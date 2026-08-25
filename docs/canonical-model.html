@@ -466,7 +466,7 @@
         <span class="f">type</span><span class="n">user | agent | thinking | tool_use | system | summary</span>
         <span class="f">subtype</span><span class="n">system only: compaction · truncation · model_change · mode_change · handoff · error</span>
         <span class="f">uuid · parent_uuid</span><span class="n">native threading, preserved</span>
-        <span class="f">ordinal · ts</span><span class="n">position + timestamp; ordinal doubles as the live-subscription sequence (snapshot@S, then replay S‥head)</span>
+        <span class="f">ordinal · ts</span><span class="n">position + timestamp — presentation order ONLY; live delivery sequences on the hub's (epoch, mutation_seq), because tool-result merges mutate earlier rows</span>
         <span class="f">model · effort</span><span class="n">per-row observations — both change mid-session</span>
         <span class="f">content</span><span class="n">text — the FTS target</span>
         <span class="f">tool_use</span><span class="n">{name, input, result, payload, is_error} — the call, its result text, AND the structured result payload merged into one row by tool id; payload stays an opaque value (spaghetti scar); pending until the result lands</span>
@@ -501,13 +501,15 @@
       <div class="fields">
         <span class="f">session_id · hour_ts</span><span class="n">hourly buckets, UTC — day/timezone grouping happens at query time (the GitHub-heatmap scar)</span>
         <span class="f">model</span><span class="n">per-model, like the agents' own caches</span>
-        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · thinking — kept apart; cost weighting is the UI's call</span>
+        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · thinking — kept apart and nullable (never-reported ≠ zero); cost weighting is the UI's call</span>
         <span class="f">message_count · tool_call_count</span><span class="n">&nbsp;</span>
       </div>
       <div class="evidence"><b>Session grain only:</b> project / runtime / all-time totals are query-time
       sums through <span class="f">session</span> — nothing to invalidate when a session is reassigned to
       another project. <b>Trap:</b> codex token counters are cumulative, claude-code's are per-message —
-      normalize to deltas once, at ingest, or the cache double-counts. <b>Precedent:</b> hermes keeps a
+      normalize to deltas once, at ingest, or the cache double-counts. <b>Replacement-aware:</b> usage
+      keys to its response row; a re-reported snapshot applies (new − old) in the same tx, so re-ingest
+      is idempotent. <b>Precedent:</b> hermes keeps a
       <span class="f">session_model_usage</span> table and claude-code caches <span class="f">modelUsage</span> by model.</div>
       <div class="consumers-line"><span class="cchip">activity heatmap</span><span class="cchip">contribution board</span><span class="cchip">agent-view totals</span></div>
     </div>
@@ -718,7 +720,8 @@
       normalization (the codex trap) happens here, once. Priority: live tails first, then sessions the
       user opens, then newest-first backfill. Everything resumes via
       <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">ingest_cursor</span>
-      (byte offset + hash) — the pattern codex itself ships as
+      (a versioned driver checkpoint: generation · file identity · committed offset · boundary
+      anchor) — the simplest form of the pattern codex itself ships as
       <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">next_rollout_byte_offset</span>.
       The live lane is <b>memory-first</b>: active sessions keep an in-process tail ring that serves the
       realtime view ahead of the batched commit — the DB is structurally behind the tail, so this is
@@ -806,13 +809,14 @@ CREATE INDEX task_session ON task(session_id);
 
 <span class="h">-- ————— phase 3 · stream —————————————————————————————————————————</span>
 
-CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- resume + provenance anchor (codex: next_rollout_byte_offset)</span>
+CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- driver checkpoint + provenance anchor</span>
   id          INTEGER PRIMARY KEY,
   runtime_id  TEXT NOT NULL REFERENCES agent_runtime(id),
   stream      TEXT NOT NULL,                <span class="c">-- layout stream id</span>
   path        TEXT NOT NULL,                <span class="c">-- relative to data_root</span>
-  byte_offset INTEGER NOT NULL DEFAULT 0,
-  head_hash   TEXT,                         <span class="c">-- detects rewrite-in-place / truncation</span>
+  checkpoint  TEXT NOT NULL,                <span class="c">-- versioned opaque blob: generation · file identity ·</span>
+                                            <span class="c">--   committed offset · boundary anchor · decoder version</span>
+                                            <span class="c">--   (spaghetti AppendCheckpoint, ported; CAS'd at commit)</span>
   updated_at  INTEGER,
   UNIQUE (runtime_id, path)
 );
@@ -878,22 +882,41 @@ CREATE TABLE <b>git_commit</b> (              <span class="c">-- derived; inferr
   PRIMARY KEY (commit_id, session_id)
 ) WITHOUT ROWID;
 
+CREATE TABLE <b>drift_agg</b> (               <span class="c">-- aggregated drift — never one row per bad record</span>
+  runtime_id    TEXT NOT NULL REFERENCES agent_runtime(id),
+  agent_version TEXT NOT NULL,
+  stream        TEXT NOT NULL,
+  record_kind   TEXT NOT NULL,
+  error_code    TEXT NOT NULL,
+  shape_hash    TEXT NOT NULL,
+  count         INTEGER NOT NULL DEFAULT 0,
+  first_seen    INTEGER,
+  last_seen     INTEGER,
+  sample_cursor INTEGER REFERENCES ingest_cursor(id),  <span class="c">-- bounded ledger ref to ONE sample</span>
+  sample_offset INTEGER,
+  PRIMARY KEY (runtime_id, agent_version, stream, record_kind, error_code, shape_hash)
+) WITHOUT ROWID;
+<span class="c">-- spaghetti scar: one replay persisted 457,311 permanent error rows (95% of grok records).
+-- a complete malformed record advances the cursor; an incomplete trailing record does not.</span>
+
 CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized cache; session grain × hour × model</span>
   session_id      TEXT NOT NULL REFERENCES session(id),
   hour_ts         INTEGER NOT NULL,         <span class="c">-- bucket start, unix ms UTC — day/timezone grouping at query time</span>
   model           TEXT NOT NULL,
-  in_tokens       INTEGER NOT NULL DEFAULT 0,
-  out_tokens      INTEGER NOT NULL DEFAULT 0,
-  cache_r_tokens  INTEGER NOT NULL DEFAULT 0,
-  cache_w_tokens  INTEGER NOT NULL DEFAULT 0,
-  think_tokens    INTEGER NOT NULL DEFAULT 0,
+  in_tokens       INTEGER,                  <span class="c">-- token components NULLABLE: never-reported ≠ zero</span>
+  out_tokens      INTEGER,
+  cache_r_tokens  INTEGER,
+  cache_w_tokens  INTEGER,
+  think_tokens    INTEGER,
   message_count   INTEGER NOT NULL DEFAULT 0,
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, hour_ts, model)
 ) WITHOUT ROWID;
 CREATE INDEX usage_bucket_hour ON usage_bucket(hour_ts);
 <span class="c">-- session grain ONLY: project / runtime / all-time totals are query-time sums
--- through session — nothing to invalidate when a session is reassigned</span>
+-- through session — nothing to invalidate when a session is reassigned.
+-- replacement-aware: usage keys to its response row; a re-reported snapshot
+-- applies (new − old) to the bucket in the same tx as the row update</span>
 
 CREATE VIEW <b>session_contribution</b> AS    <span class="c">-- one row per ROOT session: subagent trees fold in</span>
 SELECT r.id AS session_id, r.project_id,
@@ -916,7 +939,7 @@ LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
            GROUP BY rid) f ON f.rid = r.id
 WHERE r.id = r.root_session_id;</pre>
 
-  <p class="h2-note" style="margin-top:14px">Twelve tables — eleven real plus the external-content FTS
+  <p class="h2-note" style="margin-top:14px">Thirteen tables — twelve real plus the external-content FTS
   index — and one reporting view, against the ~15 budget. Live-lane updates touch
   <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">message</span>,
   <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">session.updated_at</span>, and the

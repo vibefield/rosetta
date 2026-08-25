@@ -146,10 +146,10 @@
   .job p + p { margin-top: 8px; }
   .job code { font-family: 'JetBrains Mono', monospace; font-size: .9em; color: var(--ink); }
 
-  ol.order { max-width: 78ch; padding-left: 22px; margin: 0; }
-  ol.order li { margin-bottom: 10px; font-size: 14px; }
-  ol.order li b { font-family: 'JetBrains Mono', monospace; font-size: .92em; font-weight: 600; }
-  ol.order li span { color: var(--muted); }
+  ol.order, ul.order { max-width: 82ch; padding-left: 22px; margin: 0; }
+  ol.order li, ul.order li { margin-bottom: 10px; font-size: 14px; }
+  ol.order li b, ul.order li b { font-family: 'JetBrains Mono', monospace; font-size: .92em; font-weight: 600; }
+  ol.order li span, ul.order li span { color: var(--muted); }
 
   .callout {
     border: 1px solid var(--copper); background: var(--copper-bg); border-radius: 10px;
@@ -269,10 +269,12 @@ enum <b>IngestOp</b> {
     Message(MessageRow),              <span class="c">// one flattened timeline row</span>
     ToolResult { tool_id: ToolId, result: String, payload: Value, is_error: bool },
                                       <span class="c">// a merge op, not a row — folds into its tool_use</span>
-    UsageDelta { session: SessionId, ts: Ms, model: ModelId, tokens: TokenDelta },
+    Usage { response: TimelineId, ts: Ms, model: ModelId, tokens: TokenSnapshot },
+                                      <span class="c">// replacement-keyed: the writer applies (new − old) to the hour bucket;</span>
+                                      <span class="c">// absent components stay None — never coerced to zero</span>
     WorkspaceObs(WorkspaceObsRow),
     FileEdit(FileEditRow),            <span class="c">// carries lines_added / lines_removed</span>
-    Drift(DriftFact),
+    Drift(DriftFact),                 <span class="c">// lands aggregated (drift_agg) — never one row per bad record</span>
 }
 
 <span class="c">// crates/adapter-support — one impl per agent; all agent knowledge stops at this boundary</span>
@@ -316,14 +318,21 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <code>SourceEvents</code> trait — FS watching is the flakiest OS surface we touch, so tests
       inject synthetic event streams), <code>ledger</code> (append-only raw segments; the durable
       copy that survives agents GC-ing their own data — claude-code sweeps at 30 days).</p>
-      <div class="seams"><b>Benches:</b> ledger append/scan (MB/sec), discovery walk (dirs/sec).</div>
+      <div class="seams"><b>Ports:</b> spaghetti's append-delimited tailer — checkpoint = generation ·
+      file identity · committed offset · boundary anchor · decoder version — plus its adversarial tests
+      (partial tails, truncation, same-size rewrites, atomic replacement, corrupted cursors, bounded
+      IO), and the watch-before-scan / polling-fallback recovery rules.
+      <b>Benches:</b> ledger append/scan (MB/sec), discovery walk (dirs/sec).</div>
     </div>
 
     <div class="card">
       <header><h3>pipeline</h3><span class="hdr-tags"><span class="badge b-pure">pure</span><span class="badge b-io">io</span></span></header>
       <p>The phase orchestrators (<code>discover()</code>, <code>meta_ingest()</code>,
       <code>stream()</code>), the priority scheduler (live ▸ on-open ▸ newest-first backfill),
-      cursor management, and <code>instrument</code> — the profiler that ships in the binary.</p>
+      cursor management, and <code>instrument</code> — the profiler that ships in the binary. The
+      scheduler also runs a low-duty-cycle <b>audit lane</b>: rotating forced verification that opens
+      the file and checks the checkpoint anchor even when size+mtime are unchanged — a missed
+      same-size rewrite must not stay invisible forever.</p>
       <div class="seams"><b>Seams:</b> phases take <code>&amp;dyn</code> deps, so integration tests run
       whole phases against a temp-dir corpus and an in-memory store. The fold itself stays pure.</div>
     </div>
@@ -335,7 +344,10 @@ trait <b>AgentAdapter</b>: Send + Sync {
       never exist), <code>writer.rs</code> (single thread, bounded channel of batches, same-tx
       rows+FTS+buckets), <code>queries.rs</code> (typed functions for heatmap / contribution /
       timeline / FTS — consumers never hand-write SQL), <code>hot.rs</code> (the in-process tier
-      below: metadata mirror + result caches, mutated only by the writer thread).</p>
+      below: metadata mirror + result caches, mutated only by the writer thread). The writer has two
+      modes: <b>live</b> (rows + FTS + bucket corrections in one tx) and <b>cold rebuild</b>
+      (bulk-load base rows, defer FTS and selected indexes, build + validate once, then publish
+      search readiness — spaghetti's 166× recovery came from exactly this, not parser parallelism).</p>
       <div class="seams"><b>Benches:</b> writer rows/sec across batch sizes; query latency on a
       generated multi-million-row DB.</div>
     </div>
@@ -355,7 +367,9 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <p>The L3 edges: wire contract (ts-rs generated types), axum server over
       <code>store::queries</code> + <code>store::hot</code>, the <code>server::hub</code> pub/sub
       fan-out (topics = cache keys), and the daemon/CLI — including the profiling entry points
-      <code>rosettad ingest --once --profile</code> and <code>rosettad rebuild --profile</code>.</p>
+      <code>rosettad ingest --once --profile</code> and <code>rosettad rebuild --profile</code>.
+      API pagination cursors bind an <b>exact commit watermark</b> — match or expired, never silently
+      rebased; their tests must mutate rows between pages, not just insert.</p>
       <div class="seams"><b>Async lives only here.</b> The ingest engine below is synchronous threads.</div>
     </div>
   </div>
@@ -471,7 +485,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <polyline points="100,125 100,72 218,72" fill="none" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr3t)"/>
       <rect x="224" y="40" width="210" height="64" rx="6" fill="var(--teal-bg)" stroke="var(--teal)" stroke-width="1.25"/>
       <text x="240" y="64" font-size="12.5" font-weight="600" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">tail rings</text>
-      <text x="240" y="84" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">per active session · last N rows</text>
+      <text x="240" y="84" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">per active session · last N mutations</text>
       <line x1="434" y1="72" x2="488" y2="72" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr3t)"/>
       <rect x="494" y="40" width="200" height="64" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
       <text x="510" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">hub — pub/sub</text>
@@ -479,7 +493,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <line x1="694" y1="72" x2="748" y2="72" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr3t)"/>
       <rect x="754" y="40" width="210" height="64" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
       <text x="770" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">WS subscribers</text>
-      <text x="770" y="84" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">snapshot@S + replay S‥head</text>
+      <text x="770" y="84" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">snapshot@(epoch, seq) + replay</text>
 
       <!-- behind-DB path -->
       <line x1="160" y1="157" x2="212" y2="157" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr3)"/>
@@ -515,18 +529,23 @@ trait <b>AgentAdapter</b>: Send + Sync {
     <figcaption>Two coherence classes, stated once and scoped hard: the teal path runs <b>ahead of the
     DB</b> — required for correctness, since batched commits leave the DB structurally behind the tail
     while the live budget is event→frame p99 &lt; 20 ms; everything else updates strictly <b>after
-    commit</b>. <code>message.ordinal</code> is the subscription sequence, so subscribe = DB snapshot up
-    to committed ordinal S, ring replay of (S‥head], then live. Restart empties everything — the hot
-    tier rebuilds from the projection the way the projection rebuilds from the ledger.</figcaption>
+    commit</b>. Delivery is a <b>mutation log</b>, not ordinal replay — tool-result merges mutate earlier
+    rows, so ordinals cannot sequence a subscription. The hub owns an in-memory (epoch, mutation_seq):
+    subscribe = DB snapshot stamped @(epoch, seq), replay mutations &gt; seq, then live. Restart mints a
+    new epoch; ring overflow or a lagging subscriber invalidates the epoch → replacement snapshot +
+    resync barrier (spaghetti's observer semantics, ported). Restart empties everything — the hot tier
+    rebuilds from the projection the way the projection rebuilds from the ledger.</figcaption>
   </figure>
 
   <div class="cards" style="margin-top:20px">
     <div class="card">
       <header><h3>tail rings</h3><span class="hdr-tags"><span class="badge b-ahead">ahead of db</span></span></header>
-      <p>Ring buffer per active session (~256 rows / 1MB cap), fed at the fold stage before the batch
-      commits. The live chat view serves from here — it cannot be a DB read no matter how fast SQLite
-      is, because the commit cadence is slower than the latency budget.</p>
-      <div class="seams"><b>Eviction:</b> idle ~10 min → drop the ring (the one legitimate TTL —
+      <p>Ring buffer of <b>mutations</b> — row upserts tagged with mutation_seq, so appends AND merges
+      into earlier rows both flow through it — per active session (~256 / 1MB cap), fed at the fold
+      before the batch commits. The live chat view serves from here; it cannot be a DB read, because
+      the commit cadence is slower than the latency budget.</p>
+      <div class="seams"><b>Overflow / lagging subscriber:</b> epoch invalidated → replacement snapshot
+      + resync barrier. <b>Eviction:</b> idle ~10 min → drop the ring (the one legitimate TTL —
       resource-bound, not correctness); rewarms lazily on subscribe. <b>Day one.</b></div>
     </div>
     <div class="card">
@@ -613,6 +632,31 @@ trait <b>AgentAdapter</b>: Send + Sync {
   </div>
 
   <!-- ================================================================ -->
+  <h2>Prior art — ported from spaghetti, narrowly</h2>
+  <p class="h2-note">Spaghetti's architecture stays buried (the 31-variant fact algebra, 101 tables,
+  DTO mirrors, durable readiness machines — its own deletion history removed 190k+ lines of it). Its
+  reliability algorithms and their adversarial tests come along, reimplemented against the op-stream
+  rather than copied wholesale:</p>
+
+  <ul class="order">
+    <li><b>append-delimited tailer + tests</b> → capture. <span>The single highest-value port:
+    generation/identity/anchor checkpointing, truncation and same-size-rewrite detection, bounded IO —
+    and the test suite that proves them.</span></li>
+    <li><b>recovery rules</b> → capture. <span>Watch-before-scan, notifications as hints, bounded
+    coalescing, polling fallback — the state-machine rules, not the scheduler framework.</span></li>
+    <li><b>writer topology</b> → store. <span>Connection-owning thread, group commits, checkpoint CAS,
+    deterministic crash seams.</span></li>
+    <li><b>usage normalization vectors</b> → adapters. <span>Response-level replacement,
+    cumulative→delta, inclusive-cached-input split by subtraction, unknown stays unknown — ported as
+    golden tests on pure normalize.</span></li>
+    <li><b>observer overflow semantics</b> → server::hub. <span>Epoch invalidation + replacement
+    snapshot + resync barrier; identity never bound to delivery sequence.</span></li>
+    <li><b>search modes</b> → store + L3. <span>Cold-build vs live maintenance, readiness gating,
+    exact-watermark cursor expiry (the catalog cursor's silent rebase was a bug — don't port that
+    side).</span></li>
+  </ul>
+
+  <!-- ================================================================ -->
   <h2>Build order</h2>
   <p class="h2-note">Measurement infrastructure arrives before the thing it measures — the pipeline
   is profiled from its first day, not instrumented after the fact.</p>
@@ -627,11 +671,15 @@ trait <b>AgentAdapter</b>: Send + Sync {
   </ol>
 
   <div class="callout">
-    <b>Open decision — ledger-before-parse.</b> The stream lane appends raw records to the ledger
-    before parsing them, which doubles write IO during backfill versus parse-directly-and-ledger-lazily.
-    It's what makes rebuild, provenance, and GC-survival unconditional — spaghetti's scars say pay the
-    IO — but it's expensive to retrofit in either direction, so it deserves an explicit yes before
-    the capture crate is built.
+    <b>Decided — ledger-first, with an explicit crash protocol.</b> The stream lane appends raw records
+    to the ledger before parsing them: extra write IO during backfill, paid deliberately, because it
+    makes rebuild, provenance, and GC-survival unconditional. The ledger and SQLite are separate
+    filesystems, so SQLite cannot make both atomic — the ordering does: (1) frame only complete raw
+    records; (2) append and durably flush the ledger segment; (3) ONE SQLite transaction — CAS the
+    driver checkpoint, then canonical rows, FTS/live indexes, bucket corrections (new − old), drift
+    aggregates, and ledger references; (4) publish committed mutations to the hub. Invariant: recovery
+    may find an orphan ledger tail (harmless); it must never find a database reference to unflushed
+    ledger bytes.
   </div>
 
   <footer class="note">
