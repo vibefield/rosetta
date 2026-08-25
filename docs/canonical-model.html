@@ -1,0 +1,990 @@
+<title>Rosetta Canonical Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #FAF9F7;
+    --card: #FFFFFF;
+    --ink: #23262B;
+    --muted: #6B7076;
+    --line: #DDDAD3;
+    --chip: #EFEDE8;
+    --copper: #A14E28;
+    --copper-bg: rgba(161, 78, 40, .08);
+    --teal: #1F6E63;
+    --teal-bg: rgba(31, 110, 99, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17191D;
+      --card: #1E2126;
+      --ink: #E6E4DF;
+      --muted: #9A9EA6;
+      --line: #33373D;
+      --chip: #282C32;
+      --copper: #D3805A;
+      --copper-bg: rgba(211, 128, 90, .12);
+      --teal: #55A99B;
+      --teal-bg: rgba(85, 169, 155, .12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17191D;
+    --card: #1E2126;
+    --ink: #E6E4DF;
+    --muted: #9A9EA6;
+    --line: #33373D;
+    --chip: #282C32;
+    --copper: #D3805A;
+    --copper-bg: rgba(211, 128, 90, .12);
+    --teal: #55A99B;
+    --teal-bg: rgba(85, 169, 155, .12);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 48px 28px 80px; }
+  .narrow { max-width: 1100px; margin: 0 auto; }
+
+  /* ---------- header ---------- */
+  .eyebrow {
+    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px; font-weight: 600; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--copper);
+  }
+  h1 {
+    font-family: Spectral, Georgia, serif;
+    font-weight: 600; font-size: 38px; line-height: 1.15;
+    margin: 10px 0 8px; text-wrap: balance;
+  }
+  .sub { color: var(--muted); max-width: 68ch; margin: 0; }
+  .pipeline {
+    margin-top: 22px; padding: 12px 16px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted);
+    overflow-x: auto; white-space: nowrap;
+  }
+  .pipeline b { color: var(--ink); font-weight: 600; }
+  .pipeline .cu { color: var(--copper); font-weight: 600; }
+  .pipeline .te { color: var(--teal); font-weight: 600; }
+
+  /* ---------- legend ---------- */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+    margin: 26px 0 10px; font-size: 12.5px; color: var(--muted);
+  }
+  .legend svg { vertical-align: -2px; }
+  .lg { display: inline-flex; align-items: center; gap: 7px; }
+
+  /* ---------- badges ---------- */
+  .badge {
+    font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px;
+  }
+  .b-ours    { color: var(--copper); background: var(--copper-bg); }
+  .b-derived { color: var(--copper); background: var(--copper-bg); }
+  .b-cache   { color: var(--teal);   background: var(--teal-bg); }
+  .b-native  { color: var(--muted);  border: 1px solid var(--line); padding: 1px 6px; }
+
+  /* ---------- ingest-phase chips ---------- */
+  .ph {
+    font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 600;
+    letter-spacing: .07em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  }
+  .ph-0 { background: var(--ink); color: var(--bg); }
+  .ph-1 { background: var(--chip); color: var(--ink); }
+  .ph-2 { border: 1px solid var(--line); color: var(--muted); padding: 1px 6px; }
+  .ph-live { color: var(--teal); background: var(--teal-bg); }
+  .fields .ph { margin-right: 6px; vertical-align: 1px; }
+  .hdr-tags { display: inline-flex; gap: 6px; align-items: center; }
+
+  /* ---------- diagram ---------- */
+  figure.er { margin: 8px 0 0; }
+  .er-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  figure.er svg { display: block; min-width: 1080px; width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; max-width: 90ch; }
+
+  /* ---------- sections ---------- */
+  h2 {
+    font-family: Spectral, Georgia, serif; font-weight: 600;
+    font-size: 24px; margin: 56px 0 6px; text-wrap: balance;
+  }
+  .h2-note { color: var(--muted); font-size: 14px; margin: 0 0 20px; max-width: 80ch; }
+
+  /* ---------- entity cards ---------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .card header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .card h3 {
+    font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600; margin: 0;
+  }
+  .fields { display: grid; grid-template-columns: minmax(118px, auto) 1fr; gap: 5px 14px; font-size: 12.5px; }
+  .fields .f { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; }
+  .fields .n { color: var(--muted); }
+  .fields .f.cu { color: var(--copper); }
+  .fields .f.te { color: var(--teal); }
+  .card .evidence {
+    border-top: 1px solid var(--line); padding-top: 10px;
+    font-size: 12px; color: var(--muted);
+  }
+  .card .evidence b { color: var(--ink); font-weight: 600; }
+  .consumers-line { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .cchip {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;
+    background: var(--chip); border-radius: 4px; padding: 2px 7px; color: var(--muted);
+  }
+
+  /* ---------- taxonomy table ---------- */
+  .tbl-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13.5px; }
+  th {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em; color: var(--muted);
+    text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.rt { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  td .native { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--muted); }
+
+  /* ---------- DDL listing ---------- */
+  pre.ddl {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 22px 24px; overflow-x: auto; margin: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.65;
+    color: var(--ink);
+  }
+  .ddl .c { color: var(--muted); }
+  .ddl .h { font-weight: 600; }
+  .ddl b  { font-weight: 600; color: var(--copper); }
+
+  /* ---------- consumers ---------- */
+  .jobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .job { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .job h3 { font-family: Spectral, Georgia, serif; font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+  .job p { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+  .job .reads { display: flex; gap: 6px; flex-wrap: wrap; }
+  .job .reads .cchip { color: var(--ink); }
+
+  footer.note {
+    margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-size: 13px; color: var(--muted); max-width: 90ch;
+  }
+</style>
+
+<div class="wrap">
+  <div class="narrow">
+    <div class="eyebrow">rosetta · phase 2 · hypothesis</div>
+    <h1>Rosetta Canonical Model</h1>
+    <p class="sub">One canonical projection over every agent's ground truth — ten entities, checked
+    against the nine captured <span style="font-family:'JetBrains Mono',monospace;font-size:.88em">groundtruth.json</span>
+    packs (gemini and cursor pending). Sessions group under projects, transcripts flatten into typed
+    timeline rows, and heavy aggregates live in materialized caches updated at ingest.</p>
+
+    <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
+      <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 tables)&nbsp;&nbsp;→&nbsp;&nbsp;FTS · agent-view</div>
+  </div>
+
+  <div class="legend">
+    <span class="lg"><svg width="34" height="10" viewBox="0 0 34 10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" stroke="currentColor" stroke-width="1.5"/><polygon points="26,1.5 34,5 26,8.5" fill="currentColor"/></svg> owns / has-many</span>
+    <span class="lg"><svg width="34" height="10" viewBox="0 0 34 10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" stroke="var(--copper)" stroke-width="1.5" stroke-dasharray="4 3"/><polygon points="26,1.5 34,5 26,8.5" fill="var(--copper)"/></svg> derived at ingest</span>
+    <span class="lg"><svg width="34" height="10" viewBox="0 0 34 10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" stroke="var(--teal)" stroke-width="2.25"/><polygon points="26,1.5 34,5 26,8.5" fill="var(--teal)"/></svg> materialized accumulation</span>
+    <span class="lg"><span class="badge b-ours">ours</span> rosetta abstraction</span>
+    <span class="lg"><span class="badge b-cache">cache</span> rebuildable rollup</span>
+    <span class="lg"><span class="badge b-native">unmarked</span> agent-native</span>
+  </div>
+  <div class="legend" style="margin-top:0">
+    <span class="lg"><span class="ph ph-0">discover</span> phase 1 — scan for installed agents; the app asks which to ingest</span>
+    <span class="lg"><span class="ph ph-1">meta</span> phase 2 — stat + bounded reads; lists render before first paint</span>
+    <span class="lg"><span class="ph ph-2">stream</span> phase 3 — parallel lanes: transcripts · FTS · rollups · derivations</span>
+    <span class="lg"><span class="ph ph-live">live</span> stream lane — watcher tail feeding realtime views</span>
+  </div>
+
+  <figure class="er">
+    <div class="er-scroll">
+    <svg viewBox="0 0 1160 660" role="img" aria-label="Entity-relationship diagram: agent_runtime and project each own many sessions; sessions own ordered message rows, workspace observations, plans and tasks; sessions recurse via parent_session for subagents, anchored by a tool_use message; file edits and git commits are derived from tool_use rows; usage buckets accumulate from message usage at ingest; workspace observations derive the project assignment.">
+      <defs>
+        <marker id="arrInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+        </marker>
+        <marker id="arrCu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" style="fill:var(--copper)"/>
+        </marker>
+        <marker id="arrTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" style="fill:var(--teal)"/>
+        </marker>
+      </defs>
+
+      <!-- ================= edges (drawn first, under boxes' labels) ================= -->
+      <!-- runtime -> session -->
+      <line x1="250" y1="105" x2="470" y2="105" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <text x="362" y="96" font-size="11" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">runs 1‥N</text>
+
+      <!-- project -> session -->
+      <line x1="910" y1="105" x2="730" y2="105" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <text x="820" y="96" font-size="11" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">groups · assigned at ingest</text>
+
+      <!-- session -> message -->
+      <line x1="600" y1="170" x2="600" y2="265" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <text x="610" y="224" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">ordered rows 1‥N</text>
+
+      <!-- session self-loop: parent_session -->
+      <path d="M 690 40 C 690 6, 560 6, 560 36" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrInk)"/>
+      <text x="712" y="22" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">parent_session · role — subagents recurse</text>
+
+      <!-- session -> workspace_obs -->
+      <polyline points="725,140 838,140 838,300 905,300" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <text x="848" y="226" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">observes cwd · branch</text>
+
+      <!-- workspace_obs -> project (derives) -->
+      <line x1="1015" y1="250" x2="1015" y2="166" stroke="var(--copper)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrCu)"/>
+      <text x="1023" y="214" font-size="11" text-anchor="start" style="fill:var(--copper)" font-family="'Source Sans 3',sans-serif">derives assignment</text>
+
+      <!-- session -> plan / task (shared rail) -->
+      <polyline points="475,130 360,130 360,381" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="360" y1="287" x2="256" y2="287" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <line x1="360" y1="381" x2="256" y2="381" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <text x="368" y="206" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">scoped: plans · tasks</text>
+
+      <!-- message -> session (tool_use spawns subagent) -->
+      <polyline points="470,270 470,240 540,240 540,176" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrInk)"/>
+      <text x="478" y="258" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">spawns subagent</text>
+
+      <!-- message -> file_edit (derived) -->
+      <polyline points="520,470 520,500 340,500 340,534" fill="none" stroke="var(--copper)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrCu)"/>
+      <text x="348" y="493" font-size="11" text-anchor="start" style="fill:var(--copper)" font-family="'Source Sans 3',sans-serif">derived from tool_use rows</text>
+
+      <!-- message -> git_commit (inferred) -->
+      <line x1="565" y1="470" x2="565" y2="542" stroke="var(--copper)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrCu)"/>
+      <text x="575" y="515" font-size="11" text-anchor="start" style="fill:var(--copper)" font-family="'Source Sans 3',sans-serif">inferred from Bash calls</text>
+
+      <!-- message -> usage_rollup (accumulate) -->
+      <polyline points="770,410 1000,410 1000,514" fill="none" stroke="var(--teal)" stroke-width="2.25" marker-end="url(#arrTeal)"/>
+      <text x="790" y="401" font-size="11" text-anchor="start" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">accumulate deltas · normalized at ingest</text>
+
+      <!-- ================= entity boxes ================= -->
+      <!-- agent_runtime -->
+      <g>
+        <rect x="40" y="50" width="210" height="110" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="56" y="74" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">agent_runtime</text>
+        <text x="56" y="96"  font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">kind · versions_seen[]</text>
+        <text x="56" y="114" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">account · data_root</text>
+        <text x="56" y="132" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">config · skills[]</text>
+      </g>
+
+      <!-- session -->
+      <g>
+        <rect x="475" y="40" width="250" height="130" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="491" y="64" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">session</text>
+        <text x="491" y="86"  font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">id · native_session_id</text>
+        <text x="491" y="104" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">runtime_id · project_id</text>
+        <text x="491" y="122" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">parent · root · role</text>
+        <text x="491" y="140" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">title · summary</text>
+        <text x="491" y="158" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">started_at · updated_at</text>
+      </g>
+
+      <!-- project -->
+      <g>
+        <rect x="910" y="50" width="210" height="110" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25"/>
+        <text x="926" y="74" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">project</text>
+        <text x="1104" y="72" font-size="9.5" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--copper)" font-family="'JetBrains Mono',monospace">OURS</text>
+        <text x="926" y="96"  font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">id — blake3(root·repo)</text>
+        <text x="926" y="114" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">name · root_paths[]</text>
+        <text x="926" y="132" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">git_repo identity</text>
+      </g>
+
+      <!-- plan -->
+      <g>
+        <rect x="40" y="250" width="210" height="74" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="56" y="274" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">plan</text>
+        <text x="56" y="296" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · revision</text>
+        <text x="56" y="314" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">content · updated_at</text>
+      </g>
+
+      <!-- task -->
+      <g>
+        <rect x="40" y="344" width="210" height="74" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="56" y="368" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">task</text>
+        <text x="56" y="390" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · status</text>
+        <text x="56" y="408" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">content · timestamps</text>
+      </g>
+
+      <!-- message -->
+      <g>
+        <rect x="430" y="270" width="340" height="200" rx="6" fill="var(--card)" stroke="currentColor" stroke-width="1.5"/>
+        <text x="446" y="294" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">message — flattened timeline row</text>
+        <text x="446" y="316" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">timeline_id · uuid · parent_uuid</text>
+        <text x="446" y="334" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">ordinal · ts · model · effort</text>
+        <text x="446" y="352" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">content — FTS target</text>
+        <text x="446" y="370" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">tool_use{name·input·result·payload}</text>
+        <text x="446" y="388" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">usage — per-turn deltas</text>
+        <text x="446" y="406" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">branch_tool_id ⟶ subagent anchor</text>
+        <!-- type chips -->
+        <g font-family="'JetBrains Mono',monospace" font-size="10">
+          <rect x="446" y="418" width="42" height="20" rx="10" fill="var(--chip)"/>
+          <text x="467" y="432" text-anchor="middle" fill="currentColor">user</text>
+          <rect x="496" y="418" width="52" height="20" rx="10" fill="var(--chip)"/>
+          <text x="522" y="432" text-anchor="middle" fill="currentColor">agent</text>
+          <rect x="556" y="418" width="66" height="20" rx="10" fill="var(--chip)"/>
+          <text x="589" y="432" text-anchor="middle" fill="currentColor">thinking</text>
+          <rect x="446" y="444" width="66" height="20" rx="10" fill="var(--chip)"/>
+          <text x="479" y="458" text-anchor="middle" fill="currentColor">tool_use</text>
+          <rect x="520" y="444" width="58" height="20" rx="10" fill="var(--chip)"/>
+          <text x="549" y="458" text-anchor="middle" fill="currentColor">system</text>
+          <rect x="586" y="444" width="66" height="20" rx="10" fill="var(--chip)"/>
+          <text x="619" y="458" text-anchor="middle" fill="currentColor">summary</text>
+        </g>
+      </g>
+
+      <!-- workspace_obs -->
+      <g>
+        <rect x="910" y="250" width="210" height="118" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="926" y="274" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">workspace_obs</text>
+        <text x="926" y="296" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · at</text>
+        <text x="926" y="314" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">cwd · git_branch</text>
+        <text x="926" y="332" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">git_repo</text>
+        <text x="926" y="352" font-size="10.5" fill="var(--muted)" font-style="italic" font-family="'Source Sans 3',sans-serif">mid-session cwd moves stay visible</text>
+      </g>
+
+      <!-- file_edit -->
+      <g>
+        <rect x="240" y="540" width="200" height="86" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="256" y="564" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">file_edit</text>
+        <text x="256" y="586" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · message_ref</text>
+        <text x="256" y="604" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">path · kind · snapshot_ref</text>
+        <text x="256" y="622" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">lines_added · lines_removed</text>
+      </g>
+
+      <!-- git_commit -->
+      <g>
+        <rect x="470" y="548" width="190" height="78" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25" stroke-dasharray="5 3"/>
+        <text x="486" y="572" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">git_commit</text>
+        <text x="644" y="570" font-size="9.5" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--copper)" font-family="'JetBrains Mono',monospace">DERIVED</text>
+        <text x="486" y="594" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">commit_id · branch</text>
+        <text x="486" y="612" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · at</text>
+      </g>
+
+      <!-- usage_rollup -->
+      <g>
+        <rect x="880" y="520" width="240" height="110" rx="6" fill="var(--card)" stroke="var(--teal)" stroke-width="1.25"/>
+        <text x="896" y="544" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">usage_bucket</text>
+        <text x="1104" y="542" font-size="9.5" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">CACHE</text>
+        <text x="896" y="566" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · hour_ts · model</text>
+        <text x="896" y="584" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">in·out·cache_r·cache_w·think</text>
+        <text x="896" y="602" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">message_count · tool_calls</text>
+        <text x="896" y="622" font-size="10.5" fill="var(--muted)" font-style="italic" font-family="'Source Sans 3',sans-serif">hour grain — day/tz grouped at query time</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>The canonical projection. Solid edges are ownership; dashed copper edges are computed
+    once at ingest; the teal edge is the incremental accumulation that keeps rollups cheap to read.
+    <span style="font-family:'JetBrains Mono',monospace;font-size:.92em">project</span> is rosetta's own
+    abstraction — sessions are assigned to it from workspace observations, not from any single agent's layout.</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2>Entities</h2>
+  <p class="h2-note">Full field detail per entity, with the ground-truth evidence each claim rests on.
+  Unmarked entities mirror agent-native data; marked ones are rosetta's additions. Every entity is
+  chipped with its ingest phase: <span class="ph ph-0">discover</span> and
+  <span class="ph ph-1">meta</span> land before first paint, <span class="ph ph-2">stream</span> fills
+  in behind the running app.</p>
+
+  <div class="cards">
+
+    <div class="card">
+      <header><h3>project</h3><span class="hdr-tags"><span class="ph ph-1">meta</span><span class="badge b-ours">ours</span></span></header>
+      <div class="fields">
+        <span class="f">id</span><span class="n">blake3 of normalized root + git repo identity — worktrees and renames merge</span>
+        <span class="f">name</span><span class="n">display name (editable)</span>
+        <span class="f">root_paths[]</span><span class="n">normalized directories claimed by this project</span>
+        <span class="f">git_repo</span><span class="n">remote identity when present</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> native in claude-code (project dir slugs), opencode
+      (<span class="f">project</span>/<span class="f">workspace</span> tables), codex (<span class="f">project_roots</span>),
+      antigravity (ProjectID). Derived from cwd for grok, pi, kimi, hermes, copilot. Where the layout
+      itself encodes projects (claude-code slugs, opencode DB), rows land instantly at the top of meta
+      ingest — no reads needed.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span><span class="cchip">rollups</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>agent_runtime</h3></header>
+      <div class="fields">
+        <span class="f">id</span><span class="n"><span class="ph ph-0">discover</span>one installed agent (kind + data root)</span>
+        <span class="f">kind</span><span class="n"><span class="ph ph-0">discover</span>claude-code | codex | grok | copilot | …</span>
+        <span class="f">account</span><span class="n"><span class="ph ph-1">meta</span>login identity — ids sit in the sensitivity register, handle deliberately</span>
+        <span class="f">data_root</span><span class="n"><span class="ph ph-0">discover</span>~/.claude, ~/.codex, …</span>
+        <span class="f">versions_seen[]</span><span class="n"><span class="ph ph-1">meta</span>from binary/config; refined by the stream from per-record stamps</span>
+        <span class="f">config</span><span class="n"><span class="ph ph-1">meta</span>settings snapshot ref</span>
+        <span class="f">skills[]</span><span class="n"><span class="ph ph-1">meta</span>installed skills / extensions / agents-md</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> config, auth, and installation-id streams exist in all 9
+      packs; skills/extension stream families in copilot, kimi, pi, hermes. Discovery rows are the
+      opt-in surface: the app lists found runtimes and the user picks which to ingest — nothing else is
+      read before that consent.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>session</h3><span class="hdr-tags"><span class="ph ph-1">meta</span></span></header>
+      <div class="fields">
+        <span class="f">id</span><span class="n">deterministic blake3; native ids from filenames</span>
+        <span class="f">runtime_id</span><span class="n">→ agent_runtime</span>
+        <span class="f">project_id</span><span class="n">→ project, assigned at ingest (cwd at session start)</span>
+        <span class="f cu">parent_session_id</span><span class="n">nullable, recursive — one entity covers subagents and teams</span>
+        <span class="f cu">root_session_id</span><span class="n">denormalized root of the subagent tree (= id for top-level sessions); contribution rolls up here</span>
+        <span class="f">role</span><span class="n">main | subagent | team-member</span>
+        <span class="f">title · summary</span><span class="n">meta sidecars / first + last lines</span>
+        <span class="f">started_at · updated_at</span><span class="n">filenames + mtime; updated_at tracked live</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> parent links are native everywhere they matter —
+      claude-code <span class="f">agentId/isSidechain</span>, kimi <span class="f">parentAgentId</span>,
+      copilot spawning-parent session id, antigravity <span class="f">parent_conversation_id</span>. No
+      separate "subagent session" type: it duplicated every field. <b>Meta-ingest guarantee:</b> every
+      field above is readable without parsing a transcript body — filenames, mtimes, first/last lines,
+      sidecar files.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>message</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="ph ph-live">live</span></span></header>
+      <div class="fields">
+        <span class="f">timeline_id</span><span class="n">stable, unique in session — native uuids aren't</span>
+        <span class="f">type</span><span class="n">user | agent | thinking | tool_use | system | summary</span>
+        <span class="f">subtype</span><span class="n">system only: compaction · truncation · model_change · mode_change · handoff · error</span>
+        <span class="f">uuid · parent_uuid</span><span class="n">native threading, preserved</span>
+        <span class="f">ordinal · ts</span><span class="n">position + timestamp; ordinal doubles as the live-subscription sequence (snapshot@S, then replay S‥head)</span>
+        <span class="f">model · effort</span><span class="n">per-row observations — both change mid-session</span>
+        <span class="f">content</span><span class="n">text — the FTS target</span>
+        <span class="f">tool_use</span><span class="n">{name, input, result, payload, is_error} — the call, its result text, AND the structured result payload merged into one row by tool id; payload stays an opaque value (spaghetti scar); pending until the result lands</span>
+        <span class="f">usage</span><span class="n">per-turn normalized deltas</span>
+        <span class="f">branch_tool_id</span><span class="n">anchors a spawned subagent thread to its tool_use row</span>
+        <span class="f">provenance</span><span class="n">agent version + raw ledger refs</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> grok, copilot, and kimi are natively flat event streams;
+      codex <span class="f">response_item</span>s map 1:1; claude-code assistant blocks are split — the
+      transform spaghetti's <span class="f">SessionMessage</span> already proved out.</div>
+      <div class="consumers-line"><span class="cchip">FTS</span><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>workspace_obs</h3><span class="hdr-tags"><span class="ph ph-1">meta</span><span class="ph ph-2">stream</span></span></header>
+      <div class="fields">
+        <span class="f">session_id · at</span><span class="n">one row per observed change</span>
+        <span class="f">cwd</span><span class="n">working directory</span>
+        <span class="f">git_branch</span><span class="n">where stamped</span>
+        <span class="f">git_repo</span><span class="n">repo identity when derivable</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> codex carries cwd in <span class="f">turn_context</span>
+      per turn; copilot emits <span class="f">session.context_changed</span>; claude-code stamps
+      <span class="f">gitBranch</span> on every line. Sessions provably move directories — this table is
+      why project assignment stays honest. The first observation lands during meta ingest; the full
+      history backfills in the stream phase.</div>
+      <div class="consumers-line"><span class="cchip">project assignment</span><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>usage_bucket</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="ph ph-live">live</span><span class="badge b-cache">cache</span></span></header>
+      <div class="fields">
+        <span class="f">session_id · hour_ts</span><span class="n">hourly buckets, UTC — day/timezone grouping happens at query time (the GitHub-heatmap scar)</span>
+        <span class="f">model</span><span class="n">per-model, like the agents' own caches</span>
+        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · thinking — kept apart; cost weighting is the UI's call</span>
+        <span class="f">message_count · tool_call_count</span><span class="n">&nbsp;</span>
+      </div>
+      <div class="evidence"><b>Session grain only:</b> project / runtime / all-time totals are query-time
+      sums through <span class="f">session</span> — nothing to invalidate when a session is reassigned to
+      another project. <b>Trap:</b> codex token counters are cumulative, claude-code's are per-message —
+      normalize to deltas once, at ingest, or the cache double-counts. <b>Precedent:</b> hermes keeps a
+      <span class="f">session_model_usage</span> table and claude-code caches <span class="f">modelUsage</span> by model.</div>
+      <div class="consumers-line"><span class="cchip">activity heatmap</span><span class="cchip">contribution board</span><span class="cchip">agent-view totals</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>plan</h3><span class="hdr-tags"><span class="ph ph-1">meta</span></span></header>
+      <div class="fields">
+        <span class="f">session_id</span><span class="n">→ session</span>
+        <span class="f">revision</span><span class="n">plans get rewritten; keep the history</span>
+        <span class="f">content · updated_at</span><span class="n">&nbsp;</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> claude-code <span class="f">plans</span>, kimi
+      <span class="f">plans</span> + <span class="f">plan-revisions</span>, grok <span class="f">plan</span>,
+      copilot <span class="f">session-plans</span>. Sidecar streams keyed to a session — not embedded in transcripts.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>task</h3><span class="hdr-tags"><span class="ph ph-1">meta</span></span></header>
+      <div class="fields">
+        <span class="f">session_id</span><span class="n">→ session</span>
+        <span class="f">status</span><span class="n">pending | in_progress | completed</span>
+        <span class="f">content · timestamps</span><span class="n">&nbsp;</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> claude-code <span class="f">todos</span> +
+      <span class="f">tasks</span>, kimi <span class="f">tasks</span> + <span class="f">upcoming-goals</span>,
+      codex <span class="f">goals_1.sqlite</span>.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>file_edit</h3><span class="hdr-tags"><span class="ph ph-2">stream</span></span></header>
+      <div class="fields">
+        <span class="f">session_id</span><span class="n">→ session</span>
+        <span class="f">message_ref</span><span class="n">the tool_use row that made the change</span>
+        <span class="f">path · kind</span><span class="n">edit | write | checkpoint</span>
+        <span class="f">snapshot_ref</span><span class="n">where the agent keeps one</span>
+        <span class="f cu">lines_added · lines_removed</span><span class="n">LOC — exact when the payload carries a patch (claude-code structuredPatch, codex apply_patch); best-effort for whole-file writes</span>
+      </div>
+      <div class="evidence"><b>Ratification:</b> stronger than expected — copilot
+      <span class="f">rewind-snapshots</span> + <span class="f">workspace_file_changed</span>, grok
+      <span class="f">rewind-points</span>, opencode <span class="f">snapshot</span> +
+      <span class="f">session-diff</span>, claude-code <span class="f">file-history</span>. Tool-derived
+      where no native stream exists.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span></div>
+    </div>
+
+    <div class="card">
+      <header><h3>git_commit</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="badge b-derived">derived</span></span></header>
+      <div class="fields">
+        <span class="f">session_id · at</span><span class="n">&nbsp;</span>
+        <span class="f">commit_id · branch</span><span class="n">&nbsp;</span>
+      </div>
+      <div class="evidence"><b>Honesty flag:</b> no agent records commits natively — this is inference from
+      Bash tool calls (spaghetti's approach), and quality varies per agent. Kept because the consumers want
+      it; flagged so nobody mistakes it for ground truth.</div>
+      <div class="consumers-line"><span class="cchip">agent-view</span></div>
+    </div>
+
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>Message rows — the flattened taxonomy</h2>
+  <p class="h2-note">One block per row, tool results merged into their <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">tool_use</span> row.
+  Most agents are already flat; claude-code is the one that packs blocks inside assistant messages, and the
+  split transform un-packs it to match everyone else.</p>
+
+  <div class="tbl-scroll">
+  <table>
+    <thead>
+      <tr><th>row type</th><th>carries</th><th>native examples</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="rt">user</td>
+        <td>prompt text, pasted content, attachments</td>
+        <td><span class="native">claude-code user line · codex message(role=user) item</span></td>
+      </tr>
+      <tr>
+        <td class="rt">agent</td>
+        <td>response text · model · effort · per-turn usage</td>
+        <td><span class="native">copilot assistant.message · grok agent_message_chunk · claude-code text block (split)</span></td>
+      </tr>
+      <tr>
+        <td class="rt">thinking</td>
+        <td>reasoning text, own row — never embedded in the parent</td>
+        <td><span class="native">codex reasoning item · copilot assistant.reasoning · grok agent_thought_chunk</span></td>
+      </tr>
+      <tr>
+        <td class="rt">tool_use</td>
+        <td>name · input · merged result text + structured payload · is_error; spawn anchor for subagents</td>
+        <td><span class="native">codex function_call + function_call_output · grok tool_call + tool_call_update · copilot external_tool.requested/completed · claude-code tool_use + tool_result (correlated by id)</span></td>
+      </tr>
+      <tr>
+        <td class="rt">system</td>
+        <td>lifecycle, by subtype: compaction · truncation · model_change · mode_change · handoff · error</td>
+        <td><span class="native">copilot session.* events · grok auto_compact_* · pi compaction · claude-code system(subtype)</span></td>
+      </tr>
+      <tr>
+        <td class="rt">summary</td>
+        <td>compaction summaries, branch summaries, ai titles</td>
+        <td><span class="native">claude-code summary records · pi branch_summary · grok compaction-checkpoints</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>Parse &amp; write strategy — discover, meta ingest, stream</h2>
+  <p class="h2-note">Phase 1 finds what's installed so the app can ask what to ingest. Phase 2 makes
+  every list render within seconds. Phase 3 fans out into parallel lanes that never block each other —
+  heavy transcript/FTS backfill, rollup accumulation, and live tails feeding the realtime chat view,
+  all at once.</p>
+
+  <figure class="er">
+    <div class="er-scroll">
+    <svg viewBox="0 0 1100 310" role="img" aria-label="Ingestion flow: discovery scans for installed agents, the user picks which to ingest, meta ingest fills project and session lists before first paint, then the stream phase fans out into three parallel non-blocking lanes — transcript and FTS backfill, usage bucket accumulation, and live watchers feeding the realtime chat view.">
+      <defs>
+        <marker id="arrInk2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+        </marker>
+        <marker id="arrTeal2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" style="fill:var(--teal)"/>
+        </marker>
+      </defs>
+
+      <!-- 1 · discovery -->
+      <g>
+        <rect x="40" y="120" width="180" height="84" rx="6" fill="var(--ink)"/>
+        <text x="56" y="146" font-size="13" font-weight="600" fill="var(--bg)" font-family="'JetBrains Mono',monospace">1 · discovery</text>
+        <text x="56" y="168" font-size="11" fill="var(--bg)" opacity=".82" font-family="'Source Sans 3',sans-serif">scan layouts · find agents</text>
+        <text x="56" y="184" font-size="11" fill="var(--bg)" opacity=".82" font-family="'Source Sans 3',sans-serif">data roots + versions</text>
+        <text x="130" y="224" font-size="10.5" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">milliseconds</text>
+      </g>
+
+      <!-- consent gate -->
+      <line x1="220" y1="162" x2="234" y2="162" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
+      <polygon points="262,138 288,162 262,186 236,162" fill="var(--card)" stroke="currentColor" stroke-width="1.4"/>
+      <text x="262" y="205" font-size="10.5" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">user picks agents</text>
+      <line x1="288" y1="162" x2="304" y2="162" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
+
+      <!-- 2 · meta ingest -->
+      <g>
+        <rect x="310" y="120" width="190" height="84" rx="6" fill="var(--chip)"/>
+        <text x="326" y="146" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">2 · meta ingest</text>
+        <text x="326" y="168" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">stat + first/last lines</text>
+        <text x="326" y="184" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">projects · sessions · sidecars</text>
+        <text x="405" y="224" font-size="10.5" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">≈ 1–2 s</text>
+      </g>
+
+      <!-- first paint marker -->
+      <line x1="512" y1="30" x2="512" y2="284" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <text x="520" y="26" font-size="12" font-weight="600" fill="currentColor" font-family="'Source Sans 3',sans-serif">first paint — lists ready</text>
+      <text x="1060" y="26" font-size="11" font-weight="600" text-anchor="end" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">3 · stream — parallel, non-blocking</text>
+
+      <!-- fan-out -->
+      <polyline points="500,162 536,162 536,75 554,75" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
+      <line x1="536" y1="162" x2="554" y2="162" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
+      <polyline points="536,162 536,249 554,249" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
+
+      <!-- lane A: transcript + FTS -->
+      <g>
+        <rect x="560" y="40" width="500" height="70" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="576" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">transcript + FTS — heavy backfill</text>
+        <text x="576" y="86" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">full parse → message rows · FTS index — newest-first · opening a session promotes it</text>
+      </g>
+
+      <!-- lane B: rollups -->
+      <g>
+        <rect x="560" y="127" width="500" height="70" rx="6" fill="var(--card)" stroke="var(--teal)" stroke-width="1.25"/>
+        <text x="576" y="151" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">usage buckets — accumulate</text>
+        <text x="576" y="173" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">deltas land per batch — session totals stay current while backfill runs</text>
+      </g>
+
+      <!-- lane C: live watch -->
+      <g>
+        <rect x="560" y="214" width="500" height="70" rx="6" fill="var(--teal-bg)" stroke="var(--teal)" stroke-width="1.25"/>
+        <text x="576" y="238" font-size="12.5" font-weight="600" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">live watch — realtime append</text>
+        <text x="576" y="260" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">watchers tail active sessions — chat view appends rows the moment they land</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Widths are not to scale — discovery is milliseconds, meta ingest a couple of seconds,
+    and the three stream lanes run in parallel for as long as the app does. Nothing past discovery is
+    read until the user opts an agent in.</figcaption>
+  </figure>
+
+  <div class="jobs" style="margin-top:20px">
+    <div class="job">
+      <h3>1 · Discovery</h3>
+      <p>The layout manifests probe each candidate data root: which agents exist, their versions, roughly
+      how much data. Nothing else is read — discovery exists so the app can show what it found and ask
+      which agents to ingest. The selection persists, and re-running is cheap enough to spot a newly
+      installed agent at any time.</p>
+    </div>
+    <div class="job">
+      <h3>2 · Meta ingest</h3>
+      <p>Small synchronous transactions, recency-ordered (mtime descending) so current work lands first.
+      stat calls give the session list and timestamps; bounded reads — first and last transcript lines
+      plus tiny sidecars — fill titles, project assignment, plans, and tasks. Project and session lists
+      render now; each session shows an indexing state until its stream lane catches up.</p>
+    </div>
+    <div class="job">
+      <h3>3 · Stream lanes</h3>
+      <p>Parse workers run in parallel per lane; writes funnel through one writer with batched commits, so
+      lanes never contend on locks. Message rows, FTS entries, and rollup increments commit in the
+      <b>same transaction</b> — aggregates never drift from their rows, and the cumulative→delta
+      normalization (the codex trap) happens here, once. Priority: live tails first, then sessions the
+      user opens, then newest-first backfill. Everything resumes via
+      <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">ingest_cursor</span>
+      (byte offset + hash) — the pattern codex itself ships as
+      <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">next_rollout_byte_offset</span>.
+      The live lane is <b>memory-first</b>: active sessions keep an in-process tail ring that serves the
+      realtime view ahead of the batched commit — the DB is structurally behind the tail, so this is
+      correctness, not optimization (design: ingest-engine.html, "The hot tier").</p>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>The SQLite projection</h2>
+  <p class="h2-note">The canonical model as actual DDL — one WAL database, grouped by the ingest phase
+  that fills each table. Ids are blake3 hex, times are unix milliseconds, structured values are JSON
+  text. The whole file is disposable: it rebuilds from the ledger (rule 4).</p>
+
+  <pre class="ddl"><span class="c">PRAGMA journal_mode = WAL;
+PRAGMA synchronous  = NORMAL;
+PRAGMA foreign_keys = ON;</span>
+
+<span class="h">-- ————— phase 1 · discovery ——————————————————————————————————————</span>
+
+CREATE TABLE <b>agent_runtime</b> (
+  id            TEXT PRIMARY KEY,           <span class="c">-- blake3(kind · data_root)</span>
+  kind          TEXT NOT NULL,              <span class="c">-- 'claude-code' | 'codex' | …</span>
+  data_root     TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 0, <span class="c">-- the user's opt-in from discovery</span>
+  account       TEXT,                       <span class="c">-- JSON; sensitivity-register ids stay out</span>
+  config        TEXT,                       <span class="c">-- JSON settings snapshot</span>
+  skills        TEXT,                       <span class="c">-- JSON array</span>
+  versions_seen TEXT,                       <span class="c">-- JSON array; refined by the stream</span>
+  discovered_at INTEGER NOT NULL
+);
+
+<span class="h">-- ————— phase 2 · meta ingest ————————————————————————————————————</span>
+
+CREATE TABLE <b>project</b> (
+  id         TEXT PRIMARY KEY,              <span class="c">-- blake3(normalized root · repo identity)</span>
+  name       TEXT NOT NULL,
+  root_paths TEXT NOT NULL,                 <span class="c">-- JSON array; worktrees/renames merge here</span>
+  git_repo   TEXT
+);
+
+CREATE TABLE <b>session</b> (
+  id                TEXT PRIMARY KEY,       <span class="c">-- blake3(runtime · native id)</span>
+  native_session_id TEXT NOT NULL,
+  runtime_id        TEXT NOT NULL REFERENCES agent_runtime(id),
+  project_id        TEXT REFERENCES project(id),  <span class="c">-- assigned at ingest</span>
+  parent_session_id TEXT REFERENCES session(id),  <span class="c">-- subagents recurse</span>
+  root_session_id   TEXT NOT NULL REFERENCES session(id),  <span class="c">-- = id for roots; parents never change, set once</span>
+  role              TEXT NOT NULL DEFAULT 'main', <span class="c">-- 'main' | 'subagent' | 'team'</span>
+  title             TEXT,
+  summary           TEXT,
+  started_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  stream_state      TEXT NOT NULL DEFAULT 'pending'  <span class="c">-- 'pending' | 'streaming' | 'indexed' — drives the UI badge</span>
+);
+CREATE INDEX session_project ON session(project_id, updated_at DESC);
+CREATE INDEX session_runtime ON session(runtime_id, updated_at DESC);
+CREATE INDEX session_parent  ON session(parent_session_id);
+
+CREATE TABLE <b>workspace_obs</b> (
+  session_id TEXT NOT NULL REFERENCES session(id),
+  at         INTEGER NOT NULL,
+  cwd        TEXT NOT NULL,
+  git_branch TEXT,
+  git_repo   TEXT
+);
+CREATE INDEX workspace_obs_session ON workspace_obs(session_id, at);
+
+CREATE TABLE <b>plan</b> (
+  session_id TEXT NOT NULL REFERENCES session(id),
+  revision   INTEGER NOT NULL,
+  content    TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, revision)
+) WITHOUT ROWID;
+
+CREATE TABLE <b>task</b> (
+  id         TEXT PRIMARY KEY,              <span class="c">-- blake3(session · native key)</span>
+  session_id TEXT NOT NULL REFERENCES session(id),
+  status     TEXT NOT NULL,                 <span class="c">-- 'pending' | 'in_progress' | 'completed'</span>
+  content    TEXT NOT NULL,
+  created_at INTEGER,
+  updated_at INTEGER
+);
+CREATE INDEX task_session ON task(session_id);
+
+<span class="h">-- ————— phase 3 · stream —————————————————————————————————————————</span>
+
+CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- resume + provenance anchor (codex: next_rollout_byte_offset)</span>
+  id          INTEGER PRIMARY KEY,
+  runtime_id  TEXT NOT NULL REFERENCES agent_runtime(id),
+  stream      TEXT NOT NULL,                <span class="c">-- layout stream id</span>
+  path        TEXT NOT NULL,                <span class="c">-- relative to data_root</span>
+  byte_offset INTEGER NOT NULL DEFAULT 0,
+  head_hash   TEXT,                         <span class="c">-- detects rewrite-in-place / truncation</span>
+  updated_at  INTEGER,
+  UNIQUE (runtime_id, path)
+);
+
+CREATE TABLE <b>message</b> (
+  id             INTEGER PRIMARY KEY,       <span class="c">-- rowid; message_fts points here</span>
+  timeline_id    TEXT NOT NULL UNIQUE,      <span class="c">-- stable blake3; native uuids aren't unique</span>
+  session_id     TEXT NOT NULL REFERENCES session(id),
+  ordinal        INTEGER NOT NULL,
+  type           TEXT NOT NULL,             <span class="c">-- 'user'|'agent'|'thinking'|'tool_use'|'system'|'summary'</span>
+  subtype        TEXT,                      <span class="c">-- system only: 'compaction'|'truncation'|'model_change'|…</span>
+  uuid           TEXT,                      <span class="c">-- native id</span>
+  parent_uuid    TEXT,                      <span class="c">-- native threading</span>
+  ts             INTEGER,
+  model          TEXT,
+  effort         TEXT,
+  content        TEXT,                      <span class="c">-- the FTS target</span>
+  tool_id        TEXT,                      <span class="c">-- merge key: the result row folds in here</span>
+  tool_name      TEXT,
+  tool_input     TEXT,                      <span class="c">-- JSON</span>
+  tool_result    TEXT,                      <span class="c">-- result text; NULL until it lands</span>
+  tool_payload   TEXT,                      <span class="c">-- JSON, opaque (spaghetti scar)</span>
+  tool_is_error  INTEGER,
+  branch_tool_id TEXT,                      <span class="c">-- anchors a spawned subagent thread</span>
+  in_tokens      INTEGER,                   <span class="c">-- per-turn deltas (cumulative sources normalized first)</span>
+  out_tokens     INTEGER,
+  cache_r_tokens INTEGER,
+  cache_w_tokens INTEGER,
+  think_tokens   INTEGER,
+  agent_version  TEXT,                      <span class="c">-- provenance…</span>
+  src_cursor     INTEGER REFERENCES ingest_cursor(id),  <span class="c">-- …which ledger file</span>
+  src_offset     INTEGER,                   <span class="c">-- …which byte</span>
+  UNIQUE (session_id, ordinal)
+);
+CREATE INDEX message_tool ON message(session_id, tool_id) WHERE tool_id IS NOT NULL;
+
+CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
+  content, tool_input, tool_result,
+  content='message', content_rowid='id',    <span class="c">-- external content: index only, no copied text</span>
+  tokenize='unicode61 remove_diacritics 2'
+);
+<span class="c">-- no triggers: the stream writer inserts message rows, fts entries,
+-- and rollup increments in the SAME transaction</span>
+
+CREATE TABLE <b>file_edit</b> (
+  session_id   TEXT NOT NULL REFERENCES session(id),
+  message_id   INTEGER REFERENCES message(id),  <span class="c">-- the tool_use row that made it</span>
+  path         TEXT NOT NULL,
+  kind         TEXT NOT NULL,               <span class="c">-- 'edit' | 'write' | 'checkpoint'</span>
+  snapshot_ref TEXT,
+  lines_added  INTEGER,                     <span class="c">-- LOC: exact from patch payloads, best-effort from writes</span>
+  lines_removed INTEGER,
+  at           INTEGER
+);
+CREATE INDEX file_edit_session ON file_edit(session_id, at);
+CREATE INDEX file_edit_path    ON file_edit(path);
+
+CREATE TABLE <b>git_commit</b> (              <span class="c">-- derived; inferred from Bash calls</span>
+  commit_id  TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES session(id),
+  branch     TEXT,
+  at         INTEGER,
+  PRIMARY KEY (commit_id, session_id)
+) WITHOUT ROWID;
+
+CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized cache; session grain × hour × model</span>
+  session_id      TEXT NOT NULL REFERENCES session(id),
+  hour_ts         INTEGER NOT NULL,         <span class="c">-- bucket start, unix ms UTC — day/timezone grouping at query time</span>
+  model           TEXT NOT NULL,
+  in_tokens       INTEGER NOT NULL DEFAULT 0,
+  out_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_r_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_w_tokens  INTEGER NOT NULL DEFAULT 0,
+  think_tokens    INTEGER NOT NULL DEFAULT 0,
+  message_count   INTEGER NOT NULL DEFAULT 0,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session_id, hour_ts, model)
+) WITHOUT ROWID;
+CREATE INDEX usage_bucket_hour ON usage_bucket(hour_ts);
+<span class="c">-- session grain ONLY: project / runtime / all-time totals are query-time sums
+-- through session — nothing to invalidate when a session is reassigned</span>
+
+CREATE VIEW <b>session_contribution</b> AS    <span class="c">-- one row per ROOT session: subagent trees fold in</span>
+SELECT r.id AS session_id, r.project_id,
+       COALESCE(u.tokens, 0)  AS tokens,
+       COALESCE(g.commits, 0) AS commits,
+       COALESCE(f.edits, 0)   AS edits,
+       COALESCE(f.loc, 0)     AS loc
+FROM session r
+LEFT JOIN (SELECT s.root_session_id rid,
+                  SUM(b.in_tokens + b.out_tokens + b.cache_r_tokens
+                      + b.cache_w_tokens + b.think_tokens) tokens
+           FROM usage_bucket b JOIN session s ON s.id = b.session_id
+           GROUP BY rid) u ON u.rid = r.id
+LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) commits
+           FROM git_commit g JOIN session s ON s.id = g.session_id
+           GROUP BY rid) g ON g.rid = r.id
+LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
+                  SUM(COALESCE(f.lines_added, 0) + COALESCE(f.lines_removed, 0)) loc
+           FROM file_edit f JOIN session s ON s.id = f.session_id
+           GROUP BY rid) f ON f.rid = r.id
+WHERE r.id = r.root_session_id;</pre>
+
+  <p class="h2-note" style="margin-top:14px">Twelve tables — eleven real plus the external-content FTS
+  index — and one reporting view, against the ~15 budget. Live-lane updates touch
+  <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">message</span>,
+  <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">session.updated_at</span>, and the
+  buckets through the same single-writer funnel as backfill.</p>
+
+  <!-- ================================================================ -->
+  <h2>Two usage features, two queries</h2>
+  <p class="h2-note">The rethought cache exists so these service-level features are trivial reads —
+  no feature-specific tables, just sums over
+  <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">usage_bucket</span> and friends.</p>
+
+  <div class="jobs">
+    <div class="job">
+      <h3>Activity heatmap</h3>
+      <p>GitHub-style day grid for a project, a session, or everything — grouped into the viewer's
+      timezone at query time, which only works because the buckets are hourly. The same table answers
+      hour-of-day profiles (when do you actually work?) with a different GROUP BY.</p>
+      <pre class="ddl" style="font-size:11.5px">SELECT date(b.hour_ts / 1000, 'unixepoch', 'localtime') AS day,
+       SUM(b.in_tokens + b.out_tokens + b.think_tokens
+           + b.cache_r_tokens + b.cache_w_tokens) AS tokens
+FROM usage_bucket b
+JOIN session s ON s.id = b.session_id
+WHERE s.project_id = :project AND b.hour_ts >= :since
+GROUP BY day;</pre>
+    </div>
+    <div class="job">
+      <h3>Contribution board</h3>
+      <p>Sessions ranked by what they added to a project — tokens, commits, edits, or LOC, all
+      sortable columns of one view. Subagent trees fold into the session the user actually ran;
+      the per-subagent breakdown stays one query away via
+      <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">root_session_id</span>.</p>
+      <pre class="ddl" style="font-size:11.5px">SELECT * FROM session_contribution
+WHERE project_id = :project
+ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pre>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>Consumers — every table has a name attached</h2>
+  <p class="h2-note">Two consumers today, no orphan tables. The third job — live metric feeds for
+  chopsticks — is parked until its needs are actually specified; nothing gets built for it in the
+  meantime.</p>
+
+  <div class="jobs">
+    <div class="job">
+      <h3>Full-text search</h3>
+      <p>Search across everything every agent ever said or did.</p>
+      <div class="reads">
+        <span class="cchip">message.content</span>
+        <span class="cchip">tool_use input/result</span>
+      </div>
+    </div>
+    <div class="job">
+      <h3>Agent-view app</h3>
+      <p>Live session timelines, project browsing, metadata, usage heatmaps, contribution boards.</p>
+      <div class="reads">
+        <span class="cchip">project</span><span class="cchip">session</span><span class="cchip">message</span>
+        <span class="cchip">plan</span><span class="cchip">task</span><span class="cchip">file_edit</span>
+        <span class="cchip">usage_bucket</span><span class="cchip">session_contribution</span>
+      </div>
+    </div>
+  </div>
+
+  <footer class="note">
+    Iron rule 4 holds throughout, one level further than usual: the in-process hot tier rebuilds from
+    this projection, and the projection — caches and cursors included — rebuilds from the append-only
+    ledger. Ten entities plus the internal ingest_cursor bookkeeping table, against the ~15-table
+    budget. This model is a Phase-2 hypothesis ratified against 9 of 11 ground-truth packs; gemini and
+    cursor captures may still amend it. Implementation design: ingest-engine.html.
+  </footer>
+</div>

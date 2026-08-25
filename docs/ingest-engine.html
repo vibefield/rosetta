@@ -1,0 +1,643 @@
+<title>Rosetta Ingest Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #FAF9F7;
+    --card: #FFFFFF;
+    --ink: #23262B;
+    --muted: #6B7076;
+    --line: #DDDAD3;
+    --chip: #EFEDE8;
+    --copper: #A14E28;
+    --copper-bg: rgba(161, 78, 40, .08);
+    --teal: #1F6E63;
+    --teal-bg: rgba(31, 110, 99, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17191D;
+      --card: #1E2126;
+      --ink: #E6E4DF;
+      --muted: #9A9EA6;
+      --line: #33373D;
+      --chip: #282C32;
+      --copper: #D3805A;
+      --copper-bg: rgba(211, 128, 90, .12);
+      --teal: #55A99B;
+      --teal-bg: rgba(85, 169, 155, .12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17191D;
+    --card: #1E2126;
+    --ink: #E6E4DF;
+    --muted: #9A9EA6;
+    --line: #33373D;
+    --chip: #282C32;
+    --copper: #D3805A;
+    --copper-bg: rgba(211, 128, 90, .12);
+    --teal: #55A99B;
+    --teal-bg: rgba(85, 169, 155, .12);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 48px 28px 80px; }
+  .narrow { max-width: 1100px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px; font-weight: 600; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--copper);
+  }
+  h1 {
+    font-family: Spectral, Georgia, serif;
+    font-weight: 600; font-size: 38px; line-height: 1.15;
+    margin: 10px 0 8px; text-wrap: balance;
+  }
+  .sub { color: var(--muted); max-width: 70ch; margin: 0; }
+  .sub a { color: var(--copper); }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+    margin: 26px 0 10px; font-size: 12.5px; color: var(--muted);
+  }
+  .lg { display: inline-flex; align-items: center; gap: 7px; }
+
+  .badge {
+    font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px;
+  }
+  .b-pure { color: var(--teal);   background: var(--teal-bg); }
+  .b-io   { color: var(--copper); background: var(--copper-bg); }
+  .b-bench{ color: var(--muted);  border: 1px solid var(--line); padding: 1px 6px; }
+  .b-ahead{ color: var(--teal);   background: var(--teal-bg); }
+  .b-behind{ color: var(--muted); border: 1px solid var(--line); padding: 1px 6px; }
+
+  figure.er { margin: 8px 0 0; }
+  .er-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  figure.er svg { display: block; min-width: 1150px; width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; max-width: 90ch; }
+
+  h2 {
+    font-family: Spectral, Georgia, serif; font-weight: 600;
+    font-size: 24px; margin: 56px 0 6px; text-wrap: balance;
+  }
+  .h2-note { color: var(--muted); font-size: 14px; margin: 0 0 20px; max-width: 82ch; }
+  .h2-note code, p code {
+    font-family: 'JetBrains Mono', monospace; font-size: .88em;
+  }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .card header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .card h3 { font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600; margin: 0; }
+  .hdr-tags { display: inline-flex; gap: 6px; align-items: center; }
+  .card p { font-size: 13px; margin: 0; }
+  .card p.dim { color: var(--muted); }
+  .card .seams {
+    border-top: 1px solid var(--line); padding-top: 10px;
+    font-size: 12px; color: var(--muted);
+  }
+  .card .seams b { color: var(--ink); font-weight: 600; }
+  .cchips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .cchip {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;
+    background: var(--chip); border-radius: 4px; padding: 2px 7px; color: var(--muted);
+  }
+
+  pre.ddl {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 22px 24px; overflow-x: auto; margin: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.65;
+    color: var(--ink);
+  }
+  .ddl .c { color: var(--muted); }
+  .ddl b  { font-weight: 600; color: var(--copper); }
+
+  .tbl-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13.5px; }
+  th {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em; color: var(--muted);
+    text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.cm { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  td.metric { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+  .jobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .job { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .job h3 { font-family: Spectral, Georgia, serif; font-size: 17px; font-weight: 600; margin: 0 0 6px; }
+  .job p { font-size: 13px; color: var(--muted); margin: 0; }
+  .job p + p { margin-top: 8px; }
+  .job code { font-family: 'JetBrains Mono', monospace; font-size: .9em; color: var(--ink); }
+
+  ol.order { max-width: 78ch; padding-left: 22px; margin: 0; }
+  ol.order li { margin-bottom: 10px; font-size: 14px; }
+  ol.order li b { font-family: 'JetBrains Mono', monospace; font-size: .92em; font-weight: 600; }
+  ol.order li span { color: var(--muted); }
+
+  .callout {
+    border: 1px solid var(--copper); background: var(--copper-bg); border-radius: 10px;
+    padding: 16px 20px; max-width: 90ch; margin-top: 24px; font-size: 14px;
+  }
+  .callout b { color: var(--copper); }
+
+  footer.note {
+    margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-size: 13px; color: var(--muted); max-width: 90ch;
+  }
+  footer.note a { color: var(--copper); }
+</style>
+
+<div class="wrap">
+  <div class="narrow">
+    <div class="eyebrow">rosetta · phase 3 · implementation design</div>
+    <h1>Rosetta Ingest Engine</h1>
+    <p class="sub">How the L2 runtime is built: a typed op-stream with effects only at the ends, one
+    crate seam per stage, and measurement infrastructure designed in from day one — every phase and
+    every hot component owns a fixture and a bench, so each can be optimized in isolation.
+    Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
+  </div>
+
+  <div class="legend">
+    <span class="lg"><span class="badge b-pure">pure</span> no IO, no clock, no locks — benches in isolation, tests without a filesystem</span>
+    <span class="lg"><span class="badge b-io">io</span> the two ends — the only places the world is touched</span>
+    <span class="lg"><span class="badge b-bench">bench</span> owns a criterion bench fed by the synthetic corpus</span>
+  </div>
+
+  <figure class="er">
+    <div class="er-scroll">
+    <svg viewBox="0 0 1290 240" role="img" aria-label="The ingest spine: agent data roots flow through five stages — read (capture, IO), parse (adapters, pure), normalize (adapters, pure), fold (pipeline, pure), write (store, IO) — into the SQLite projection. Typed values connect the stages: RawRecord, ParsedRecord, IngestOp, WriteBatch.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+        </marker>
+      </defs>
+
+      <!-- type labels above the arrows -->
+      <g font-family="'JetBrains Mono',monospace" font-size="10.5" fill="var(--muted)" text-anchor="middle">
+        <text x="344" y="58">RawRecord</text>
+        <text x="540" y="58">ParsedRecord</text>
+        <text x="746" y="58">IngestOp</text>
+        <text x="932" y="58">WriteBatch</text>
+      </g>
+
+      <!-- source -->
+      <rect x="30" y="88" width="110" height="50" rx="6" fill="var(--chip)"/>
+      <text x="85" y="109" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">agent data</text>
+      <text x="85" y="124" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">roots</text>
+      <line x1="140" y1="113" x2="170" y2="113" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- read -->
+      <rect x="176" y="70" width="140" height="86" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25"/>
+      <text x="192" y="94" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">read</text>
+      <text x="304" y="90" font-size="9" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--copper)" font-family="'JetBrains Mono',monospace">IO</text>
+      <text x="192" y="114" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">crates/capture</text>
+      <text x="192" y="134" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">stat · bounded reads · tail</text>
+      <line x1="316" y1="113" x2="366" y2="113" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- parse -->
+      <rect x="372" y="70" width="140" height="86" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="388" y="94" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">parse</text>
+      <text x="500" y="90" font-size="9" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">PURE</text>
+      <text x="388" y="114" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">crates/adapters/*</text>
+      <text x="388" y="134" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">permissive serde raw types</text>
+      <line x1="512" y1="113" x2="562" y2="113" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- normalize -->
+      <rect x="568" y="70" width="150" height="86" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="584" y="94" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">normalize</text>
+      <text x="706" y="90" font-size="9" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">PURE</text>
+      <text x="584" y="114" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">crates/adapters/*</text>
+      <text x="584" y="134" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">agent worldview → ops</text>
+      <line x1="718" y1="113" x2="768" y2="113" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- fold -->
+      <rect x="774" y="70" width="130" height="86" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="790" y="94" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">fold</text>
+      <text x="892" y="90" font-size="9" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">PURE</text>
+      <text x="790" y="114" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">crates/pipeline</text>
+      <text x="790" y="134" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">merge · buckets · ids</text>
+      <line x1="904" y1="113" x2="954" y2="113" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- write -->
+      <rect x="960" y="70" width="140" height="86" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25"/>
+      <text x="976" y="94" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">write</text>
+      <text x="1088" y="90" font-size="9" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--copper)" font-family="'JetBrains Mono',monospace">IO</text>
+      <text x="976" y="114" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">crates/store</text>
+      <text x="976" y="134" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">batched tx · rows+FTS+buckets</text>
+      <line x1="1100" y1="113" x2="1130" y2="113" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- projection -->
+      <rect x="1136" y="88" width="124" height="50" rx="6" fill="var(--chip)"/>
+      <text x="1198" y="109" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">SQLite</text>
+      <text x="1198" y="124" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">projection</text>
+    </svg>
+    </div>
+    <figcaption>The spine. The three middle stages are pure functions over values — that single
+    property is the whole testability and profiling story: every stage benches in isolation, every
+    stage tests against fixtures without a filesystem, and a slow phase decomposes into "which stage
+    of it is slow" by construction. Threading is deliberately boring: std threads + bounded crossbeam
+    channels, rayon inside parse, async only at the L3 server edge — no executor noise in flamegraphs.</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2>The two contracts</h2>
+  <p class="h2-note">Everything modular hangs off two types. <code>IngestOp</code> is where all
+  agent-specific weirdness ends; <code>AgentAdapter</code> is the one trait each agent implements.
+  Note <code>skim</code>'s signature: bytes in, meta out — the meta-phase promise ("no transcript
+  body is ever fully read") is enforced by the type, because the adapter never sees a file handle.</p>
+
+  <pre class="ddl"><span class="c">// crates/core — the central op type; adapters end here, the writer starts here</span>
+enum <b>IngestOp</b> {
+    SessionMeta(SessionRow),          <span class="c">// meta-phase upsert</span>
+    Message(MessageRow),              <span class="c">// one flattened timeline row</span>
+    ToolResult { tool_id: ToolId, result: String, payload: Value, is_error: bool },
+                                      <span class="c">// a merge op, not a row — folds into its tool_use</span>
+    UsageDelta { session: SessionId, ts: Ms, model: ModelId, tokens: TokenDelta },
+    WorkspaceObs(WorkspaceObsRow),
+    FileEdit(FileEditRow),            <span class="c">// carries lines_added / lines_removed</span>
+    Drift(DriftFact),
+}
+
+<span class="c">// crates/adapter-support — one impl per agent; all agent knowledge stops at this boundary</span>
+trait <b>AgentAdapter</b>: Send + Sync {
+    fn kind(&amp;self) -&gt; AgentKind;
+    fn layout(&amp;self) -&gt; &amp;SourceLayout;   <span class="c">// discovery probes with this; tests pin it to the L1 layout.toml</span>
+    fn skim(&amp;self, head: &amp;[u8], tail: &amp;[u8], stat: &amp;FileStat) -&gt; SkimResult;
+    fn parse(&amp;self, stream: &amp;StreamId, line: &amp;[u8]) -&gt; ParseOutcome;
+    fn normalize(&amp;self, rec: &amp;ParsedRecord, ctx: &amp;mut NormalizeCtx) -&gt; Vec&lt;IngestOp&gt;;
+}</pre>
+
+  <!-- ================================================================ -->
+  <h2>Crate responsibilities</h2>
+  <p class="h2-note">One seam per crate; each names the benches it owns. The claude-code block split
+  and codex's cumulative→delta live in their adapters' <code>normalize</code>; the shared machinery
+  (tool-merge state, ordinals, hour bucketing, root-session resolution) is agent-blind and lives in
+  the fold.</p>
+
+  <div class="cards">
+    <div class="card">
+      <header><h3>core</h3><span class="hdr-tags"><span class="badge b-pure">pure</span><span class="badge b-bench">bench</span></span></header>
+      <p>Canonical row types mirroring the DDL exactly, <code>IngestOp</code>, blake3 id derivation,
+      and the pure helpers: tool-merge state machine, <code>cumulative_to_delta</code>,
+      <code>hour_bucket(ts)</code>. Zero IO dependencies.</p>
+      <div class="seams"><b>Benches:</b> fold helpers (ops/sec), id derivation. Types first — everything depends on them.</div>
+    </div>
+
+    <div class="card">
+      <header><h3>adapters/&lt;agent&gt;</h3><span class="hdr-tags"><span class="badge b-pure">pure</span><span class="badge b-bench">bench</span></span></header>
+      <p>The existing permissive raw parsers gain the <code>AgentAdapter</code> impl: skim + normalize
+      on top of <code>parse_line</code>. All nine crates exist; claude-code and codex go first.</p>
+      <div class="seams"><b>Tests:</b> replay suite extends with a golden-ops lane — fixture corpus →
+      ops → committed JSON snapshot, pinning L2 semantics the way L1 pins schemas.
+      <b>Benches:</b> parse throughput (lines/sec) per adapter.</div>
+    </div>
+
+    <div class="card">
+      <header><h3>capture</h3><span class="hdr-tags"><span class="badge b-io">io</span><span class="badge b-bench">bench</span></span></header>
+      <p>Three modules: <code>discovery</code> (walk layouts, stat, emit
+      <code>DiscoveredRuntime</code>), <code>watcher</code> (notify-based, behind a
+      <code>SourceEvents</code> trait — FS watching is the flakiest OS surface we touch, so tests
+      inject synthetic event streams), <code>ledger</code> (append-only raw segments; the durable
+      copy that survives agents GC-ing their own data — claude-code sweeps at 30 days).</p>
+      <div class="seams"><b>Benches:</b> ledger append/scan (MB/sec), discovery walk (dirs/sec).</div>
+    </div>
+
+    <div class="card">
+      <header><h3>pipeline</h3><span class="hdr-tags"><span class="badge b-pure">pure</span><span class="badge b-io">io</span></span></header>
+      <p>The phase orchestrators (<code>discover()</code>, <code>meta_ingest()</code>,
+      <code>stream()</code>), the priority scheduler (live ▸ on-open ▸ newest-first backfill),
+      cursor management, and <code>instrument</code> — the profiler that ships in the binary.</p>
+      <div class="seams"><b>Seams:</b> phases take <code>&amp;dyn</code> deps, so integration tests run
+      whole phases against a temp-dir corpus and an in-memory store. The fold itself stays pure.</div>
+    </div>
+
+    <div class="card">
+      <header><h3>store</h3><span class="hdr-tags"><span class="badge b-io">io</span><span class="badge b-bench">bench</span></span></header>
+      <p><code>schema.rs</code> (the DDL, stamped with <code>schema_version</code> — on mismatch the
+      projection <b>rebuilds from the ledger instead of migrating</b>; rule 4 as code, migrations
+      never exist), <code>writer.rs</code> (single thread, bounded channel of batches, same-tx
+      rows+FTS+buckets), <code>queries.rs</code> (typed functions for heatmap / contribution /
+      timeline / FTS — consumers never hand-write SQL), <code>hot.rs</code> (the in-process tier
+      below: metadata mirror + result caches, mutated only by the writer thread).</p>
+      <div class="seams"><b>Benches:</b> writer rows/sec across batch sizes; query latency on a
+      generated multi-million-row DB.</div>
+    </div>
+
+    <div class="card">
+      <header><h3>bench-corpus</h3><span class="hdr-tags"><span class="badge b-bench">bench</span></span></header>
+      <p><b>The load-bearing fixture.</b> A seeded, deterministic generator synthesizing realistic
+      corpora from the ground-truth shapes — line templates derived from fixtures, parameterized by
+      sessions × lines × tool-call ratio, laid out on disk per the agent's real layout.</p>
+      <div class="seams"><code>bench-corpus gen claude-code --sessions 2000 --lines 1M --seed 42</code>
+      — same corpus on every machine, per iron rule 3. The 3.9GB organic corpus stays an opt-in local
+      validation lane (the <code>probe_local</code> precedent), never load-bearing.</div>
+    </div>
+
+    <div class="card">
+      <header><h3>protocol · server · rosettad</h3><span class="hdr-tags"><span class="badge b-io">io</span></span></header>
+      <p>The L3 edges: wire contract (ts-rs generated types), axum server over
+      <code>store::queries</code> + <code>store::hot</code>, the <code>server::hub</code> pub/sub
+      fan-out (topics = cache keys), and the daemon/CLI — including the profiling entry points
+      <code>rosettad ingest --once --profile</code> and <code>rosettad rebuild --profile</code>.</p>
+      <div class="seams"><b>Async lives only here.</b> The ingest engine below is synchronous threads.</div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>Runtime shape — the stream phase</h2>
+  <p class="h2-note">"Many parallel processes" with one honest constraint: parse workers parallelize
+  freely, writes funnel through a single writer with batched commits — that funnel is what lets lanes
+  run without contending on SQLite locks, and what makes the same-transaction guarantee possible.
+  Queue depths are instrumented at every arrow: the depth tells you which stage is the bottleneck.</p>
+
+  <figure class="er">
+    <div class="er-scroll">
+    <svg viewBox="0 0 1100 330" role="img" aria-label="Stream-phase runtime: watcher (live), on-open promotion, and backfill scanner feed a priority queue ordered live, on-open, backfill; a rayon pool of parse and normalize workers consumes it, appending raw records to the ledger first; ops flow through a bounded channel into the single writer thread, which commits rows, FTS, and buckets in batched transactions to SQLite.">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+        </marker>
+        <marker id="arr2t" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" style="fill:var(--teal)"/>
+        </marker>
+        <marker id="arr2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" style="fill:var(--copper)"/>
+        </marker>
+      </defs>
+
+      <!-- inputs -->
+      <rect x="40" y="50" width="180" height="56" rx="6" fill="var(--teal-bg)" stroke="var(--teal)" stroke-width="1.25"/>
+      <text x="56" y="73" font-size="12" font-weight="600" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">watcher</text>
+      <text x="56" y="92" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">live appends on active files</text>
+
+      <rect x="40" y="140" width="180" height="56" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="56" y="163" font-size="12" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">on-open</text>
+      <text x="56" y="182" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">UI opens a session → promote</text>
+
+      <rect x="40" y="230" width="180" height="56" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="56" y="253" font-size="12" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">backfill scanner</text>
+      <text x="56" y="272" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">newest-first over cursors</text>
+
+      <polyline points="220,78 258,78 258,155 292,155" fill="none" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr2t)"/>
+      <line x1="220" y1="168" x2="292" y2="168" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr2)"/>
+      <polyline points="220,258 258,258 258,181 292,181" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr2)"/>
+
+      <!-- queue -->
+      <rect x="298" y="135" width="176" height="66" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="314" y="158" font-size="12" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">priority queue</text>
+      <text x="314" y="178" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">live ▸ on-open ▸ backfill</text>
+      <line x1="474" y1="168" x2="532" y2="168" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr2)"/>
+
+      <!-- workers -->
+      <rect x="538" y="110" width="212" height="116" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="554" y="134" font-size="12" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">parse · normalize</text>
+      <text x="554" y="152" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">rayon pool ×N</text>
+      <text x="554" y="176" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">read → ledger append → parse</text>
+      <text x="554" y="194" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">→ normalize → IngestOps</text>
+
+      <!-- ledger -->
+      <line x1="644" y1="226" x2="644" y2="262" stroke="var(--copper)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr2c)"/>
+      <text x="656" y="250" font-size="10.5" style="fill:var(--copper)" font-family="'Source Sans 3',sans-serif">durable raw copy first</text>
+      <rect x="538" y="266" width="212" height="40" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25"/>
+      <text x="554" y="291" font-size="11.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">raw ledger — append-only</text>
+
+      <!-- channel -->
+      <line x1="750" y1="168" x2="782" y2="168" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr2)"/>
+      <rect x="788" y="150" width="94" height="36" rx="18" fill="var(--chip)"/>
+      <text x="835" y="172" font-size="10.5" text-anchor="middle" fill="currentColor" font-family="'JetBrains Mono',monospace">bounded ch</text>
+      <line x1="882" y1="168" x2="914" y2="168" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr2)"/>
+
+      <!-- writer -->
+      <rect x="920" y="120" width="150" height="96" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25"/>
+      <text x="936" y="144" font-size="12" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">writer — 1 thread</text>
+      <text x="936" y="164" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">batched tx:</text>
+      <text x="936" y="180" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">rows + FTS + buckets</text>
+      <text x="936" y="200" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">→ SQLite</text>
+    </svg>
+    </div>
+    <figcaption>Backpressure comes free from the bounded channel: if the writer falls behind, workers
+    block, the queue grows, and the instrumented depths say so. The ledger append sits before parse —
+    see the open decision at the bottom of this page. Live fan-out does not wait for the writer: ops
+    for watched sessions branch off at the fold into the hot tier's tail rings (next section).</figcaption>
+  </figure>
+
+  <!-- ================================================================ -->
+  <h2>The hot tier — in-process memory, not a cache server</h2>
+  <p class="h2-note">Some reads shouldn't touch the DB. But rosetta is one local daemon, so the answer
+  is an in-process tier inside rosettad — redis-like in its keyspace, pub/sub, and invalidation
+  discipline, never an external cache server (a socket hop + serialization would be slower than the
+  SQLite read it replaces). Two structural advantages make it clean: the <b>single writer</b> sees
+  every mutation, so all invalidation is event-driven and precise — TTLs appear only for resource
+  eviction, never correctness; and <b>deterministic blake3 ids</b> make ahead-of-DB serving safe,
+  because a crash + ledger replay reproduces identical rows, so at-least-once delivery is idempotent
+  for clients keyed by <code>timeline_id</code>.</p>
+
+  <figure class="er">
+    <div class="er-scroll">
+    <svg viewBox="0 0 1120 310" role="img" aria-label="Hot-tier coherence: fold output feeds two paths. The teal ahead-of-DB path goes fold to per-session tail rings to the pub/sub hub to WebSocket subscribers, running before the batch commits. The behind-DB path goes fold through the bounded channel to the single writer into SQLite; after each commit the writer applies the batch to the metadata mirror and result caches, which serve REST readers and emit row diffs as precise events into the hub.">
+      <defs>
+        <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+        </marker>
+        <marker id="arr3t" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" style="fill:var(--teal)"/>
+        </marker>
+      </defs>
+
+      <!-- fold -->
+      <rect x="40" y="125" width="120" height="64" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="56" y="150" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">fold</text>
+      <text x="56" y="170" font-size="10.5" fill="var(--muted)" font-family="'JetBrains Mono',monospace">IngestOps out</text>
+
+      <!-- ahead-of-DB path (teal) -->
+      <text x="460" y="28" font-size="11" font-weight="600" text-anchor="middle" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">ahead of DB — live path, p99 &lt; 20 ms</text>
+      <polyline points="100,125 100,72 218,72" fill="none" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr3t)"/>
+      <rect x="224" y="40" width="210" height="64" rx="6" fill="var(--teal-bg)" stroke="var(--teal)" stroke-width="1.25"/>
+      <text x="240" y="64" font-size="12.5" font-weight="600" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">tail rings</text>
+      <text x="240" y="84" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">per active session · last N rows</text>
+      <line x1="434" y1="72" x2="488" y2="72" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr3t)"/>
+      <rect x="494" y="40" width="200" height="64" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="510" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">hub — pub/sub</text>
+      <text x="510" y="84" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">topics = cache keys</text>
+      <line x1="694" y1="72" x2="748" y2="72" stroke="var(--teal)" stroke-width="1.6" marker-end="url(#arr3t)"/>
+      <rect x="754" y="40" width="210" height="64" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="770" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">WS subscribers</text>
+      <text x="770" y="84" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">snapshot@S + replay S‥head</text>
+
+      <!-- behind-DB path -->
+      <line x1="160" y1="157" x2="212" y2="157" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr3)"/>
+      <rect x="218" y="139" width="104" height="36" rx="18" fill="var(--chip)"/>
+      <text x="270" y="161" font-size="10.5" text-anchor="middle" fill="currentColor" font-family="'JetBrains Mono',monospace">bounded ch</text>
+      <line x1="322" y1="157" x2="376" y2="157" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr3)"/>
+      <rect x="382" y="121" width="180" height="72" rx="6" fill="var(--card)" stroke="var(--copper)" stroke-width="1.25"/>
+      <text x="398" y="145" font-size="12" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">writer — 1 thread</text>
+      <text x="398" y="165" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">batched tx</text>
+      <line x1="562" y1="157" x2="616" y2="157" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr3)"/>
+      <rect x="622" y="132" width="130" height="50" rx="6" fill="var(--chip)"/>
+      <text x="687" y="152" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">SQLite</text>
+      <text x="687" y="168" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">projection</text>
+
+      <!-- post-commit apply -->
+      <polyline points="472,193 472,262 616,262" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arr3)"/>
+      <text x="484" y="254" font-size="10.5" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">applied after commit</text>
+      <rect x="622" y="228" width="310" height="68" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+      <text x="638" y="252" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">metadata mirror + result caches</text>
+      <text x="638" y="272" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">full-resident meta · epoch-LRU results</text>
+
+      <!-- mirror diffs into hub -->
+      <polyline points="622,240 594,240 594,110" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arr3)"/>
+      <text x="602" y="210" font-size="10.5" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">row diffs → precise events</text>
+
+      <!-- REST readers -->
+      <line x1="932" y1="262" x2="966" y2="262" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr3)"/>
+      <rect x="972" y="237" width="130" height="50" rx="6" fill="var(--chip)"/>
+      <text x="1037" y="257" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">REST readers</text>
+      <text x="1037" y="273" font-size="11" text-anchor="middle" fill="currentColor" font-family="'Source Sans 3',sans-serif">lists · heatmaps</text>
+    </svg>
+    </div>
+    <figcaption>Two coherence classes, stated once and scoped hard: the teal path runs <b>ahead of the
+    DB</b> — required for correctness, since batched commits leave the DB structurally behind the tail
+    while the live budget is event→frame p99 &lt; 20 ms; everything else updates strictly <b>after
+    commit</b>. <code>message.ordinal</code> is the subscription sequence, so subscribe = DB snapshot up
+    to committed ordinal S, ring replay of (S‥head], then live. Restart empties everything — the hot
+    tier rebuilds from the projection the way the projection rebuilds from the ledger.</figcaption>
+  </figure>
+
+  <div class="cards" style="margin-top:20px">
+    <div class="card">
+      <header><h3>tail rings</h3><span class="hdr-tags"><span class="badge b-ahead">ahead of db</span></span></header>
+      <p>Ring buffer per active session (~256 rows / 1MB cap), fed at the fold stage before the batch
+      commits. The live chat view serves from here — it cannot be a DB read no matter how fast SQLite
+      is, because the commit cadence is slower than the latency budget.</p>
+      <div class="seams"><b>Eviction:</b> idle ~10 min → drop the ring (the one legitimate TTL —
+      resource-bound, not correctness); rewarms lazily on subscribe. <b>Day one.</b></div>
+    </div>
+    <div class="card">
+      <header><h3>metadata mirror</h3><span class="hdr-tags"><span class="badge b-behind">behind db</span></span></header>
+      <p>The whole session + project metadata surface, fully resident (10k sessions ≈ a few MB — no
+      LRU, no eviction), applied by the writer after each commit. List/browse reads never touch the
+      DB, and the mirror doubles as the <b>diff source for pub/sub</b>: old row vs new row → precise
+      events ("stream_state → indexed"), which is what makes live-reordering lists cheap.</p>
+      <div class="seams"><b>Warm-up:</b> one query during meta ingest. <b>Day one</b> — the only
+      convenience-over-bench-gating call in this design.</div>
+    </div>
+    <div class="card">
+      <header><h3>result caches</h3><span class="hdr-tags"><span class="badge b-behind">behind db</span><span class="badge b-bench">bench-gated</span></span></header>
+      <p>Heatmap / contribution results keyed <code>project:{id}:heat:{tz}:{range}</code>, LRU-capped
+      (~32MB). Invalidation by epoch: any bucket write for project P bumps P's usage epoch; mismatch →
+      lazy recompute (milliseconds anyway). Live heatmaps skip the server entirely — push
+      <code>UsageDelta</code> events and let the client patch today's cell.</p>
+      <div class="seams"><b>Phase 2:</b> added only when a profile shows these reads actually hurting.</div>
+    </div>
+    <div class="card">
+      <header><h3>DB-only, deliberately</h3><span class="hdr-tags"><span class="badge b-io">io</span></span></header>
+      <p>Timeline scrollback stays on SQLite — the page cache + mmap are already a very good LRU; tune
+      <code>cache_size</code>/<code>mmap_size</code> before writing any app-level paging cache. FTS is
+      never cached: long-tail queries make result caching a hit-rate lie. And no external cache server,
+      ever — it loses on every axis for a single-machine daemon.</p>
+      <div class="seams"><b>Rule:</b> hot-tier structures are mutated only by the writer thread —
+      coherence by construction; readers go through snapshots that never block the writer.</div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>Measurement — fixtures and profilers as first-class citizens</h2>
+  <p class="h2-note">The rule: nothing performance-critical exists without a reproducible way to
+  measure it. Three instruments cover everything.</p>
+
+  <div class="jobs">
+    <div class="job">
+      <h3>Synthetic corpus, seeded</h3>
+      <p>L1 fixtures are correctness-sized (dozens of lines); performance needs millions, and iron
+      rule 3 forbids depending on anyone's organic data. <code>bench-corpus</code> generates the load
+      deterministically from ground-truth shapes — every bench and profile run sees the same corpus
+      on every machine.</p>
+      <p>Criterion benches live in each crate's <code>benches/</code>, fed by it: parse, fold, writer,
+      queries, ledger, discovery.</p>
+    </div>
+    <div class="job">
+      <h3>The profiler ships in the binary</h3>
+      <p><code>pipeline::instrument</code> wraps every phase and lane: timings, rows/sec, bytes/sec,
+      batch commit latency, queue depths. Surfaced as <code>tracing</code> spans for flamegraphs and
+      as a plain table from <code>rosettad ingest --once --profile</code> pointed at a corpus dir —
+      a one-command, reproducible end-to-end profile of discover / meta / stream.</p>
+    </div>
+    <div class="job">
+      <h3>Two harnesses, one headline</h3>
+      <p>A <b>live-latency harness</b> appends synthetic lines to a watched file and measures
+      event→row-visible p50/p95 — the realtime chat view's number. And
+      <code>rosettad rebuild --profile</code> (drop DB, replay ledger) is the headline macro-bench:
+      if rebuild gets slow, "disposable projection" quietly dies.</p>
+      <p>CI runs benches in smoke mode (<code>--test</code>) so they always compile and run; timing
+      gates stay local (criterion baselines + a committed <code>BENCHMARKS.md</code> of reference
+      numbers) — shared runners make timing gates flaky liars.</p>
+    </div>
+  </div>
+
+  <div style="margin-top:20px" class="tbl-scroll">
+  <table>
+    <thead>
+      <tr><th>component</th><th>measured by</th><th>metric</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="cm">parse (per adapter)</td><td>criterion + bench-corpus</td><td class="metric">lines/sec</td></tr>
+      <tr><td class="cm">skim</td><td>criterion + corpus on tmpfs</td><td class="metric">sessions/sec</td></tr>
+      <tr><td class="cm">fold (merge · buckets · ids)</td><td>criterion</td><td class="metric">ops/sec</td></tr>
+      <tr><td class="cm">ledger append / scan</td><td>criterion</td><td class="metric">MB/sec</td></tr>
+      <tr><td class="cm">writer</td><td>criterion, across batch sizes</td><td class="metric">rows/sec · commit ms</td></tr>
+      <tr><td class="cm">queries (heatmap · contribution · timeline · FTS)</td><td>criterion on generated multi-M-row DB</td><td class="metric">ms p95</td></tr>
+      <tr><td class="cm">discovery walk</td><td>criterion</td><td class="metric">dirs/sec</td></tr>
+      <tr><td class="cm">live path (fold → ring → hub → frame)</td><td>latency harness</td><td class="metric">p50 / p95 ms</td></tr>
+      <tr><td class="cm">view apply (writer → hot tier)</td><td>criterion</td><td class="metric">µs/batch — must vanish next to the commit</td></tr>
+      <tr><td class="cm">hot tier health</td><td>instrument --profile counters</td><td class="metric">hit % · bytes per keyspace</td></tr>
+      <tr><td class="cm">full rebuild</td><td>rosettad rebuild --profile</td><td class="metric">wall-clock (headline)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>Build order</h2>
+  <p class="h2-note">Measurement infrastructure arrives before the thing it measures — the pipeline
+  is profiled from its first day, not instrumented after the fact.</p>
+
+  <ol class="order">
+    <li><b>core</b> — rows + IngestOp + pure helpers. <span>Types first; everything depends on them.</span></li>
+    <li><b>store</b> — schema + writer + queries. <span>Benched against hand-built ops before any adapter exists.</span></li>
+    <li><b>bench-corpus</b> — claude-code + codex generators. <span>Before the pipeline, deliberately.</span></li>
+    <li><b>adapters</b> — AgentAdapter for claude-code + codex over the existing parsers. <span>Golden-ops snapshots pin semantics.</span></li>
+    <li><b>pipeline + capture</b> — phases, instrument, scheduler; watcher and ledger last. <span>Backfill works without them.</span></li>
+    <li><b>store::hot + server::hub</b> — rings first (correctness), metadata mirror next; result caches stay bench-gated. <span>Arrives with the L3 server work.</span></li>
+  </ol>
+
+  <div class="callout">
+    <b>Open decision — ledger-before-parse.</b> The stream lane appends raw records to the ledger
+    before parsing them, which doubles write IO during backfill versus parse-directly-and-ledger-lazily.
+    It's what makes rebuild, provenance, and GC-survival unconditional — spaghetti's scars say pay the
+    IO — but it's expensive to retrofit in either direction, so it deserves an explicit yes before
+    the capture crate is built.
+  </div>
+
+  <footer class="note">
+    Companion to <a href="canonical-model.html">canonical-model.html</a> (what gets stored) and
+    ARCHITECTURE.md §4–§7 (the layer contracts). Crate names match the workspace as of 2026-08-26:
+    core · adapter-support · adapters/&lt;agent&gt; ×9 · capture · pipeline · store · protocol ·
+    server · rosettad, plus the proposed bench-corpus.
+  </footer>
+</div>

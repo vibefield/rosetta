@@ -225,6 +225,12 @@ capture contract explicit.
 > validates these shapes against every agent's reality (§10). Spaghetti's canonical
 > model was designed from Claude Code alone and every later adapter had to contort to
 > fit it — rosetta does not repeat that.
+>
+> The current detailed hypothesis — ten entities, the flattened message-row taxonomy,
+> the discover/meta/stream ingest phasing, and the concrete SQLite DDL, ratified
+> against 9 of 11 ground-truth packs — lives in
+> [`docs/canonical-model.html`](canonical-model.html) (rendered design doc, 2026-08-26).
+> Where that file and this section disagree, the HTML is newer.
 
 The canonical model is deliberately small — it covers what the three jobs need, nothing
 more:
@@ -345,6 +351,13 @@ ingestion.
   drift, cursors. A new table needs a consumer to justify it.
 
 ## 7. Performance playbook
+
+> The detailed implementation design — the pure op-stream pipeline, crate seams,
+> stream-phase concurrency, and the bench/profiler infrastructure (bench-corpus
+> generator, per-stage criterion benches, `rosettad ingest --profile`, the rebuild
+> headline bench) — lives in [`docs/ingest-engine.html`](ingest-engine.html)
+> (rendered design doc, 2026-08-26). Where it and this section disagree, the HTML
+> is newer.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for hashing; zstd for ledger segments.
