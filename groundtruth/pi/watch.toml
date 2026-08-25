@@ -1,0 +1,29 @@
+# Pi (Earendil Works / Mario Zechner) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.2
+
+[agent]
+name = "pi"
+display = "Pi"
+vendor = "Earendil Works"
+tier = "A"
+
+[release]
+channel = "npm"
+id = "@earendil-works/pi-coding-agent"   # @mariozechner/pi-coding-agent deprecated at 0.73.1 — keep only for historical fixtures
+surveyed = "0.84.3"                      # 2026-08-24; weekly-to-biweekly
+pinned = ""
+changelog = "https://github.com/earendil-works/pi/releases"
+
+[source]
+repo = "https://github.com/earendil-works/pi"    # transferred from badlogic/pi-mono (redirects)
+persistence_paths = [
+  "packages/coding-agent/src/core/session-manager.ts",
+  "packages/coding-agent/src/core/messages.ts",
+  "packages/coding-agent/docs/session-format.md",  # vendor documents the session schema — diff per release
+]
+
+[fixture]
+headless = "pi -p <prompt> --mode json"  # plus PI_OFFLINE=1, PI_SKIP_VERSION_CHECK=1
+mock_dialect = "openai-chat"             # models.json custom providers; also speaks anthropic-messages + gemini dialects
+home_env = "PI_CODING_AGENT_SESSION_DIR" # session dir override; config still under ~/.pi/agent/
+data_root = "~/.pi"
+notes = "JSONL with versioned SessionHeader first line (v3 current; auto-migrates old). Install with --ignore-scripts. Pre-1.0: breaking format bumps expected; watch for further org/scope moves; cwd-hyphenated session dir naming is an implementation detail."

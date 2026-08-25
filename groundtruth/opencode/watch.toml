@@ -1,0 +1,28 @@
+# OpenCode (Anomaly Co, ex-SST) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.3
+
+[agent]
+name = "opencode"
+display = "OpenCode"
+vendor = "Anomaly Co"
+tier = "A"
+
+[release]
+channel = "npm"                          # near-daily releases — batch into weekly roll-up PRs
+id = "opencode-ai"
+surveyed = "1.18.22"                     # 2026-08-24
+pinned = ""
+changelog = "https://github.com/anomalyco/opencode/releases"
+
+[source]
+repo = "https://github.com/anomalyco/opencode"   # sst/opencode redirects here
+persistence_paths = [
+  "packages/opencode/src/storage/",
+  "packages/opencode/src/session/",
+]
+
+[fixture]
+headless = "opencode run <prompt> -m mock/mock-model --format json --auto"
+mock_dialect = "openai-chat"             # provider block: "npm": "@ai-sdk/openai-compatible" + local baseURL
+home_env = "OPENCODE_DB"                 # overrides DB path; XDG dirs otherwise — run in container HOME
+data_root = "~/.local/share/opencode"
+notes = "Storage migrated (~v1.2+) from per-record JSON (storage/{session,message,part}/*.json) to SQLite opencode.db — BOTH formats exist in the wild, adapter reads both. SQLite schema is internal; schema-dump diff is the only drift signal."

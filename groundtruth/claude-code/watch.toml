@@ -1,0 +1,25 @@
+# Claude Code (Anthropic) — Tier B. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.6
+
+[agent]
+name = "claude-code"
+display = "Claude Code"
+vendor = "Anthropic"
+tier = "B"
+
+[release]
+channel = "npm"                          # poll dist-tags: stable + latest (near-daily patches)
+id = "@anthropic-ai/claude-code"
+surveyed = "2.1.241"                     # latest at survey (2026-08-24); stable was 2.1.231
+pinned = "2.1.241"                       # fixtures + schemas committed for this version (2026-08-24)
+changelog = "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
+
+[source]                                 # closed source — fixtures are the only reliable signal
+repo = ""
+persistence_paths = []
+
+[fixture]
+headless = "claude -p <prompt> --output-format stream-json --bare"
+mock_dialect = "anthropic-messages"      # ANTHROPIC_BASE_URL + dummy ANTHROPIC_API_KEY
+home_env = "CLAUDE_CONFIG_DIR"
+data_root = "~/.claude"
+notes = "Never pass --no-session-persistence. Per-line `version` field stamps writer version. 30-day GC (cleanupPeriodDays). `summary`/`file-history-snapshot` records need resume/compaction scenarios."

@@ -1,0 +1,25 @@
+# Google Antigravity ("AGV") — Tier C (CLI) / D (IDE). Plan: docs/groundtruth/RESEARCH_PLAN.md §5.10
+
+[agent]
+name = "antigravity"
+display = "Google Antigravity"
+vendor = "Google"
+tier = "C/D"
+
+[release]
+channel = "manifest"                     # CLI: Cloud Run JSON manifest {version, url, sha512} -> GCS
+id = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json"
+surveyed = "cli 1.1.19 / ide 2.9.1"      # 2026-08-24
+pinned = ""
+changelog = "https://antigravity.google/changelog"   # IDE: scrape this (releases page is JS-rendered)
+
+[source]                                 # closed — repo has no license and no source
+repo = ""
+persistence_paths = []
+
+[fixture]
+headless = "agy -p <prompt> --output-format stream-json"
+mock_dialect = "none"                    # Google OAuth in system keyring; no documented endpoint override
+home_env = ""
+data_root = "~/.gemini/antigravity-ide"  # moved from ~/.gemini/antigravity; CLI: ~/.gemini/antigravity-cli + ~/.config/antigravity
+notes = "Scoped survey-and-monitor. CLI lane = credentialed scheduled runs (test account, keyring pre-seed). IDE lane = manual capture protocol; conversations are unpublished protobuf (.pb) -> SQLite migration; investigate the undocumented local HTTP API the community export tools use. CLI transcript on-disk location UNVERIFIED (may be server-side)."

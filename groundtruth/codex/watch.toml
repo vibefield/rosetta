@@ -1,0 +1,25 @@
+# Codex CLI (OpenAI) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.7
+
+[agent]
+name = "codex"
+display = "Codex CLI"
+vendor = "OpenAI"
+tier = "A"
+
+[release]
+channel = "github-releases"              # openai/codex/releases.atom; npm @openai/codex secondary
+id = "openai/codex"
+surveyed = "0.149.1"                     # 2026-08-24; track `latest` only, ignore alphas
+pinned = "0.149.1"                       # fixtures + groundtruth doc committed (2026-08-25)
+changelog = "https://github.com/openai/codex/releases"
+
+[source]
+repo = "https://github.com/openai/codex"
+persistence_paths = ["codex-rs/core/src/rollout/"]   # RolloutRecorder; may move crates — re-pin per release
+
+[fixture]
+headless = "codex exec <prompt> --json"
+mock_dialect = "openai-responses"        # wire_api = "responses" is the only supported value
+home_env = "CODEX_HOME"
+data_root = "~/.codex"
+notes = "Mock via [model_providers.mock] base_url + env_key in config.toml. CONFIRMED 0.149.1: SQLite stores landed (goals_1/logs_2/memories_1/queue_1.sqlite, WAL) alongside JSONL rollouts. `exec resume --last` appends to the same rollout. Declares exec_command (not shell) as its tool. Include compaction scenarios — rollouts embed compaction history."

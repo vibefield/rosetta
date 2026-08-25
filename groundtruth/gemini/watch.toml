@@ -1,0 +1,28 @@
+# Gemini CLI (Google) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.8
+
+[agent]
+name = "gemini"
+display = "Gemini CLI"
+vendor = "Google"
+tier = "A"
+
+[release]
+channel = "npm"                          # dist-tags latest/preview/nightly = the three channels
+id = "@google/gemini-cli"
+surveyed = "0.56.0"                      # 2026-08-24; fixture latest + preview
+pinned = ""
+changelog = "https://github.com/google-gemini/gemini-cli/releases"
+
+[source]
+repo = "https://github.com/google-gemini/gemini-cli"
+persistence_paths = [
+  "packages/core/src/services/chatRecordingService.ts",
+  "packages/core/src/services/chatRecordingTypes.ts",
+]
+
+[fixture]
+headless = "gemini -p <prompt> --output-format stream-json"
+mock_dialect = "gemini-generatecontent"  # GOOGLE_GEMINI_BASE_URL + dummy GEMINI_API_KEY
+home_env = ""                            # no home override documented — run in container HOME
+data_root = "~/.gemini"
+notes = "Sessions under ~/.gemini/tmp/<project_hash>/chats/ with retention cleanup — harvest immediately. JSON->JSONL migration in flight: fixture both. Clean home required: cached OAuth session ignores the base-URL override."

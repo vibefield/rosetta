@@ -1,0 +1,2523 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "claude-code",
+  "agent_version": "2.1.241",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth farm 1",
+  "data_root": "~/.claude",
+  "streams": [
+    {
+      "id": "transcript",
+      "glob": "projects/*/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Session transcripts; project dir = cwd slug; per-record `version` stamp; `-c` appends to the same file. Census: 19 record types incl. attachment (most common), progress, ai-title (summary's successor?), bridge-session, pr-link, file-history-delta, and ~2k lines with NO type field.",
+      "discriminator": "type",
+      "record_types": {
+        "assistant": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "effort": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "high": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "entrypoint": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "sdk-cli": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "gitBranch": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "HEAD": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "isSidechain": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "id": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "msg_mock_0001_tool": 1
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "input": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "Bash": 1
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 4,
+                                  "tool_use": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 5
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "msg_mock_0000": 1,
+                          "msg_mock_0001": 1,
+                          "msg_mock_0002": 1,
+                          "msg_mock_0003": 1,
+                          "msg_mock_0004": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "claude-opus-5": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "stop_details": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "stop_reason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "end_turn": 4,
+                          "tool_use": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "stop_sequence": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "message": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache_creation": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "ephemeral_1h_input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "ephemeral_5m_input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "cache_creation_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "cache_read_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "inference_geo": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "iterations": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "output_tokens_details": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "thinking_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "server_tool_use": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "web_fetch_requests": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "web_search_requests": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "service_tier": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "standard": 5
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "speed": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "standard": 5
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentUuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "userType": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "external": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "version": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "2.1.241": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "atis-latch": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "atis": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "atis-latch": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        },
+        "last-prompt": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "lastPrompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "leafUuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "last-prompt": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "mode": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "mode": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "normal": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "mode": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "queue-operation": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 2
+              },
+              "operation": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "dequeue": 2,
+                    "enqueue": 2
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "queue-operation": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "user": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "entrypoint": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "sdk-cli": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "gitBranch": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "HEAD": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "isSidechain": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "any_of",
+                        "variants": [
+                          {
+                            "kind": "string"
+                          },
+                          {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "content": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "rosetta-mock": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "is_error": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "tool_use_id": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "msg_mock_0001_tool": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "tool_result": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "user": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "parentUuid": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 3
+              },
+              "permissionMode": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "bypassPermissions": 1,
+                    "default": 1
+                  }
+                },
+                "required": false,
+                "observed": 2
+              },
+              "promptId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "promptSource": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "sdk": 2
+                  }
+                },
+                "required": false,
+                "observed": 2
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "sourceToolAssistantUUID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "toolUseResult": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "interrupted": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "isImage": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "noOutputExpected": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "stderr": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "stdout": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "rosetta-mock": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "user": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "userType": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "external": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "version": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "2.1.241": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        }
+      },
+      "facets": [
+        {
+          "id": "assistant-content-blocks",
+          "path": "assistant.message.content[]",
+          "discriminator": "type",
+          "record_types": {
+            "text": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "tool_use": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "msg_mock_0001_tool": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "input": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "command": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "name": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "Bash": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool_use": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-input",
+          "path": "assistant.message.content[type=tool_use].input",
+          "discriminator": "name",
+          "record_types": {
+            "Bash": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "command": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "user.toolUseResult (keyed by producing tool)",
+          "discriminator": "tool",
+          "record_types": {
+            "Bash": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "interrupted": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "isImage": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "noOutputExpected": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "stderr": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "stdout": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "rosetta-mock": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "user-content-blocks",
+          "path": "user.message.content[]",
+          "discriminator": "type",
+          "record_types": {
+            "tool_result": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "rosetta-mock": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "is_error": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "tool_use_id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "msg_mock_0001_tool": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool_result": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "glob": ".claude.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Global state/config blob; timestamped copies in backups/ (derived, excluded from harvest).",
+      "record_types": {
+        "": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "firstStartTime": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "firstStartVersion": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "2.1.241": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "hasResetAutoModeOptInForDefaultOffer": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "machineID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "migrationVersion": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "opusProMigrationComplete": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "seenNotifications": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": true,
+                "observed": 3
+              },
+              "sonnet1m45MigrationComplete": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "userID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "subagent-transcript",
+      "glob": "projects/*/*/subagents/**/agent-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Subagent transcripts. Census: own record vocabulary — started, result, fork-context-ref — plus user/assistant/progress/attachment/system."
+    },
+    {
+      "id": "todos",
+      "glob": "todos/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Per-session/agent todo lists (census: ~2.5k files live)."
+    },
+    {
+      "id": "tasks",
+      "glob": "tasks/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Background task state (census: ~47 files)."
+    },
+    {
+      "id": "plans",
+      "glob": "plans/*.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Saved plan documents."
+    },
+    {
+      "id": "team-config",
+      "glob": "teams/*/config.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Agent team configuration (census: teams/ has ~60 files)."
+    },
+    {
+      "id": "team-inbox",
+      "glob": "teams/*/inboxes/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Team mailbox state."
+    },
+    {
+      "id": "session-meta",
+      "glob": "sessions/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Session metadata records (census: ~8 files)."
+    },
+    {
+      "id": "sessions-index",
+      "glob": "projects/*/sessions-index.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-project session index."
+    },
+    {
+      "id": "file-history",
+      "glob": "file-history/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "File version snapshots; transcripts reference them via file-history-snapshot/-delta records."
+    },
+    {
+      "id": "memory",
+      "glob": "projects/*/memory/*.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Project memory documents."
+    },
+    {
+      "id": "settings",
+      "glob": "settings*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "settings.json + settings.local.json (cleanupPeriodDays: 30-day transcript GC)."
+    },
+    {
+      "id": "prompt-history",
+      "glob": "history.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Global prompt history. Census keyset: display, pastedContents, project, sessionId, timestamp."
+    },
+    {
+      "id": "shell-snapshots",
+      "glob": "shell-snapshots/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Shell environment snapshots for Bash tool sessions."
+    },
+    {
+      "id": "paste-cache",
+      "glob": "paste-cache/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Pasted-content blobs; history.jsonl `pastedContents` likely references these."
+    },
+    {
+      "id": "session-env",
+      "glob": "session-env/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Per-session environment state."
+    },
+    {
+      "id": "debug-logs",
+      "glob": "debug/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Debug logs — potential monitor-app signal, not transcript ground truth."
+    },
+    {
+      "id": "uploads",
+      "glob": "uploads/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Uploaded file blobs referenced from transcripts."
+    },
+    {
+      "id": "farm:headless-stdout",
+      "glob": "<farm>/stdout*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Headless stream-json stdout — corroboration surface captured by the farm, not part of the agent data root.",
+      "discriminator": "type",
+      "record_types": {
+        "assistant": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "id": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "msg_mock_0001_tool": 1
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "input": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "Bash": 1
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 4,
+                                  "tool_use": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 5
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "context_management": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "msg_mock_0000": 1,
+                          "msg_mock_0001": 1,
+                          "msg_mock_0002": 1,
+                          "msg_mock_0003": 1,
+                          "msg_mock_0004": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "claude-opus-5": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "stop_reason": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "stop_sequence": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "message": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache_creation_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "cache_read_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parent_tool_use_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "result": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "api_error_status": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "duration_api_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "duration_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "fast_mode_disabled_reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "sdk_opt_in_required": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "fast_mode_state": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "off": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "is_error": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "modelUsage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "claude-opus-5": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheCreationInputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "cacheReadInputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "canonicalModel": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "claude-opus-5": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "contextWindow": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "costUSD": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "inputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "maxOutputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "outputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "provider": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "firstParty": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "webSearchRequests": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "claude-opus-5[1m]": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheCreationInputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "cacheReadInputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "canonicalModel": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "claude-opus-5": 3
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "contextWindow": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "costUSD": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "inputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "maxOutputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "outputTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "provider": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "firstParty": 3
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "webSearchRequests": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 3
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 3
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "num_turns": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "permission_denials": {
+                "shape": {
+                  "kind": "array"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "result": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "stop_reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "end_turn": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "subagent_stats": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "by_type": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "completed": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "failed": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "killed": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "parent": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "system": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "user": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "max_depth": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "refused": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "budget": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "concurrency_limit": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "depth_limit": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "requested": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "background": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "foreground": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "unset": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "spawned": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "spawned_by_subagents": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "started_in_background": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "subtype": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "success": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "terminal_reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "completed": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "time_to_request_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "total_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "ttft_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "ttft_stream_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "result": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "cache_creation": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "ephemeral_1h_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "ephemeral_5m_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "cache_creation_input_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "cache_read_input_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "inference_geo": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "input_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "iterations": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "output_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "output_tokens_details": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "thinking_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "server_tool_use": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "web_fetch_requests": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "web_search_requests": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "service_tier": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "standard": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "speed": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "standard": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "system": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agents": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string",
+                    "values": {
+                      "Explore": 4,
+                      "Plan": 4,
+                      "claude": 4,
+                      "general-purpose": 4,
+                      "statusline-setup": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "analytics_disabled": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "apiKeySource": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ANTHROPIC_API_KEY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "capabilities": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string",
+                    "values": {
+                      "interrupt_cancel_queued_v1": 4,
+                      "interrupt_receipt_v1": 4,
+                      "msg_lifecycle_v1": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "claude_code_version": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "2.1.241": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "fast_mode_disabled_reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "sdk_opt_in_required": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "fast_mode_state": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "off": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "mcp_servers": {
+                "shape": {
+                  "kind": "array"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "output_style": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "default": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "permissionMode": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "bypassPermissions": 1,
+                    "default": 3
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "plugins": {
+                "shape": {
+                  "kind": "array"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "product_feedback_disabled": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "skills": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string",
+                    "values": {
+                      "batch": 4,
+                      "claude-api": 4,
+                      "code-review": 4,
+                      "dataviz": 4,
+                      "debug": 4,
+                      "deep-research": 4,
+                      "doctor": 4,
+                      "fewer-permission-prompts": 4,
+                      "loop": 4,
+                      "run": 4,
+                      "run-skill-generator": 4,
+                      "simplify": 4,
+                      "update-config": 4,
+                      "verify": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "slash_commands": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string"
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "subtype": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "init": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "terminal_slash_commands": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string",
+                    "values": {
+                      "color": 4,
+                      "doctor": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "tools": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string",
+                    "values": {
+                      "Bash": 4,
+                      "Edit": 4,
+                      "Read": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "system": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "user": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "content": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "rosetta-mock": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "is_error": {
+                              "shape": {
+                                "kind": "boolean"
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "tool_use_id": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "msg_mock_0001_tool": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "tool_result": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 1
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "user": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "parent_tool_use_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "tool_use_result": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "interrupted": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "isImage": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "noOutputExpected": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "stderr": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "stdout": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "rosetta-mock": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "user": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

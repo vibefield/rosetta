@@ -1,0 +1,33 @@
+{
+  "agent": "claude-code",
+  "agent_version": "2.1.241",
+  "files": [
+    {
+      "bytes": 423,
+      "path": "claude-config/.claude.json"
+    },
+    {
+      "bytes": 3379,
+      "path": "claude-config/projects/-private-tmp-rosetta-farm-resume-project/469a2e13-c3ed-4909-89af-056a5ab04a4e.jsonl"
+    },
+    {
+      "bytes": 0,
+      "path": "stderr-1.log"
+    },
+    {
+      "bytes": 0,
+      "path": "stderr.log"
+    },
+    {
+      "bytes": 3454,
+      "path": "stdout-1.jsonl"
+    },
+    {
+      "bytes": 3463,
+      "path": "stdout.jsonl"
+    }
+  ],
+  "generator": "rosetta-fixture-farm 0.2.0",
+  "mock_dialect": "anthropic-messages",
+  "scenario": "resume"
+}

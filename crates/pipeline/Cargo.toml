@@ -1,0 +1,6 @@
+[package]
+name = "rosetta-pipeline"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

@@ -1,0 +1,25 @@
+# Kimi Code CLI (Moonshot AI) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.4
+
+[agent]
+name = "kimi-code"
+display = "Kimi Code CLI"
+vendor = "Moonshot AI"
+tier = "A"
+
+[release]
+channel = "npm"
+id = "@moonshot-ai/kimi-code"
+surveyed = "0.38.0"                      # 2026-08-24; pre-1.0, fast-moving
+pinned = ""
+changelog = "https://www.kimi.com/code/docs"     # treat kimi.com/code as canonical among the three doc mirrors
+
+[source]
+repo = "https://github.com/MoonshotAI/kimi-code"
+persistence_paths = []                   # UNVERIFIED — grep the wire.jsonl / state.json writers under src/
+
+[fixture]
+headless = "kimi -p <prompt> --output-format stream-json"
+mock_dialect = "openai-chat"             # zero-config env synth: KIMI_MODEL_NAME + KIMI_MODEL_API_KEY + KIMI_MODEL_BASE_URL + KIMI_MODEL_PROVIDER_TYPE
+home_env = "KIMI_CODE_HOME"
+data_root = "~/.kimi-code"
+notes = "-p implicitly auto-approves tools — container isolation mandatory. Regular provider keys are NOT read from env (config.toml only); the KIMI_MODEL_* synth is the exception. Legacy ~/.kimi layout differs (context.jsonl+wire.jsonl); `kimi migrate` imports it."

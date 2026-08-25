@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a036c5-6ff0-70a3-aa4c-75eddafa53d2"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `mock-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo rosetta-mock'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo rosetta-mock'","aggregated_output":"rosetta-mock\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The tool ran successfully and printed: rosetta-mock. Scenario complete."}}
+{"type":"turn.completed","usage":{"input_tokens":256,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":64,"reasoning_output_tokens":0}}

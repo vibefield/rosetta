@@ -1,0 +1,155 @@
+format = "rosetta-layout/1"
+agent = "claude-code"
+data_root = "~/.claude"
+
+[[streams]]
+id = "transcript"
+glob = "projects/*/*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Session transcripts; project dir = cwd slug; per-record `version` stamp; `-c` appends to the same file. Census: 19 record types incl. attachment (most common), progress, ai-title (summary's successor?), bridge-session, pr-link, file-history-delta, and ~2k lines with NO type field."
+
+[[streams]]
+id = "state"
+glob = ".claude.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Global state/config blob; timestamped copies in backups/ (derived, excluded from harvest)."
+
+[[streams]]
+id = "subagent-transcript"
+glob = "projects/*/*/subagents/**/agent-*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "observed"
+notes = "Subagent transcripts. Census: own record vocabulary — started, result, fork-context-ref — plus user/assistant/progress/attachment/system."
+
+[[streams]]
+id = "todos"
+glob = "todos/*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Per-session/agent todo lists (census: ~2.5k files live)."
+
+[[streams]]
+id = "tasks"
+glob = "tasks/**/*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Background task state (census: ~47 files)."
+
+[[streams]]
+id = "plans"
+glob = "plans/*.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Saved plan documents."
+
+[[streams]]
+id = "team-config"
+glob = "teams/*/config.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Agent team configuration (census: teams/ has ~60 files)."
+
+[[streams]]
+id = "team-inbox"
+glob = "teams/*/inboxes/*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Team mailbox state."
+
+[[streams]]
+id = "session-meta"
+glob = "sessions/*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Session metadata records (census: ~8 files)."
+
+[[streams]]
+id = "sessions-index"
+glob = "projects/*/sessions-index.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-project session index."
+
+[[streams]]
+id = "file-history"
+glob = "file-history/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "observed"
+notes = "File version snapshots; transcripts reference them via file-history-snapshot/-delta records."
+
+[[streams]]
+id = "memory"
+glob = "projects/*/memory/*.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Project memory documents."
+
+[[streams]]
+id = "settings"
+glob = "settings*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "settings.json + settings.local.json (cleanupPeriodDays: 30-day transcript GC)."
+
+[[streams]]
+id = "prompt-history"
+glob = "history.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "observed"
+notes = "Global prompt history. Census keyset: display, pastedContents, project, sessionId, timestamp."
+
+[[streams]]
+id = "shell-snapshots"
+glob = "shell-snapshots/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Shell environment snapshots for Bash tool sessions."
+
+[[streams]]
+id = "paste-cache"
+glob = "paste-cache/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "observed"
+notes = "Pasted-content blobs; history.jsonl `pastedContents` likely references these."
+
+[[streams]]
+id = "session-env"
+glob = "session-env/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Per-session environment state."
+
+[[streams]]
+id = "debug-logs"
+glob = "debug/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "observed"
+notes = "Debug logs — potential monitor-app signal, not transcript ground truth."
+
+[[streams]]
+id = "uploads"
+glob = "uploads/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "observed"
+notes = "Uploaded file blobs referenced from transcripts."

@@ -1,0 +1,28 @@
+# Hermes (Nous Research) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.1
+
+[agent]
+name = "hermes"
+display = "Hermes Agent"
+vendor = "Nous Research"
+tier = "A"
+
+[release]
+channel = "github-releases"              # dual tags: semver v0.20.x + calver v2026.x.y — normalize to semver
+id = "NousResearch/hermes-agent"
+surveyed = "0.20.5"                      # 2026-08-24; multiple releases per week
+pinned = ""
+changelog = "https://github.com/NousResearch/hermes-agent/releases"
+
+[source]
+repo = "https://github.com/NousResearch/hermes-agent"   # MIT, Python
+persistence_paths = [
+  "hermes_state.py",                     # SessionDB: WAL, _reconcile_columns(), export_session()
+  "website/docs/developer-guide/session-storage.md",
+]
+
+[fixture]
+headless = "hermes -z <prompt> --ignore-user-config --usage-file usage.json"
+mock_dialect = "openai-chat"             # custom endpoint via `hermes model` wizard / config.yaml — provider block shape UNVERIFIED, capture from first farm run
+home_env = "HERMES_HOME"
+data_root = "~/.hermes"
+notes = "No npm/brew — use per-release Docker images for pinned installs. Store is SQLite state.db (schema_version table, currently 23; three FTS5 tables). Commit .db harvest PLUS diffable derivatives: sqlite3 .schema dump + export_session() output (format UNVERIFIED). Legacy JSONL in sessions/ is dead."

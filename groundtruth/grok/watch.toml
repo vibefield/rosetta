@@ -1,0 +1,29 @@
+# Grok Build (xAI) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.9
+
+[agent]
+name = "grok"
+display = "Grok Build"
+vendor = "xAI"
+tier = "A"
+
+[release]
+channel = "url"                          # plain-text latest version; install.sh accepts pinned `bash -s X.Y.Z`
+id = "https://x.ai/cli/stable"
+surveyed = "1.0.5"                       # 2026-08-24
+pinned = ""
+changelog = "https://x.ai/build/changelog"
+
+[source]
+repo = "https://github.com/xai-org/grok-build"   # Apache-2.0 mirror of internal monorepo (SOURCE_REV)
+persistence_paths = [
+  "crates/codegen/xai-chat-state/src/persistence.rs",
+  "crates/codegen/xai-grok-pager/src/app/dispatch/session/",
+  "crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md",
+]
+
+[fixture]
+headless = "grok -p <prompt> --output-format streaming-json"
+mock_dialect = "openai-chat"             # [model.<name>] base_url/env_key, or GROK_MODELS_BASE_URL; XAI_API_KEY skips browser login
+home_env = "GROK_HOME"
+data_root = "~/.grok"
+notes = "updates.jsonl is the authoritative conversation log; chat_history.jsonl = raw model messages. Prior art: crates/codegen/xai-grok-foreign-sessions parses Claude Code + Codex stores. Mirror may lag binaries — fixtures decide on disagreement."

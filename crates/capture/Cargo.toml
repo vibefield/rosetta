@@ -1,0 +1,6 @@
+[package]
+name = "rosetta-capture"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

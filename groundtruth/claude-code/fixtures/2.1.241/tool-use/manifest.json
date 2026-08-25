@@ -1,0 +1,25 @@
+{
+  "agent": "claude-code",
+  "agent_version": "2.1.241",
+  "files": [
+    {
+      "bytes": 423,
+      "path": "claude-config/.claude.json"
+    },
+    {
+      "bytes": 3880,
+      "path": "claude-config/projects/-private-tmp-rosetta-farm-tool-use-project/13f3a252-bd0a-415b-a20b-d6d6b139aaa1.jsonl"
+    },
+    {
+      "bytes": 0,
+      "path": "stderr.log"
+    },
+    {
+      "bytes": 4470,
+      "path": "stdout.jsonl"
+    }
+  ],
+  "generator": "rosetta-fixture-farm 0.2.0",
+  "mock_dialect": "anthropic-messages",
+  "scenario": "tool-use"
+}

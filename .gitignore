@@ -1,0 +1,9 @@
+target/
+.idea/
+.junie/
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# machine-local cargo config (absolute SSD path — never commit)
+/.cargo/

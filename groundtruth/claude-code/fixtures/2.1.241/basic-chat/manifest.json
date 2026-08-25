@@ -1,0 +1,25 @@
+{
+  "agent": "claude-code",
+  "agent_version": "2.1.241",
+  "files": [
+    {
+      "bytes": 423,
+      "path": "claude-config/.claude.json"
+    },
+    {
+      "bytes": 1282,
+      "path": "claude-config/projects/-private-tmp-rosetta-farm-basic-chat-project/665e3e71-7c12-4810-925a-e8b92cb6f29d.jsonl"
+    },
+    {
+      "bytes": 0,
+      "path": "stderr.log"
+    },
+    {
+      "bytes": 3467,
+      "path": "stdout.jsonl"
+    }
+  ],
+  "generator": "rosetta-fixture-farm 0.2.0",
+  "mock_dialect": "anthropic-messages",
+  "scenario": "basic-chat"
+}

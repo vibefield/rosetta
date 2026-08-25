@@ -1,0 +1,5032 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "codex",
+  "agent_version": "0.149.1",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth farm 1",
+  "data_root": "~/.codex",
+  "streams": [
+    {
+      "id": "rollout",
+      "glob": "sessions/*/*/*/rollout-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg (task_started/item_completed/token_count/task_complete), response_item (message/function_call/function_call_output), world_state, turn_context. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large.",
+      "discriminator": "type",
+      "record_types": {
+        "event_msg": {
+          "observed": 23,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 23
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "collaboration_mode_kind": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "default": 4
+                        }
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "completed_at": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "completed_at_ms": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 9
+                    },
+                    "duration_ms": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "info": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "last_token_usage": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cache_write_input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "cached_input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "output_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "reasoning_output_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "total_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "model_context_window": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "total_token_usage": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cache_write_input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "cached_input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "input_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "output_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "reasoning_output_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "total_tokens": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "item": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "aggregated_output": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "command": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "string"
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "content": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "object",
+                                "fields": {
+                                  "text": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 8
+                                  },
+                                  "text_elements": {
+                                    "shape": {
+                                      "kind": "array"
+                                    },
+                                    "required": false,
+                                    "observed": 4
+                                  },
+                                  "type": {
+                                    "shape": {
+                                      "kind": "string",
+                                      "values": {
+                                        "Text": 4,
+                                        "text": 4
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 8
+                                  }
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 8
+                          },
+                          "cwd": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "duration": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "nanos": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "secs": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "exit_code": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "formatted_output": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 9
+                          },
+                          "parsed_cmd": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "object",
+                                "fields": {
+                                  "cmd": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  },
+                                  "type": {
+                                    "shape": {
+                                      "kind": "string",
+                                      "values": {
+                                        "unknown": 1
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "process_id": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "35326": 1
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "source": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "unified_exec_startup": 1
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "status": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "completed": 1
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "stderr": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "stdout": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "AgentMessage": 4,
+                                "CommandExecution": 1,
+                                "UserMessage": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 9
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 9
+                    },
+                    "last_agent_message": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "model_context_window": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "rate_limits": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "credits": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "individual_limit": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "limit_id": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "codex": 5
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "limit_name": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "plan_type": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "primary": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "rate_limit_reached_type": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "secondary": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "spend_control_reached": {
+                            "shape": {
+                              "kind": "null"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "started_at": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 8
+                    },
+                    "started_at_ms": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 9
+                    },
+                    "thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 9
+                    },
+                    "thread_settings": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "active_permission_profile": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "id": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "approval_policy": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "never": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "approvals_reviewer": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "user": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "collaboration_mode": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "mode": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "default": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "settings": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "developer_instructions": {
+                                        "shape": {
+                                          "kind": "null"
+                                        },
+                                        "required": true,
+                                        "observed": 1
+                                      },
+                                      "model": {
+                                        "shape": {
+                                          "kind": "string",
+                                          "values": {
+                                            "mock-model": 1
+                                          }
+                                        },
+                                        "required": true,
+                                        "observed": 1
+                                      },
+                                      "reasoning_effort": {
+                                        "shape": {
+                                          "kind": "null"
+                                        },
+                                        "required": true,
+                                        "observed": 1
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "cwd": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "model": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock-model": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "model_provider_id": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "permission_profile": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "file_system": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "entries": {
+                                        "shape": {
+                                          "kind": "array",
+                                          "items": {
+                                            "kind": "object",
+                                            "fields": {
+                                              "access": {
+                                                "shape": {
+                                                  "kind": "string",
+                                                  "values": {
+                                                    "read": 1
+                                                  }
+                                                },
+                                                "required": true,
+                                                "observed": 1
+                                              },
+                                              "path": {
+                                                "shape": {
+                                                  "kind": "object",
+                                                  "fields": {
+                                                    "type": {
+                                                      "shape": {
+                                                        "kind": "string",
+                                                        "values": {
+                                                          "special": 1
+                                                        }
+                                                      },
+                                                      "required": true,
+                                                      "observed": 1
+                                                    },
+                                                    "value": {
+                                                      "shape": {
+                                                        "kind": "object",
+                                                        "fields": {
+                                                          "kind": {
+                                                            "shape": {
+                                                              "kind": "string",
+                                                              "values": {
+                                                                "root": 1
+                                                              }
+                                                            },
+                                                            "required": true,
+                                                            "observed": 1
+                                                          }
+                                                        }
+                                                      },
+                                                      "required": true,
+                                                      "observed": 1
+                                                    }
+                                                  }
+                                                },
+                                                "required": true,
+                                                "observed": 1
+                                              }
+                                            }
+                                          }
+                                        },
+                                        "required": true,
+                                        "observed": 1
+                                      },
+                                      "type": {
+                                        "shape": {
+                                          "kind": "string",
+                                          "values": {
+                                            "restricted": 1
+                                          }
+                                        },
+                                        "required": true,
+                                        "observed": 1
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "network": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "restricted": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "managed": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "personality": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "pragmatic": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "time_to_first_token_ms": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "turn_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 17
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "item_completed": 9,
+                          "task_complete": 4,
+                          "task_started": 4,
+                          "thread_settings_applied": 1,
+                          "token_count": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 23
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 23
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 23
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "event_msg": 23
+                  }
+                },
+                "required": true,
+                "observed": 23
+              }
+            }
+          }
+        },
+        "response_item": {
+          "observed": 16,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 16
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "arguments": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "call_id": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "call_mock_0001": 2
+                        }
+                      },
+                      "required": false,
+                      "observed": 2
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 17
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "input_text": 13,
+                                  "output_text": 4
+                                }
+                              },
+                              "required": true,
+                              "observed": 17
+                            }
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 14
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 16
+                    },
+                    "internal_chat_message_metadata_passthrough": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "create_time": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 11
+                          },
+                          "turn_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 16
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 16
+                    },
+                    "name": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "exec_command": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 4,
+                          "developer": 3,
+                          "user": 7
+                        }
+                      },
+                      "required": false,
+                      "observed": 14
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "function_call": 1,
+                          "function_call_output": 1,
+                          "message": 14
+                        }
+                      },
+                      "required": true,
+                      "observed": 16
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 16
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 16
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "response_item": 16
+                  }
+                },
+                "required": true,
+                "observed": 16
+              }
+            }
+          }
+        },
+        "session_meta": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "base_instructions": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "provenance": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "model": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "mock-model": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "model": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 3
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "cli_version": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "0.149.1": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "context_window": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "window_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 3
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "cwd": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "history_mode": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "paginated": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "model_provider": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "originator": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "codex_exec": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "session_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "source": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "exec": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "thread_source": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "user": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "timestamp": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 3
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session_meta": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        },
+        "turn_context": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "active_permission_profile": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 3
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 3
+                    },
+                    "approval_policy": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "never": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "approvals_reviewer": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "user": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "collaboration_mode": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "mode": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "default": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "settings": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "developer_instructions": {
+                                  "shape": {
+                                    "kind": "null"
+                                  },
+                                  "required": true,
+                                  "observed": 4
+                                },
+                                "model": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "mock-model": 4
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 4
+                                },
+                                "reasoning_effort": {
+                                  "shape": {
+                                    "kind": "null"
+                                  },
+                                  "required": true,
+                                  "observed": 4
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "current_date": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "2026-08-24": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "cwd": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "multi_agent_version": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "v1": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "permission_profile": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "file_system": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "entries": {
+                                  "shape": {
+                                    "kind": "array",
+                                    "items": {
+                                      "kind": "object",
+                                      "fields": {
+                                        "access": {
+                                          "shape": {
+                                            "kind": "string",
+                                            "values": {
+                                              "read": 3
+                                            }
+                                          },
+                                          "required": true,
+                                          "observed": 3
+                                        },
+                                        "path": {
+                                          "shape": {
+                                            "kind": "object",
+                                            "fields": {
+                                              "type": {
+                                                "shape": {
+                                                  "kind": "string",
+                                                  "values": {
+                                                    "special": 3
+                                                  }
+                                                },
+                                                "required": true,
+                                                "observed": 3
+                                              },
+                                              "value": {
+                                                "shape": {
+                                                  "kind": "object",
+                                                  "fields": {
+                                                    "kind": {
+                                                      "shape": {
+                                                        "kind": "string",
+                                                        "values": {
+                                                          "root": 3
+                                                        }
+                                                      },
+                                                      "required": true,
+                                                      "observed": 3
+                                                    }
+                                                  }
+                                                },
+                                                "required": true,
+                                                "observed": 3
+                                              }
+                                            }
+                                          },
+                                          "required": true,
+                                          "observed": 3
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "restricted": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 3
+                          },
+                          "network": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "restricted": 3
+                              }
+                            },
+                            "required": false,
+                            "observed": 3
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "disabled": 1,
+                                "managed": 3
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "personality": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "pragmatic": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "realtime_active": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "sandbox_policy": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "danger-full-access": 1,
+                                "read-only": 3
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "summary": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "auto": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "timezone": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "turn_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "workspace_roots": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "string"
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "turn_context": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "world_state": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "full": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "state": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "agents_md": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {}
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "apps_instructions": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "collaboration_mode": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "instructions": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "mode": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "default": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "model": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "mock-model": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "environments": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "current_date": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "2026-08-24": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "environments": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "local": {
+                                        "shape": {
+                                          "kind": "object",
+                                          "fields": {
+                                            "cwd": {
+                                              "shape": {
+                                                "kind": "string"
+                                              },
+                                              "required": true,
+                                              "observed": 3
+                                            },
+                                            "shell": {
+                                              "shape": {
+                                                "kind": "string",
+                                                "values": {
+                                                  "zsh": 3
+                                                }
+                                              },
+                                              "required": true,
+                                              "observed": 3
+                                            },
+                                            "status": {
+                                              "shape": {
+                                                "kind": "string",
+                                                "values": {
+                                                  "available": 3
+                                                }
+                                              },
+                                              "required": true,
+                                              "observed": 3
+                                            }
+                                          }
+                                        },
+                                        "required": true,
+                                        "observed": 3
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "filesystem": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "timezone": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "environments_instructions": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "git_attribution": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "host_skills": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "body": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "includeInstructions": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "model": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock-model": 3
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "multi_agent_mode": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {}
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "orchestrator_skills": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "enabled": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "includeInstructions": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "permissions": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "approved_command_prefixes": {
+                                  "shape": {
+                                    "kind": "array"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "instructions": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "personality": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "model": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "mock-model": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                },
+                                "personality": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "pragmatic": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "plugins_instructions": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "realtime": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "active": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          },
+                          "skills": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "includeInstructions": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 3
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 3
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "world_state": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        }
+      },
+      "facets": [
+        {
+          "id": "event-msg",
+          "path": "event_msg.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {
+            "item_completed": {
+              "observed": 9,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "completed_at_ms": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "item": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "aggregated_output": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "command": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "string"
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "content": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "text": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 8
+                                },
+                                "text_elements": {
+                                  "shape": {
+                                    "kind": "array"
+                                  },
+                                  "required": false,
+                                  "observed": 4
+                                },
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "Text": 4,
+                                      "text": 4
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 8
+                                }
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 8
+                        },
+                        "cwd": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "duration": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "nanos": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "secs": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "exit_code": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "formatted_output": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 9
+                        },
+                        "parsed_cmd": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "cmd": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "unknown": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "process_id": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "35326": 1
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "source": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "unified_exec_startup": 1
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "status": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "completed": 1
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "stderr": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "stdout": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "type": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "AgentMessage": 4,
+                              "CommandExecution": 1,
+                              "UserMessage": 4
+                            }
+                          },
+                          "required": true,
+                          "observed": 9
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "started_at_ms": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "thread_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "turn_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "item_completed": 9
+                      }
+                    },
+                    "required": true,
+                    "observed": 9
+                  }
+                }
+              }
+            },
+            "task_complete": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "completed_at": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "duration_ms": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "last_agent_message": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "started_at": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "time_to_first_token_ms": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "turn_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "task_complete": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "task_started": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "collaboration_mode_kind": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "default": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "model_context_window": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "started_at": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "turn_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "task_started": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "thread_settings_applied": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "thread_settings": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "active_permission_profile": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "id": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "approval_policy": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "never": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "approvals_reviewer": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "user": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "collaboration_mode": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "mode": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "default": 1
+                                  }
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "settings": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "developer_instructions": {
+                                      "shape": {
+                                        "kind": "null"
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    },
+                                    "model": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "mock-model": 1
+                                        }
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    },
+                                    "reasoning_effort": {
+                                      "shape": {
+                                        "kind": "null"
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "cwd": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "model": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock-model": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "model_provider_id": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "permission_profile": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "file_system": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "entries": {
+                                      "shape": {
+                                        "kind": "array",
+                                        "items": {
+                                          "kind": "object",
+                                          "fields": {
+                                            "access": {
+                                              "shape": {
+                                                "kind": "string",
+                                                "values": {
+                                                  "read": 1
+                                                }
+                                              },
+                                              "required": true,
+                                              "observed": 1
+                                            },
+                                            "path": {
+                                              "shape": {
+                                                "kind": "object",
+                                                "fields": {
+                                                  "type": {
+                                                    "shape": {
+                                                      "kind": "string",
+                                                      "values": {
+                                                        "special": 1
+                                                      }
+                                                    },
+                                                    "required": true,
+                                                    "observed": 1
+                                                  },
+                                                  "value": {
+                                                    "shape": {
+                                                      "kind": "object",
+                                                      "fields": {
+                                                        "kind": {
+                                                          "shape": {
+                                                            "kind": "string",
+                                                            "values": {
+                                                              "root": 1
+                                                            }
+                                                          },
+                                                          "required": true,
+                                                          "observed": 1
+                                                        }
+                                                      }
+                                                    },
+                                                    "required": true,
+                                                    "observed": 1
+                                                  }
+                                                }
+                                              },
+                                              "required": true,
+                                              "observed": 1
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    },
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "restricted": 1
+                                        }
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "network": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "restricted": 1
+                                  }
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "type": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "managed": 1
+                                  }
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "personality": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "pragmatic": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "thread_settings_applied": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            },
+            "token_count": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "info": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "last_token_usage": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cache_write_input_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "cached_input_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "input_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "output_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "reasoning_output_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "total_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "model_context_window": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "total_token_usage": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cache_write_input_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "cached_input_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "input_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "output_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "reasoning_output_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "total_tokens": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "rate_limits": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "credits": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "individual_limit": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "limit_id": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "codex": 5
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "limit_name": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "plan_type": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "primary": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "rate_limit_reached_type": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "secondary": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "spend_control_reached": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "token_count": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "response-items",
+          "path": "response_item.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {
+            "function_call": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "arguments": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "call_id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "call_mock_0001": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "fc_mock_0001": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "turn_id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "name": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "exec_command": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "function_call": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            },
+            "function_call_output": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "call_id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "call_mock_0001": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "create_time": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "turn_id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "function_call_output": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            },
+            "message": {
+              "observed": 14,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 17
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "input_text": 13,
+                                "output_text": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 17
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 14
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 14
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "create_time": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 10
+                        },
+                        "turn_id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 14
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 14
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "assistant": 4,
+                        "developer": 3,
+                        "user": 7
+                      }
+                    },
+                    "required": true,
+                    "observed": 14
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "message": 14
+                      }
+                    },
+                    "required": true,
+                    "observed": 14
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "thread-items",
+          "path": "event_msg[item_completed].item (by item type)",
+          "discriminator": "type",
+          "record_types": {
+            "AgentMessage": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "Text": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "msg_mock_0000": 1,
+                        "msg_mock_0002": 1,
+                        "msg_mock_0003": 1,
+                        "msg_mock_0004": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "AgentMessage": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "CommandExecution": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "aggregated_output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "command": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "string"
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "cwd": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "duration": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "nanos": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "secs": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "exit_code": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "formatted_output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "call_mock_0001": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "parsed_cmd": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "cmd": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "unknown": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "process_id": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "35326": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "source": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "unified_exec_startup": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "status": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "completed": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "stderr": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "stdout": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "CommandExecution": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            },
+            "UserMessage": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "text_elements": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "text": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "UserMessage": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-call-arguments",
+          "path": "response_item[function_call].arguments (parsed, by tool name)",
+          "discriminator": "name",
+          "record_types": {
+            "exec_command": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "cmd": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "state-dbs",
+      "glob": "*.sqlite*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Version-suffixed WAL-mode SQLite stores created on first run at 0.149.1: goals_1, logs_2, memories_1, queue_1, state_5 (150 migrations), thread_history_1 (+ -wal/-shm). thread_history_1 is codex's OWN rollout->SQLite projection with per-thread byte-offset cursors (thread_history_projection_state.next_rollout_byte_offset) — rollouts stay the source of truth. state_5.threads holds session metadata; rollout_migration_state instruments the JSONL migration. Schema dump: sources/<version>.sqlite-schema.sql.",
+      "discriminator": "table",
+      "record_types": {
+        "goals_1.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "goals_1.sqlite:thread_goal_continuation_deferrals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "goals_1.sqlite:thread_goals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "goal_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "objective": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_used_seconds": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "token_budget": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "tokens_used": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "logs_2.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "logs_2.sqlite:logs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "estimated_bytes": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "feedback_log_body": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "file": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "level": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "line": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "module_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "process_uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "target": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "ts": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "ts_nanos": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "memories_1.sqlite:_sqlx_migrations": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "memories_1.sqlite:jobs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "finished_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "input_watermark": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "job_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "kind": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "last_error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "last_success_watermark": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "lease_until": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "ownership_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "retry_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "retry_remaining": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "worker_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "memories_1.sqlite:stage1_outputs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "generated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_usage": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "raw_memory": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "rollout_slug": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "rollout_summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "selected_for_phase2": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "selected_for_phase2_source_updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "source_updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "usage_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "queue_1.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "queue_1.sqlite:queued_items": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "payload_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "queue_order": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "queue_1.sqlite:queued_thread_revisions": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "revision": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:_sqlx_migrations": {
+          "observed": 150,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:backfill_state": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_success_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "last_watermark": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:external_agent_config_imports": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "completed_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "failures": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "import_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "provider_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "successes": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:project_idempotency_keys": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:project_roots": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "position": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:projects": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "metadata": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "position": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:remote_control_enrollments": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "account_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "app_server_client_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "environment_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "remote_control_enabled": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "server_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "server_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "websocket_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:rollout_migration_skipped_rollouts": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "migration_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "rollout_modified_at_ns": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "rollout_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "rollout_size_bytes": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "skip_reason": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "skipped_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:rollout_migration_state": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "last_checked_thread_created_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "last_checked_thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "migration_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:thread_dynamic_tools": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "defer_loading": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "input_schema": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "namespace": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "position": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:thread_sections": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "appearance": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:thread_spawn_edges": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "child_thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "parent_thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "state_5.sqlite:threads": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agent_nickname": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "agent_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "agent_role": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "approval_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "archived": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "archived_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "cli_version": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "first_user_message": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "git_branch": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "git_origin_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "git_sha": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "has_user_event": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "history_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "is_pinned": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "memory_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "model_provider": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "preview": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning_effort": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "recency_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "recency_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "rollout_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "sandbox_policy": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "section_entered_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "section_position": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_section_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "thread_source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "tokens_used": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "thread_history_1.sqlite:_sqlx_migrations": {
+          "observed": 12,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "thread_history_1.sqlite:thread_history_projection_state": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "next_rollout_byte_offset": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "next_rollout_ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "thread_history_1.sqlite:thread_items": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "item_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "item_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "item_type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "rollout_ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "turn_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at_ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "thread_history_1.sqlite:thread_turns": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "completed_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "duration_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "error_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "final_agent_item_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "first_user_item_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "rollout_byte_offset": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "rollout_end_byte_offset": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "rollout_end_ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "rollout_ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "turn_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "writer-locks",
+      "glob": "thread-writer-locks/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Rollout writer coordination locks (.coordination.lock) — runtime artifacts, no data value."
+    },
+    {
+      "id": "installation-id",
+      "glob": "installation_id",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Install identity marker."
+    },
+    {
+      "id": "sandbox-migration",
+      "glob": ".sandbox_migration",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Sandbox migration marker."
+    },
+    {
+      "id": "config",
+      "glob": "config.toml",
+      "file_format": "toml",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Config incl. model_providers (base_url/env_key/wire_api), history.persistence, sqlite_home (migration watch)."
+    },
+    {
+      "id": "prompt-history",
+      "glob": "history.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Prompt history; governed by history.persistence = save-all|none and history.max_bytes."
+    },
+    {
+      "id": "auth",
+      "glob": "auth.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Credentials — MUST-NOT-PARSE; inventory only, excluded from harvests."
+    },
+    {
+      "id": "logs",
+      "glob": "log/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "TUI/CLI logs."
+    },
+    {
+      "id": "version",
+      "glob": "version.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Installed-version marker (presence unverified)."
+    },
+    {
+      "id": "farm:headless-stdout",
+      "glob": "<farm>/stdout*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Headless stream-json stdout — corroboration surface captured by the farm, not part of the agent data root.",
+      "discriminator": "type",
+      "record_types": {
+        "item.completed": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "item": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "aggregated_output": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "command": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "exit_code": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "item_0": 4,
+                          "item_1": 4,
+                          "item_2": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 9
+                    },
+                    "message": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "status": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "completed": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "text": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "agent_message": 4,
+                          "command_execution": 1,
+                          "error": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 9
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "item.completed": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              }
+            }
+          }
+        },
+        "item.started": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "item": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "aggregated_output": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "command": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "exit_code": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "item_1": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "status": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "in_progress": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "command_execution": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "item.started": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "thread.started": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "thread.started": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "turn.completed": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "turn.completed": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "cache_write_input_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "cached_input_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "input_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "output_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "reasoning_output_tokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "turn.started": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "turn.started": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

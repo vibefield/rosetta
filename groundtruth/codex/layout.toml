@@ -1,0 +1,83 @@
+format = "rosetta-layout/1"
+agent = "codex"
+data_root = "~/.codex"
+
+[[streams]]
+id = "rollout"
+glob = "sessions/*/*/*/rollout-*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg (task_started/item_completed/token_count/task_complete), response_item (message/function_call/function_call_output), world_state, turn_context. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large."
+
+[[streams]]
+id = "state-dbs"
+glob = "*.sqlite*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Version-suffixed WAL-mode SQLite stores created on first run at 0.149.1: goals_1, logs_2, memories_1, queue_1, state_5 (150 migrations), thread_history_1 (+ -wal/-shm). thread_history_1 is codex's OWN rollout->SQLite projection with per-thread byte-offset cursors (thread_history_projection_state.next_rollout_byte_offset) — rollouts stay the source of truth. state_5.threads holds session metadata; rollout_migration_state instruments the JSONL migration. Schema dump: sources/<version>.sqlite-schema.sql."
+
+[[streams]]
+id = "writer-locks"
+glob = "thread-writer-locks/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Rollout writer coordination locks (.coordination.lock) — runtime artifacts, no data value."
+
+[[streams]]
+id = "installation-id"
+glob = "installation_id"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Install identity marker."
+
+[[streams]]
+id = "sandbox-migration"
+glob = ".sandbox_migration"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Sandbox migration marker."
+
+[[streams]]
+id = "config"
+glob = "config.toml"
+file_format = "toml"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Config incl. model_providers (base_url/env_key/wire_api), history.persistence, sqlite_home (migration watch)."
+
+[[streams]]
+id = "prompt-history"
+glob = "history.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "research"
+notes = "Prompt history; governed by history.persistence = save-all|none and history.max_bytes."
+
+[[streams]]
+id = "auth"
+glob = "auth.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Credentials — MUST-NOT-PARSE; inventory only, excluded from harvests."
+
+[[streams]]
+id = "logs"
+glob = "log/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "TUI/CLI logs."
+
+[[streams]]
+id = "version"
+glob = "version.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Installed-version marker (presence unverified)."
