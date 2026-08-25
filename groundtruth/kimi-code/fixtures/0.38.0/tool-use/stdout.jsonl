@@ -1,0 +1,5 @@
+{"role":"meta","type":"system.version","version":"0.38.0"}
+{"role":"assistant","tool_calls":[{"type":"function","id":"call_mock_0001","function":{"name":"Bash","arguments":"{\"command\":\"echo rosetta-mock\"}"}}]}
+{"role":"tool","tool_call_id":"call_mock_0001","content":"rosetta-mock\n"}
+{"role":"assistant","content":"The tool ran successfully and printed: rosetta-mock. Scenario complete."}
+{"role":"meta","type":"session.resume_hint","session_id":"session_29c8de9f-290f-419c-a2c9-0e7c1284f527","command":"kimi -r session_29c8de9f-290f-419c-a2c9-0e7c1284f527","content":"To resume this session: kimi -r session_29c8de9f-290f-419c-a2c9-0e7c1284f527"}

@@ -1,0 +1,155 @@
+format = "rosetta-layout/1"
+agent = "pi"
+data_root = "~/.pi"
+
+[[streams]]
+id = "session"
+glob = "agent/sessions/*/*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "JSONL with versioned SessionHeader first line (v1 linear → v2 tree → v3 current). 0.84.3 fixtures: session (parentSession on --fork), session_info (--name), model_change, thinking_level_change, message (user/assistant/toolResult, stopReason=error). Auto-compaction did not fire under a 1024-token mock window; compaction/branch_summary/custom/label remain writer-source (research) until a scenario writes them. Writer types at this pin require compaction.firstKeptEntryId; retainedTail is documented but absent from session-manager.ts. parentId is string|null. Farm strips auth.json, npm/, git/, logs/, bin/."
+
+[[streams]]
+id = "settings"
+glob = "agent/settings.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Global settings (~/.pi/agent/settings.json). Project-local .pi/settings.json lives in the cwd, not under ~/.pi. Keys from 0.84.3 docs: defaultProvider, defaultModel, defaultThinkingLevel, compaction, retry, defaultProjectTrust, enableInstallTelemetry, packages, extensions, skills, prompts, themes, sessionDir, defaultTools, …"
+
+[[streams]]
+id = "models"
+glob = "agent/models.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Custom providers (openai-completions / openai-responses / anthropic-messages / google-generative-ai). Farm writes the mock provider here."
+
+[[streams]]
+id = "models-store"
+glob = "agent/models-store.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Cached provider model catalog. Farm harvests `{}` on a first empty-home run."
+
+[[streams]]
+id = "trust"
+glob = "agent/trust.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Saved project-trust decisions. Written by /trust in interactive mode."
+
+[[streams]]
+id = "auth"
+glob = "agent/auth.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Credentials (0600) — MUST-NOT-PARSE; inventory only. Farm strips this file."
+
+[[streams]]
+id = "keybindings"
+glob = "agent/keybindings.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Custom keybindings overlay."
+
+[[streams]]
+id = "agents-md"
+glob = "agent/AGENTS.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Global context file concatenated with cwd/parent AGENTS.md or CLAUDE.md."
+
+[[streams]]
+id = "system-md"
+glob = "agent/SYSTEM.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Replaces the default system prompt when present."
+
+[[streams]]
+id = "append-system-md"
+glob = "agent/APPEND_SYSTEM.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Appended to the system prompt without replacing it."
+
+[[streams]]
+id = "extensions"
+glob = "agent/extensions/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User TypeScript extensions. Farm runs with --no-extensions."
+
+[[streams]]
+id = "skills"
+glob = "agent/skills/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User skills. Farm runs with --no-skills."
+
+[[streams]]
+id = "prompts"
+glob = "agent/prompts/**/*"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Prompt templates. Farm runs with --no-prompt-templates."
+
+[[streams]]
+id = "themes"
+glob = "agent/themes/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Custom themes. Farm runs with --no-themes."
+
+[[streams]]
+id = "tools"
+glob = "agent/tools/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User tools directory (getToolsDir)."
+
+[[streams]]
+id = "bin"
+glob = "agent/bin/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Managed binaries (fd, rg). Farm strips this tree (vendor bundle)."
+
+[[streams]]
+id = "npm-packages"
+glob = "agent/npm/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-scoped npm pi packages. Farm strips this tree."
+
+[[streams]]
+id = "git-packages"
+glob = "agent/git/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-scoped git pi packages. Farm strips this tree."
+
+[[streams]]
+id = "debug-log"
+glob = "agent/pi-debug.log"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "Debug log (getDebugLogPath). Farm strips logs/."

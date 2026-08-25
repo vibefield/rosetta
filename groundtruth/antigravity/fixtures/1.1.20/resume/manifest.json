@@ -1,0 +1,105 @@
+{
+  "agent": "antigravity",
+  "agent_version": "1.1.20",
+  "scenario": "resume",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "gemini-generatecontent",
+  "files": [
+    {
+      "path": "antigravity-cli/brain/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09/.system_generated/logs/chunks/transcript/00000000.jsonl",
+      "bytes": 2646
+    },
+    {
+      "path": "antigravity-cli/brain/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09/.system_generated/logs/chunks/transcript_full/00000000.jsonl",
+      "bytes": 2646
+    },
+    {
+      "path": "antigravity-cli/brain/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09/.system_generated/logs/transcript.jsonl",
+      "bytes": 2646
+    },
+    {
+      "path": "antigravity-cli/brain/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09/.system_generated/logs/transcript_full.jsonl",
+      "bytes": 2646
+    },
+    {
+      "path": "antigravity-cli/brain/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09/.system_generated/messages/7b3c71bd-7266-450e-a747-5afecbc80d01.json",
+      "bytes": 472
+    },
+    {
+      "path": "antigravity-cli/brain/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09/.system_generated/messages/read.json",
+      "bytes": 45
+    },
+    {
+      "path": "antigravity-cli/cache/conversation_metadata.json",
+      "bytes": 611
+    },
+    {
+      "path": "antigravity-cli/cache/default_project_id.txt",
+      "bytes": 19
+    },
+    {
+      "path": "antigravity-cli/cache/last_conversations.json",
+      "bytes": 57
+    },
+    {
+      "path": "antigravity-cli/cache/onboarding.json",
+      "bytes": 113
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db",
+      "bytes": 20480
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/conversations/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09.db",
+      "bytes": 135168
+    },
+    {
+      "path": "antigravity-cli/conversations/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "antigravity-cli/conversations/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/installation_id",
+      "bytes": 36
+    },
+    {
+      "path": "antigravity-cli/jetski_state.pbtxt",
+      "bytes": 503
+    },
+    {
+      "path": "antigravity-cli/knowledge/knowledge.lock",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/settings.json",
+      "bytes": 70
+    },
+    {
+      "path": "stderr-1.log",
+      "bytes": 0
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout-1.jsonl",
+      "bytes": 2267
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 2399
+    }
+  ]
+}

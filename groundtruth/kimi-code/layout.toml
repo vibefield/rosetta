@@ -1,0 +1,325 @@
+format = "rosetta-layout/1"
+agent = "kimi-code"
+data_root = "~/.kimi-code"
+
+# Primary conversation journal. Writer: Event2 with `durable = true` is
+# appended to wire.jsonl (packages/agent-core-v2/src/app/event/event2.ts).
+# The envelope is open `{type, time?}` (packages/agent-core-v2/src/wire/record.ts).
+# Protocol stamp is `metadata.protocol_version` (1.5 at 0.38.0).
+#
+# Durable Event2 types the writer CAN emit (58). Hermetic 0.38.0 fixtures
+# only prove a subset; organic protocol-1.5 sessions prove a different
+# subset (often omitting `agentId` even though the zod payload requires it).
+# Types listed here as research have not been seen in fixtures or organic
+# census and MUST stay UnknownType until bytes exist:
+#   context.clear, context.undo, cron.add/cursor/delete, forked, goal.clear/
+#   create/update, full_compaction.cancel, interruptionReminder.recorded,
+#   mcp.tools_discovered, permission.rules.add, plan.revision, plan_mode.*,
+#   staleGuard.*, swarm_mode.*, task.notified/started/terminated/
+#   waitDelivered, token_counting.rebased/truncated, tools.register_user_tool/
+#   reset_active_tools/set_active_tools/unregister_user_tool, tower_mode.*,
+#   turn.cancel, turn.steer.
+# Writer quirk: TaskTerminated and TaskTerminatedNotice share type
+# `task.terminated`. Non-durable Event2 types (assistant.delta, tool.progress,
+# subagent.spawned, session.meta.updated, …) are in-memory/UI only and are
+# not journaled.
+
+[[streams]]
+id = "wire"
+glob = "sessions/*/*/agents/*/wire.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Main + sub-agent complete wire event records. Main lives at agents/main/wire.jsonl; sub-agents at agents/agent-N/wire.jsonl (Agent tool, profiles coder/explore/plan — 0.38.0 subagent fixture writes agents/agent-0 with profileName=explore; origin.kind=system_trigger origin.name=subagent). Cold rebuild source of truth (packages/transcript). 0.38.0 hermetic types: metadata, runtime.set_binding, profile.bind, permission.set_mode, turn.prompt, context.append_message, plugin.session_start, context.append_loop_event (step.begin/end, content.part, tool.call, tool.result), llm.tools_snapshot, llm.request, usage.record, token_counting.measured, turn.ended (reason completed|failed; error payload on failed), token_counting.turn_recorded. Organic protocol-1.5 extras: prompt.accepted, tools.update_store, interaction.request/resolved, permission.record_approval_result, full_compaction.begin/complete, context.apply_compaction, config.update. Large media offloaded to blobs (blobref:<mime>;<sha256>). Tool results may spill to tool-results/."
+
+[[streams]]
+id = "session-state"
+glob = "sessions/*/*/state.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Session metadata. Fixture fields: id, version, cwd, createdAt/updatedAt, archived, agents.<id>.{homedir,type}, custom, lastTurnReason (completed|failed), isCustomTitle. Sub-agent entries add parentAgentId and labels. Organic also writes title, lastPrompt, titleKind. Docs list forkedFrom (unseen in fixtures and organic census)."
+
+[[streams]]
+id = "session-index"
+glob = "session_index.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "One homogeneous record per session: sessionId, sessionDir, workDir. No type discriminant. workDirKey = wd_<slug>_<sha256-12>."
+
+[[streams]]
+id = "workspaces"
+glob = "workspaces.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Workspace catalog (fileWorkspacePersistence WORKSPACE_CATALOG_KEY). {version, workspaces.<workDirKey>.{root,name,created_at,last_opened_at}, deleted_workspace_ids}."
+
+[[streams]]
+id = "device-id"
+glob = "device_id"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Install/device identity UUID (createKimiDeviceId)."
+
+[[streams]]
+id = "migrations-effort"
+glob = "migrations-effort.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "One-shot thinking-effort migration markers (dynamic keys such as thinking-effort-max-to-high → ISO timestamp)."
+
+[[streams]]
+id = "session-logs"
+glob = "sessions/*/*/logs/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Per-session diagnostic log (kimi-code.log)."
+
+[[streams]]
+id = "global-logs"
+glob = "logs/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Global diagnostic log: startup, login, export, cross-session events."
+
+# --- observed on an organic ~/.kimi-code (not produced by the hermetic farm) ---
+
+[[streams]]
+id = "blobs"
+glob = "sessions/*/*/agents/**/blobs/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "observed"
+notes = "Content-addressed media offloaded from wire (IAgentBlobService scope `blobs`; blobref:<mime>;<sha256>). Filenames are hex hashes. Binary/content — do not parse."
+
+[[streams]]
+id = "tool-results"
+glob = "sessions/*/*/agents/**/tool-results/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "observed"
+notes = "Spilled tool-result bodies (toolResultTruncationService scope `tool-results`). Names like <Tool>-<toolCallId>-<uuid>.txt. Free-text content — do not parse."
+
+[[streams]]
+id = "user-history"
+glob = "user-history/*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "observed"
+notes = "Per-workdir TUI input history, keyed by md5(workDir). Records are {content: string}. Free-text prompts — census skips this stream."
+
+[[streams]]
+id = "workspace-trust"
+glob = "workspace-trust/*"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Per-workDirKey trust records {root, trustedAt} (workspaceTrust/trustRecord.ts). Filename is the workDirKey, no extension."
+
+[[streams]]
+id = "region"
+glob = "region"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Persisted login-region marker (apps/kimi-code/src/utils/region.ts); organic value e.g. `cn`. Not written by the hermetic API-key farm."
+
+[[streams]]
+id = "config"
+glob = "config.toml"
+file_format = "toml"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Providers, models, loop control. Regular API keys live here — not in process.env. KIMI_MODEL_* synth is in-memory only. MAY contain secrets — inventory only, never parse."
+
+[[streams]]
+id = "tui-config"
+glob = "tui.toml"
+file_format = "toml"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "TUI preferences including [upgrade].auto_install. Not written by headless -p."
+
+[[streams]]
+id = "updates"
+glob = "updates/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Auto-update state (latest.json, install.json, install.lock, rollout.log, plugin-notices.json) — derived, excluded from harvest."
+
+[[streams]]
+id = "bin"
+glob = "bin/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Managed rg/fd (and sometimes a kimi wrapper) vendor binaries — excluded from harvest."
+
+[[streams]]
+id = "query-store"
+glob = "cache/query-store/**/*"
+file_format = "text"
+discipline = "database"
+evidence = "observed"
+notes = "Derived minidb query-store shards (cluster.meta.json, cluster.indexes.json, shard-*/db.wal + generations). Not SQLite. Excluded from harvest with cache/."
+
+[[streams]]
+id = "cache-client-configs"
+glob = "cache/client-configs/**/*"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Cached client-config hints (e.g. estimated_cache_duration.json). Derived; excluded from harvest with cache/."
+
+[[streams]]
+id = "cache-banner"
+glob = "cache/banner/**/*"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Banner display state at cache/banner/state.json (getBannerStateFile). Unseen in organic census and hermetic farm."
+
+[[streams]]
+id = "search-index"
+glob = "search-index/**/*"
+file_format = "text"
+discipline = "database"
+evidence = "observed"
+notes = "kap-server full-text search index (db.wal, db.textindexes.json, postings). Derived read model — excluded from harvest. Not SQLite."
+
+[[streams]]
+id = "telemetry"
+glob = "telemetry/**/*"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "observed"
+notes = "Failed telemetry upload queue (cloudTransport FAILED_PREFIX failed_<id>.jsonl). May contain event payloads — do not parse. Excluded from harvest."
+
+[[streams]]
+id = "oauth"
+glob = "oauth/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Managed OAuth blob store (distinct from credentials/). Organic file `oauth/kimi-code` has no extension. MUST-NOT-PARSE; excluded from harvest."
+
+[[streams]]
+id = "credentials"
+glob = "credentials/**/*"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "OAuth credentials (dir 0700, files 0600) including credentials/mcp/ — MUST-NOT-PARSE; inventory only, excluded from harvests."
+
+# --- research: documented or writer-known, not seen on this machine or in the farm ---
+
+[[streams]]
+id = "upcoming-goals"
+glob = "sessions/*/*/upcoming-goals.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "TUI-only /goal next queue; not part of the agent conversation until promoted. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "plans"
+glob = "sessions/*/*/agents/*/plans/*.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Plan-mode documents named by plan id. `--plan` does not combine with headless `-p`. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "plan-revisions"
+glob = "sessions/*/*/agents/*/plan/**/*"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Versioned plan bodies offloaded from wire (plan.revision records). Unseen in fixtures and organic census."
+
+[[streams]]
+id = "tasks"
+glob = "sessions/*/*/tasks/*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Background task persistence: status/pid/exit code per task_id. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "task-logs"
+glob = "sessions/*/*/tasks/**/*.log"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "Background task output logs. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "cron"
+glob = "sessions/*/*/cron/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Scheduled-task persistence; reloaded on kimi --session. Farm sets KIMI_DISABLE_CRON=1. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "mcp"
+glob = "mcp.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-level MCP server declarations; merged with project-local .kimi-code/mcp.json. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "plugins-installed"
+glob = "plugins/installed.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Installed plugin records and enabled state. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "plugins-managed"
+glob = "plugins/managed/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Vendor copies of plugins installed from zip/local paths — excluded from harvest."
+
+[[streams]]
+id = "skills"
+glob = "skills/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Kimi-specific user-level Skills; generic .agents/skills stay under real HOME. Excluded from harvest."
+
+[[streams]]
+id = "agents-md"
+glob = "AGENTS.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Global Kimi-specific agent instructions. Unseen in fixtures and organic census."
+
+[[streams]]
+id = "server-token"
+glob = "server.token"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "kimi web persistent bearer token (`<KIMI_CODE_HOME>/server.token`, 0600) written on first web boot. MUST-NOT-PARSE. Not produced by headless -p."
+
+[[streams]]
+id = "server"
+glob = "server/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "kimi web instance registry (server/lock, server/instances/). Legacy vs current layouts differ. Not produced by headless -p."

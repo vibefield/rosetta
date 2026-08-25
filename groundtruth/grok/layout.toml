@@ -1,0 +1,235 @@
+format = "rosetta-layout/1"
+agent = "grok"
+data_root = "~/.grok"
+
+[[streams]]
+id = "updates"
+glob = "sessions/*/*/updates.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "ACP session/update stream — the authoritative conversation log (user-guide 17-sessions.md). Envelope {timestamp, method, params}. method is session/update or _x.ai/session/update. Discriminator is params.update.sessionUpdate: user_message_chunk, agent_message_chunk, tool_call, tool_call_update, turn_completed."
+
+[[streams]]
+id = "chat-history"
+glob = "sessions/*/*/chat_history.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Raw model messages. Fixture types: system (string content), user (content[] text blocks; prompt_index on real queries), assistant (string content + optional tool_calls[{id,name,arguments}]), tool_result (tool_call_id + string content). Compaction may rewrite the file."
+
+[[streams]]
+id = "events"
+glob = "sessions/*/*/events.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Turn-scoped timestamps. Fixture types: turn_started, loop_started, phase_changed, first_token, turn_ended, tool_started, tool_completed, permission_requested, permission_resolved. Not listed in 1.0.5 user-guide 17-sessions.md but written by the binary."
+
+[[streams]]
+id = "summary"
+glob = "sessions/*/*/summary.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Session index: info.id/cwd, session_summary, generated_title, created_at/updated_at/last_active_at, num_messages, num_chat_messages, current_model_id, next_trace_turn, chat_format_version, request_id, grok_home, agent_name, sandbox_profile."
+
+[[streams]]
+id = "signals"
+glob = "sessions/*/*/signals.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Session counters: turn/user/assistant counts, contextTokensUsed/contextWindowTokens, modelsUsed, primaryModelId, toolFailureCount, latency samples."
+
+[[streams]]
+id = "rewind-points"
+glob = "sessions/*/*/rewind_points.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "One rewind point per user prompt: prompt_index, created_at, file_snapshots, after_snapshots."
+
+[[streams]]
+id = "prompt-context"
+glob = "sessions/*/*/prompt_context.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Prompt-builder snapshot: version, prompt_mode, audience, working_directory, is_non_interactive, memory_enabled, system_prompt_label."
+
+[[streams]]
+id = "system-prompt"
+glob = "sessions/*/*/system_prompt.txt"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Rendered system prompt text for the session."
+
+[[streams]]
+id = "title-refresh"
+glob = "sessions/*/*/title_refresh_idx"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Auto-title generation counter (single integer)."
+
+[[streams]]
+id = "terminal-logs"
+glob = "sessions/*/*/terminal/**"
+file_format = "text"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Per-tool-call shell capture (call_<id>.log), referenced from tool_call_update.rawOutput.output_file."
+
+[[streams]]
+id = "prompt-history"
+glob = "sessions/*/prompt_history.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Per-cwd prompt history: timestamp, session_id, prompt, is_bash."
+
+[[streams]]
+id = "plan"
+glob = "sessions/*/*/plan.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "TODO/task list state (`todos` object). Absent from the hermetic farm; present in organic sessions."
+
+[[streams]]
+id = "feedback"
+glob = "sessions/*/*/feedback.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "research"
+notes = "User feedback and ratings — not written by the farm scenarios."
+
+[[streams]]
+id = "compaction-checkpoints"
+glob = "sessions/*/*/compaction_checkpoints/**"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Saved compaction state (manual or auto)."
+
+[[streams]]
+id = "subagents"
+glob = "sessions/*/*/subagents/**"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Per-subagent metadata (meta.json); child sessions live in the normal sessions tree. Farm disables subagents; organic census observed status/ids/model fields."
+
+[[streams]]
+id = "cwd-marker"
+glob = "sessions/*/.cwd"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Original cwd when the encoded name exceeds 255 bytes (slug+hash fallback). Farm cwds are short."
+
+[[streams]]
+id = "session-search"
+glob = "sessions/session_search.sqlite*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "FTS5 index over session titles and prompts for `grok sessions search`. Harvest includes -wal/-shm."
+
+[[streams]]
+id = "config"
+glob = "config.toml"
+file_format = "toml"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Main configuration. Farm writes [model.mock-model] chat_completions + [cli]/[features] isolation. Agent may append [marketplace]."
+
+[[streams]]
+id = "pager"
+glob = "pager.toml"
+file_format = "toml"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "TUI appearance configuration — not written in headless farm runs."
+
+[[streams]]
+id = "version"
+glob = "version.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Installed-version cache for update checks. Farm sets GROK_DISABLE_AUTOUPDATER so this may be absent."
+
+[[streams]]
+id = "auth"
+glob = "auth.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Credentials — MUST-NOT-PARSE; inventory only, excluded from harvests."
+
+[[streams]]
+id = "unified-log"
+glob = "logs/unified.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Internal structured log (ts/src/pid/lvl/msg/ctx). No `type` discriminator."
+
+[[streams]]
+id = "logs"
+glob = "logs/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "Other internal logs (MCP server logs, etc.). unified.jsonl is its own stream."
+
+[[streams]]
+id = "agent-id"
+glob = "agent_id"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Install/agent identity marker (UUID text)."
+
+[[streams]]
+id = "metadata-version"
+glob = ".metadata_version"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Home-dir metadata format version (single integer)."
+
+[[streams]]
+id = "active-sessions"
+glob = "active_sessions.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Live session registry; headless farm leaves it empty (`[]`)."
+
+[[streams]]
+id = "models-cache"
+glob = "models_cache.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Cached model catalog — not written when remote_fetch is off."
+
+[[streams]]
+id = "trusted-folders"
+glob = "trusted_folders.toml"
+file_format = "toml"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Workspace trust records."
+
+[[streams]]
+id = "worktrees-db"
+glob = "worktrees.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Git worktree registry (worktrees.db + WAL). Used by `grok du` / `grok worktree gc`."

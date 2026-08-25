@@ -1,0 +1,49 @@
+{
+  "agent": "pi",
+  "agent_version": "0.84.3",
+  "scenario": "compaction",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "pi-home/agent/models-store.json",
+      "bytes": 2
+    },
+    {
+      "path": "pi-home/agent/models.json",
+      "bytes": 691
+    },
+    {
+      "path": "pi-home/agent/sessions/--private-tmp-rosetta-farm-compaction-project--/2026-08-25T06-39-49-418Z_01a037a5-84aa-7abe-9102-384eb067bc2e.jsonl",
+      "bytes": 3270
+    },
+    {
+      "path": "pi-home/agent/settings.json",
+      "bytes": 208
+    },
+    {
+      "path": "stderr-1.log",
+      "bytes": 0
+    },
+    {
+      "path": "stderr-2.log",
+      "bytes": 0
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout-1.jsonl",
+      "bytes": 3671
+    },
+    {
+      "path": "stdout-2.jsonl",
+      "bytes": 4256
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 3715
+    }
+  ]
+}

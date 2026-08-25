@@ -1,0 +1,33 @@
+{
+  "agent": "opencode",
+  "agent_version": "1.18.22",
+  "scenario": "basic-chat",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "opencode-home/log/opencode.log",
+      "bytes": 3027
+    },
+    {
+      "path": "opencode-home/opencode.db",
+      "bytes": 262144
+    },
+    {
+      "path": "opencode-home/opencode.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "opencode-home/opencode.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 988
+    }
+  ]
+}

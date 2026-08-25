@@ -1,0 +1,31 @@
+[cli]
+auto_update = false
+
+[features]
+telemetry = false
+feedback = false
+codebase_indexing = false
+remote_fetch = false
+
+[memory]
+enabled = false
+
+[workflows]
+enabled = false
+
+[subagents]
+enabled = false
+
+[models]
+default = "mock-model"
+
+[model.mock-model]
+model = "mock-model"
+base_url = "http://127.0.0.1:53638/v1"
+name = "Rosetta Mock"
+env_key = "XAI_API_KEY"
+api_backend = "chat_completions"
+context_window = 128000
+
+[marketplace]
+default_skills_installs_purged = true

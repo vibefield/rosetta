@@ -1,0 +1,5394 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "opencode",
+  "agent_version": "1.18.22",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth farm 1",
+  "data_root": "~/.local/share/opencode",
+  "streams": [
+    {
+      "id": "opencode-db",
+      "glob": "opencode.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Current (v1.2+) session store: Drizzle/SQLite WAL at opencode.db (+ -wal/-shm). Fixtures 1.18.22 keep journal_mode=WAL; redaction checkpoints into the main file so the committed db is complete. basic-chat uses the non-git `global` project; tool-use/resume init a git worktree so project.id is a hash and vcs=`git`. Conversational truth is message.data (role) and part.data (type); the event table is an append-only streaming log (session.created.1 / session.updated.1 / message.updated.1 / message.part.updated.1). credential/account tables exist and MUST-NOT-PARSE. Schema dump: sources/<version>.sqlite-schema.sql.",
+      "discriminator": "table",
+      "record_types": {
+        "opencode.db:account": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "access_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "email": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "refresh_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "token_expiry": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:account_state": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "active_account_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "active_org_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:control_account": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "access_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "active": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "email": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "refresh_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "token_expiry": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:credential": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "active": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "connector_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "integration_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "label": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "method_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "value": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:data_migration": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_completed": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:event": {
+          "observed": 72,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "aggregate_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "info": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "agent": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 42
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 36
+                          },
+                          "directory": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 21
+                          },
+                          "finish": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "stop": 8,
+                                "tool-calls": 2
+                              }
+                            },
+                            "required": false,
+                            "observed": 10
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 45
+                          },
+                          "mode": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "build": 15
+                              }
+                            },
+                            "required": false,
+                            "observed": 15
+                          },
+                          "model": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "id": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 18
+                                },
+                                "modelID": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "mock-model": 9
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 9
+                                },
+                                "providerID": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "mock": 27
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 27
+                                },
+                                "variant": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 18
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 27
+                          },
+                          "modelID": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock-model": 15
+                              }
+                            },
+                            "required": false,
+                            "observed": 15
+                          },
+                          "parentID": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 15
+                          },
+                          "path": {
+                            "shape": {
+                              "kind": "any_of",
+                              "variants": [
+                                {
+                                  "kind": "string"
+                                },
+                                {
+                                  "kind": "object",
+                                  "fields": {
+                                    "cwd": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 15
+                                    },
+                                    "root": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 15
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "required": false,
+                            "observed": 36
+                          },
+                          "permission": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "object",
+                                "fields": {
+                                  "action": {
+                                    "shape": {
+                                      "kind": "string",
+                                      "values": {
+                                        "deny": 63
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 63
+                                  },
+                                  "pattern": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 63
+                                  },
+                                  "permission": {
+                                    "shape": {
+                                      "kind": "string",
+                                      "values": {
+                                        "plan_enter": 21,
+                                        "plan_exit": 21,
+                                        "question": 21
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 63
+                                  }
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 21
+                          },
+                          "projectID": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 21
+                          },
+                          "providerID": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock": 15
+                              }
+                            },
+                            "required": false,
+                            "observed": 15
+                          },
+                          "role": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "assistant": 15,
+                                "user": 9
+                              }
+                            },
+                            "required": false,
+                            "observed": 24
+                          },
+                          "sessionID": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 24
+                          },
+                          "slug": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 21
+                          },
+                          "summary": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "additions": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 11
+                                },
+                                "deletions": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 11
+                                },
+                                "diffs": {
+                                  "shape": {
+                                    "kind": "array"
+                                  },
+                                  "required": false,
+                                  "observed": 5
+                                },
+                                "files": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 11
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 16
+                          },
+                          "time": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "completed": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 5
+                                },
+                                "created": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 45
+                                },
+                                "updated": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 21
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 45
+                          },
+                          "title": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 21
+                          },
+                          "tokens": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cache": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "read": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 36
+                                      },
+                                      "write": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 36
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 36
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 36
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 36
+                                },
+                                "reasoning": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 36
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 10
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 36
+                          },
+                          "version": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "1.18.22": 21
+                              }
+                            },
+                            "required": false,
+                            "observed": 21
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 45
+                    },
+                    "part": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "callID": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 27
+                          },
+                          "messageID": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 27
+                          },
+                          "reason": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "stop": 4,
+                                "tool-calls": 1
+                              }
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "sessionID": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 27
+                          },
+                          "snapshot": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 8
+                          },
+                          "state": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "input": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "command": {
+                                        "shape": {
+                                          "kind": "string"
+                                        },
+                                        "required": false,
+                                        "observed": 4
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "metadata": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "exit": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": false,
+                                        "observed": 1
+                                      },
+                                      "output": {
+                                        "shape": {
+                                          "kind": "string"
+                                        },
+                                        "required": true,
+                                        "observed": 3
+                                      },
+                                      "truncated": {
+                                        "shape": {
+                                          "kind": "boolean"
+                                        },
+                                        "required": false,
+                                        "observed": 1
+                                      }
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 3
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "raw": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "status": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "completed": 1,
+                                      "pending": 1,
+                                      "running": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "time": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "end": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": false,
+                                        "observed": 1
+                                      },
+                                      "start": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 4
+                                      }
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 4
+                                },
+                                "title": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 12
+                          },
+                          "time": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "end": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": false,
+                                  "observed": 4
+                                },
+                                "start": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 8
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 8
+                          },
+                          "tokens": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cache": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "read": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      },
+                                      "write": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "reasoning": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "tool": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "bash": 5
+                              }
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "step-finish": 5,
+                                "step-start": 5,
+                                "text": 12,
+                                "tool": 5
+                              }
+                            },
+                            "required": true,
+                            "observed": 27
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 27
+                    },
+                    "sessionID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 72
+                    },
+                    "time": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 27
+                    }
+                  }
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "seq": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:event_sequence": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "aggregate_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "owner_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "seq": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:message": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "agent": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 9
+                    },
+                    "cost": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "finish": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "stop": 4,
+                          "tool-calls": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "mode": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "build": 5
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "modelID": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock-model": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "providerID": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "mock": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "modelID": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 5
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "parentID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "path": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cwd": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "root": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "providerID": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 5
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 5,
+                          "user": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 9
+                    },
+                    "summary": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "diffs": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "time": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "completed": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 5
+                          },
+                          "created": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 9
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 9
+                    },
+                    "tokens": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "read": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "write": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:migration": {
+          "observed": 114,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_completed": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:part": {
+          "observed": 19,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "callID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "cost": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "reason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "stop": 4,
+                          "tool-calls": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "snapshot": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 8
+                    },
+                    "state": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "command": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "metadata": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "exit": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "truncated": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "status": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "completed": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "time": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "end": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "start": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "title": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "text": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 8
+                    },
+                    "time": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "end": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "start": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "tokens": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "read": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "write": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 5
+                    },
+                    "tool": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "step-finish": 5,
+                          "step-start": 5,
+                          "text": 8,
+                          "tool": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 19
+                    }
+                  }
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "message_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:permission": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "action": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "resource": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:project": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "commands": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "icon_color": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "icon_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "icon_url_override": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "sandboxes": {
+                "shape": {
+                  "kind": "array"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_initialized": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "vcs": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "worktree": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:project_directory": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "directory": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "strategy": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "opencode.db:session": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agent": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cost": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "directory": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "metadata": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "model": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "providerID": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 3
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "variant": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 3
+                    }
+                  }
+                },
+                "required": false
+              },
+              "parent_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "permission": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "action": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "deny": 9
+                          }
+                        },
+                        "required": true,
+                        "observed": 9
+                      },
+                      "pattern": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 9
+                      },
+                      "permission": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "plan_enter": 3,
+                            "plan_exit": 3,
+                            "question": 3
+                          }
+                        },
+                        "required": true,
+                        "observed": 9
+                      }
+                    }
+                  }
+                },
+                "required": false
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "revert": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "share_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "slug": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "summary_additions": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "summary_deletions": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "summary_diffs": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "summary_files": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "time_archived": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "time_compacting": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "tokens_cache_read": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "tokens_cache_write": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "tokens_input": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "tokens_output": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "tokens_reasoning": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "workspace_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "opencode.db:session_context_epoch": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "baseline": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "baseline_seq": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "snapshot": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:session_input": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "admitted_seq": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "delivery": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "promoted_seq": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "prompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:session_message": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "seq": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:session_share": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "secret": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:todo": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "position": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "priority": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_created": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "time_updated": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "opencode.db:workspace": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "branch": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "directory": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "extra": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_used": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      },
+      "facets": [
+        {
+          "id": "event-data",
+          "path": "event.data (by event.type)",
+          "discriminator": "type",
+          "record_types": {
+            "message.part.updated.1": {
+              "observed": 27,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "part": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "callID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "cost": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 27
+                        },
+                        "messageID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 27
+                        },
+                        "reason": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "stop": 4,
+                              "tool-calls": 1
+                            }
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "sessionID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 27
+                        },
+                        "snapshot": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 8
+                        },
+                        "state": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "input": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "command": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": false,
+                                      "observed": 4
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "metadata": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "exit": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": false,
+                                      "observed": 1
+                                    },
+                                    "output": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 3
+                                    },
+                                    "truncated": {
+                                      "shape": {
+                                        "kind": "boolean"
+                                      },
+                                      "required": false,
+                                      "observed": 1
+                                    }
+                                  }
+                                },
+                                "required": false,
+                                "observed": 3
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "raw": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "status": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "completed": 1,
+                                    "pending": 1,
+                                    "running": 3
+                                  }
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "time": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "end": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": false,
+                                      "observed": 1
+                                    },
+                                    "start": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 4
+                                    }
+                                  }
+                                },
+                                "required": false,
+                                "observed": 4
+                              },
+                              "title": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "text": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 12
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "end": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": false,
+                                "observed": 4
+                              },
+                              "start": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 8
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 8
+                        },
+                        "tokens": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cache": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "read": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 5
+                                    },
+                                    "write": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 5
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "input": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "reasoning": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "total": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "tool": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "bash": 5
+                            }
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "type": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "step-finish": 5,
+                              "step-start": 5,
+                              "text": 12,
+                              "tool": 5
+                            }
+                          },
+                          "required": true,
+                          "observed": 27
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 27
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 27
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 27
+                  }
+                }
+              }
+            },
+            "message.updated.1": {
+              "observed": 24,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "info": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "agent": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 24
+                        },
+                        "cost": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 15
+                        },
+                        "finish": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "stop": 8,
+                              "tool-calls": 2
+                            }
+                          },
+                          "required": false,
+                          "observed": 10
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 24
+                        },
+                        "mode": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "build": 15
+                            }
+                          },
+                          "required": false,
+                          "observed": 15
+                        },
+                        "model": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "modelID": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "mock-model": 9
+                                  }
+                                },
+                                "required": true,
+                                "observed": 9
+                              },
+                              "providerID": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "mock": 9
+                                  }
+                                },
+                                "required": true,
+                                "observed": 9
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 9
+                        },
+                        "modelID": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock-model": 15
+                            }
+                          },
+                          "required": false,
+                          "observed": 15
+                        },
+                        "parentID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 15
+                        },
+                        "path": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cwd": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 15
+                              },
+                              "root": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 15
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 15
+                        },
+                        "providerID": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock": 15
+                            }
+                          },
+                          "required": false,
+                          "observed": 15
+                        },
+                        "role": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "assistant": 15,
+                              "user": 9
+                            }
+                          },
+                          "required": true,
+                          "observed": 24
+                        },
+                        "sessionID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 24
+                        },
+                        "summary": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "diffs": {
+                                "shape": {
+                                  "kind": "array"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "completed": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": false,
+                                "observed": 5
+                              },
+                              "created": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 24
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 24
+                        },
+                        "tokens": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cache": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "read": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 15
+                                    },
+                                    "write": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 15
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 15
+                              },
+                              "input": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 15
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 15
+                              },
+                              "reasoning": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 15
+                              },
+                              "total": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": false,
+                                "observed": 10
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 15
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 24
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 24
+                  }
+                }
+              }
+            },
+            "session.created.1": {
+              "observed": 3,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "info": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cost": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "directory": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "path": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "permission": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "action": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "deny": 9
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 9
+                                },
+                                "pattern": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 9
+                                },
+                                "permission": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "plan_enter": 3,
+                                      "plan_exit": 3,
+                                      "question": 3
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 9
+                                }
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "projectID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "slug": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "created": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 3
+                              },
+                              "updated": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 3
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "title": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "tokens": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cache": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "read": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 3
+                                    },
+                                    "write": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 3
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 3
+                              },
+                              "input": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 3
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 3
+                              },
+                              "reasoning": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 3
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 3
+                        },
+                        "version": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "1.18.22": 3
+                            }
+                          },
+                          "required": true,
+                          "observed": 3
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 3
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 3
+                  }
+                }
+              }
+            },
+            "session.updated.1": {
+              "observed": 18,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "info": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "agent": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "cost": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "directory": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "model": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "id": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 18
+                              },
+                              "providerID": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "mock": 18
+                                  }
+                                },
+                                "required": true,
+                                "observed": 18
+                              },
+                              "variant": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 18
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "path": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "permission": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "action": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "deny": 54
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 54
+                                },
+                                "pattern": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 54
+                                },
+                                "permission": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "plan_enter": 18,
+                                      "plan_exit": 18,
+                                      "question": 18
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 54
+                                }
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "projectID": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "slug": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "summary": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "additions": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 11
+                              },
+                              "deletions": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 11
+                              },
+                              "files": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 11
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 11
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "created": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 18
+                              },
+                              "updated": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 18
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "title": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "tokens": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cache": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "read": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 18
+                                    },
+                                    "write": {
+                                      "shape": {
+                                        "kind": "number"
+                                      },
+                                      "required": true,
+                                      "observed": 18
+                                    }
+                                  }
+                                },
+                                "required": true,
+                                "observed": 18
+                              },
+                              "input": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 18
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 18
+                              },
+                              "reasoning": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 18
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 18
+                        },
+                        "version": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "1.18.22": 18
+                            }
+                          },
+                          "required": true,
+                          "observed": 18
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 18
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 18
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "event-message-info",
+          "path": "event.data.info (by role)",
+          "discriminator": "role",
+          "record_types": {
+            "assistant": {
+              "observed": 15,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "agent": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "cost": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "finish": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "stop": 8,
+                        "tool-calls": 2
+                      }
+                    },
+                    "required": false,
+                    "observed": 10
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "mode": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "build": 15
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "modelID": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mock-model": 15
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "parentID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cwd": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 15
+                        },
+                        "root": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 15
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "providerID": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mock": 15
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "assistant": 15
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "completed": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 5
+                        },
+                        "created": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 15
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  },
+                  "tokens": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cache": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "read": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 15
+                              },
+                              "write": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 15
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 15
+                        },
+                        "input": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 15
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 15
+                        },
+                        "reasoning": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 15
+                        },
+                        "total": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 10
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 15
+                  }
+                }
+              }
+            },
+            "user": {
+              "observed": 9,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "agent": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "model": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "modelID": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock-model": 9
+                            }
+                          },
+                          "required": true,
+                          "observed": 9
+                        },
+                        "providerID": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock": 9
+                            }
+                          },
+                          "required": true,
+                          "observed": 9
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "user": 9
+                      }
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 9
+                  },
+                  "summary": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "diffs": {
+                          "shape": {
+                            "kind": "array"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": false,
+                    "observed": 5
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "created": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 9
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 9
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "event-part",
+          "path": "event.data.part (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "step-finish": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "cost": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "messageID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "reason": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "stop": 4,
+                        "tool-calls": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "snapshot": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 4
+                  },
+                  "tokens": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cache": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "read": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "write": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "input": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "reasoning": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "total": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "step-finish": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            },
+            "step-start": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "messageID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "snapshot": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "step-start": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            },
+            "text": {
+              "observed": 12,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "messageID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "end": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 4
+                        },
+                        "start": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 8
+                        }
+                      }
+                    },
+                    "required": false,
+                    "observed": 8
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 12
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  }
+                }
+              }
+            },
+            "tool": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "callID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "messageID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "sessionID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "state": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "input": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "command": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 4
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "metadata": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "exit": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 3
+                              },
+                              "truncated": {
+                                "shape": {
+                                  "kind": "boolean"
+                                },
+                                "required": false,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 3
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "raw": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "status": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "completed": 1,
+                              "pending": 1,
+                              "running": 3
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "end": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "start": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 4
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 4
+                        },
+                        "title": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "tool": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "bash": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "message-data",
+          "path": "message.data (by role)",
+          "discriminator": "role",
+          "record_types": {
+            "assistant": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "agent": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "cost": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "finish": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "stop": 4,
+                        "tool-calls": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "mode": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "build": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "modelID": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mock-model": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "parentID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cwd": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "root": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "providerID": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mock": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "assistant": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "completed": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "created": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "tokens": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cache": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "read": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "write": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "input": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "reasoning": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "total": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            },
+            "user": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "agent": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "model": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "modelID": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock-model": 4
+                            }
+                          },
+                          "required": true,
+                          "observed": 4
+                        },
+                        "providerID": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "mock": 4
+                            }
+                          },
+                          "required": true,
+                          "observed": 4
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "user": 4
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "summary": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "diffs": {
+                          "shape": {
+                            "kind": "array"
+                          },
+                          "required": true,
+                          "observed": 4
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "created": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 4
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "part-data",
+          "path": "part.data (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "step-finish": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "cost": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "reason": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "stop": 4,
+                        "tool-calls": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "snapshot": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 4
+                  },
+                  "tokens": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cache": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "read": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              },
+                              "write": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 5
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "input": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "reasoning": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        },
+                        "total": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 5
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "step-finish": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            },
+            "step-start": {
+              "observed": 5,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "snapshot": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "step-start": 5
+                      }
+                    },
+                    "required": true,
+                    "observed": 5
+                  }
+                }
+              }
+            },
+            "text": {
+              "observed": 8,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 8
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "end": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 4
+                        },
+                        "start": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 4
+                        }
+                      }
+                    },
+                    "required": false,
+                    "observed": 4
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 8
+                      }
+                    },
+                    "required": true,
+                    "observed": 8
+                  }
+                }
+              }
+            },
+            "tool": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "callID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "state": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "input": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "command": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "metadata": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "exit": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "truncated": {
+                                "shape": {
+                                  "kind": "boolean"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "status": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "completed": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "end": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "start": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "title": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "tool": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "bash": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-part",
+          "path": "part.data[type=tool] (by tool)",
+          "discriminator": "tool",
+          "record_types": {
+            "bash": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "callID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "state": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "input": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "command": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "metadata": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "exit": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "truncated": {
+                                "shape": {
+                                  "kind": "boolean"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "status": {
+                          "shape": {
+                            "kind": "string",
+                            "values": {
+                              "completed": 1
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "time": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "end": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "start": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "title": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "tool": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "bash": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "glob": "auth.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Provider credentials — MUST-NOT-PARSE; inventory only, excluded from harvests."
+    },
+    {
+      "id": "log",
+      "glob": "log/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "CLI/TUI diagnostic logs under Global.Path.log. Farm harvests log/opencode.log."
+    },
+    {
+      "id": "legacy-session",
+      "glob": "storage/session/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Pre-1.2 per-record JSON sessions (storage/session/<projectID>/ses_*.json). Both formats exist in the wild; current writer is SQLite."
+    },
+    {
+      "id": "legacy-message",
+      "glob": "storage/message/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Pre-1.2 per-message JSON (storage/message/<sessionID>/msg_*.json)."
+    },
+    {
+      "id": "legacy-part",
+      "glob": "storage/part/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Pre-1.2 per-part JSON (storage/part/<messageID>/prt_*.json)."
+    },
+    {
+      "id": "legacy-project",
+      "glob": "storage/project/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Pre-1.2 project records under storage/project/."
+    },
+    {
+      "id": "legacy-session-diff",
+      "glob": "storage/session_diff/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Pre-1.2 session diff snapshots."
+    },
+    {
+      "id": "legacy-share",
+      "glob": "storage/share/**/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Pre-1.2 share records."
+    },
+    {
+      "id": "storage-migration",
+      "glob": "storage/migration",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "JSON-storage migration marker (integer generation)."
+    },
+    {
+      "id": "snapshot",
+      "glob": "snapshot/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Git worktree snapshots at snapshot/<project-hash>/<snapshot-hash>/ (HEAD, config, objects, index). Farm strips snapshot/**/hooks (git init template samples). Present only when the cwd is a git repo."
+    },
+    {
+      "id": "tool-output",
+      "glob": "tool-output/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Persisted tool output blobs."
+    },
+    {
+      "id": "repos",
+      "glob": "repos/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Cloned repository cache (Global.Path.repos)."
+    },
+    {
+      "id": "farm:headless-stdout",
+      "glob": "<farm>/stdout*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Headless stream-json stdout — corroboration surface captured by the farm, not part of the agent data root.",
+      "discriminator": "type",
+      "record_types": {
+        "step_finish": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "part": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "cost": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "messageID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "reason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "stop": 4,
+                          "tool-calls": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "sessionID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "snapshot": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "tokens": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "read": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "write": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "step-finish": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "sessionID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "step_finish": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "step_start": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "part": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "messageID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "sessionID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "snapshot": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "step-start": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "sessionID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "step_start": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "text": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "part": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "messageID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "sessionID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "text": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "time": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "end": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "start": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "text": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "sessionID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "text": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "tool_use": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "part": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "callID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "messageID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "sessionID": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "state": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "command": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "metadata": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "exit": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "truncated": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "status": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "completed": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "time": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "end": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "start": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "title": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "tool": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "tool": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "sessionID": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool_use": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

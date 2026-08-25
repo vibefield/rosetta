@@ -1,0 +1,20 @@
+{
+  "conversations": {
+    "3baa3d39-d12f-4ac7-89fd-c2eb6369cd09": {
+      "summary": {
+        "ID": "3baa3d39-d12f-4ac7-89fd-c2eb6369cd09",
+        "Title": "",
+        "Preview": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+        "NumSteps": 3,
+        "Loaded": true,
+        "UpdatedAt": "2026-08-25T05:10:45.422346Z",
+        "WorkspaceURIs": null,
+        "AppDataDir": "antigravity-cli",
+        "ProjectID": "default-cli-project",
+        "AgentName": ""
+      },
+      "is_internal": false,
+      "last_modified_time": "2026-08-24T22:10:45.594000638-07:00"
+    }
+  }
+}

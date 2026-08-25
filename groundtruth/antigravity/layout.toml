@@ -1,0 +1,251 @@
+format = "rosetta-layout/1"
+agent = "antigravity"
+data_root = "~/.gemini/antigravity-cli"
+
+[[streams]]
+id = "transcript"
+glob = "brain/*/.system_generated/logs/transcript.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Primary transcript JSONL. Fixture 1.1.20: USER_INPUT, PLANNER_RESPONSE (optional tool_calls[{name,args}]), RUN_COMMAND (exit_code+content), CHECKPOINT, SYSTEM_MESSAGE. Organic census additionally: CONVERSATION_HISTORY (no content), LIST_DIRECTORY, VIEW_FILE, ERROR_MESSAGE (error+content). Envelope: type, source, status, step_index, created_at."
+
+[[streams]]
+id = "transcript-full"
+glob = "brain/*/.system_generated/logs/transcript_full.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Sibling of transcript.jsonl. Hook stdin transcriptPath points here. Same record vocabulary as transcript."
+
+[[streams]]
+id = "transcript-chunks"
+glob = "brain/*/.system_generated/logs/chunks/transcript/*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Chunked copy of transcript.jsonl (00000000.jsonl in 1.1.20, same bytes as the parent file)."
+
+[[streams]]
+id = "transcript-full-chunks"
+glob = "brain/*/.system_generated/logs/chunks/transcript_full/*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Chunked copy of transcript_full.jsonl."
+
+[[streams]]
+id = "conversation-message-index"
+glob = "brain/*/.system_generated/messages/read.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Map of message-id → bool (read). Resume fixture only. Keys are UUIDs and collapse to <dynamic> in the canonical shape."
+
+[[streams]]
+id = "conversation-messages"
+glob = "brain/*/.system_generated/messages/*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Per-message JSON (id, recipient, sender, priority, timestamp, hideFromUser, content). read.json is a separate stream and must be listed first so it does not merge into this shape."
+
+[[streams]]
+id = "undelivered-messages"
+glob = "brain/*/.system_generated/messages/undelivered/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Empty undelivered/ dir created on resume in 1.1.20. Promote when a file appears."
+
+[[streams]]
+id = "conversation-db"
+glob = "conversations/*.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Durable conversation store. One WAL-mode SQLite file per conversation UUID plus -wal/-shm. Schema dump identity is conversations.db (UUID filenames collapsed). Tables: steps (blob payloads), trajectory_meta, gen_metadata, executor_metadata, parent_references, trajectory_metadata_blob, battle_mode_infos. Schema dump: sources/<version>.sqlite-schema.sql."
+
+[[streams]]
+id = "conversation-summaries"
+glob = "conversation_summaries.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Summary index: conversation_id, title, preview, step_count, workspace_uris, parent_conversation_id, app_data_dir, timestamps."
+
+[[streams]]
+id = "last-conversations"
+glob = "cache/last_conversations.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Launch-cwd → conversation UUID for --continue/-c. Redacted farm keys collapse to <dynamic>."
+
+[[streams]]
+id = "conversation-metadata"
+glob = "cache/conversation_metadata.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Cache of conversation summaries under conversations.<uuid>. UUID keys collapse to <dynamic>. Written on resume in 1.1.20."
+
+[[streams]]
+id = "settings"
+glob = "settings.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Sparse user settings. Farm writes modelProvider=gemini (required for GEMINI_API_KEY) and toolPermission=always-proceed. Live organic file has been seen with trustedWorkspaces[]."
+
+[[streams]]
+id = "history"
+glob = "history.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "observed"
+notes = "Prompt history. Organic keys: display, timestamp (int), workspace, type. Print-mode farm does not write this file."
+
+[[streams]]
+id = "installation-id"
+glob = "installation_id"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Install identity UUID."
+
+[[streams]]
+id = "onboarding-cache"
+glob = "cache/onboarding.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Onboarding completion flags."
+
+[[streams]]
+id = "default-project"
+glob = "cache/default_project_id.txt"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Default CLI project id (fixture: default-cli-project)."
+
+[[streams]]
+id = "jetski-state"
+glob = "jetski_state.pbtxt"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Protobuf-text jetski runtime state. Inventory only; do not parse."
+
+[[streams]]
+id = "implicit-protobuf"
+glob = "implicit/*.pb"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Unpublished binary protobuf blobs. Inventory only; do not parse. Organic 1.1.12 writes these; print-mode farm does not."
+
+[[streams]]
+id = "knowledge"
+glob = "knowledge/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Knowledge lock/files. Fixture: empty knowledge.lock."
+
+[[streams]]
+id = "brain-scratch"
+glob = "brain/*/scratch/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-conversation scratch dir. Created empty in 1.1.20 farm."
+
+[[streams]]
+id = "user-uploaded"
+glob = "brain/*/.user_uploaded/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-conversation user-upload dir. Created empty in 1.1.20 farm."
+
+[[streams]]
+id = "scratch"
+glob = "scratch/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "CLI-root scratch dir. Created empty in 1.1.20 farm."
+
+[[streams]]
+id = "logs"
+glob = "log/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "CLI logs — volatile; stripped at harvest."
+
+[[streams]]
+id = "cli-log"
+glob = "cli.log"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Symlink to the current log/cli-*.log. Stripped at harvest."
+
+[[streams]]
+id = "presence"
+glob = "presence/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-conversation presence locks. Stripped at harvest."
+
+[[streams]]
+id = "updater"
+glob = "updater/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Auto-updater lock/state. Stripped at harvest."
+
+[[streams]]
+id = "crashes"
+glob = "crashes/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "Crash logs. Stripped at harvest."
+
+[[streams]]
+id = "last-check"
+glob = "last_check.timestamp"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Updater last-check stamp. Stripped at harvest."
+
+[[streams]]
+id = "changelog-cache"
+glob = "cache/CHANGELOG.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Vendor changelog cache. Stripped at harvest."
+
+[[streams]]
+id = "builtin"
+glob = "builtin/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Vendor-bundled skills. Stripped at harvest."
+
+[[streams]]
+id = "bin"
+glob = "bin/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Vendor helper binaries (e.g. webm_encoder). Stripped at harvest."

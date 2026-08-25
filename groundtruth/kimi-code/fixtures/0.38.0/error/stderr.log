@@ -1,0 +1,2 @@
+error: failed to run prompt: Provider safety policy blocked the response.
+See log: <SCENARIO_DIR>/kimi-home/logs/kimi-code.log

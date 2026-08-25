@@ -1,0 +1,65 @@
+{
+  "agent": "opencode",
+  "agent_version": "1.18.22",
+  "scenario": "tool-use",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "opencode-home/log/opencode.log",
+      "bytes": 3166
+    },
+    {
+      "path": "opencode-home/opencode.db",
+      "bytes": 266240
+    },
+    {
+      "path": "opencode-home/opencode.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "opencode-home/opencode.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/HEAD",
+      "bytes": 21
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/config",
+      "bytes": 319
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/description",
+      "bytes": 73
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/index",
+      "bytes": 381
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/info/exclude",
+      "bytes": 240
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/objects/3f/b16cd4ce8cb5a72171ed84a6b454360b2af66c",
+      "bytes": 235
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/objects/8f/fa06f0b5ca643f10cee80528b88acd29be0838",
+      "bytes": 58
+    },
+    {
+      "path": "opencode-home/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4/objects/info/alternates",
+      "bytes": 23
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 2350
+    }
+  ]
+}

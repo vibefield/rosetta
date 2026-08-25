@@ -1,5 +1,9 @@
 # Cursor CLI (Anysphere) — Tier C. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.5
 
+[groundtruth]
+status = "blocked"
+reason = "No endpoint override; a credentialed capture lane is not provisioned."
+
 [agent]
 name = "cursor"
 display = "Cursor CLI"

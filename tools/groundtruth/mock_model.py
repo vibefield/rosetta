@@ -1,4 +1,4 @@
-"""Deterministic Anthropic Messages and OpenAI Responses mock server."""
+"""Deterministic Anthropic Messages, OpenAI Responses, Chat Completions, and Gemini generateContent mock."""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from typing import Any
 
 USAGE_IN = 128
 USAGE_OUT = 32
+HIGH_USAGE_IN = 900
+GREETING = "Hello from rosetta mockmodel. This is a deterministic scripted response."
+TOOL_DONE = "The tool ran successfully and printed: rosetta-mock. Scenario complete."
 
 
 def _compact(value: Any) -> str:
@@ -72,7 +75,10 @@ class MockHandler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.send_header("connection", "close")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         self.close_connection = True
 
     def _send_json(self, status: int, value: Any) -> None:
@@ -82,17 +88,44 @@ class MockHandler(BaseHTTPRequestHandler):
         request = self._request_json()
         if request is None:
             return
-        if self.path == "/v1/messages":
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path == "/v1/messages":
             self._anthropic_messages(request)
-        elif self.path == "/v1/messages/count_tokens":
+        elif path == "/v1/messages/count_tokens":
             self.server.state.log({"path": self.path, "request": request})
             self._send_json(200, {"input_tokens": USAGE_IN})
-        elif self.path == "/v1/responses":
+        elif path == "/v1/responses":
             self._openai_responses(request)
+        elif path.endswith("/chat/completions"):
+            self._openai_chat(request)
+        elif ":countTokens" in path:
+            self._gemini_count_tokens(request)
+        elif ":streamGenerateContent" in path or ":generateContent" in path:
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            streamed = ":streamGenerateContent" in path or "alt=sse" in query
+            self._gemini_generate(request, streamed)
         else:
             self._not_found()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path in {"/v1/models", "/models"}:
+            self.server.state.log({"path": self.path, "method": "GET"})
+            self._send_json(200, _models_list())
+            return
+        if path.startswith("/v1/models/"):
+            model_id = path[len("/v1/models/") :]
+            self.server.state.log({"path": self.path, "method": "GET"})
+            self._send_json(200, _model_object(model_id or "mock-model"))
+            return
+        if path.startswith("/models/") and not path.startswith("/v1beta/"):
+            model_id = path[len("/models/") :]
+            self.server.state.log({"path": self.path, "method": "GET"})
+            self._send_json(200, _model_object(model_id or "mock-model"))
+            return
+        if path == "/v1beta/models" or path.startswith("/v1beta/models/"):
+            self._gemini_models(path)
+            return
         self._not_found()
 
     def _not_found(self) -> None:
@@ -175,6 +208,65 @@ class MockHandler(BaseHTTPRequestHandler):
         body = _openai_sse(request_id, model, script, response, item).encode()
         self._send(200, body, "text/event-stream")
 
+    def _gemini_count_tokens(self, request: dict[str, Any]) -> None:
+        self.server.state.log({"path": self.path, "request": request})
+        self._send_json(200, {"totalTokens": USAGE_IN})
+
+    def _gemini_models(self, path: str) -> None:
+        self.server.state.log({"path": self.path, "method": "GET"})
+        model = {
+            "name": "models/mock-model",
+            "version": "mock",
+            "displayName": "Rosetta mock model",
+            "supportedGenerationMethods": ["generateContent", "countTokens"],
+        }
+        if path.endswith("/models"):
+            self._send_json(200, {"models": [model]})
+            return
+        self._send_json(200, model)
+
+    def _gemini_generate(self, request: dict[str, Any], streamed: bool) -> None:
+        request_id = self.server.state.next_id()
+        model = _gemini_model_name(self.path, request)
+        script = _gemini_script(request)
+        self.server.state.log(
+            {
+                "path": self.path,
+                "id": request_id,
+                "stream": streamed,
+                "response_kind": script[0],
+                "request": request,
+            }
+        )
+        if streamed:
+            body = _gemini_sse(request_id, model, script).encode()
+            self._send(200, body, "text/event-stream")
+            return
+        self._send_json(200, _gemini_response(request_id, model, script))
+
+    def _openai_chat(self, request: dict[str, Any]) -> None:
+        request_id = self.server.state.next_id()
+        model = request.get("model") if isinstance(request.get("model"), str) else "mock-model"
+        stream = bool(request.get("stream", False))
+        script = _openai_chat_script(request)
+        usage_in = HIGH_USAGE_IN if "[high-usage]" in _compact(request) else USAGE_IN
+        self.server.state.log(
+            {
+                "path": self.path,
+                "id": request_id,
+                "stream": stream,
+                "response_kind": script[0],
+                "request": request,
+            }
+        )
+        if stream:
+            body = _openai_chat_sse(request_id, model, script, usage_in).encode()
+            self._send(200, body, "text/event-stream")
+            return
+        self._send_json(
+            200, _openai_chat_completion(request_id, model, script, usage_in)
+        )
+
 
 def _anthropic_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
     messages = request.get("messages") if isinstance(request.get("messages"), list) else []
@@ -184,7 +276,7 @@ def _anthropic_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
         if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in message["content"]):
             return (
                 "text",
-                "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
+                TOOL_DONE,
                 None,
             )
 
@@ -211,7 +303,7 @@ def _anthropic_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
         return ("tool_use", name, inputs)
     return (
         "text",
-        "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+        GREETING,
         None,
     )
 
@@ -350,7 +442,7 @@ def _openai_script(request: dict[str, Any]) -> tuple[str, str, str | None]:
     if any(isinstance(item, dict) and item.get("type") == "function_call_output" for item in items):
         return (
             "text",
-            "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
+            TOOL_DONE,
             None,
         )
     if any("[use-tool]" in text for text in _input_texts(request)):
@@ -368,7 +460,7 @@ def _openai_script(request: dict[str, Any]) -> tuple[str, str, str | None]:
         return ("function_call", name, arguments)
     return (
         "text",
-        "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+        GREETING,
         None,
     )
 
@@ -548,6 +640,432 @@ def _openai_sse(
         ]
     )
     return "".join(parts)
+
+
+def _model_object(model_id: str) -> dict[str, Any]:
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": 0,
+        "owned_by": "rosetta",
+        "context_length": 128000,
+        "max_model_len": 128000,
+    }
+
+
+def _models_list() -> dict[str, Any]:
+    return {
+        "object": "list",
+        "data": [_model_object(name) for name in ("mock-model", "grok-4.5", "grok-build")],
+    }
+
+
+def _chat_message_texts(request: dict[str, Any]) -> list[str]:
+    messages = request.get("messages") if isinstance(request.get("messages"), list) else []
+    texts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, str):
+                    texts.append(block)
+                elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                    texts.append(block["text"])
+    return texts
+
+
+def _chat_tool_names(request: dict[str, Any]) -> list[str]:
+    tools = request.get("tools") if isinstance(request.get("tools"), list) else []
+    names: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if isinstance(tool.get("name"), str):
+            names.append(tool["name"])
+        function = tool.get("function")
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            names.append(function["name"])
+    return names
+
+
+def _openai_chat_script(request: dict[str, Any]) -> tuple[str, str, str | None]:
+    messages = request.get("messages") if isinstance(request.get("messages"), list) else []
+    if any(isinstance(message, dict) and message.get("role") == "tool" for message in messages):
+        return ("text", TOOL_DONE, None)
+    for message in messages:
+        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            continue
+        if any(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for block in message["content"]
+        ):
+            return ("text", TOOL_DONE, None)
+    if any("[error]" in text for text in _chat_message_texts(request)):
+        return ("error", "Rosetta mockmodel refused this request.", None)
+    if any("[use-agent]" in text for text in _chat_message_texts(request)):
+        names = _chat_tool_names(request)
+        name = next(
+            (candidate for candidate in names if candidate.lower() == "agent"),
+            "Agent",
+        )
+        arguments = _compact(
+            {
+                "prompt": "Reply with a short greeting.",
+                "description": "greet briefly",
+                "subagent_type": "explore",
+            }
+        )
+        return ("function_call", name, arguments)
+    if any("[use-tool]" in text for text in _chat_message_texts(request)):
+        names = _chat_tool_names(request)
+        preferred = (
+            "run_terminal_command",
+            "run_terminal_cmd",
+            "terminal",
+            "bash",
+            "shell",
+            "exec_command",
+            "execute",
+        )
+        name = next(
+            (
+                candidate
+                for wanted in preferred
+                for candidate in names
+                if candidate.lower() == wanted
+            ),
+            names[0] if names else "run_terminal_command",
+        )
+        lowered = name.lower()
+        if lowered == "run_terminal_command":
+            arguments = _compact(
+                {
+                    "command": "echo rosetta-mock",
+                    "description": "echo mock output",
+                }
+            )
+        elif lowered in {
+            "bash",
+            "shell",
+            "execute",
+            "run_terminal_cmd",
+            "terminal",
+        }:
+            arguments = _compact({"command": "echo rosetta-mock"})
+        elif lowered == "exec_command":
+            arguments = _compact({"cmd": "echo rosetta-mock"})
+        else:
+            arguments = "{}"
+        return ("function_call", name, arguments)
+    return ("text", GREETING, None)
+
+
+def _openai_chat_usage(input_tokens: int = USAGE_IN) -> dict[str, int]:
+    return {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": USAGE_OUT,
+        "total_tokens": input_tokens + USAGE_OUT,
+    }
+
+
+def _openai_chat_completion(
+    request_id: int,
+    model: str,
+    script: tuple[str, str, str | None],
+    usage_in: int = USAGE_IN,
+) -> dict[str, Any]:
+    completion_id = f"chatcmpl-mock_{request_id:04}"
+    if script[0] == "text":
+        message: dict[str, Any] = {"role": "assistant", "content": script[1]}
+        finish_reason = "stop"
+    elif script[0] == "error":
+        message = {"role": "assistant", "content": script[1]}
+        finish_reason = "content_filter"
+    else:
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": f"call_mock_{request_id:04}",
+                    "type": "function",
+                    "function": {"name": script[1], "arguments": script[2]},
+                }
+            ],
+        }
+        finish_reason = "tool_calls"
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": 0,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": _openai_chat_usage(usage_in),
+    }
+
+
+def _sse_data(value: Any) -> str:
+    return f"data: {_compact(value)}\n\n"
+
+
+def _openai_chat_sse(
+    request_id: int,
+    model: str,
+    script: tuple[str, str, str | None],
+    usage_in: int = USAGE_IN,
+) -> str:
+    completion_id = f"chatcmpl-mock_{request_id:04}"
+
+    def chunk(delta: dict[str, Any], finish_reason: str | None = None) -> str:
+        return _sse_data(
+            {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta,
+                        "finish_reason": finish_reason,
+                    }
+                ],
+            }
+        )
+
+    parts: list[str] = []
+    if script[0] == "text":
+        text = script[1]
+        midpoint = len(text) // 2
+        parts.append(chunk({"role": "assistant", "content": ""}))
+        for piece in (text[:midpoint], text[midpoint:]):
+            if piece:
+                parts.append(chunk({"content": piece}))
+        parts.append(chunk({}, "stop"))
+    elif script[0] == "error":
+        text = script[1] or "error"
+        parts.append(chunk({"role": "assistant", "content": ""}))
+        parts.append(chunk({"content": text}))
+        parts.append(chunk({}, "content_filter"))
+    else:
+        # Emit the complete tool call in the first delta. Clients that do not
+        # accumulate argument fragments (Grok 1.0.5) otherwise persist `{}`.
+        parts.append(
+            chunk(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": f"call_mock_{request_id:04}",
+                            "type": "function",
+                            "function": {
+                                "name": script[1],
+                                "arguments": script[2] or "{}",
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+        parts.append(chunk({}, "tool_calls"))
+    usage_chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [],
+        "usage": _openai_chat_usage(usage_in),
+    }
+    parts.append(_sse_data(usage_chunk))
+    parts.append("data: [DONE]\n\n")
+    return "".join(parts)
+
+
+def _gemini_model_name(path: str, request: dict[str, Any]) -> str:
+    if isinstance(request.get("model"), str) and request["model"]:
+        return request["model"]
+    route = path.split("?", 1)[0]
+    marker = "/models/"
+    if marker in route:
+        rest = route.split(marker, 1)[1]
+        return rest.split(":", 1)[0] or "mock-model"
+    return "mock-model"
+
+
+def _gemini_parts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return []
+    parts = value.get("parts", value.get("Parts"))
+    if isinstance(parts, dict):
+        return [parts]
+    if isinstance(parts, list):
+        return [part for part in parts if isinstance(part, dict)]
+    return []
+
+
+def _gemini_contents(request: dict[str, Any]) -> list[dict[str, Any]]:
+    contents = request.get("contents")
+    if isinstance(contents, dict):
+        return [contents]
+    if isinstance(contents, list):
+        return [item for item in contents if isinstance(item, dict)]
+    return []
+
+
+def _gemini_texts(request: dict[str, Any]) -> list[str]:
+    texts: list[str] = []
+    instruction = request.get("systemInstruction", request.get("system_instruction"))
+    for part in _gemini_parts(instruction):
+        if isinstance(part.get("text"), str):
+            texts.append(part["text"])
+    for content in _gemini_contents(request):
+        for part in _gemini_parts(content):
+            if isinstance(part.get("text"), str):
+                texts.append(part["text"])
+    return texts
+
+
+def _gemini_has_function_response(request: dict[str, Any]) -> bool:
+    for content in _gemini_contents(request):
+        for part in _gemini_parts(content):
+            if part.get("functionResponse") or part.get("function_response"):
+                return True
+    return False
+
+
+def _gemini_tool_names(request: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    tools = request.get("tools") if isinstance(request.get("tools"), list) else []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if isinstance(tool.get("name"), str):
+            names.append(tool["name"])
+        declarations = tool.get("functionDeclarations", tool.get("function_declarations", []))
+        if isinstance(declarations, dict):
+            declarations = [declarations]
+        if not isinstance(declarations, list):
+            continue
+        for declaration in declarations:
+            if isinstance(declaration, dict) and isinstance(declaration.get("name"), str):
+                names.append(declaration["name"])
+    return names
+
+
+def _gemini_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
+    if _gemini_has_function_response(request):
+        return ("text", TOOL_DONE, None)
+    if any("[use-tool]" in text for text in _gemini_texts(request)):
+        names = _gemini_tool_names(request)
+        preferred = ("run_command", "run_terminal_cmd", "shell", "bash", "exec_command")
+        name = next(
+            (
+                candidate
+                for wanted in preferred
+                for candidate in names
+                if candidate.lower() == wanted
+            ),
+            names[0] if names else "run_command",
+        )
+        lowered = name.lower()
+        if lowered == "run_command":
+            arguments: dict[str, Any] = {"commandLine": "echo rosetta-mock"}
+        elif lowered in {"bash", "shell", "execute", "run_terminal_cmd"}:
+            arguments = {"command": "echo rosetta-mock"}
+        elif lowered == "list_dir":
+            arguments = {"DirectoryPath": "."}
+        else:
+            arguments = {}
+        return ("function_call", name, arguments)
+    return ("text", GREETING, None)
+
+
+def _gemini_usage() -> dict[str, int]:
+    return {
+        "promptTokenCount": USAGE_IN,
+        "candidatesTokenCount": USAGE_OUT,
+        "totalTokenCount": USAGE_IN + USAGE_OUT,
+    }
+
+
+def _gemini_candidate(script: tuple[str, Any, Any]) -> dict[str, Any]:
+    if script[0] == "text":
+        parts: list[dict[str, Any]] = [{"text": script[1]}]
+    else:
+        parts = [{"functionCall": {"name": script[1], "args": script[2]}}]
+    return {
+        "content": {"role": "model", "parts": parts},
+        "finishReason": "STOP",
+        "index": 0,
+    }
+
+
+def _gemini_response(
+    request_id: int, model: str, script: tuple[str, Any, Any]
+) -> dict[str, Any]:
+    del request_id
+    return {
+        "candidates": [_gemini_candidate(script)],
+        "usageMetadata": _gemini_usage(),
+        "modelVersion": model,
+    }
+
+
+def _gemini_sse(request_id: int, model: str, script: tuple[str, Any, Any]) -> str:
+    del request_id
+    if script[0] == "text":
+        text = script[1]
+        midpoint = len(text) // 2
+        first, second = text[:midpoint], text[midpoint:]
+        chunks = []
+        if first:
+            chunks.append(
+                _sse_data(
+                    {
+                        "candidates": [
+                            {
+                                "content": {"role": "model", "parts": [{"text": first}]},
+                                "index": 0,
+                            }
+                        ]
+                    }
+                )
+            )
+        chunks.append(
+            _sse_data(
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": second}]},
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": _gemini_usage(),
+                    "modelVersion": model,
+                }
+            )
+        )
+        return "".join(chunks)
+    return _sse_data(
+        {
+            "candidates": [_gemini_candidate(script)],
+            "usageMetadata": _gemini_usage(),
+            "modelVersion": model,
+        }
+    )
 
 
 def start_server(port: int = 0, log_path: Path | None = None) -> tuple[MockServer, threading.Thread]:

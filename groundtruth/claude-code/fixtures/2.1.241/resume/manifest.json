@@ -1,33 +1,33 @@
 {
   "agent": "claude-code",
   "agent_version": "2.1.241",
+  "scenario": "resume",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "anthropic-messages",
   "files": [
     {
-      "bytes": 423,
-      "path": "claude-config/.claude.json"
+      "path": "claude-config/.claude.json",
+      "bytes": 423
     },
     {
-      "bytes": 3379,
-      "path": "claude-config/projects/-private-tmp-rosetta-farm-resume-project/469a2e13-c3ed-4909-89af-056a5ab04a4e.jsonl"
+      "path": "claude-config/projects/-private-tmp-rosetta-farm-resume-project/469a2e13-c3ed-4909-89af-056a5ab04a4e.jsonl",
+      "bytes": 3379
     },
     {
-      "bytes": 0,
-      "path": "stderr-1.log"
+      "path": "stderr-1.log",
+      "bytes": 0
     },
     {
-      "bytes": 0,
-      "path": "stderr.log"
+      "path": "stderr.log",
+      "bytes": 0
     },
     {
-      "bytes": 3454,
-      "path": "stdout-1.jsonl"
+      "path": "stdout-1.jsonl",
+      "bytes": 3454
     },
     {
-      "bytes": 3463,
-      "path": "stdout.jsonl"
+      "path": "stdout.jsonl",
+      "bytes": 3463
     }
-  ],
-  "generator": "rosetta-fixture-farm 0.2.0",
-  "mock_dialect": "anthropic-messages",
-  "scenario": "resume"
+  ]
 }

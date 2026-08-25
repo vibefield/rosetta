@@ -1,0 +1,4291 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "antigravity",
+  "agent_version": "1.1.20",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth canonical 2",
+  "data_root": "~/.gemini/antigravity-cli",
+  "sources": [
+    {
+      "generator": "tools.groundtruth farm 1",
+      "agent_version": "1.1.20",
+      "evidence": "fixture",
+      "path": "sources/1.1.20.fixtures.json",
+      "sha256": "83a5f3745b7f4cd37292760905762b8467a2a2acbb2857b39182bd855a5567c3"
+    },
+    {
+      "generator": "tools.groundtruth census 2",
+      "agent_version": "observed-2026-08-25",
+      "evidence": "observed",
+      "path": "sources/observed-2026-08-25.json",
+      "sha256": "025a335340aa50bf2655815f2958f12921f77a2e9af2b6dbaa8c10d6bc695627",
+      "captured_at": "2026-08-25"
+    }
+  ],
+  "streams": [
+    {
+      "id": "transcript",
+      "glob": "brain/*/.system_generated/logs/transcript.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Primary transcript JSONL. Fixture 1.1.20: USER_INPUT, PLANNER_RESPONSE (optional tool_calls[{name,args}]), RUN_COMMAND (exit_code+content), CHECKPOINT, SYSTEM_MESSAGE. Organic census additionally: CONVERSATION_HISTORY (no content), LIST_DIRECTORY, VIEW_FILE, ERROR_MESSAGE (error+content). Envelope: type, source, status, step_index, created_at.",
+      "discriminator": "type",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 14,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "commandLine": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 7
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 7
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "RUN_COMMAND": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "exit_code": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "RUN_COMMAND": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "USER_INPUT": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "run_command": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "commandLine": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              },
+              "evidence": "observed"
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "RUN_COMMAND (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "RUN_COMMAND": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "fixture"
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript-full",
+      "glob": "brain/*/.system_generated/logs/transcript_full.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Sibling of transcript.jsonl. Hook stdin transcriptPath points here. Same record vocabulary as transcript.",
+      "discriminator": "type",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 14,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "commandLine": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 7
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 7
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "RUN_COMMAND": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "exit_code": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "RUN_COMMAND": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "USER_INPUT": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "run_command": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "commandLine": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              },
+              "evidence": "observed"
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "RUN_COMMAND (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "RUN_COMMAND": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "fixture"
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript-chunks",
+      "glob": "brain/*/.system_generated/logs/chunks/transcript/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Chunked copy of transcript.jsonl (00000000.jsonl in 1.1.20, same bytes as the parent file).",
+      "discriminator": "type",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 14,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "commandLine": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 7
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 7
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "RUN_COMMAND": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "exit_code": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "RUN_COMMAND": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "USER_INPUT": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "run_command": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "commandLine": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              },
+              "evidence": "observed"
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "RUN_COMMAND (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "RUN_COMMAND": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "fixture"
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript-full-chunks",
+      "glob": "brain/*/.system_generated/logs/chunks/transcript_full/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Chunked copy of transcript_full.jsonl.",
+      "discriminator": "type",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 14,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 14
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "commandLine": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 7
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 7
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 14
+                  }
+                },
+                "required": true,
+                "observed": 14
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "RUN_COMMAND": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "exit_code": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "RUN_COMMAND": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "USER_INPUT": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "run_command": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "commandLine": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              },
+              "evidence": "observed"
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "RUN_COMMAND (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            },
+            "RUN_COMMAND": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "fixture"
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              },
+              "evidence": "observed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "conversation-message-index",
+      "glob": "brain/*/.system_generated/messages/read.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Map of message-id → bool (read). Resume fixture only. Keys are UUIDs and collapse to <dynamic> in the canonical shape.",
+      "record_types": {
+        "": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "<dynamic>": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "conversation-messages",
+      "glob": "brain/*/.system_generated/messages/*.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Per-message JSON (id, recipient, sender, priority, timestamp, hideFromUser, content). read.json is a separate stream and must be listed first so it does not merge into this shape.",
+      "record_types": {
+        "": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "hideFromUser": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "priority": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "recipient": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "sender": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "undelivered-messages",
+      "glob": "brain/*/.system_generated/messages/undelivered/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Empty undelivered/ dir created on resume in 1.1.20. Promote when a file appears."
+    },
+    {
+      "id": "conversation-db",
+      "glob": "conversations/*.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Durable conversation store. One WAL-mode SQLite file per conversation UUID plus -wal/-shm. Schema dump identity is conversations.db (UUID filenames collapsed). Tables: steps (blob payloads), trajectory_meta, gen_metadata, executor_metadata, parent_references, trajectory_metadata_blob, battle_mode_infos. Schema dump: sources/<version>.sqlite-schema.sql.",
+      "discriminator": "table",
+      "record_types": {
+        "conversations.db:battle_mode_infos": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "conversations.db:executor_metadata": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "conversations.db:gen_metadata": {
+          "observed": 13,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "size": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "conversations.db:parent_references": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "conversations.db:steps": {
+          "observed": 37,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "error_details": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "has_subtrajectory": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "metadata": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "permissions": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "render_info": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "step_format": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "step_payload": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "step_type": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "task_details": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "conversations.db:trajectory_meta": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "cascade_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "source": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "trajectory_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "trajectory_type": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "conversations.db:trajectory_metadata_blob": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "conversation-summaries",
+      "glob": "conversation_summaries.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Summary index: conversation_id, title, preview, step_count, workspace_uris, parent_conversation_id, app_data_dir, timestamps.",
+      "discriminator": "table",
+      "record_types": {
+        "conversation_summaries.db:conversation_summaries": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agent_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "app_data_dir": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "battle_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "killed": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "last_modified_time": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "last_user_input_step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_user_input_time": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "nesting_depth": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "not_fully_idle": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "parent_conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "preview": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "step_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "winning_conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "workspace_uris": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "last-conversations",
+      "glob": "cache/last_conversations.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Launch-cwd → conversation UUID for --continue/-c. Redacted farm keys collapse to <dynamic>.",
+      "record_types": {
+        "": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "<dynamic>": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "conversation-metadata",
+      "glob": "cache/conversation_metadata.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Cache of conversation summaries under conversations.<uuid>. UUID keys collapse to <dynamic>. Written on resume in 1.1.20.",
+      "record_types": {
+        "": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "conversations": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "<dynamic>": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "is_internal": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "last_modified_time": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "summary": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "AgentName": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "AppDataDir": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "ID": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "Loaded": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "NumSteps": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "Preview": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "ProjectID": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "Title": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "UpdatedAt": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "WorkspaceURIs": {
+                                  "shape": {
+                                    "kind": "null"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "settings",
+      "glob": "settings.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Sparse user settings. Farm writes modelProvider=gemini (required for GEMINI_API_KEY) and toolPermission=always-proceed. Live organic file has been seen with trustedWorkspaces[].",
+      "record_types": {
+        "": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "modelProvider": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "gemini": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "toolPermission": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "history",
+      "glob": "history.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Prompt history. Organic keys: display, timestamp (int), workspace, type. Print-mode farm does not write this file.",
+      "record_types": {
+        "<dynamic>": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "display": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "slash_command": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "workspace": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      }
+    },
+    {
+      "id": "installation-id",
+      "glob": "installation_id",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Install identity UUID."
+    },
+    {
+      "id": "onboarding-cache",
+      "glob": "cache/onboarding.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Onboarding completion flags.",
+      "record_types": {
+        "": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "consumerOnboardingComplete": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "enterpriseOnboardingComplete": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "onboardingComplete": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "default-project",
+      "glob": "cache/default_project_id.txt",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Default CLI project id (fixture: default-cli-project)."
+    },
+    {
+      "id": "jetski-state",
+      "glob": "jetski_state.pbtxt",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Protobuf-text jetski runtime state. Inventory only; do not parse."
+    },
+    {
+      "id": "implicit-protobuf",
+      "glob": "implicit/*.pb",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Unpublished binary protobuf blobs. Inventory only; do not parse. Organic 1.1.12 writes these; print-mode farm does not."
+    },
+    {
+      "id": "knowledge",
+      "glob": "knowledge/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Knowledge lock/files. Fixture: empty knowledge.lock."
+    },
+    {
+      "id": "brain-scratch",
+      "glob": "brain/*/scratch/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-conversation scratch dir. Created empty in 1.1.20 farm."
+    },
+    {
+      "id": "user-uploaded",
+      "glob": "brain/*/.user_uploaded/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-conversation user-upload dir. Created empty in 1.1.20 farm."
+    },
+    {
+      "id": "scratch",
+      "glob": "scratch/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "CLI-root scratch dir. Created empty in 1.1.20 farm."
+    },
+    {
+      "id": "logs",
+      "glob": "log/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "CLI logs — volatile; stripped at harvest."
+    },
+    {
+      "id": "cli-log",
+      "glob": "cli.log",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Symlink to the current log/cli-*.log. Stripped at harvest."
+    },
+    {
+      "id": "presence",
+      "glob": "presence/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-conversation presence locks. Stripped at harvest."
+    },
+    {
+      "id": "updater",
+      "glob": "updater/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Auto-updater lock/state. Stripped at harvest."
+    },
+    {
+      "id": "crashes",
+      "glob": "crashes/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Crash logs. Stripped at harvest."
+    },
+    {
+      "id": "last-check",
+      "glob": "last_check.timestamp",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Updater last-check stamp. Stripped at harvest."
+    },
+    {
+      "id": "changelog-cache",
+      "glob": "cache/CHANGELOG.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Vendor changelog cache. Stripped at harvest."
+    },
+    {
+      "id": "builtin",
+      "glob": "builtin/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Vendor-bundled skills. Stripped at harvest."
+    },
+    {
+      "id": "bin",
+      "glob": "bin/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Vendor helper binaries (e.g. webm_encoder). Stripped at harvest."
+    },
+    {
+      "id": "farm:headless-stdout",
+      "glob": "<farm>/stdout*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Headless stream-json stdout — corroboration surface captured by the farm, not part of the agent data root.",
+      "discriminator": "event",
+      "record_types": {
+        "init": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "event": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "init": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "init": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "cwd": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "permission_mode": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "always-proceed": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "tools": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "string",
+                          "values": {
+                            "ask_custom_permission": 4,
+                            "ask_permission": 4,
+                            "ask_question": 4,
+                            "browser_click_element": 4,
+                            "browser_drag_pixel_to_pixel": 4,
+                            "browser_get_dom": 4,
+                            "browser_get_network_request": 4,
+                            "browser_input": 4,
+                            "browser_list_network_requests": 4,
+                            "browser_mouse_down": 4,
+                            "browser_mouse_up": 4,
+                            "browser_move_mouse": 4,
+                            "browser_press_key": 4,
+                            "browser_refresh_page": 4,
+                            "browser_resize_window": 4,
+                            "browser_scroll": 4,
+                            "browser_scroll_dom": 4,
+                            "browser_select_option": 4,
+                            "browser_subagent": 4,
+                            "call_mcp_tool": 4,
+                            "capture_browser_console_logs": 4,
+                            "capture_browser_screenshot": 4,
+                            "click_browser_pixel": 4,
+                            "command_status": 4,
+                            "define_subagent": 4,
+                            "delete_knowledge": 4,
+                            "execute_browser_javascript": 4,
+                            "find_by_name": 4,
+                            "finish": 4,
+                            "generate_image": 4,
+                            "grep_search": 4,
+                            "invoke_subagent": 4,
+                            "list_browser_pages": 4,
+                            "list_dir": 4,
+                            "list_permissions": 4,
+                            "list_resources": 4,
+                            "manage_inbox": 4,
+                            "manage_subagents": 4,
+                            "manage_task": 4,
+                            "multi_replace_file_content": 4,
+                            "notebook_edit": 4,
+                            "notebook_execution": 4,
+                            "open_browser_url": 4,
+                            "read_browser_page": 4,
+                            "read_resource": 4,
+                            "read_url_content": 4,
+                            "replace_file_content": 4,
+                            "run_command": 4,
+                            "schedule": 4,
+                            "search_web": 4,
+                            "sed_file": 4,
+                            "send_command_input": 4,
+                            "send_message": 4,
+                            "view_file": 4,
+                            "wait": 4,
+                            "wait_5_seconds": 4,
+                            "write_to_file": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "result": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "event": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "result": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "result": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "conversation_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "duration_seconds": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "num_turns": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "response": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "status": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "SUCCESS": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache_read_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "thinking_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "step_update": {
+          "observed": 15,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "event": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "step_update": 15
+                  }
+                },
+                "required": true,
+                "observed": 15
+              },
+              "step_update": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "conversation_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 15
+                    },
+                    "duration_seconds": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 9
+                    },
+                    "state": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "ACTIVE": 1,
+                          "DONE": 14
+                        }
+                      },
+                      "required": true,
+                      "observed": 15
+                    },
+                    "step_index": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 15
+                    },
+                    "step_type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "agent_response": 5,
+                          "checkpoint": 3,
+                          "system_message": 1,
+                          "tool": 2,
+                          "user_input": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 15
+                    },
+                    "text_delta": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "tool_info": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "name": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 2
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "parameters": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "CommandLine": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 2
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 2
+                    },
+                    "tool_name": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "run_command": 2
+                        }
+                      },
+                      "required": false,
+                      "observed": 2
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cache_read_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 8
+                          },
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 8
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 8
+                          },
+                          "thinking_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 8
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 8
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 8
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 15
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    }
+  ]
+}

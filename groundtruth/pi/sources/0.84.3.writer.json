@@ -1,0 +1,1373 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "pi",
+  "agent_version": "0.84.3",
+  "evidence": "writer",
+  "generator": "writer-source earendil-works/pi@v0.84.3 session-manager.ts + messages.ts + packages/ai/src/types.ts",
+  "data_root": "~/.pi",
+  "notes": "Pinned writer types. CompactionEntry at this tag requires firstKeptEntryId; retainedTail is documented in session-format.md but is NOT on the 0.84.3 TypeScript interface. SessionHeader.version is optional (v1 files omit it). Message.content may be a string or a block array. StopReason 'pending' is streaming-only and must not appear in persisted JSONL.",
+  "streams": [
+    {
+      "id": "session",
+      "glob": "agent/sessions/*/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "discriminator": "type",
+      "record_types": {
+        "session": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentSession": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "message": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "role": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "timestamp": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "any_of",
+                        "variants": [
+                          {
+                            "kind": "string"
+                          },
+                          {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "type": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 0
+                                },
+                                "text": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "thinking": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "thinkingSignature": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "redacted": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "id": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "name": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "arguments": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {}
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "thoughtSignature": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "namespace": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "data": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "mimeType": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                },
+                                "textSignature": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 0
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "api": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "provider": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "responseModel": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "responseId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "diagnostics": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheWrite1h": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "totalTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 0
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 0
+                                },
+                                "cacheRead": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 0
+                                },
+                                "cacheWrite": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 0
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 0
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 0
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "stopReason": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "deferred": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "errorMessage": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "rawStopReason": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "endTurn": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "details": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "addedToolNames": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "string"
+                        }
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "isError": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "command": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "exitCode": {
+                      "shape": {
+                        "kind": "any_of",
+                        "variants": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ]
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "cancelled": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "truncated": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "fullOutputPath": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "excludeFromContext": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "customType": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "display": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "summary": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "fromId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "tokensBefore": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 0
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "model_change": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "provider": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "modelId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "thinking_level_change": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "thinkingLevel": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "compaction": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "firstKeptEntryId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "tokensBefore": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "details": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": false,
+                "observed": 0
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "input": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cacheRead": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cacheWrite": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cacheWrite1h": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "reasoning": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "totalTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cost": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 0
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 0
+              },
+              "fromHook": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "branch_summary": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "fromId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "details": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": false,
+                "observed": 0
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "input": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cacheRead": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cacheWrite": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cacheWrite1h": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "reasoning": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 0
+                    },
+                    "totalTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 0
+                    },
+                    "cost": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 0
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 0
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 0
+              },
+              "fromHook": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "custom": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "customType": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "custom_message": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "customType": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "content": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "type": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 0
+                          },
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "thinking": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "thinkingSignature": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "redacted": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "name": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "arguments": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {}
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "thoughtSignature": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "namespace": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "data": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "mimeType": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          },
+                          "textSignature": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 0
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "display": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "details": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "label": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "targetId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "label": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        },
+        "session_info": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 0
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 0
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

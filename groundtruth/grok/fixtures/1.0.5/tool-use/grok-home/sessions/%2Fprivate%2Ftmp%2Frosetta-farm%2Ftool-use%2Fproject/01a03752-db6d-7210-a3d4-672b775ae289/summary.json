@@ -1,0 +1,20 @@
+{
+  "info": {
+    "id": "01a03752-db6d-7210-a3d4-672b775ae289",
+    "cwd": "<PROJECT>"
+  },
+  "session_summary": "Run the echo command now. [use-tool]",
+  "created_at": "2026-08-25T05:09:32.285342Z",
+  "updated_at": "2026-08-25T05:09:33.011362Z",
+  "num_messages": 6,
+  "num_chat_messages": 6,
+  "current_model_id": "mock-model",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "request_id": "889a5248-fb32-435a-aac2-bc9aaa76069b",
+  "grok_home": "<SCENARIO_DIR>/grok-home",
+  "last_active_at": "2026-08-25T05:09:33.011362Z",
+  "generated_title": "Run the echo command now. [use-tool]",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off"
+}

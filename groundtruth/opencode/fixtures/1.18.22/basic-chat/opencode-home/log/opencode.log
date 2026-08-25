@@ -1,0 +1,21 @@
+timestamp=2026-08-25T05:25:35.499Z level=INFO run=13699d9b message="creating instance" directory=<PROJECT>
+timestamp=2026-08-25T05:25:35.502Z level=INFO run=13699d9b message=fromDirectory directory=<PROJECT>
+timestamp=2026-08-25T05:25:35.515Z level=INFO run=13699d9b message=bootstrapping directory=<PROJECT>
+timestamp=2026-08-25T05:25:35.520Z level=INFO run=13699d9b message=loading path=<SCENARIO_DIR>/home/.config/opencode/config.json
+timestamp=2026-08-25T05:25:35.521Z level=INFO run=13699d9b message=loading path=<SCENARIO_DIR>/home/.config/opencode/opencode.json
+timestamp=2026-08-25T05:25:35.521Z level=INFO run=13699d9b message=loading path=<SCENARIO_DIR>/home/.config/opencode/opencode.jsonc
+timestamp=2026-08-25T05:25:35.523Z level=INFO run=13699d9b message=loading path=<PROJECT>/opencode.json
+timestamp=2026-08-25T05:25:35.684Z level=INFO run=13699d9b message="all LSPs are disabled"
+timestamp=2026-08-25T05:25:35.685Z level=INFO run=13699d9b message="all formatters are disabled"
+timestamp=2026-08-25T05:25:35.685Z level=INFO run=13699d9b message=init
+timestamp=2026-08-25T05:25:35.779Z level=INFO run=13699d9b message=created id=ses_fc89e705cffekX0QkX3GLlyzir slug=stellar-tiger version=1.18.22 projectID=global directory=<PROJECT> path=<PROJECT> workspaceID=undefined parentID=undefined title="New session - 2026-08-25T05:25:35.779Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1787635535779 time.updated=1787635535779
+timestamp=2026-08-25T05:25:35.788Z level=INFO run=13699d9b message="event connected"
+timestamp=2026-08-25T05:25:36.143Z level=INFO run=13699d9b message=loop session.id=ses_fc89e705cffekX0QkX3GLlyzir step=0
+timestamp=2026-08-25T05:25:36.150Z level=INFO run=13699d9b message="shell tool using shell" shell=/bin/zsh
+timestamp=2026-08-25T05:25:36.154Z level=INFO run=13699d9b message=init count=1
+timestamp=2026-08-25T05:25:36.175Z level=INFO run=13699d9b message=stream providerID=mock modelID=mock-model session.id=ses_fc89e705cffekX0QkX3GLlyzir small=true agent=title mode=primary
+timestamp=2026-08-25T05:25:36.186Z level=INFO run=13699d9b message="llm runtime selected" llm.runtime=ai-sdk llm.provider=mock llm.model=mock-model
+timestamp=2026-08-25T05:25:36.628Z level=INFO run=13699d9b message="watcher backend" directory=<PROJECT> platform=darwin backend=fs-events
+timestamp=2026-08-25T05:25:36.657Z level=INFO run=13699d9b message="booting location services" directory=<PROJECT> workspaceID=undefined
+timestamp=2026-08-25T05:25:36.659Z level=INFO run=13699d9b message="project copy refresh started" projectID=global
+timestamp=2026-08-25T05:25:36.660Z level=INFO run=13699d9b message="project copy refresh done" projectID=global updated=[] removed=[]

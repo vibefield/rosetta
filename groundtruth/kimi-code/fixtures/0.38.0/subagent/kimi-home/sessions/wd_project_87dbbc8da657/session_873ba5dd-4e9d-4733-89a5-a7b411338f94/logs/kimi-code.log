@@ -1,0 +1,10 @@
+2026-08-25T05:39:29.486Z INFO  llm config  turnStep=0.1 provider=openai model=mock-model modelAlias=__kimi_env_model__ thinkingEffort=on systemPromptChars=19334 toolCount=26
+2026-08-25T05:39:29.487Z INFO  llm request  turnStep=0.1
+2026-08-25T05:39:29.510Z INFO  llm response  turnStep=0.1 ttftMs=19 streamDurationMs=1 outputTokens=32 requestBuildMs=0 serverFirstTokenMs=19 serverDecodeMs=0 clientConsumeMs=1
+2026-08-25T05:39:29.576Z INFO  llm config  turnStep=0.1 provider=openai model=mock-model modelAlias=__kimi_env_model__ thinkingEffort=on systemPromptChars=19362 toolCount=6
+2026-08-25T05:39:29.576Z INFO  llm request  turnStep=0.1
+2026-08-25T05:39:29.581Z INFO  llm response  turnStep=0.1 ttftMs=3 streamDurationMs=1 outputTokens=32 requestBuildMs=0 serverFirstTokenMs=3 serverDecodeMs=0 clientConsumeMs=1
+2026-08-25T05:39:29.584Z INFO  llm request  turnStep=1.1
+2026-08-25T05:39:29.591Z INFO  llm response  turnStep=1.1 ttftMs=7 streamDurationMs=0 outputTokens=32 requestBuildMs=1 serverFirstTokenMs=6 serverDecodeMs=0 clientConsumeMs=0
+2026-08-25T05:39:29.598Z INFO  llm request  turnStep=0.2
+2026-08-25T05:39:29.613Z INFO  llm response  turnStep=0.2 ttftMs=14 streamDurationMs=0 outputTokens=32 requestBuildMs=1 serverFirstTokenMs=13 serverDecodeMs=0 clientConsumeMs=0

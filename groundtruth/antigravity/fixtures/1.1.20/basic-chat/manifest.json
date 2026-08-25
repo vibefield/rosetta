@@ -1,0 +1,85 @@
+{
+  "agent": "antigravity",
+  "agent_version": "1.1.20",
+  "scenario": "basic-chat",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "gemini-generatecontent",
+  "files": [
+    {
+      "path": "antigravity-cli/brain/bd6ccc47-c565-40ec-a71a-ae53ce0b3481/.system_generated/logs/chunks/transcript/00000000.jsonl",
+      "bytes": 1517
+    },
+    {
+      "path": "antigravity-cli/brain/bd6ccc47-c565-40ec-a71a-ae53ce0b3481/.system_generated/logs/chunks/transcript_full/00000000.jsonl",
+      "bytes": 1517
+    },
+    {
+      "path": "antigravity-cli/brain/bd6ccc47-c565-40ec-a71a-ae53ce0b3481/.system_generated/logs/transcript.jsonl",
+      "bytes": 1517
+    },
+    {
+      "path": "antigravity-cli/brain/bd6ccc47-c565-40ec-a71a-ae53ce0b3481/.system_generated/logs/transcript_full.jsonl",
+      "bytes": 1517
+    },
+    {
+      "path": "antigravity-cli/cache/default_project_id.txt",
+      "bytes": 19
+    },
+    {
+      "path": "antigravity-cli/cache/last_conversations.json",
+      "bytes": 57
+    },
+    {
+      "path": "antigravity-cli/cache/onboarding.json",
+      "bytes": 113
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db",
+      "bytes": 20480
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/conversations/bd6ccc47-c565-40ec-a71a-ae53ce0b3481.db",
+      "bytes": 118784
+    },
+    {
+      "path": "antigravity-cli/conversations/bd6ccc47-c565-40ec-a71a-ae53ce0b3481.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "antigravity-cli/conversations/bd6ccc47-c565-40ec-a71a-ae53ce0b3481.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/installation_id",
+      "bytes": 36
+    },
+    {
+      "path": "antigravity-cli/jetski_state.pbtxt",
+      "bytes": 503
+    },
+    {
+      "path": "antigravity-cli/knowledge/knowledge.lock",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/settings.json",
+      "bytes": 70
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 2400
+    }
+  ]
+}

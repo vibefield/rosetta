@@ -1,0 +1,2715 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "hermes",
+  "agent_version": "0.20.5",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth canonical 2",
+  "data_root": "~/.hermes",
+  "sources": [
+    {
+      "generator": "tools.groundtruth farm 1",
+      "agent_version": "0.20.5",
+      "evidence": "fixture",
+      "path": "sources/0.20.5.fixtures.json",
+      "sha256": "3cf5e3bfb38dfe33b2883c065722e58aa3ac000691fce2ea2a2ced26d54e0616"
+    }
+  ],
+  "streams": [
+    {
+      "id": "state-db",
+      "glob": "state.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Primary session store (WAL mode). 0.20.5 schema_version=26. sessions has 56 named columns (NOT collapsed). Tables with fixture rows: sessions, messages, session_model_usage, schema_version, state_meta, system_prompts. Empty-but-present: gateway_routing, async_delegations, compression_locks, session_turn_leases, gateway_hygiene_state, plus FTS5 virtual tables. messages.tool_calls is TEXT holding a JSON array of OpenAI-style function calls (facet: tool-calls/terminal). Tool-role messages.content is TEXT holding JSON {output, exit_code, error} (facet: tool-result/terminal). CLI-only farm does not populate gateway tables. WAL/SHM siblings are absent after a clean close. Schema dump: sources/<version>.sqlite-schema.sql.",
+      "discriminator": "table",
+      "record_types": {
+        "state.db:async_delegations": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "completed_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "delegation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "delivered_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "delivery_attempts": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "delivery_claim": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "delivery_claimed_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "delivery_state": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "dispatched_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "event_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "origin_session": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "origin_session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "origin_ui_session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "owner_pid": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "owner_started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "parent_session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "result_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "state": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "task_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:compression_locks": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "acquired_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "expires_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "holder": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:gateway_hygiene_state": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "failure_streak": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:gateway_routing": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "entry_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "scope": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "active": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "api_content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "codex_message_items": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "codex_reasoning_items": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "compacted": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "content": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "error": {
+                          "shape": {
+                            "kind": "null"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "exit_code": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                "required": false
+              },
+              "display_kind": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "display_metadata": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "effect_disposition": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "finish_reason": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "observed": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "platform_message_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning_content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning_details": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "role": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "token_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "tool_call_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "call_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "function": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "arguments": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "name": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "response_item_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "function": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "required": false
+              },
+              "tool_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "error": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "exit_code": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": false
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "call_id": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "function": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "id": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "response_item_id": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "type": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "function": 1
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      }
+                    }
+                  }
+                },
+                "required": false
+              },
+              "tool_name": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_config": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "k": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "v": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_data": {
+          "observed": 16,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "block": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_docsize": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "sz": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_idx": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "pgno": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "segid": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "term": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_trigram": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "call_id": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "function": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "id": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "response_item_id": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "type": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "function": 1
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      }
+                    }
+                  }
+                },
+                "required": false
+              },
+              "tool_name": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_trigram_config": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "k": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "v": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_trigram_data": {
+          "observed": 15,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "block": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_trigram_docsize": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "sz": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:messages_fts_trigram_idx": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "pgno": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "segid": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "term": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:schema_version": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:session_model_usage": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "actual_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "api_call_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "billing_base_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "billing_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "billing_provider": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "cache_read_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "cache_write_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "cost_source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cost_status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "estimated_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "first_seen": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "input_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_seen": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "output_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "reasoning_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "task": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:session_turn_leases": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "acquired_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "expires_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "holder": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:sessions": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "actual_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "api_call_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "archived": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "billing_base_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "billing_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "billing_provider": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cache_read_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "cache_write_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "chat_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "chat_type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "compression_failure_cooldown_until": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "compression_failure_error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "compression_fallback_streak": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "compression_ineffective_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "cost_source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cost_status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "display_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "end_reason": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "ended_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "estimated_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "expiry_finalized": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "git_branch": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "git_metadata_generation": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "git_repo_root": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "handoff_error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "handoff_platform": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "handoff_state": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "hidden": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "input_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "last_activity_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "last_activity_description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "last_activity_provenance": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "last_read_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "message_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "model_config": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "max_iterations": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "max_tokens": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "reasoning_config": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 3
+                    },
+                    "yolo_mode": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 3
+                    }
+                  }
+                },
+                "required": false
+              },
+              "origin_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "output_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "parent_session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "pinned": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "pricing_version": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "profile_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "rewind_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "system_prompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "system_prompt_hash": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "title_source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "tool_call_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "user_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:state_meta": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "value": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "state.db:system_prompts": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "hash": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "prompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-calls",
+          "path": "messages.tool_calls[] (by tool name)",
+          "discriminator": "name",
+          "record_types": {
+            "terminal": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "call_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "function": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "arguments": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "name": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "response_item_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "function": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "messages.content (tool role, keyed by tool_name)",
+          "discriminator": "tool",
+          "record_types": {
+            "terminal": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "error": {
+                    "shape": {
+                      "kind": "null"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "exit_code": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "glob": "config.yaml",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Non-secret settings. Custom OpenAI-compatible endpoint lives at model.provider=custom + model.base_url + model.api_key. Docker first-boot may migrate missing keys."
+    },
+    {
+      "id": "soul",
+      "glob": "SOUL.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Primary agent identity injected into the system prompt. Seeded on first run even with --ignore-rules."
+    },
+    {
+      "id": "credentials-env",
+      "glob": ".env",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "API keys and secrets — MUST-NOT-PARSE; inventory only, excluded from harvest."
+    },
+    {
+      "id": "auth",
+      "glob": "auth.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "OAuth provider credentials (Nous Portal, Codex, …) — MUST-NOT-PARSE; excluded from harvest."
+    },
+    {
+      "id": "memories",
+      "glob": "memories/**/*",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Persistent memory documents (MEMORY.md, USER.md)."
+    },
+    {
+      "id": "skills",
+      "glob": "skills/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Bundled + agent-created skills. Vendor bundles are stripped at harvest."
+    },
+    {
+      "id": "cron",
+      "glob": "cron/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Scheduled job definitions."
+    },
+    {
+      "id": "sessions-legacy",
+      "glob": "sessions/**/*",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Legacy per-session JSONL. Dead: CLI/gateway resume from state.db. Still inventoried so an unexpected revival is UnknownFile-adjacent rather than silent."
+    },
+    {
+      "id": "logs",
+      "glob": "logs/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Runtime logs (errors.log, gateway.log, agent.log). Stripped at harvest."
+    },
+    {
+      "id": "terminal-sessions",
+      "glob": "terminal-sessions/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-terminal -c breadcrumbs keyed by tty/tmux/kitty pane."
+    },
+    {
+      "id": "hooks",
+      "glob": "hooks/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Event hooks."
+    },
+    {
+      "id": "home",
+      "glob": "home/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-profile HOME for tool subprocesses when terminal.home_mode=profile. Stripped at harvest."
+    },
+    {
+      "id": "update-check",
+      "glob": ".update_check",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Updater stamp written on first run. Volatile; stripped at harvest."
+    },
+    {
+      "id": "farm:messages",
+      "glob": "<farm>/messages.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Farm-generated corroboration at the scenario root, not part of the agent data root.",
+      "discriminator": "table",
+      "record_types": {
+        "messages": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "active": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "api_content": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "codex_message_items": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "codex_reasoning_items": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "compacted": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "display_kind": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "display_metadata": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "effect_disposition": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "finish_reason": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "stop": 2
+                      }
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "stop": 2
+                      }
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "tool_calls": 1
+                      }
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 10
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "observed": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "platform_message_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "reasoning": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "reasoning_content": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "reasoning_details": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "role": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant": 5,
+                    "tool": 1,
+                    "user": 4
+                  }
+                },
+                "required": true,
+                "observed": 10
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "token_count": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "tool_call_id": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "string"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 10
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "string"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 10
+              },
+              "tool_name": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "terminal": 1
+                      }
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 10
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-calls",
+          "path": "messages.tool_calls[] (by tool name)",
+          "discriminator": "name",
+          "record_types": {
+            "terminal": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "call_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "function": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "arguments": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        },
+                        "name": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "response_item_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "function": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "messages.content (tool role, keyed by tool_name)",
+          "discriminator": "tool",
+          "record_types": {
+            "terminal": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "error": {
+                    "shape": {
+                      "kind": "null"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "exit_code": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              },
+              "evidence": "fixture"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "farm:schema_version",
+      "glob": "<farm>/schema_version.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Farm-generated corroboration at the scenario root, not part of the agent data root.",
+      "discriminator": "table",
+      "record_types": {
+        "schema_version": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "farm:session_model_usage",
+      "glob": "<farm>/session_model_usage.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Farm-generated corroboration at the scenario root, not part of the agent data root.",
+      "discriminator": "table",
+      "record_types": {
+        "session_model_usage": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "actual_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "api_call_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "billing_base_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "billing_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "billing_provider": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "custom": 6
+                  }
+                },
+                "required": true,
+                "observed": 6
+              },
+              "cache_read_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "cache_write_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "cost_source": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "none": 2
+                      }
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "none": 1
+                      }
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 6
+              },
+              "cost_status": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "unknown": 2
+                      }
+                    },
+                    {
+                      "kind": "string",
+                      "values": {
+                        "unknown": 1
+                      }
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 6
+              },
+              "estimated_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "first_seen": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "input_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "last_seen": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "model": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "mock-model": 6
+                  }
+                },
+                "required": true,
+                "observed": 6
+              },
+              "output_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "reasoning_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "task": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 6
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "farm:sessions",
+      "glob": "<farm>/sessions.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Farm-generated corroboration at the scenario root, not part of the agent data root.",
+      "discriminator": "table",
+      "record_types": {
+        "sessions": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "actual_cost_usd": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "api_call_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "archived": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "billing_base_url": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "billing_mode": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "billing_provider": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "custom": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "cache_read_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "cache_write_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "chat_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "chat_type": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "compression_failure_cooldown_until": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "compression_failure_error": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "compression_fallback_streak": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "compression_ineffective_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "cost_source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "none": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "cost_status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "unknown": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "display_name": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "end_reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "cli_close": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "ended_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "estimated_cost_usd": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "expiry_finalized": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "git_branch": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "git_metadata_generation": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "git_repo_root": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "handoff_error": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "handoff_platform": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "handoff_state": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "hidden": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "input_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "last_activity_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "last_activity_description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "last_activity_provenance": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "last_read_at": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "message_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "model": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "mock-model": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "model_config": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "origin_json": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "output_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "parent_session_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "pinned": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "pricing_version": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "profile_name": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "reasoning_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "rewind_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "session_key": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "cli": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "system_prompt": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "system_prompt_hash": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "title_source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "derived": 1,
+                    "llm": 2
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "tool_call_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "user_id": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "farm:state_meta",
+      "glob": "<farm>/state_meta.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Farm-generated corroboration at the scenario root, not part of the agent data root.",
+      "discriminator": "table",
+      "record_types": {
+        "state_meta": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "value": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "farm:system_prompts",
+      "glob": "<farm>/system_prompts.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Farm-generated corroboration at the scenario root, not part of the agent data root.",
+      "discriminator": "table",
+      "record_types": {
+        "system_prompts": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "hash": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "prompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    }
+  ]
+}

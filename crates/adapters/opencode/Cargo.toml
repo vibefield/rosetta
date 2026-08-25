@@ -1,0 +1,13 @@
+[package]
+name = "rosetta-adapter-opencode"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rosetta-adapter-support = { path = "../../adapter-support" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+walkdir.workspace = true

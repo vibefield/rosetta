@@ -49,10 +49,7 @@
               },
               "gitBranch": {
                 "shape": {
-                  "kind": "string",
-                  "values": {
-                    "HEAD": 5
-                  }
+                  "kind": "string"
                 },
                 "required": true,
                 "observed": 5
@@ -76,10 +73,7 @@
                           "fields": {
                             "id": {
                               "shape": {
-                                "kind": "string",
-                                "values": {
-                                  "msg_mock_0001_tool": 1
-                                }
+                                "kind": "string"
                               },
                               "required": false,
                               "observed": 1
@@ -102,10 +96,7 @@
                             },
                             "name": {
                               "shape": {
-                                "kind": "string",
-                                "values": {
-                                  "Bash": 1
-                                }
+                                "kind": "string"
                               },
                               "required": false,
                               "observed": 1
@@ -136,14 +127,7 @@
                     },
                     "id": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "msg_mock_0000": 1,
-                          "msg_mock_0001": 1,
-                          "msg_mock_0002": 1,
-                          "msg_mock_0003": 1,
-                          "msg_mock_0004": 1
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 5
@@ -323,10 +307,7 @@
                           },
                           "speed": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "standard": 5
-                              }
+                              "kind": "string"
                             },
                             "required": true,
                             "observed": 5
@@ -582,10 +563,7 @@
               },
               "gitBranch": {
                 "shape": {
-                  "kind": "string",
-                  "values": {
-                    "HEAD": 3
-                  }
+                  "kind": "string"
                 },
                 "required": true,
                 "observed": 3
@@ -615,10 +593,7 @@
                               "fields": {
                                 "content": {
                                   "shape": {
-                                    "kind": "string",
-                                    "values": {
-                                      "rosetta-mock": 1
-                                    }
+                                    "kind": "string"
                                   },
                                   "required": true,
                                   "observed": 1
@@ -632,10 +607,7 @@
                                 },
                                 "tool_use_id": {
                                   "shape": {
-                                    "kind": "string",
-                                    "values": {
-                                      "msg_mock_0001_tool": 1
-                                    }
+                                    "kind": "string"
                                   },
                                   "required": true,
                                   "observed": 1
@@ -771,10 +743,7 @@
                     },
                     "stdout": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "rosetta-mock": 1
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 1
@@ -863,10 +832,7 @@
                 "fields": {
                   "id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "msg_mock_0001_tool": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -889,10 +855,7 @@
                   },
                   "name": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "Bash": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -974,10 +937,7 @@
                   },
                   "stdout": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "rosetta-mock": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -999,10 +959,7 @@
                 "fields": {
                   "content": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "rosetta-mock": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -1016,10 +973,7 @@
                   },
                   "tool_use_id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "msg_mock_0001_tool": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -1288,10 +1242,7 @@
                           "fields": {
                             "id": {
                               "shape": {
-                                "kind": "string",
-                                "values": {
-                                  "msg_mock_0001_tool": 1
-                                }
+                                "kind": "string"
                               },
                               "required": false,
                               "observed": 1
@@ -1314,10 +1265,7 @@
                             },
                             "name": {
                               "shape": {
-                                "kind": "string",
-                                "values": {
-                                  "Bash": 1
-                                }
+                                "kind": "string"
                               },
                               "required": false,
                               "observed": 1
@@ -1355,14 +1303,7 @@
                     },
                     "id": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "msg_mock_0000": 1,
-                          "msg_mock_0001": 1,
-                          "msg_mock_0002": 1,
-                          "msg_mock_0003": 1,
-                          "msg_mock_0004": 1
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 5
@@ -2091,10 +2032,7 @@
                     },
                     "speed": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "standard": 4
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 4
@@ -2123,14 +2061,7 @@
                 "shape": {
                   "kind": "array",
                   "items": {
-                    "kind": "string",
-                    "values": {
-                      "Explore": 4,
-                      "Plan": 4,
-                      "claude": 4,
-                      "general-purpose": 4,
-                      "statusline-setup": 4
-                    }
+                    "kind": "string"
                   }
                 },
                 "required": true,
@@ -2157,12 +2088,7 @@
                 "shape": {
                   "kind": "array",
                   "items": {
-                    "kind": "string",
-                    "values": {
-                      "interrupt_cancel_queued_v1": 4,
-                      "interrupt_receipt_v1": 4,
-                      "msg_lifecycle_v1": 4
-                    }
+                    "kind": "string"
                   }
                 },
                 "required": true,
@@ -2265,23 +2191,7 @@
                 "shape": {
                   "kind": "array",
                   "items": {
-                    "kind": "string",
-                    "values": {
-                      "batch": 4,
-                      "claude-api": 4,
-                      "code-review": 4,
-                      "dataviz": 4,
-                      "debug": 4,
-                      "deep-research": 4,
-                      "doctor": 4,
-                      "fewer-permission-prompts": 4,
-                      "loop": 4,
-                      "run": 4,
-                      "run-skill-generator": 4,
-                      "simplify": 4,
-                      "update-config": 4,
-                      "verify": 4
-                    }
+                    "kind": "string"
                   }
                 },
                 "required": true,
@@ -2311,11 +2221,7 @@
                 "shape": {
                   "kind": "array",
                   "items": {
-                    "kind": "string",
-                    "values": {
-                      "color": 4,
-                      "doctor": 4
-                    }
+                    "kind": "string"
                   }
                 },
                 "required": true,
@@ -2373,10 +2279,7 @@
                           "fields": {
                             "content": {
                               "shape": {
-                                "kind": "string",
-                                "values": {
-                                  "rosetta-mock": 1
-                                }
+                                "kind": "string"
                               },
                               "required": true,
                               "observed": 1
@@ -2390,10 +2293,7 @@
                             },
                             "tool_use_id": {
                               "shape": {
-                                "kind": "string",
-                                "values": {
-                                  "msg_mock_0001_tool": 1
-                                }
+                                "kind": "string"
                               },
                               "required": true,
                               "observed": 1
@@ -2484,10 +2384,7 @@
                     },
                     "stdout": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "rosetta-mock": 1
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 1

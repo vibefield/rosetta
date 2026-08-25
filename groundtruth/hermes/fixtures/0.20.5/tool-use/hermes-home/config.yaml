@@ -1,0 +1,25 @@
+model:
+  default: mock-model
+  provider: custom
+  base_url: http://127.0.0.1:61299/v1
+  api_key: rosetta-mock-key
+  context_length: 128000
+terminal:
+  backend: local
+  timeout: 30
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+compression:
+  enabled: false
+agent:
+  max_turns: 8
+  disabled_toolsets:
+    - web
+    - browser
+    - memory
+auxiliary:
+  compression:
+    provider: main
+  vision:
+    provider: main

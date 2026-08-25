@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import copy
 import fnmatch
+import hashlib
 import json
+import re
 import tomllib
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -17,12 +19,117 @@ from typing import Any
 
 from . import FORMAT, LAYOUT_FORMAT
 
-ENUM_CARDINALITY_CAP = 24
+ENUM_CARDINALITY_CAP = 128
+ENUM_VALUE_BYTES_CAP = 96
 DYNAMIC_KEY_CAP = 40
+UUID_KEY = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
-EVIDENCE_STRENGTH = {"research": 0, "observed": 1, "fixture": 2}
+EVIDENCE_STRENGTH = {"research": 0, "observed": 1, "fixture": 2, "writer": 3}
 FILE_FORMATS = {"jsonl", "json", "toml", "markdown", "sqlite", "text"}
 DISCIPLINES = {"append_only", "rewrite_in_place", "database"}
+
+# Inferred shapes keep values only when the field itself is enum-like. This
+# preserves real protocol enums, model/provider names, and built-in tool names
+# without publishing arbitrary prompts, paths, titles, filenames, or IDs.
+CENSUS_ENUM_FIELDS = {
+    "action",
+    "agenttype",
+    "api",
+    "apibackend",
+    "backend",
+    "category",
+    "channel",
+    "direction",
+    "effort",
+    "entrypoint",
+    "event",
+    "fileformat",
+    "finish",
+    "finishreason",
+    "kind",
+    "language",
+    "level",
+    "mediatype",
+    "method",
+    "mimetype",
+    "mode",
+    "model",
+    "modelid",
+    "operation",
+    "origin",
+    "outcome",
+    "permission",
+    "permissionmode",
+    "phase",
+    "promptsource",
+    "protocol",
+    "protocolversion",
+    "provider",
+    "providerid",
+    "reason",
+    "role",
+    "scope",
+    "sessionkind",
+    "sessionupdate",
+    "severity",
+    "source",
+    "state",
+    "status",
+    "stopreason",
+    "subtype",
+    "tool",
+    "toolname",
+    "tools",
+    "transport",
+    "trigger",
+    "type",
+    "usertype",
+    "version",
+    "visibility",
+}
+SEMVER_VALUE = re.compile(r"^v?\d+(?:\.\d+){0,3}(?:[-+][A-Za-z0-9.-]+)?$")
+OPAQUE_VALUE = re.compile(
+    r"^(?:msg|tool|toolu|call|session|req|request|task|thread|run|wf)_[A-Za-z0-9-]*[0-9][A-Za-z0-9-]+$",
+    re.IGNORECASE,
+)
+LONG_HEX_VALUE = re.compile(r"^[0-9a-f]{12,}$", re.IGNORECASE)
+
+CENSUS_ENUM_SUFFIXES = {
+    "action",
+    "backend",
+    "category",
+    "channel",
+    "direction",
+    "event",
+    "format",
+    "kind",
+    "language",
+    "level",
+    "method",
+    "mode",
+    "model",
+    "operation",
+    "phase",
+    "protocol",
+    "provider",
+    "reason",
+    "role",
+    "scope",
+    "source",
+    "state",
+    "status",
+    "style",
+    "subtype",
+    "tier",
+    "transport",
+    "trigger",
+    "type",
+    "version",
+    "visibility",
+}
 
 
 class GroundTruthError(ValueError):
@@ -54,15 +161,84 @@ def write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 
 def enumerable_value(value: str) -> bool:
-    return bool(value) and len(value.encode()) <= 32 and all(
+    return bool(value) and len(value.encode()) <= ENUM_VALUE_BYTES_CAP and all(
         char.isascii() and (char.isalnum() or char in "-_.") for char in value
     )
 
 
-def value_like_key(key: str) -> bool:
-    return len(key.encode()) > 48 or any(
-        char.isspace() or char in "/\\" for char in key
+def _normalized_field_name(field_name: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (field_name or "").lower())
+
+
+def _census_enum_field(field_name: str | None) -> bool:
+    normalized = _normalized_field_name(field_name)
+    return normalized in CENSUS_ENUM_FIELDS or any(
+        normalized.endswith(suffix) for suffix in CENSUS_ENUM_SUFFIXES
     )
+
+
+def _safe_enum_values(
+    field_name: str | None, values: Mapping[str, Any]
+) -> dict[str, int] | None:
+    """Return publishable enum counts for an inferred string field.
+
+    A short ASCII string is not automatically an enum: IDs, filenames, task
+    titles, and snippets can all satisfy that test. The field name must also be
+    protocol-enum-like. MCP names retain their class but not the configured
+    server or user-defined tool name.
+    """
+
+    if not _census_enum_field(field_name):
+        return None
+    normalized = _normalized_field_name(field_name)
+    safe: dict[str, int] = {}
+    for raw_value, raw_count in values.items():
+        value = str(raw_value)
+        if normalized in {"tool", "toolname", "tools"} and value == "mcp__*":
+            safe[value] = safe.get(value, 0) + int(raw_count)
+            continue
+        if not enumerable_value(value):
+            continue
+        if UUID_KEY.fullmatch(value) or OPAQUE_VALUE.fullmatch(value) or LONG_HEX_VALUE.fullmatch(value):
+            continue
+        if normalized.endswith("version") and not SEMVER_VALUE.fullmatch(value):
+            continue
+        if normalized in {"tool", "toolname", "tools"} and value.startswith("mcp__"):
+            value = "mcp__*"
+        safe[value] = safe.get(value, 0) + int(raw_count)
+    return dict(sorted(safe.items())) or None
+
+
+def value_like_key(key: str) -> bool:
+    if len(key.encode()) > 48:
+        return True
+    if any(char.isspace() or char in "/\\" for char in key):
+        return True
+    if UUID_KEY.fullmatch(key):
+        return True
+    if len(key) > 2 and key.startswith("<") and key.endswith(">"):
+        return True
+    return False
+
+
+def schema_field_key(key: str) -> bool:
+    """Stable SQL/JSON field names, as opposed to maps keyed by values."""
+    if not key or value_like_key(key):
+        return False
+    if key[0].isdigit():
+        return False
+    return all(char.isalnum() or char == "_" for char in key)
+
+
+def sqlite_schema_name(path: Path, relative: str) -> str:
+    """Stable schema-dump identity for UUID-named per-record databases."""
+
+    if UUID_KEY.fullmatch(path.stem):
+        parent = Path(relative).parent.as_posix()
+        if parent in {"", "."}:
+            return f"uuid{path.suffix}"
+        return f"{parent}{path.suffix}"
+    return path.name
 
 
 def _field(shape: dict[str, Any], *, required: bool, observed: int | None) -> dict[str, Any]:
@@ -74,7 +250,12 @@ def _field(shape: dict[str, Any], *, required: bool, observed: int | None) -> di
 
 def _collapse_dynamic(fields: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     fields = dict(sorted(fields.items()))
-    if len(fields) <= DYNAMIC_KEY_CAP and not any(value_like_key(key) for key in fields):
+    # Wide tables with real column names (Hermes sessions has 50+) must stay
+    # named. Collapse only value-keyed maps (UUIDs, paths) or huge anonymous
+    # objects.
+    if not any(value_like_key(key) for key in fields) and (
+        len(fields) <= DYNAMIC_KEY_CAP or all(schema_field_key(key) for key in fields)
+    ):
         return fields
 
     merged: dict[str, Any] | None = None
@@ -95,7 +276,7 @@ def _collapse_dynamic(fields: dict[str, dict[str, Any]]) -> dict[str, dict[str, 
     }
 
 
-def shape_of(value: Any) -> dict[str, Any]:
+def shape_of(value: Any, field_name: str | None = None) -> dict[str, Any]:
     if value is None:
         return {"kind": "null"}
     if isinstance(value, bool):
@@ -105,12 +286,14 @@ def shape_of(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         shape: dict[str, Any] = {"kind": "string"}
         if enumerable_value(value):
-            shape["values"] = {value: 1}
+            safe = _safe_enum_values(field_name, {value: 1})
+            if safe is not None:
+                shape["values"] = safe
         return shape
     if isinstance(value, list):
         items: dict[str, Any] | None = None
         for item in value:
-            incoming = shape_of(item)
+            incoming = shape_of(item, field_name)
             items = incoming if items is None else merge_shapes(items, incoming)
         shape = {"kind": "array"}
         if items is not None:
@@ -118,7 +301,7 @@ def shape_of(value: Any) -> dict[str, Any]:
         return shape
     if isinstance(value, dict):
         fields = {
-            str(key): _field(shape_of(item), required=True, observed=1)
+            str(key): _field(shape_of(item, str(key)), required=True, observed=1)
             for key, item in value.items()
         }
         return {"kind": "object", "fields": _collapse_dynamic(fields)}
@@ -236,6 +419,115 @@ class ShapeAccumulator:
         return dict(sorted(self.types.items()))
 
 
+def _merge_field_docs(
+    first: Mapping[str, Any], second: Mapping[str, Any]
+) -> dict[str, Any]:
+    observed = None
+    if "observed" in first and "observed" in second:
+        observed = int(first["observed"]) + int(second["observed"])
+    return _field(
+        merge_shapes(dict(first["shape"]), dict(second["shape"])),
+        required=bool(first.get("required") and second.get("required")),
+        observed=observed,
+    )
+
+
+def sanitize_census_shape(
+    shape: Mapping[str, Any], field_name: str | None = None
+) -> dict[str, Any]:
+    """Remove payload-like values and keys from an organic census shape."""
+
+    result = copy.deepcopy(dict(shape))
+    kind = result.get("kind")
+    if kind == "string":
+        values = result.get("values")
+        if isinstance(values, Mapping):
+            safe = _safe_enum_values(field_name, values)
+            if safe is None:
+                result.pop("values", None)
+            else:
+                result["values"] = safe
+        return result
+    if kind == "array":
+        if isinstance(result.get("items"), Mapping):
+            result["items"] = sanitize_census_shape(result["items"], field_name)
+        return result
+    if kind == "object":
+        fields: dict[str, dict[str, Any]] = {}
+        for key, raw_field in result.get("fields", {}).items():
+            field = copy.deepcopy(dict(raw_field))
+            field["shape"] = sanitize_census_shape(field["shape"], key)
+            # JSON object keys may themselves be values (project names, file
+            # names, IDs). Stable identifier-like schema fields stay named;
+            # all others are represented structurally as one dynamic field.
+            safe_key = key if key == "<dynamic>" or schema_field_key(key) else "<dynamic>"
+            if safe_key in fields:
+                fields[safe_key] = _merge_field_docs(fields[safe_key], field)
+            else:
+                fields[safe_key] = field
+        result["fields"] = dict(sorted(fields.items()))
+        return result
+    if kind == "any_of":
+        result["variants"] = [
+            sanitize_census_shape(variant, field_name)
+            for variant in result.get("variants", [])
+        ]
+    return result
+
+
+def _sanitize_census_record_types(
+    record_types: Mapping[str, Mapping[str, Any]],
+    discriminator: str | None,
+    *,
+    tool_names: bool = False,
+) -> dict[str, dict[str, Any]]:
+    sanitized: dict[str, dict[str, Any]] = {}
+    semantic_field = "tool" if tool_names else discriminator
+    preserve_names = tool_names or discriminator == "table" or _census_enum_field(discriminator)
+    sentinels = {"", "<none>", "<unnamed>", "<unmatched>", "<untyped>"}
+    for raw_name, raw_record_type in record_types.items():
+        name = raw_name
+        if name not in sentinels:
+            if discriminator == "table":
+                name = raw_name
+            else:
+                safe = (
+                    _safe_enum_values(semantic_field, {name: 1})
+                    if preserve_names
+                    else None
+                )
+                name = next(iter(safe)) if safe else "<dynamic>"
+        record_type = copy.deepcopy(dict(raw_record_type))
+        record_type["shape"] = sanitize_census_shape(record_type["shape"])
+        current = sanitized.get(name)
+        if current is None:
+            sanitized[name] = record_type
+        else:
+            current["observed"] = int(current["observed"]) + int(record_type["observed"])
+            current["shape"] = merge_shapes(current["shape"], record_type["shape"])
+    return dict(sorted(sanitized.items()))
+
+
+def sanitize_census_document(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply the committed organic-census publication policy."""
+
+    result = copy.deepcopy(dict(document))
+    result["generator"] = "tools.groundtruth census 2"
+    for stream in result.get("streams", []):
+        if stream.get("record_types"):
+            stream["record_types"] = _sanitize_census_record_types(
+                stream["record_types"], stream.get("discriminator")
+            )
+        for facet in stream.get("facets", []):
+            if facet.get("record_types"):
+                facet["record_types"] = _sanitize_census_record_types(
+                    facet["record_types"],
+                    facet.get("discriminator"),
+                    tool_names="tool" in str(facet.get("id", "")).lower(),
+                )
+    return result
+
+
 def _validate_stream(stream: Mapping[str, Any], source: Path) -> None:
     required = {"id", "glob", "file_format", "discipline", "evidence"}
     missing = required - stream.keys()
@@ -290,6 +582,28 @@ def glob_match(pattern: str, path: str) -> bool:
         )
 
     return matches(0, 0)
+
+
+def jsonl_record_type(value: Any) -> str:
+    """Discriminant for one JSONL record. Agents disagree on the key."""
+
+    if not isinstance(value, dict):
+        return "<untyped>"
+    if isinstance(value.get("type"), str) and value["type"]:
+        return value["type"]
+    if isinstance(value.get("event"), str) and value["event"]:
+        return value["event"]
+    params = value.get("params") if isinstance(value.get("params"), dict) else {}
+    update = params.get("update") if isinstance(params.get("update"), dict) else {}
+    if isinstance(update.get("sessionUpdate"), str) and update["sessionUpdate"]:
+        return update["sessionUpdate"]
+    if isinstance(value.get("sessionUpdate"), str) and value["sessionUpdate"]:
+        return value["sessionUpdate"]
+    if isinstance(value.get("method"), str) and value["method"]:
+        return value["method"]
+    if isinstance(value.get("role"), str) and value["role"]:
+        return value["role"]
+    return "<untyped>"
 
 
 def matching_stream(layout: Mapping[str, Any], relative_path: str) -> dict[str, Any] | None:
@@ -353,6 +667,7 @@ def merge_docs(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             target = by_id.get(stream_id)
             if target is None:
                 target = copy.deepcopy(source_stream)
+                target["evidence"] = source_stream.get("evidence", evidence)
                 target["record_types"] = {
                     key: _with_evidence(value, evidence)
                     for key, value in target.get("record_types", {}).items()
@@ -366,6 +681,10 @@ def merge_docs(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                 by_id[stream_id] = target
                 continue
 
+            target["evidence"] = _stronger(
+                target.get("evidence", evidence),
+                source_stream.get("evidence", evidence),
+            )
             if not target.get("discriminator") and source_stream.get("discriminator"):
                 target["discriminator"] = source_stream["discriminator"]
             target.setdefault("record_types", {})
@@ -407,7 +726,7 @@ def merge_docs(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "agent": agent,
         "agent_version": strongest["agent_version"],
         "evidence": strongest["evidence"],
-        "generator": "tools.groundtruth canonical 1",
+        "generator": "tools.groundtruth canonical 2",
         "data_root": strongest["data_root"],
         "sources": [
             {
@@ -417,8 +736,23 @@ def merge_docs(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                     "evidence": document["evidence"],
                 },
                 **(
+                    {"path": document["_source_path"]}
+                    if document.get("_source_path") is not None
+                    else {}
+                ),
+                **(
+                    {"sha256": document["_source_sha256"]}
+                    if document.get("_source_sha256") is not None
+                    else {}
+                ),
+                **(
                     {"captured_at": document["captured_at"]}
                     if document.get("captured_at") is not None
+                    else {}
+                ),
+                **(
+                    {"writer_version": document["writer_version"]}
+                    if document.get("writer_version") is not None
                     else {}
                 ),
             }
@@ -433,7 +767,13 @@ def canonical_from_sources(agent_dir: Path) -> dict[str, Any]:
     paths = sorted(source_dir.glob("*.json"))
     if not paths:
         raise GroundTruthError(f"{source_dir}: no JSON source documents")
-    return merge_docs(read_json(path) for path in paths)
+    documents = []
+    for path in paths:
+        document = read_json(path)
+        document["_source_path"] = f"sources/{path.name}"
+        document["_source_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        documents.append(document)
+    return merge_docs(documents)
 
 
 def build_canonical(agent_dir: Path) -> Path:

@@ -1,0 +1,7 @@
+{
+  "enableInstallTelemetry": false,
+  "defaultProjectTrust": "never",
+  "retry": {
+    "enabled": false
+  }
+}

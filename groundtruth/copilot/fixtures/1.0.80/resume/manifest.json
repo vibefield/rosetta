@@ -1,0 +1,57 @@
+{
+  "agent": "copilot",
+  "agent_version": "1.0.80",
+  "scenario": "resume",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "copilot-home/config.json",
+      "bytes": 131
+    },
+    {
+      "path": "copilot-home/session-state/58ee8371-b203-48fa-b274-352cb336fe17/checkpoints/index.md",
+      "bytes": 172
+    },
+    {
+      "path": "copilot-home/session-state/58ee8371-b203-48fa-b274-352cb336fe17/events.jsonl",
+      "bytes": 57151
+    },
+    {
+      "path": "copilot-home/session-state/58ee8371-b203-48fa-b274-352cb336fe17/rewind-file-snapshots/tracking.json",
+      "bytes": 29
+    },
+    {
+      "path": "copilot-home/session-state/58ee8371-b203-48fa-b274-352cb336fe17/session.db",
+      "bytes": 28672
+    },
+    {
+      "path": "copilot-home/session-state/58ee8371-b203-48fa-b274-352cb336fe17/workspace.yaml",
+      "bytes": 224
+    },
+    {
+      "path": "copilot-home/settings.json",
+      "bytes": 89
+    },
+    {
+      "path": "share.md",
+      "bytes": 455
+    },
+    {
+      "path": "stderr-1.log",
+      "bytes": 45
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 45
+    },
+    {
+      "path": "stdout-1.jsonl",
+      "bytes": 4673
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 4669
+    }
+  ]
+}

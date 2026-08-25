@@ -1,0 +1,3 @@
+{"role":"meta","type":"system.version","version":"0.38.0"}
+{"role":"assistant","content":"Hello from rosetta mockmodel. This is a deterministic scripted response."}
+{"role":"meta","type":"session.resume_hint","session_id":"session_fdd97865-f1e2-49bb-a624-ff57f50a82b9","command":"kimi -r session_fdd97865-f1e2-49bb-a624-ff57f50a82b9","content":"To resume this session: kimi -r session_fdd97865-f1e2-49bb-a624-ff57f50a82b9"}

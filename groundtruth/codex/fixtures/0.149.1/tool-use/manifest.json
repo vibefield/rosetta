@@ -1,109 +1,109 @@
 {
   "agent": "codex",
   "agent_version": "0.149.1",
+  "scenario": "tool-use",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-responses",
   "files": [
     {
-      "bytes": 3,
-      "path": "codex-home/.sandbox_migration"
+      "path": "codex-home/.sandbox_migration",
+      "bytes": 3
     },
     {
-      "bytes": 251,
-      "path": "codex-home/config.toml"
+      "path": "codex-home/config.toml",
+      "bytes": 251
     },
     {
-      "bytes": 4096,
-      "path": "codex-home/goals_1.sqlite"
+      "path": "codex-home/goals_1.sqlite",
+      "bytes": 4096
     },
     {
-      "bytes": 32768,
-      "path": "codex-home/goals_1.sqlite-shm"
+      "path": "codex-home/goals_1.sqlite-shm",
+      "bytes": 32768
     },
     {
-      "bytes": 78312,
-      "path": "codex-home/goals_1.sqlite-wal"
+      "path": "codex-home/goals_1.sqlite-wal",
+      "bytes": 78312
     },
     {
-      "bytes": 36,
-      "path": "codex-home/installation_id"
+      "path": "codex-home/installation_id",
+      "bytes": 36
     },
     {
-      "bytes": 49152,
-      "path": "codex-home/logs_2.sqlite"
+      "path": "codex-home/logs_2.sqlite",
+      "bytes": 49152
     },
     {
-      "bytes": 32768,
-      "path": "codex-home/logs_2.sqlite-shm"
+      "path": "codex-home/logs_2.sqlite-shm",
+      "bytes": 32768
     },
     {
-      "bytes": 119512,
-      "path": "codex-home/logs_2.sqlite-wal"
+      "path": "codex-home/logs_2.sqlite-wal",
+      "bytes": 119512
     },
     {
-      "bytes": 4096,
-      "path": "codex-home/memories_1.sqlite"
+      "path": "codex-home/memories_1.sqlite",
+      "bytes": 4096
     },
     {
-      "bytes": 32768,
-      "path": "codex-home/memories_1.sqlite-shm"
+      "path": "codex-home/memories_1.sqlite-shm",
+      "bytes": 32768
     },
     {
-      "bytes": 61832,
-      "path": "codex-home/memories_1.sqlite-wal"
+      "path": "codex-home/memories_1.sqlite-wal",
+      "bytes": 61832
     },
     {
-      "bytes": 4096,
-      "path": "codex-home/queue_1.sqlite"
+      "path": "codex-home/queue_1.sqlite",
+      "bytes": 4096
     },
     {
-      "bytes": 32768,
-      "path": "codex-home/queue_1.sqlite-shm"
+      "path": "codex-home/queue_1.sqlite-shm",
+      "bytes": 32768
     },
     {
-      "bytes": 86552,
-      "path": "codex-home/queue_1.sqlite-wal"
+      "path": "codex-home/queue_1.sqlite-wal",
+      "bytes": 86552
     },
     {
-      "bytes": 35708,
-      "path": "codex-home/sessions/2026/08/24/rollout-2026-08-24T19-35-04-01a036c5-6ff0-70a3-aa4c-75eddafa53d2.jsonl"
+      "path": "codex-home/sessions/2026/08/24/rollout-2026-08-24T19-35-04-01a036c5-6ff0-70a3-aa4c-75eddafa53d2.jsonl",
+      "bytes": 35708
     },
     {
-      "bytes": 4096,
-      "path": "codex-home/state_5.sqlite"
+      "path": "codex-home/state_5.sqlite",
+      "bytes": 4096
     },
     {
-      "bytes": 32768,
-      "path": "codex-home/state_5.sqlite-shm"
+      "path": "codex-home/state_5.sqlite-shm",
+      "bytes": 32768
     },
     {
-      "bytes": 2208352,
-      "path": "codex-home/state_5.sqlite-wal"
+      "path": "codex-home/state_5.sqlite-wal",
+      "bytes": 2208352
     },
     {
-      "bytes": 0,
-      "path": "codex-home/thread-writer-locks/.coordination.lock"
+      "path": "codex-home/thread-writer-locks/.coordination.lock",
+      "bytes": 0
     },
     {
-      "bytes": 4096,
-      "path": "codex-home/thread_history_1.sqlite"
+      "path": "codex-home/thread_history_1.sqlite",
+      "bytes": 4096
     },
     {
-      "bytes": 32768,
-      "path": "codex-home/thread_history_1.sqlite-shm"
+      "path": "codex-home/thread_history_1.sqlite-shm",
+      "bytes": 32768
     },
     {
-      "bytes": 309032,
-      "path": "codex-home/thread_history_1.sqlite-wal"
+      "path": "codex-home/thread_history_1.sqlite-wal",
+      "bytes": 309032
     },
     {
-      "bytes": 39,
-      "path": "stderr.log"
+      "path": "stderr.log",
+      "bytes": 39
     },
     {
-      "bytes": 983,
-      "path": "stdout.jsonl"
+      "path": "stdout.jsonl",
+      "bytes": 983
     }
-  ],
-  "generator": "rosetta-fixture-farm 0.2.0",
-  "mock_dialect": "openai-responses",
-  "scenario": "tool-use"
+  ]
 }

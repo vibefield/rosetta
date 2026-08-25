@@ -3,13 +3,15 @@
   "agent": "codex",
   "agent_version": "0.149.1",
   "evidence": "fixture",
-  "generator": "tools.groundtruth canonical 1",
+  "generator": "tools.groundtruth canonical 2",
   "data_root": "~/.codex",
   "sources": [
     {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "0.149.1",
-      "evidence": "fixture"
+      "evidence": "fixture",
+      "path": "sources/0.149.1.fixtures.json",
+      "sha256": "5ec96182f5986558bc40859708ba408745e20cf39efe2eb9a6fd7b294c0af96c"
     }
   ],
   "streams": [
@@ -327,10 +329,7 @@
                           },
                           "process_id": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "35326": 1
-                              }
+                              "kind": "string"
                             },
                             "required": false,
                             "observed": 1
@@ -420,10 +419,7 @@
                           },
                           "limit_id": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "codex": 5
-                              }
+                              "kind": "string"
                             },
                             "required": true,
                             "observed": 5
@@ -518,20 +514,14 @@
                           },
                           "approval_policy": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "never": 1
-                              }
+                              "kind": "string"
                             },
                             "required": true,
                             "observed": 1
                           },
                           "approvals_reviewer": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "user": 1
-                              }
+                              "kind": "string"
                             },
                             "required": true,
                             "observed": 1
@@ -607,10 +597,7 @@
                           },
                           "model_provider_id": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "mock": 1
-                              }
+                              "kind": "string"
                             },
                             "required": true,
                             "observed": 1
@@ -631,10 +618,7 @@
                                             "fields": {
                                               "access": {
                                                 "shape": {
-                                                  "kind": "string",
-                                                  "values": {
-                                                    "read": 1
-                                                  }
+                                                  "kind": "string"
                                                 },
                                                 "required": true,
                                                 "observed": 1
@@ -700,10 +684,7 @@
                                 },
                                 "network": {
                                   "shape": {
-                                    "kind": "string",
-                                    "values": {
-                                      "restricted": 1
-                                    }
+                                    "kind": "string"
                                   },
                                   "required": true,
                                   "observed": 1
@@ -725,10 +706,7 @@
                           },
                           "personality": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "pragmatic": 1
-                              }
+                              "kind": "string"
                             },
                             "required": true,
                             "observed": 1
@@ -817,10 +795,7 @@
                     },
                     "call_id": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "call_mock_0001": 2
-                        }
+                        "kind": "string"
                       },
                       "required": false,
                       "observed": 2
@@ -887,10 +862,7 @@
                     },
                     "name": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "exec_command": 1
-                        }
+                        "kind": "string"
                       },
                       "required": false,
                       "observed": 1
@@ -1075,10 +1047,7 @@
                     },
                     "originator": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "codex_exec": 3
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 3
@@ -1177,20 +1146,14 @@
                     },
                     "approval_policy": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "never": 4
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 4
                     },
                     "approvals_reviewer": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "user": 4
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 4
@@ -1249,10 +1212,7 @@
                     },
                     "current_date": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "2026-08-24": 4
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 4
@@ -1300,10 +1260,7 @@
                                       "fields": {
                                         "access": {
                                           "shape": {
-                                            "kind": "string",
-                                            "values": {
-                                              "read": 3
-                                            }
+                                            "kind": "string"
                                           },
                                           "required": true,
                                           "observed": 3
@@ -1369,10 +1326,7 @@
                           },
                           "network": {
                             "shape": {
-                              "kind": "string",
-                              "values": {
-                                "restricted": 3
-                              }
+                              "kind": "string"
                             },
                             "required": false,
                             "observed": 3
@@ -1395,10 +1349,7 @@
                     },
                     "personality": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "pragmatic": 4
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 4
@@ -1432,10 +1383,7 @@
                     },
                     "summary": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "auto": 4
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 4
@@ -1574,10 +1522,7 @@
                               "fields": {
                                 "current_date": {
                                   "shape": {
-                                    "kind": "string",
-                                    "values": {
-                                      "2026-08-24": 3
-                                    }
+                                    "kind": "string"
                                   },
                                   "required": true,
                                   "observed": 3
@@ -1599,10 +1544,7 @@
                                             },
                                             "shell": {
                                               "shape": {
-                                                "kind": "string",
-                                                "values": {
-                                                  "zsh": 3
-                                                }
+                                                "kind": "string"
                                               },
                                               "required": true,
                                               "observed": 3
@@ -1763,10 +1705,7 @@
                                 },
                                 "personality": {
                                   "shape": {
-                                    "kind": "string",
-                                    "values": {
-                                      "pragmatic": 3
-                                    }
+                                    "kind": "string"
                                   },
                                   "required": true,
                                   "observed": 3
@@ -2005,10 +1944,7 @@
                         },
                         "process_id": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "35326": 1
-                            }
+                            "kind": "string"
                           },
                           "required": false,
                           "observed": 1
@@ -2237,20 +2173,14 @@
                         },
                         "approval_policy": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "never": 1
-                            }
+                            "kind": "string"
                           },
                           "required": true,
                           "observed": 1
                         },
                         "approvals_reviewer": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "user": 1
-                            }
+                            "kind": "string"
                           },
                           "required": true,
                           "observed": 1
@@ -2326,10 +2256,7 @@
                         },
                         "model_provider_id": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "mock": 1
-                            }
+                            "kind": "string"
                           },
                           "required": true,
                           "observed": 1
@@ -2350,10 +2277,7 @@
                                           "fields": {
                                             "access": {
                                               "shape": {
-                                                "kind": "string",
-                                                "values": {
-                                                  "read": 1
-                                                }
+                                                "kind": "string"
                                               },
                                               "required": true,
                                               "observed": 1
@@ -2419,10 +2343,7 @@
                               },
                               "network": {
                                 "shape": {
-                                  "kind": "string",
-                                  "values": {
-                                    "restricted": 1
-                                  }
+                                  "kind": "string"
                                 },
                                 "required": true,
                                 "observed": 1
@@ -2444,10 +2365,7 @@
                         },
                         "personality": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "pragmatic": 1
-                            }
+                            "kind": "string"
                           },
                           "required": true,
                           "observed": 1
@@ -2614,10 +2532,7 @@
                         },
                         "limit_id": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "codex": 5
-                            }
+                            "kind": "string"
                           },
                           "required": true,
                           "observed": 5
@@ -2704,20 +2619,14 @@
                   },
                   "call_id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "call_mock_0001": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
                   },
                   "id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "fc_mock_0001": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -2740,10 +2649,7 @@
                   },
                   "name": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "exec_command": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -2769,10 +2675,7 @@
                 "fields": {
                   "call_id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "call_mock_0001": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -2962,13 +2865,7 @@
                   },
                   "id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "msg_mock_0000": 1,
-                        "msg_mock_0002": 1,
-                        "msg_mock_0003": 1,
-                        "msg_mock_0004": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 4
@@ -3055,10 +2952,7 @@
                   },
                   "id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "call_mock_0001": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -3094,10 +2988,7 @@
                   },
                   "process_id": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "35326": 1
-                      }
+                      "kind": "string"
                     },
                     "required": true,
                     "observed": 1
@@ -4446,7 +4337,103 @@
               },
               "sandbox_policy": {
                 "shape": {
-                  "kind": "string"
+                  "kind": "object",
+                  "fields": {
+                    "file_system": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "entries": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "object",
+                                "fields": {
+                                  "access": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 2
+                                  },
+                                  "path": {
+                                    "shape": {
+                                      "kind": "object",
+                                      "fields": {
+                                        "type": {
+                                          "shape": {
+                                            "kind": "string",
+                                            "values": {
+                                              "special": 2
+                                            }
+                                          },
+                                          "required": true,
+                                          "observed": 2
+                                        },
+                                        "value": {
+                                          "shape": {
+                                            "kind": "object",
+                                            "fields": {
+                                              "kind": {
+                                                "shape": {
+                                                  "kind": "string",
+                                                  "values": {
+                                                    "root": 2
+                                                  }
+                                                },
+                                                "required": true,
+                                                "observed": 2
+                                              }
+                                            }
+                                          },
+                                          "required": true,
+                                          "observed": 2
+                                        }
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 2
+                                  }
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 2
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "restricted": 2
+                              }
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 2
+                    },
+                    "network": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 2
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "disabled": 1,
+                          "managed": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 3
+                    }
+                  }
                 },
                 "required": true
               },
@@ -4599,7 +4586,204 @@
               },
               "item_json": {
                 "shape": {
-                  "kind": "string"
+                  "kind": "object",
+                  "fields": {
+                    "aggregatedOutput": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "clientId": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "command": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "commandActions": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "command": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "unknown": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 1
+                            }
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 4
+                            },
+                            "text_elements": {
+                              "shape": {
+                                "kind": "array"
+                              },
+                              "required": true,
+                              "observed": 4
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 4
+                                }
+                              },
+                              "required": true,
+                              "observed": 4
+                            }
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "cwd": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "delivery": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "durationMs": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "exitCode": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 9
+                    },
+                    "memoryCitation": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "phase": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "pluginId": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "processId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "scriptPath": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "source": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "unifiedExecStartup": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "status": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "completed": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "text": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 4
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "agentMessage": 4,
+                          "commandExecution": 1,
+                          "userMessage": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 9
+                    }
+                  }
                 },
                 "required": true
               },
@@ -4831,12 +5015,7 @@
                     },
                     "id": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "item_0": 4,
-                          "item_1": 4,
-                          "item_2": 1
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 9
@@ -4928,10 +5107,7 @@
                     },
                     "id": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "item_1": 1
-                        }
+                        "kind": "string"
                       },
                       "required": true,
                       "observed": 1

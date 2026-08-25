@@ -120,7 +120,7 @@ pub struct UserLine {
     pub source_tool_use_id: Option<String>,
     /// Tool-dependent result payload (object | string | array per canonical).
     /// Deliberately untyped — narrowing this per tool is a known production
-    /// bug (GROUND_TRUTH.md §3).
+    /// bug (`docs/groundtruth/claude-code.md` §3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_result: Option<Value>,
     /// snake_case duplicate of sessionId that some versions emit.

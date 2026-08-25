@@ -1,0 +1,20 @@
+{
+  "info": {
+    "id": "01a03752-d5a9-73f3-b99f-139cb363ccac",
+    "cwd": "<PROJECT>"
+  },
+  "session_summary": "Reply with a short greeting.",
+  "created_at": "2026-08-25T05:09:30.810488Z",
+  "updated_at": "2026-08-25T05:09:31.452146Z",
+  "num_messages": 3,
+  "num_chat_messages": 4,
+  "current_model_id": "mock-model",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "request_id": "1b1bd697-05d6-4f8f-a7f5-dac26df85a99",
+  "grok_home": "<SCENARIO_DIR>/grok-home",
+  "last_active_at": "2026-08-25T05:09:31.452146Z",
+  "generated_title": "Reply with a short greeting.",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off"
+}

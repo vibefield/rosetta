@@ -1,0 +1,12 @@
+[package]
+name = "rosetta-adapter-antigravity"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rosetta-adapter-support = { path = "../../adapter-support" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+walkdir.workspace = true

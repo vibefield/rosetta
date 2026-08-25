@@ -1,0 +1,5 @@
+{"role":"meta","type":"system.version","version":"0.38.0"}
+{"role":"assistant","tool_calls":[{"type":"function","id":"call_mock_0005","function":{"name":"Agent","arguments":"{\"prompt\":\"Reply with a short greeting.\",\"description\":\"greet briefly\",\"subagent_type\":\"explore\"}"}}]}
+{"role":"tool","tool_call_id":"call_mock_0005","content":"agent_id: agent-0\nactual_subagent_type: explore\nstatus: completed\n\n[summary]\nHello from rosetta mockmodel. This is a deterministic scripted response."}
+{"role":"assistant","content":"The tool ran successfully and printed: rosetta-mock. Scenario complete."}
+{"role":"meta","type":"session.resume_hint","session_id":"session_873ba5dd-4e9d-4733-89a5-a7b411338f94","command":"kimi -r session_873ba5dd-4e9d-4733-89a5-a7b411338f94","content":"To resume this session: kimi -r session_873ba5dd-4e9d-4733-89a5-a7b411338f94"}

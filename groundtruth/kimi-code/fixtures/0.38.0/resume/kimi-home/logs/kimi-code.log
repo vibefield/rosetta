@@ -1,0 +1,3 @@
+2026-08-25T05:39:26.347Z INFO  minidb query-store opening  dir=<SCENARIO_DIR>/kimi-home/cache/query-store shardCount=16
+2026-08-25T05:39:27.925Z INFO  minidb query-store opening  dir=<SCENARIO_DIR>/kimi-home/cache/query-store shardCount=16
+2026-08-25T05:39:28.208Z INFO  session index generation published  generation=1 sessions=1

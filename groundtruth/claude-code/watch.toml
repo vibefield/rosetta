@@ -1,5 +1,11 @@
 # Claude Code (Anthropic) — Tier B. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.6
 
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "Closed writer: pinned fixtures cover basic chat, tools, and resume; compaction, teams, subagents, and rare system records rely on version-scoped organic evidence.",
+]
+
 [agent]
 name = "claude-code"
 display = "Claude Code"

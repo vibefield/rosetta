@@ -1,0 +1,3630 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "copilot",
+  "agent_version": "1.0.80",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth farm 1",
+  "data_root": "~/.copilot",
+  "streams": [
+    {
+      "id": "events",
+      "glob": "session-state/*/events.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Primary session event log. Envelope: id, timestamp, parentId, type, data; optional agentId/ephemeral. Writer JSON Schema (npm copilot-*/schemas/session-events.schema.json) lists ~53 persisted types and ~63 ephemeral streaming types that are NOT written to disk. Fixtures prove the subset the CLI actually persists. session-store.db is a derived rebuildable index and is stripped at harvest.",
+      "discriminator": "type",
+      "record_types": {
+        "assistant.message": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "apiCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "messageId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 7
+                        }
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "outputTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "rte": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "toolRequests": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 2
+                                  }
+                                }
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "intentionSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "toolCallId": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "function": 2
+                                }
+                              },
+                              "required": true,
+                              "observed": 2
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.message": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "assistant.turn_end": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.turn_end": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "assistant.turn_start": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.turn_start": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "session.model_change": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "contextTier": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "newModel": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "previousModel": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "reasoningEffort": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.model_change": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "session.permissions_changed": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "allowAllPermissionMode": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "on": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "allowAllPermissions": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "previousAllowAllPermissionMode": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "off": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "previousAllowAllPermissions": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.permissions_changed": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "session.resume": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "alreadyInUse": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "context": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cwd": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "contextTier": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "eventCount": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "eventsFileSizeBytes": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "remoteSteerable": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "resumeTime": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "selectedModel": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "sessionLimits": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.resume": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "session.shutdown": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "codeChanges": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "filesModified": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "linesAdded": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "linesRemoved": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "conversationTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "currentModel": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "currentTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "eventsFileSizeBytes": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "modelMetrics": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "mock-model": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "requests": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "cost": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      },
+                                      "count": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "totalNanoAiu": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                },
+                                "usage": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "cacheReadTokens": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      },
+                                      "cacheWriteTokens": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      },
+                                      "inputTokens": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      },
+                                      "outputTokens": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      },
+                                      "reasoningTokens": {
+                                        "shape": {
+                                          "kind": "number"
+                                        },
+                                        "required": true,
+                                        "observed": 5
+                                      }
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 5
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "sessionStartTime": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "shutdownType": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "routine": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "systemTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "toolDefinitionsTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "totalApiDurationMs": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "totalNanoAiu": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "totalPremiumRequests": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.shutdown": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "session.start": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "alreadyInUse": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "context": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cwd": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 4
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "contextTier": {
+                      "shape": {
+                        "kind": "null"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "copilotVersion": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "1.0.80": 4
+                        }
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "producer": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "remoteSteerable": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "sessionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "startTime": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 4
+                    },
+                    "version": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 4
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.start": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "system.message": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "system": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "system.message": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "tool.execution_complete": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "error": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "code": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "message": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "result": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "content": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "detailedContent": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "rte": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "success": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolTelemetry": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "metrics": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "commandTimeout": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "properties": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "asyncOnlyShell": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "customTimeout": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "detached": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "executionMode": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "sync": 1
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "sandboxApplied": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "sandboxOptOutRequested": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "shell_error_category": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "permission_denied": 1
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool.execution_complete": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "tool.execution_start": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "arguments": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "command": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "rte": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "shellToolInfo": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "hasWriteFileRedirection": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 2
+                          },
+                          "possiblePaths": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool.execution_start": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "user.message": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "attachments": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "delivery": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "parentAgentTaskId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "supportedNativeDocumentMimeTypes": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "transformedContent": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "user.message": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        }
+      },
+      "facets": [
+        {
+          "id": "tool-request",
+          "path": "assistant.message.data.toolRequests[] (by name)",
+          "discriminator": "name",
+          "record_types": {
+            "bash": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "command": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "tool.execution_complete.data.result (keyed by producing tool)",
+          "discriminator": "tool",
+          "record_types": {
+            "bash": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "code": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "content": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "detailedContent": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "message": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-start-arguments",
+          "path": "tool.execution_start.data.arguments (by toolName)",
+          "discriminator": "name",
+          "record_types": {
+            "bash": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "command": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "session-plans",
+      "glob": "session-state/*/plan.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-session agent planning document when plan mode is used."
+    },
+    {
+      "id": "session-checkpoints",
+      "glob": "session-state/*/checkpoints/**",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Checkpoint history. 1.0.80 writes checkpoints/index.md (markdown table); compaction scenarios may add numbered JSON snapshots."
+    },
+    {
+      "id": "session-files",
+      "glob": "session-state/*/files/**",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Session-scoped artifacts the agent created during the turn."
+    },
+    {
+      "id": "session-research",
+      "glob": "session-state/*/research/**",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Per-session research/ scratch directory. The CLI creates it empty on every farmed session; no files observed yet."
+    },
+    {
+      "id": "session-workspace",
+      "glob": "session-state/*/workspace.yaml",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Per-session workspace metadata: id, cwd, client_name, name, timestamps."
+    },
+    {
+      "id": "session-db",
+      "glob": "session-state/*/session.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Per-session SQLite (todos, todo_deps, inbox_entries). Distinct from the derived session-store.db index. The agent documents this as the default 'session' SQL database in system.message.",
+      "discriminator": "table",
+      "record_types": {
+        "session.db:inbox_entries": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "interaction_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "notified_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "read_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "recipient_session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "sender_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "sender_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "sender_type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "sent_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "sequence": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "unread": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "session.db:todo_deps": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "depends_on": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "todo_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "session.db:todos": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "rewind-snapshots",
+      "glob": "session-state/*/rewind-file-snapshots/**",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Rewind/file-snapshot tracking. 1.0.80 writes tracking.json {schema, tracking}.",
+      "record_types": {
+        "": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "schema": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "tracking": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "session-locks",
+      "glob": "session-state/*/inuse.*.lock",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Volatile process locks; stripped at harvest."
+    },
+    {
+      "id": "session-store",
+      "glob": "session-store.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "research",
+      "notes": "Derived, rebuildable SQLite index (`/chronicle reindex`). EXCLUDE from harvest and from parsers — events.jsonl is the source of truth."
+    },
+    {
+      "id": "settings",
+      "glob": "settings.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "User-editable JSONC settings (model, autoUpdate, remoteExport, …). Farm writes a hermetic stub; the CLI may rewrite it.",
+      "record_types": {
+        "": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "autoUpdate": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "banner": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "beep": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "remoteExport": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "config",
+      "glob": "config.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Automatically managed application state (JSONC with leading comments). May contain authentication — MUST-NOT-PARSE beyond inventory. Farm observed firstLaunchAt only."
+    },
+    {
+      "id": "permissions",
+      "glob": "permissions-config.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Saved tool/directory approvals keyed by absolute project path."
+    },
+    {
+      "id": "mcp-config",
+      "glob": "mcp-config.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User-level MCP server definitions."
+    },
+    {
+      "id": "lsp-config",
+      "glob": "lsp-config.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User-level LSP server definitions."
+    },
+    {
+      "id": "logs",
+      "glob": "logs/**/*",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Per-process debug logs (`process-{timestamp}-{pid}.log`). Volatile; stripped at harvest."
+    },
+    {
+      "id": "command-history",
+      "glob": "command-history-state/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Interactive reverse-search command history. Not transcript ground truth."
+    },
+    {
+      "id": "agents",
+      "glob": "agents/**/*",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Personal custom agent definitions (*.agent.md)."
+    },
+    {
+      "id": "skills",
+      "glob": "skills/**/*",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Personal custom skills (SKILL.md trees)."
+    },
+    {
+      "id": "hooks",
+      "glob": "hooks/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User-level hook scripts."
+    },
+    {
+      "id": "instructions",
+      "glob": "instructions/**/*",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Additional personal *.instructions.md files."
+    },
+    {
+      "id": "copilot-instructions",
+      "glob": "copilot-instructions.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Personal custom instructions applied to every session."
+    },
+    {
+      "id": "extensions",
+      "glob": "extensions/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User-authored extension files."
+    },
+    {
+      "id": "installed-plugins",
+      "glob": "installed-plugins/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Marketplace plugin payloads. Vendor bundle; stripped at harvest."
+    },
+    {
+      "id": "plugin-data",
+      "glob": "plugin-data/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Persistent data owned by installed plugins."
+    },
+    {
+      "id": "ide",
+      "glob": "ide/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "IDE integration lock files (VS Code)."
+    },
+    {
+      "id": "mcp-oauth",
+      "glob": "mcp-oauth-config/**/*",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "MCP OAuth fallback tokens — MUST-NOT-PARSE; inventory only."
+    },
+    {
+      "id": "mcp-secrets",
+      "glob": "mcp-secrets/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "MCP secret placeholder fallback storage — MUST-NOT-PARSE; inventory only."
+    },
+    {
+      "id": "farm:headless-stdout",
+      "glob": "<farm>/stdout*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Headless stream-json stdout — corroboration surface captured by the farm, not part of the agent data root.",
+      "discriminator": "type",
+      "record_types": {
+        "assistant.idle": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": true,
+                "observed": 5
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.idle": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "assistant.message": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "apiCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "messageId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 7
+                        }
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "outputTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "rte": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "toolRequests": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 2
+                                  }
+                                }
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "intentionSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "toolCallId": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 2
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "function": 2
+                                }
+                              },
+                              "required": true,
+                              "observed": 2
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.message": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "assistant.message_delta": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "deltaContent": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 10
+                    },
+                    "messageId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 10
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 10
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.message_delta": 10
+                  }
+                },
+                "required": true,
+                "observed": 10
+              }
+            }
+          }
+        },
+        "assistant.message_start": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "messageId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.message_start": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "assistant.tool_call_delta": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "inputDelta": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolType": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "function": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.tool_call_delta": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "assistant.turn_end": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.turn_end": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "assistant.turn_start": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "assistant.turn_start": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "model.call_start": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 7
+                        }
+                      },
+                      "required": true,
+                      "observed": 7
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 7
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "model.call_start": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "result": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "exitCode": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "sessionId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "result": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "codeChanges": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "filesModified": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "linesAdded": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          },
+                          "linesRemoved": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 5
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "premiumRequests": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "sessionDurationMs": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "totalApiDurationMs": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "session.background_tasks_changed": {
+          "observed": 16,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": true,
+                "observed": 16
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 16
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 16
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 16
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 16
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.background_tasks_changed": 16
+                  }
+                },
+                "required": true,
+                "observed": 16
+              }
+            }
+          }
+        },
+        "session.mcp_servers_loaded": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "servers": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.mcp_servers_loaded": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "session.skills_loaded": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "skills": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "commandName": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 10
+                            },
+                            "description": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 10
+                            },
+                            "enabled": {
+                              "shape": {
+                                "kind": "boolean"
+                              },
+                              "required": true,
+                              "observed": 10
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 10
+                            },
+                            "path": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 10
+                            },
+                            "source": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "builtin": 10
+                                }
+                              },
+                              "required": true,
+                              "observed": 10
+                            },
+                            "userInvocable": {
+                              "shape": {
+                                "kind": "boolean"
+                              },
+                              "required": true,
+                              "observed": 10
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.skills_loaded": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "session.tools_updated": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 5
+                        }
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session.tools_updated": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        },
+        "tool.execution_complete": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "error": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "code": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "message": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "result": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "content": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "contents": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "object",
+                                "fields": {
+                                  "cwd": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  },
+                                  "exitCode": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  },
+                                  "outputPreview": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  },
+                                  "outputTruncated": {
+                                    "shape": {
+                                      "kind": "boolean"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  },
+                                  "shellId": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  },
+                                  "type": {
+                                    "shape": {
+                                      "kind": "string",
+                                      "values": {
+                                        "shell_exit": 1
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "detailedContent": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "rte": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "success": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolTelemetry": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "metrics": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "commandTimeout": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "properties": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "asyncOnlyShell": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "customTimeout": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "detached": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "executionMode": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "sync": 1
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "sandboxApplied": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "sandboxOptOutRequested": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                },
+                                "shell_error_category": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "permission_denied": 1
+                                    }
+                                  },
+                                  "required": false,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool.execution_complete": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "tool.execution_partial_result": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "partialOutput": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "ephemeral": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool.execution_partial_result": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "tool.execution_start": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "arguments": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "command": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "rte": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "shellToolInfo": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "hasWriteFileRedirection": {
+                            "shape": {
+                              "kind": "boolean"
+                            },
+                            "required": true,
+                            "observed": 2
+                          },
+                          "possiblePaths": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 2
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 2
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "turnId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool.execution_start": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "user.message": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "attachments": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "delivery": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "interactionId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "parentAgentTaskId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "supportedNativeDocumentMimeTypes": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 5
+                    },
+                    "transformedContent": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 5
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 5
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 5
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "user.message": 5
+                  }
+                },
+                "required": true,
+                "observed": 5
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

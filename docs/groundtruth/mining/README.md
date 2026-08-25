@@ -4,7 +4,7 @@ Raw output salvaged from exploration agents that mined
 `p008/spaghetti` for Claude Code schema knowledge (2026-08-25). These are
 **provenance documents, not curated truth**: agent-written, line citations
 unverified, may contain drafting noise. The curated distillation lives in
-`crates/adapters/claude-code/GROUND_TRUTH.md` — update that file, cite these.
+`docs/groundtruth/claude-code.md` — update that file, cite these.
 
 - `spag-rust-a25757325329e2208.md` — the 14 non-transcript stream specs from
   `spaghetti-napi` (`adapter.rs` StreamSpecs, sidecar decoders, verbatim
@@ -17,4 +17,4 @@ unverified, may contain drafting noise. The curated distillation lives in
 
 The TypeScript-side mining report (transcript schema, 20 record types, 13
 system subtypes, TS↔Rust divergences) was delivered in-session and is fully
-folded into GROUND_TRUTH.md.
+folded into `docs/groundtruth/claude-code.md`.

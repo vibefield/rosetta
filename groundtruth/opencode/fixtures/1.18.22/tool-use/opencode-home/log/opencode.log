@@ -1,0 +1,21 @@
+timestamp=2026-08-25T05:25:37.613Z level=INFO run=04ceef32 message="creating instance" directory=<PROJECT>
+timestamp=2026-08-25T05:25:37.614Z level=INFO run=04ceef32 message=fromDirectory directory=<PROJECT>
+timestamp=2026-08-25T05:25:37.710Z level=INFO run=04ceef32 message=bootstrapping directory=<PROJECT>
+timestamp=2026-08-25T05:25:37.715Z level=INFO run=04ceef32 message=loading path=<SCENARIO_DIR>/home/.config/opencode/config.json
+timestamp=2026-08-25T05:25:37.715Z level=INFO run=04ceef32 message=loading path=<SCENARIO_DIR>/home/.config/opencode/opencode.json
+timestamp=2026-08-25T05:25:37.719Z level=INFO run=04ceef32 message=loading path=<SCENARIO_DIR>/home/.config/opencode/opencode.jsonc
+timestamp=2026-08-25T05:25:37.721Z level=INFO run=04ceef32 message=loading path=<PROJECT>/opencode.json
+timestamp=2026-08-25T05:25:37.871Z level=INFO run=04ceef32 message="all LSPs are disabled"
+timestamp=2026-08-25T05:25:37.872Z level=INFO run=04ceef32 message="all formatters are disabled"
+timestamp=2026-08-25T05:25:37.872Z level=INFO run=04ceef32 message=init
+timestamp=2026-08-25T05:25:37.972Z level=INFO run=04ceef32 message=created id=ses_fc89e67cbffe3WHr6bNQeRJGQB slug=kind-otter version=1.18.22 projectID=2a24c78726a4475ac06801c1cf6610b34afbf6e6 directory=<PROJECT> path="" workspaceID=undefined parentID=undefined title="New session - 2026-08-25T05:25:37.972Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1787635537972 time.updated=1787635537972
+timestamp=2026-08-25T05:25:37.982Z level=INFO run=04ceef32 message="event connected"
+timestamp=2026-08-25T05:25:38.356Z level=INFO run=04ceef32 message=loop session.id=ses_fc89e67cbffe3WHr6bNQeRJGQB step=0
+timestamp=2026-08-25T05:25:38.372Z level=INFO run=04ceef32 message=stream providerID=mock modelID=mock-model session.id=ses_fc89e67cbffe3WHr6bNQeRJGQB small=true agent=title mode=primary
+timestamp=2026-08-25T05:25:38.379Z level=INFO run=04ceef32 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=mock llm.model=mock-model
+timestamp=2026-08-25T05:25:38.582Z level=INFO run=04ceef32 message=initialized
+timestamp=2026-08-25T05:25:38.697Z level=INFO run=04ceef32 message=tracking hash=8ffa06f0b5ca643f10cee80528b88acd29be0838 cwd=<PROJECT> git=<SCENARIO_DIR>/home/.local/share/opencode/snapshot/2a24c78726a4475ac06801c1cf6610b34afbf6e6/6b0f154844b87a4efc8f1673c95b49908f5b8bc4
+timestamp=2026-08-25T05:25:38.702Z level=INFO run=04ceef32 message="shell tool using shell" shell=/bin/zsh
+timestamp=2026-08-25T05:25:38.706Z level=INFO run=04ceef32 message=init count=1
+timestamp=2026-08-25T05:25:39.367Z level=INFO run=04ceef32 message="watcher backend" directory=<PROJECT> platform=darwin backend=fs-events
+timestamp=2026-08-25T05:25:39.373Z level=INFO run=04ceef32 message="project copy refresh started" projectID=2a24c78726a4475ac06801c1cf6610b34afbf6e6

@@ -1,0 +1,33 @@
+{
+  "agent": "pi",
+  "agent_version": "0.84.3",
+  "scenario": "error",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "pi-home/agent/models-store.json",
+      "bytes": 2
+    },
+    {
+      "path": "pi-home/agent/models.json",
+      "bytes": 693
+    },
+    {
+      "path": "pi-home/agent/sessions/--private-tmp-rosetta-farm-error-project--/2026-08-25T05-29-07-907Z_01a03764-cc43-79ca-9eb0-a6023ccab13e.jsonl",
+      "bytes": 1221
+    },
+    {
+      "path": "pi-home/agent/settings.json",
+      "bytes": 111
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 3451
+    }
+  ]
+}

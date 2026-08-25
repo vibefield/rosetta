@@ -46,7 +46,7 @@ data dir contains *only* what the scenario produced.
 blocks). The survey shows it needs **four wire dialects**: OpenAI Chat Completions
 (OpenCode, Kimi, Pi, Hermes), **OpenAI Responses** (Codex accepts only
 `wire_api = "responses"`), **Anthropic Messages** (Claude Code, Pi), and **Gemini
-`generateContent`** (Gemini CLI). Agents pointed at it via their base-URL override run
+`generateContent`** (Antigravity CLI). Agents pointed at it via their base-URL override run
 with **no credentials, no cost, and deterministic outputs** — this is what makes
 fixture generation CI-able.
 
@@ -128,9 +128,8 @@ Survey complete (2026-08-24). Roster at a glance:
 |---|---|---|---|
 | Claude Code | **B** | npm dist-tags `@anthropic-ai/claude-code` | `~/.claude/projects/<slug>/<id>.jsonl` |
 | Codex CLI | **A** | GitHub `openai/codex/releases.atom` | `~/.codex/sessions/…/rollout-*.jsonl` (SQLite migration watch) |
-| Gemini CLI | **A** | npm dist-tags `@google/gemini-cli` | `~/.gemini/tmp/<hash>/chats/` (JSON→JSONL migration) |
 | Grok Build | **A** | `https://x.ai/cli/stable` (plain-text version) | `~/.grok/sessions/<cwd>/<uuid>/` (multi-file) |
-| Antigravity | **C/D** | CLI: Cloud Run manifest JSON; IDE: changelog scrape | `~/.gemini/antigravity-ide/conversations/` (`.pb`→SQLite) |
+| Antigravity | **B** (CLI) / **D** (IDE) | CLI: GitHub `google-antigravity/antigravity-cli` (+ Cloud Run manifest); IDE: changelog scrape | CLI: `~/.gemini/antigravity-cli/` (JSONL + SQLite) |
 | Copilot CLI | **B** | npm `@github/copilot` | `~/.copilot/session-state/<id>/events.jsonl` |
 | OpenCode | **A** | npm `opencode-ai` | `~/.local/share/opencode/opencode.db` (+legacy JSON) |
 | Kimi Code | **A** | npm `@moonshot-ai/kimi-code` | `~/.kimi-code/sessions/…/agents/*/wire.jsonl` |
@@ -138,8 +137,8 @@ Survey complete (2026-08-24). Roster at a glance:
 | Hermes | **A** | GitHub `NousResearch/hermes-agent` releases | `~/.hermes/state.db` (SQLite, versioned schema) |
 | Pi | **A** | npm `@earendil-works/pi-coding-agent` | `~/.pi/agent/sessions/…/*.jsonl` (versioned header) |
 
-Nine of eleven are hermetically fixture-able (Tier A/B). Only Cursor CLI (no endpoint
-override) and Antigravity (OAuth-only) need credentialed or manual lanes.
+Nine of ten are hermetically fixture-able (Tier A/B). Only Cursor CLI (no endpoint
+override) needs a credentialed lane; Antigravity IDE remains Tier D.
 
 ### 5.1 Hermes (Nous Research Hermes Agent) — **Tier A**
 
@@ -154,24 +153,35 @@ week, dual-tagged semver (`v0.20.5`) + calver (`v2026.8.19`).
   **per-release Docker images** (cleanest pinned-version substrate for CI).
 - **On-disk ground truth (macOS):** everything under `~/.hermes/` (`HERMES_HOME`
   override — useful for harvest isolation). Config `config.yaml`, credentials `.env`,
-  and **sessions in SQLite: `~/.hermes/state.db`**, schema tracked by an in-DB
-  `schema_version` table (currently **v23**): `sessions` (model, parent_session_id,
-  token counts incl. cache_read/cache_write/reasoning, billing), `messages` (role,
-  content, `tool_calls` JSON, `api_content` byte-fidelity sidecar, compacted/active
-  flags), `session_model_usage`, three FTS5 tables, `gateway_routing`,
-  `async_delegations`. Legacy JSONL in `~/.hermes/sessions/` is dead.
+  identity `SOUL.md`, and **sessions in SQLite: `~/.hermes/state.db`**, schema tracked
+  by an in-DB `schema_version` table (**v26** at 0.20.5): `sessions` (model,
+  parent_session_id, token counts incl. cache_read/cache_write/reasoning, billing,
+  cwd), `messages` (role, content, `tool_calls` JSON string, `api_content`
+  byte-fidelity sidecar, compacted/active flags), `session_model_usage`,
+  `system_prompts` (content-addressed), `state_meta`, three FTS5 tables,
+  `gateway_routing`, `async_delegations`. Legacy JSONL in `~/.hermes/sessions/` is
+  dead.
 - **Source pointers:** `hermes_state.py` (`SessionDB`; WAL, `_reconcile_columns()`
   additive migrations, `export_session()`/`export_all()`); docs mirrored in-repo at
   `website/docs/developer-guide/session-storage.md`.
-- **Fixtures:** headless is first-class — `hermes -z "prompt"`, `hermes chat -q`,
-  `--query-file -`, `--usage-file report.json`, `-Q`, and `--ignore-user-config` /
-  `--safe-mode` for hermetic runs. Custom endpoints supported ("your own endpoint",
-  OpenAI-compatible) via the `hermes model` wizard / `config.yaml` — exact provider
-  block shape UNVERIFIED: run the wizard once in the farm and capture the generated
-  config as the template. Because the store is binary SQLite, commit BOTH the `.db`
-  harvest AND two diffable derivatives: a full SQL schema dump (`sqlite3 .schema` +
-  `schema_version`) and `export_session()` output (format UNVERIFIED — pin down in
-  first farm run).
+- **Fixtures:** headless is first-class — farm uses `hermes chat --query-file`
+  `--yolo --quiet --ignore-rules --toolsets terminal --max-turns 8`, resume via
+  `--resume <session_id>`. Custom endpoint CONFIRMED at 0.20.5:
+  ```yaml
+  model:
+    default: mock-model
+    provider: custom
+    base_url: http://127.0.0.1:<port>/v1
+    api_key: rosetta-mock-key
+    context_length: 128000
+  ```
+  `--ignore-user-config` would skip this file — do not use it for mock routing.
+  Because the store is binary SQLite, commit the `.db` harvest PLUS two diffable
+  derivatives: `sources/<version>.sqlite-schema.sql` and per-table JSONL next to
+  stdout (`sessions.jsonl`, `messages.jsonl`, …). Install: Docker image
+  `nousresearch/hermes-agent:v2026.8.19`, falling back to `git clone --branch
+  v2026.8.19` + `uv sync --frozen --no-dev` on CPython 3.13 (package
+  `requires-python = ">=3.11,<3.14"`).
 - **Risks:** very fast release cadence + actively evolving schema (v23 already) →
   expect frequent drift PRs; diff schema dump per release. Dual tags need
   normalization. Curl install awkward to pin — prefer Docker lane.
@@ -211,6 +221,14 @@ old URL redirects). Current `v0.84.3`; weekly-to-biweekly cadence.
 - **Risks:** pre-1.0 — breaking format bumps are fair game (the v3 rename just
   happened); the org/scope migration could recur (watch deprecation notices); the
   cwd-encoded session-dir naming is an implementation detail that may change.
+- **Captured (0.84.3):** writer-source intermediate at
+  `groundtruth/pi/sources/0.84.3.writer.json` (session-manager.ts + messages.ts +
+  pi-ai types). Fixtures: basic-chat (`session_info` via `--name`), tool-use
+  (bash), resume, fork (`parentSession`), error (`stopReason=error`). Auto-compaction
+  did not fire under a 1024-token mock window — `compaction` stays research until
+  a scenario writes it. Docs mention `retainedTail`; the 0.84.3 TypeScript
+  `CompactionEntry` does not (channel-1 wins). Interactive-only types
+  (`bashExecution`, `/tree` `branch_summary`, labels, abort) remain research.
 
 ### 5.3 OpenCode (Anomaly Co, ex-SST) — **Tier A**
 
@@ -221,14 +239,18 @@ redirects). Near-daily releases (current `v1.18.22`).
 - **Track:** npm registry `opencode-ai` `latest` dist-tag (GitHub `releases.atom`
   equivalent and carries changelog notes).
 - **Install for farm:** `npm i -g opencode-ai@<pin>` (wrapper + platform binary deps).
+  CONFIRMED 1.18.22: npm may skip `postinstall.mjs` even without `--ignore-scripts`;
+  the farm re-runs it so `bin/opencode.exe` is the real Mach-O, not the stub script.
 - **On-disk ground truth (macOS):** root `~/.local/share/opencode/` — `auth.json`,
-  `log/`, and per-project storage under `project/<slug>/storage/` (git repos) or
-  `project/global/storage/`. **Storage recently migrated (~v1.2+) from per-record
-  JSON (`storage/{session,message,part}/*.json`) to one SQLite DB
-  `~/.local/share/opencode/opencode.db`** — `OPENCODE_DB` overrides the path (harvest
-  isolation), `opencode db path` prints it. Both formats exist in the wild; the
-  adapter must read both. Config: `~/.config/opencode/opencode.jsonc` + per-project
-  `opencode.json`.
+  `log/`, and **SQLite `opencode.db`** (WAL). Docs still mention `project/<slug>/storage/`;
+  1.18.22 hermetic runs write the db + logs, not that tree. **Storage migrated (~v1.2+)
+  from per-record JSON (`storage/{session,message,part}/*.json`) to SQLite** —
+  `OPENCODE_DB` overrides the path (harvest isolation), `opencode db path` prints it.
+  Both formats exist in the wild; fixtures type the SQLite writer (session/project rows,
+  `message.data` / `part.data`, `event.data` log). Legacy JSON streams stay research
+  until a pre-1.2 corpus exists. Non-git cwds use `project.id=global`; git cwds hash the
+  worktree and write `snapshot/<project>/<snap>/`. Config: `~/.config/opencode/opencode.jsonc`
+  + per-project `opencode.json`. Farm isolation: empty HOME + `XDG_*` + `OPENCODE_DB`.
 - **Source pointers:** `packages/opencode/src/storage/storage.ts` and
   `storage/schema.ts` (branch `dev`); session domain under
   `packages/opencode/src/session/`.
@@ -241,7 +263,7 @@ redirects). Near-daily releases (current `v1.18.22`).
   rather than PR-per-release; the JSON→SQLite migration is fresh with known bugs
   (issues #13654, #16885) and dual on-disk formats; the SQLite schema is internal,
   changeable without release-note callouts — schema-dump diffing is the only reliable
-  drift signal; possible further org/URL churn.
+  drift signal; npm postinstall skip on prefix installs; possible further org/URL churn.
 
 ### 5.4 Kimi Code CLI (Moonshot AI) — **Tier A**
 
@@ -252,19 +274,35 @@ wound down; `kimi migrate` imports old data). MIT, OSS
 - **Track:** npm registry `@moonshot-ai/kimi-code` (bin `kimi`). Changelog on
   kimi.com/code docs. Legacy PyPI `kimi-cli` only if historical coverage is wanted.
 - **On-disk ground truth (macOS):** root **`~/.kimi-code/`** (`KIMI_CODE_HOME`
-  override — harvest isolation): `config.toml`, `tui.toml`, `mcp.json`; **sessions at
-  `sessions/<workDirKey>/<sessionId>/` where `workDirKey = wd_<slug>_<sha256-12>`**;
-  per session `state.json` (metadata), **`agents/main/wire.jsonl`** (complete wire
-  event record; sub-agents as `agents/agent-N/wire.jsonl`), `upcoming-goals.json`,
-  `tasks/`, `cron/`; also `credentials/` (0600), per-session and global logs,
-  `user-history/<md5(workdir)>.jsonl`. Legacy `~/.kimi/` layout differs
-  (`context.jsonl` + `wire.jsonl`).
-- **Source pointers:** exact persistence module UNVERIFIED — grep for the
-  `wire.jsonl`/`state.json` writers under `src/`; the official data-locations doc is
-  the normative schema description (diff it per release).
+  override — harvest isolation). Documented (data-locations.md): `config.toml`,
+  `tui.toml`, `mcp.json`, `AGENTS.md`, `skills/`, `plugins/`,
+  `session_index.jsonl`, `credentials/` (0700/0600),
+  **`sessions/<workDirKey>/<sessionId>/`** where `workDirKey =
+  wd_<slug>_<sha256-12>`, per session `state.json`, **`agents/main/wire.jsonl`**
+  (sub-agents `agents/agent-N/wire.jsonl`), `upcoming-goals.json`,
+  `agents/*/plans/`, `tasks/`, `cron/`, per-session + global logs,
+  `user-history/<md5(workdir)>.jsonl`, `bin/`, `updates/`. Writer + organic extras
+  **not in the data-locations doc:** `workspaces.json`, `device_id`,
+  `migrations-effort.json`, `agents/*/blobs/` (content-addressed `blobref:`
+  offload), `agents/*/tool-results/`, `workspace-trust/<workDirKey>`,
+  `region`, `oauth/` (distinct from `credentials/`), `cache/query-store/`
+  (minidb, not SQLite), `cache/client-configs/`, `search-index/` (kap-server
+  FTS), `telemetry/failed_*.jsonl`. `kimi web` additionally writes
+  `server.token` (0600) and `server/` — not produced by headless `-p`. Legacy
+  `~/.kimi/` layout differs (`context.jsonl` + `wire.jsonl`).
+- **Source pointers:** `packages/transcript/` (wire.jsonl cold rebuild),
+  `packages/agent-core-v2/src/wire/record.ts` (open `{type, time?}` envelope),
+  `packages/agent-core-v2/src/app/event/event2.ts` (`durable` Event2 registry —
+  58 durable types at 0.38.0; `agentId` is required in zod but organic
+  protocol-1.5 sessions usually omit it; hermetic 0.38.0 fixtures include it),
+  `packages/agent-core-v2/src/agent/tools/agent/` (Agent tool, profiles
+  coder/explore/plan), official data-locations doc
+  `docs/en/configuration/data-locations.md` (diff it per release — it lags the
+  writer).
 - **Fixtures:** `kimi -p "prompt"` (non-interactive; **implicitly auto-approves
   tools** — sandbox the runner), `--output-format stream-json`, `--session`/`-c`
-  resume. Mock endpoint: **zero-config env synthesis — `KIMI_MODEL_NAME` +
+  resume. `--plan` cannot combine with `-p`. Subagent farm uses the Agent tool
+  (`[use-agent]` mock). Mock endpoint: **zero-config env synthesis — `KIMI_MODEL_NAME` +
   `KIMI_MODEL_API_KEY` + `KIMI_MODEL_BASE_URL` + `KIMI_MODEL_PROVIDER_TYPE=openai|anthropic|kimi`**
   creates a temporary provider, ideal for CI (note: regular provider keys are NOT
   read from env — they must be in `config.toml`; the `KIMI_MODEL_*` synth is the
@@ -367,35 +405,7 @@ rolling alphas; track `latest` only.
   mid-pipeline; rollouts embed compaction history and can reach GBs — the scenario
   suite must include compaction; crate reorgs move the files `watch.toml` points at.
 
-### 5.8 Gemini CLI (Google) — **Tier A**
-
-Google's terminal agent. **Apache-2.0, fully OSS** — TypeScript monorepo
-([repo](https://github.com/google-gemini/gemini-cli)). Fixed cadence: weekly `stable`
-+ `preview`, daily `nightly` — npm dist-tags map exactly; fixture `latest` + `preview`.
-
-- **Track:** npm `@google/gemini-cli` dist-tags (one poll covers all three channels);
-  GitHub Releases mirror with release notes.
-- **On-disk ground truth (macOS):** settings `~/.gemini/settings.json`; session
-  recordings at **`~/.gemini/tmp/<project_hash>/chats/`** — historically single JSON
-  files rewritten each turn by `ChatRecordingService`, **actively migrating to
-  append-only JSONL** (dual formats in the wild). Records include messages, tool
-  outputs, structured subagent data. Two sharp edges for capture: storage sits under
-  `tmp/` with retention cleanup (harvest immediately after each run), and
-  `<project_hash>` must be recomputed from core source to locate files.
-- **Source pointers:** **`packages/core/src/services/chatRecordingService.ts`** +
-  **`chatRecordingTypes.ts`** (the record type definitions — ideal for source-derived
-  schema snapshots) + its test file.
-- **Fixtures:** `gemini -p "prompt" --output-format stream-json` (events: `init`,
-  `message`, `tool_use`, `tool_result`, `error`, `result`; distinct exit codes).
-  Mock via **`GOOGLE_GEMINI_BASE_URL`** + dummy `GEMINI_API_KEY` speaking the Gemini
-  `generateContent` dialect — **with a clean `~/.gemini`**: the override is reportedly
-  ignored when a cached Google OAuth session exists, so the farm must force API-key
-  auth.
-- **Risks:** JSON→JSONL migration in flight (fixture both); recording internals have
-  churned repeatedly; the rewrite-each-turn JSON legacy means tailing semantics
-  differ from append-only agents — capture layer must support both file disciplines.
-
-### 5.9 Grok Build (xAI) — **Tier A**
+### 5.8 Grok Build (xAI) — **Tier A**
 
 xAI's terminal agent (binary `grok`, Rust TUI + headless + ACP). Announced May 2026;
 **Apache-2.0 with full Rust source** at
@@ -412,12 +422,19 @@ unofficial `superagent-ai/grok-cli`. Current `1.0.5`, rapid cadence.
   `~/.grok/sessions/<url-encoded-cwd>/<UUIDv7>/`: `summary.json` (documented fields
   incl. `parent_session_id`, `num_messages`, `current_model_id`), **`updates.jsonl`
   (ACP update stream — the authoritative conversation log)**, `chat_history.jsonl`
-  (raw model messages), `plan.json`, `rewind_points.jsonl`, `signals.json`,
-  `feedback.jsonl`, `compaction_checkpoints/`, `subagents/`. Long cwds fall back to
-  slug+hash with a `.cwd` file. Also `config.toml`, `auth.json`, an FTS5 SQLite
-  search index, `worktrees/`. The vendor documents the session layout in-repo
+  (raw model messages: `system`/`user`/`assistant`/`tool_result` plus census
+  `reasoning`/`backend_tool_call`), `plan.json`, `rewind_points.jsonl`,
+  `signals.json`, `feedback.jsonl`, `compaction_checkpoints/`, `subagents/`,
+  **`events.jsonl` (written by 1.0.5 even though user-guide 17-sessions.md omits
+  it)**. Long cwds fall back to slug+hash with a `.cwd` file. Also `config.toml`,
+  `auth.json`, an FTS5 SQLite search index, `worktrees.db`. The vendor documents
+  the session layout in-repo
   (`crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md`) — diff that doc
-  per release alongside the code.
+  per release alongside the code. Confirmed 1.0.5 fixtures: shell tool is
+  **`run_terminal_command`** (not `run_terminal_cmd`) and requires `command` +
+  `description`. Organic census (2026-08-25, ~934k records) also saw
+  `hook_execution`, `agent_thought_chunk`, subagent/compaction/plan updates,
+  and MCP/goal event types.
 - **Source pointers:** `crates/codegen/xai-chat-state/src/persistence.rs` (appends to
   `chat_history.jsonl`); session lifecycle under
   `crates/codegen/xai-grok-pager/src/app/dispatch/session/`. **Prior-art bonus:
@@ -425,53 +442,58 @@ unofficial `superagent-ai/grok-cli`. Current `1.0.5`, rapid cadence.
   parses Claude Code and Codex session stores** (`src/claude/projects.rs`,
   `src/codex/db.rs`) — study it before writing rosetta's adapters.
 - **Fixtures:** `grok -p "prompt" --output-format streaming-json` (NDJSON events
-  `thought`/`tool_call`/`tool_call_update`/`text`; result JSON carries `sessionId`,
-  `usage`, `total_cost_usd`); `-r`/`-c`/`--fork-session` for resume scenarios;
-  `--always-approve`. Mock endpoint first-class: `[model.<name>]` blocks with
-  `base_url`/`env_key`, or `GROK_MODELS_BASE_URL` (OpenAI-compatible gateway);
-  `XAI_API_KEY` bypasses browser login. Fully hermetic.
+  `text`/`tool_call`/`tool_call_update`/`usage`/`end`/`available_commands`; the
+  mock does not emit `thought` because it has no reasoning). Result JSON carries
+  `sessionId`, `usage`. `-r`/`-c`/`--fork-session` for resume; `--yolo` auto-approves.
+  Mock: `[model.mock-model]` `api_backend = "chat_completions"` +
+  `GROK_MODELS_BASE_URL` + dummy `XAI_API_KEY`. Install via
+  `https://x.ai/cli/grok-<ver>-<platform>` into an isolated dir — do not run
+  `install.sh` (it mutates `~/.grok` and shell rc). Fully hermetic. Pin 1.0.5
+  committed 2026-08-25.
 - **Risks:** fast-moving beta; the plain-text version endpoint is the weakest watch
   format among Tier A agents (no feed metadata); source mirror may lag shipped
   binaries — treat fixtures, not the mirror, as decisive when they disagree.
 
-### 5.10 Google Antigravity ("AGV") — **Tier C (CLI) / Tier D (IDE)**
+### 5.9 Google Antigravity CLI (`agy`) — **Tier B (CLI) / Tier D (IDE)**
 
 Google's agentic platform, four surfaces: Antigravity 2.0 manager hub, the **IDE**
 (VS Code fork, weekly releases), the **CLI** (`agy`, Go, near-daily patches), and an
-SDK. **Closed source** (the GitHub repo carries no license and no source). The
-roster's hardest target — plan for two lanes:
+SDK. **Closed source** (the GitHub repo is docs/changelog/examples; the shipped
+archive executable is named `antigravity`, installed as `agy`). This data pack is
+the **CLI**. The IDE stays a separate survey-and-monitor lane.
 
-- **Track:** CLI — the install script's **Cloud Run JSON manifest**
-  (`…/manifests/<platform>.json` returning `{version, url, sha512}` into a public GCS
-  bucket) is a real programmatic channel; GitHub Releases mirror versions. IDE —
-  scrape `antigravity.google/changelog` (the releases page is JS-rendered).
-- **On-disk ground truth (macOS):** IDE agent data at `~/.gemini/antigravity/` →
-  **moved to `~/.gemini/antigravity-ide/`** in newer builds: `conversations/*.pb`
-  (**unpublished protobuf; newer versions use SQLite `.db` instead**),
-  `brain/<uuid>/`, `knowledge/`; editor profile in
-  `~/Library/Application Support/Antigravity[ IDE]/User/` with `state.vscdb` holding
-  base64-protobuf trajectory summaries. CLI: config
-  `~/.config/antigravity/config.toml`, settings `~/.gemini/antigravity-cli/settings.json`;
-  CLI transcript location on disk UNVERIFIED (resume is by `--conversation <ID>` —
-  possibly server-side). The user-observed `~/.antigravity` is likely the
-  extensions/launcher dir (UNVERIFIED). Community export tooling reads conversations
-  via **Antigravity's undocumented local HTTP API** rather than parsing `.pb` — that
-  API is worth investigating as the capture path.
-- **Fixtures:** CLI lane (Tier C): full headless surface exists — `agy -p`,
-  `--output-format stream-json`, `--input-format stream-json` (stdin-driven
-  multi-turn), `--json-schema`, `--dangerously-skip-permissions` — but auth is
-  Google OAuth in the system keyring; no documented endpoint override
-  (`ANTIGRAVITY_API_KEY` reported third-party, UNVERIFIED). Dedicated test account +
-  keyring pre-seeding in a scheduled credentialed lane. IDE lane (Tier D): manual
-  capture protocol — scripted checklist of in-IDE actions, then harvest
-  `antigravity-ide/` + `state.vscdb`; investigate the local HTTP API for automation.
-- **Risks:** highest in the roster — unpublished protobuf schemas, a data dir that
-  already moved once, a `.pb`→SQLite storage migration mid-flight, OAuth-only auth,
-  and weekly/near-daily churn on two surfaces. Scope Antigravity as
-  **survey-and-monitor** initially: capture what the manual lane can, revisit
-  automation when the local API is understood.
+- **Track:** CLI — GitHub Releases on `google-antigravity/antigravity-cli` (pinable
+  `agy_cli_<os>_<arch>.tar.gz` assets with published SHA-256). The install script's
+  **Cloud Run JSON manifest** (`…/manifests/<uname>_<arch>.json`, e.g. `darwin_arm64`,
+  returning `{version, url, sha512}` into a public GCS bucket) is the live
+  auto-updater channel; poll it for "a new version exists", farm from the GitHub tag.
+  IDE — scrape `antigravity.google/changelog` (the releases page is JS-rendered).
+- **On-disk ground truth (macOS, CLI):** `~/.gemini/antigravity-cli` (no documented
+  home-env override — isolate via empty `HOME`). Primary rails: append-only
+  `brain/<conversation-id>/.system_generated/logs/transcript.jsonl` and sibling
+  `transcript_full.jsonl`; WAL-mode SQLite `conversations/<id>.db` (+ `-wal`/`-shm`);
+  `conversation_summaries.db`; `cache/last_conversations.json` (cwd → UUID for `-c`);
+  `settings.json`. Resume is `--conversation <uuid>` or `--continue`/`-c`. Hook docs
+  name `transcriptPath` at the full JSONL. IDE agent data (`~/.gemini/antigravity/` →
+  `~/.gemini/antigravity-ide/`, unpublished `.pb` then SQLite) is **not** this pack.
+- **Source pointers:** none (Go binary; GitHub tag is release provenance, not
+  source-to-binary correspondence). Ground truth = fixtures + docs + binary strings.
+- **Fixtures:** `agy -p "prompt" --output-format stream-json --print-timeout 2m
+  --dangerously-skip-permissions`. Auth for the farm is the documented **Gemini
+  Developer API** path: `settings.json` `modelProvider = "gemini"` + dummy
+  `GEMINI_API_KEY` + `GOOGLE_GEMINI_BASE_URL` → mockmodel speaking Gemini
+  `generateContent` / `streamGenerateContent`. Default Google OAuth/keyring is the
+  interactive path and is not used by the farm. Harvest immediately; strip
+  `bin/`, `builtin/`, `log/`, `updater/`, `crashes/`, `presence/`,
+  `cache/CHANGELOG.md`.
+- **Risks:** near-daily CLI patches; SQLite blob payloads inside `steps` are not
+  JSON; transcript vs SQLite dual rails; `modelProvider=gemini` is required or
+  the CLI ignores `GEMINI_API_KEY` and falls back to OAuth; IDE remains Tier D.
+  Print-mode farm does not write `history.jsonl` or `implicit/*.pb`; those are
+  observed/research. Organic census (2026-08-25) is the evidence for
+  CONVERSATION_HISTORY / LIST_DIRECTORY / VIEW_FILE / ERROR_MESSAGE.
 
-### 5.11 GitHub Copilot CLI — **Tier B**
+### 5.10 GitHub Copilot CLI — **Tier B**
 
 GitHub's terminal agent (GA since Feb 2026). **Closed source** — the npm package is
 an 8 KB loader shim over platform-native binaries in `optionalDependencies`; no JS to
@@ -487,46 +509,57 @@ diff. Multiple releases per month.
   ground truth; `settings.json` (JSONC), `config.json`, `permissions-config.json`,
   `mcp-config.json`, `logs/`, `agents/`, `skills/`, `hooks/`. Field-level
   `events.jsonl` schema is NOT published — fixtures carry it.
-- **Fixtures:** `copilot -p "prompt" -s` headless with `--allow-all`/`--allow-tool`
-  granularity, `--share=PATH` (markdown transcript export — a free secondary
-  surface). Hermetic thanks to **BYOK (since 2026-04)**:
+- **Fixtures:** committed at **1.0.80** (`basic-chat`, `tool-use`, `resume`,
+  `tool-denied`) via `copilot -p "prompt" --output-format json --allow-all
+  --no-ask-user --share=share.md` against the Chat Completions mock.
+  `--continue` appends `session.resume` to the same `events.jsonl`.
+  `--deny-tool=shell` writes `tool.execution_complete` with `success: false` and
+  `error.code=denied` (no `permission.*` events — deny-by-rules skips the prompt).
+  `--share` markdown is a farm artifact next to stdout, not part of `~/.copilot`.
+  Writer JSON Schema is copied from the platform npm package
+  (`sources/vendor/<ver>.session-events.schema.json`) and folded in as
+  `writer` evidence (~53 persisted types; ~63 ephemeral types omitted).
+  Hermetic thanks to **BYOK (since 2026-04)**:
   `COPILOT_PROVIDER_BASE_URL` + `COPILOT_PROVIDER_API_KEY` + `COPILOT_MODEL` against
   any OpenAI-compatible or Anthropic endpoint → mockmodel, no GitHub subscription in
   the loop. Keep one scheduled credentialed run against GitHub-hosted models to
-  check BYOK/hosted parity of the event stream.
+  check BYOK/hosted parity of the event stream. Field-level on-disk schema is the
+  merge of that writer schema with fixtures — not either source alone.
 - **Risks:** `events.jsonl` schema undocumented and only inferable from fixtures;
   native binaries preclude static inspection; BYOK runs may not be byte-identical to
   hosted-model runs (sandbox/custom-agent features touch the event stream) — hence
   the parity lane.
 
-### 5.12 Cross-agent patterns observed (first input to Phase 2)
+### 5.11 Cross-agent patterns observed (first input to Phase 2)
 
 Even before fixtures exist, the survey surfaces patterns the Layer-2 design must
 absorb — and disproves some assumptions a Claude-only view would have baked in:
 
 - **Storage tech is not converging on JSONL.** Append-only JSONL (Claude, Codex, Pi,
   Kimi, Grok, Copilot), SQLite as primary store (Hermes, OpenCode, Cursor), and
-  rewrite-in-place JSON (Gemini legacy) all exist — and **three agents are
-  mid-migration** (OpenCode JSON→SQLite, Codex JSONL→SQLite underway, Gemini
-  JSON→JSONL). The capture layer needs three file disciplines: tail-append, whole-file
+  rewrite-in-place JSON sidecars (plans, summaries, and indexes) all exist — and
+  **two agents are mid-migration** (OpenCode JSON→SQLite and Codex JSONL→SQLite).
+  The capture layer needs three file disciplines: tail-append, whole-file
   reload, and SQLite WAL-aware polling. A JSONL-only tailer would already be wrong.
 - **Schema versioning idioms differ**: per-record version stamps (Claude), an in-DB
   `schema_version` table (Hermes v23), a versioned session-header line (Pi v3),
   nothing explicit (most others). Rosetta's per-record `detected_version` must accept
   all three plus heuristics.
-- **Universal shapes confirmed across all eleven**: session identity tied to a
+- **Universal shapes confirmed across all ten active agents**: session identity tied to a
   cwd/workspace key (five different encodings of the same idea); parent/child
   sessions and subagent trees; tool call/result pairing; token-usage blocks with
   cache splits; compaction/summarization events. These are strong candidates for the
   canonical model's spine.
-- **Headless stdout streams are near-universal** (`stream-json`/NDJSON on 9 of 11) —
+- **Headless stdout streams are near-universal** (`stream-json`/NDJSON on 9 of 10) —
   a second, cheaper corroboration surface the fixture farm gets for free.
 - **Prior art exists**: xAI's `xai-grok-foreign-sessions` crate (Apache-2.0) already
   parses Claude Code and Codex stores in Rust — read before writing those adapters.
 
 ## 6. Layer-1 exit criteria
 
-Layer 1 is done — and Layer-2 design may begin — when, for every roster agent:
+Each `watch.toml` explicitly marks its pack `captured` or `blocked`; absence of a
+canonical document is never treated as success. Layer 1 is done — and Layer-2
+design may begin — when no roster agent remains blocked and, for every agent:
 
 1. `watch.toml` exists with an authoritative channel and pinned version;
 2. the layout manifest and versioned raw types are committed;

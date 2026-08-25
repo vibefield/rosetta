@@ -1,5 +1,11 @@
 # OpenCode (Anomaly Co, ex-SST) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.3
 
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "The current SQLite store is fixture-backed; legacy JSON generations and external tool-output bodies remain research-only.",
+]
+
 [agent]
 name = "opencode"
 display = "OpenCode"
@@ -10,7 +16,7 @@ tier = "A"
 channel = "npm"                          # near-daily releases — batch into weekly roll-up PRs
 id = "opencode-ai"
 surveyed = "1.18.22"                     # 2026-08-24
-pinned = ""
+pinned = "1.18.22"                       # fixtures + groundtruth doc committed (2026-08-25)
 changelog = "https://github.com/anomalyco/opencode/releases"
 
 [source]
@@ -25,4 +31,4 @@ headless = "opencode run <prompt> -m mock/mock-model --format json --auto"
 mock_dialect = "openai-chat"             # provider block: "npm": "@ai-sdk/openai-compatible" + local baseURL
 home_env = "OPENCODE_DB"                 # overrides DB path; XDG dirs otherwise — run in container HOME
 data_root = "~/.local/share/opencode"
-notes = "Storage migrated (~v1.2+) from per-record JSON (storage/{session,message,part}/*.json) to SQLite opencode.db — BOTH formats exist in the wild, adapter reads both. SQLite schema is internal; schema-dump diff is the only drift signal."
+notes = "Storage migrated (~v1.2+) from per-record JSON to SQLite opencode.db — both formats exist in the wild; 1.18.22 hermetic runs write SQLite only. Farm: empty HOME+XDG_*+OPENCODE_DB, project opencode.json openai-compatible mock, re-run postinstall.mjs, git-init tool-use/resume (keep basic-chat as global), strip auth.json and snapshot hooks. WAL journal kept. Schema-dump diff is the sqlite drift signal."

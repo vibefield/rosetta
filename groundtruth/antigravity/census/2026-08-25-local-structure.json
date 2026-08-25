@@ -1,0 +1,2975 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "antigravity",
+  "agent_version": "observed-2026-08-25",
+  "evidence": "observed",
+  "generator": "tools.groundtruth census 1",
+  "data_root": "~/.gemini/antigravity-cli",
+  "streams": [
+    {
+      "id": "transcript",
+      "glob": "brain/*/.system_generated/logs/transcript.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SURFACE_AGY_OK": 1,
+                    "SURFACE_AGY_RESUME": 1,
+                    "SURFACE_AGY_TOOL": 1
+                  }
+                },
+                "required": false,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "list_dir": 4,
+                            "view_file": 2
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 6
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              }
+            }
+          }
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "USER_INPUT": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      },
+      "discriminator": "type",
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "LIST_DIRECTORY (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript-full",
+      "glob": "brain/*/.system_generated/logs/transcript_full.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SURFACE_AGY_OK": 1,
+                    "SURFACE_AGY_RESUME": 1,
+                    "SURFACE_AGY_TOOL": 1
+                  }
+                },
+                "required": false,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "list_dir": 4,
+                            "view_file": 2
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 6
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              }
+            }
+          }
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "USER_INPUT": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      },
+      "discriminator": "type",
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "LIST_DIRECTORY (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript-chunks",
+      "glob": "brain/*/.system_generated/logs/chunks/transcript/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SURFACE_AGY_OK": 1,
+                    "SURFACE_AGY_RESUME": 1,
+                    "SURFACE_AGY_TOOL": 1
+                  }
+                },
+                "required": false,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "list_dir": 4,
+                            "view_file": 2
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 6
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              }
+            }
+          }
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "USER_INPUT": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      },
+      "discriminator": "type",
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "LIST_DIRECTORY (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript-full-chunks",
+      "glob": "brain/*/.system_generated/logs/chunks/transcript_full/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "CHECKPOINT": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CHECKPOINT": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "CONVERSATION_HISTORY": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "CONVERSATION_HISTORY": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "ERROR_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "ERROR_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "LIST_DIRECTORY": {
+          "observed": 4,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 4
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "LIST_DIRECTORY": 4
+                  }
+                },
+                "required": true,
+                "observed": 4
+              }
+            }
+          }
+        },
+        "PLANNER_RESPONSE": {
+          "observed": 9,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SURFACE_AGY_OK": 1,
+                    "SURFACE_AGY_RESUME": 1,
+                    "SURFACE_AGY_TOOL": 1
+                  }
+                },
+                "required": false,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 9
+              },
+              "tool_calls": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "args": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "AbsolutePath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 2
+                            },
+                            "DirectoryPath": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 4
+                            },
+                            "toolAction": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            },
+                            "toolSummary": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 6
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      },
+                      "name": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "list_dir": 4,
+                            "view_file": 2
+                          }
+                        },
+                        "required": true,
+                        "observed": 6
+                      }
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 6
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "PLANNER_RESPONSE": 9
+                  }
+                },
+                "required": true,
+                "observed": 9
+              }
+            }
+          }
+        },
+        "SYSTEM_MESSAGE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "SYSTEM_MESSAGE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "USER_INPUT": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_EXPLICIT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 3
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "USER_INPUT": 3
+                  }
+                },
+                "required": true,
+                "observed": 3
+              }
+            }
+          }
+        },
+        "VIEW_FILE": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "source": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "MODEL": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "status": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "DONE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "VIEW_FILE": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      },
+      "discriminator": "type",
+      "facets": [
+        {
+          "id": "tool-call",
+          "path": "PLANNER_RESPONSE.tool_calls[]",
+          "discriminator": "name",
+          "record_types": {
+            "list_dir": {
+              "observed": 4,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "DirectoryPath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 4
+                  }
+                }
+              }
+            },
+            "view_file": {
+              "observed": 2,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "AbsolutePath": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolAction": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  },
+                  "toolSummary": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "LIST_DIRECTORY (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "ERROR_MESSAGE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "LIST_DIRECTORY": {
+              "observed": 4,
+              "shape": {
+                "kind": "string"
+              }
+            },
+            "VIEW_FILE": {
+              "observed": 1,
+              "shape": {
+                "kind": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "conversation-db",
+      "glob": "conversations/*.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "conversations.db:battle_mode_infos": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "conversations.db:executor_metadata": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "conversations.db:gen_metadata": {
+          "observed": 8,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "size": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "conversations.db:parent_references": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "conversations.db:steps": {
+          "observed": 23,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "error_details": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "has_subtrajectory": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "idx": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "metadata": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "permissions": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "render_info": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "step_format": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "step_payload": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "step_type": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "task_details": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "conversations.db:trajectory_meta": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "cascade_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "source": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "trajectory_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "trajectory_type": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "conversations.db:trajectory_metadata_blob": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "data": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      },
+      "discriminator": "table"
+    },
+    {
+      "id": "conversation-summaries",
+      "glob": "conversation_summaries.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "conversation_summaries.db:conversation_summaries": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agent_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "app_data_dir": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "battle_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "killed": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "last_modified_time": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "last_user_input_step_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_user_input_time": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "nesting_depth": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "not_fully_idle": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "parent_conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "preview": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "project_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "source": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "step_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "winning_conversation_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "workspace_uris": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      },
+      "discriminator": "table"
+    },
+    {
+      "id": "history",
+      "glob": "history.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset.",
+      "record_types": {
+        "slash_command": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "display": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "slash_command": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "workspace": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

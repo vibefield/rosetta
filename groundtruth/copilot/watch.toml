@@ -1,4 +1,10 @@
-# GitHub Copilot CLI — Tier B. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.11
+# GitHub Copilot CLI — Tier B. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.10
+
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "The writer schema defines 53 persisted event types; hermetic fixtures currently exercise 12, and hosted-model parity is not captured.",
+]
 
 [agent]
 name = "copilot"
@@ -10,7 +16,7 @@ tier = "B"
 channel = "npm"
 id = "@github/copilot"                   # 8 KB loader shim; real product = native binaries in optionalDependencies
 surveyed = "1.0.80"                      # 2026-08-24
-pinned = ""
+pinned = "1.0.80"                        # fixtures + schemas committed for this version (2026-08-25)
 changelog = "https://github.com/github/copilot-cli/blob/main/changelog.md"
 
 [source]                                 # closed — binaries only, no JS to diff
@@ -22,4 +28,4 @@ headless = "copilot -p <prompt> -s --allow-all"
 mock_dialect = "openai-chat"             # BYOK: COPILOT_PROVIDER_BASE_URL + COPILOT_PROVIDER_API_KEY + COPILOT_MODEL (anthropic dialect also accepted)
 home_env = "COPILOT_HOME"
 data_root = "~/.copilot"
-notes = "events.jsonl is ground truth; session-store.db is a derived rebuildable index — EXCLUDE from ground truth. --share=PATH gives a free markdown transcript surface. Keep one scheduled credentialed run to check BYOK vs hosted-model event-stream parity."
+notes = "events.jsonl is ground truth. Writer schema is copied from the platform npm package (sources/vendor/<ver>.session-events.schema.json) and folded in as research evidence; fixtures are stronger. Harvest strips session-store.db* (derived /chronicle index), logs/, pkg/ (binaries; schemas extracted first), installed-plugins/, inuse.*.lock. Per-session session.db (todos/inbox) is kept. Farm: COPILOT_OFFLINE + BYOK Chat Completions; --output-format json; --share=share.md; --continue appends session.resume; tool-denied uses --deny-tool=shell. Keep one scheduled credentialed run to check BYOK vs hosted-model event-stream parity."

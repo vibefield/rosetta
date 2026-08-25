@@ -1,0 +1,115 @@
+format = "rosetta-layout/1"
+agent = "hermes"
+data_root = "~/.hermes"
+
+[[streams]]
+id = "state-db"
+glob = "state.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Primary session store (WAL mode). 0.20.5 schema_version=26. sessions has 56 named columns (NOT collapsed). Tables with fixture rows: sessions, messages, session_model_usage, schema_version, state_meta, system_prompts. Empty-but-present: gateway_routing, async_delegations, compression_locks, session_turn_leases, gateway_hygiene_state, plus FTS5 virtual tables. messages.tool_calls is TEXT holding a JSON array of OpenAI-style function calls (facet: tool-calls/terminal). Tool-role messages.content is TEXT holding JSON {output, exit_code, error} (facet: tool-result/terminal). CLI-only farm does not populate gateway tables. WAL/SHM siblings are absent after a clean close. Schema dump: sources/<version>.sqlite-schema.sql."
+
+[[streams]]
+id = "config"
+glob = "config.yaml"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Non-secret settings. Custom OpenAI-compatible endpoint lives at model.provider=custom + model.base_url + model.api_key. Docker first-boot may migrate missing keys."
+
+[[streams]]
+id = "soul"
+glob = "SOUL.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Primary agent identity injected into the system prompt. Seeded on first run even with --ignore-rules."
+
+[[streams]]
+id = "credentials-env"
+glob = ".env"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "API keys and secrets — MUST-NOT-PARSE; inventory only, excluded from harvest."
+
+[[streams]]
+id = "auth"
+glob = "auth.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "OAuth provider credentials (Nous Portal, Codex, …) — MUST-NOT-PARSE; excluded from harvest."
+
+[[streams]]
+id = "memories"
+glob = "memories/**/*"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Persistent memory documents (MEMORY.md, USER.md)."
+
+[[streams]]
+id = "skills"
+glob = "skills/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Bundled + agent-created skills. Vendor bundles are stripped at harvest."
+
+[[streams]]
+id = "cron"
+glob = "cron/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Scheduled job definitions."
+
+[[streams]]
+id = "sessions-legacy"
+glob = "sessions/**/*"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "research"
+notes = "Legacy per-session JSONL. Dead: CLI/gateway resume from state.db. Still inventoried so an unexpected revival is UnknownFile-adjacent rather than silent."
+
+[[streams]]
+id = "logs"
+glob = "logs/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "Runtime logs (errors.log, gateway.log, agent.log). Stripped at harvest."
+
+[[streams]]
+id = "terminal-sessions"
+glob = "terminal-sessions/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-terminal -c breadcrumbs keyed by tty/tmux/kitty pane."
+
+[[streams]]
+id = "hooks"
+glob = "hooks/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Event hooks."
+
+[[streams]]
+id = "home"
+glob = "home/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-profile HOME for tool subprocesses when terminal.home_mode=profile. Stripped at harvest."
+
+[[streams]]
+id = "update-check"
+glob = ".update_check"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Updater stamp written on first run. Volatile; stripped at harvest."

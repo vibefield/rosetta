@@ -1,5 +1,11 @@
 # Pi (Earendil Works / Mario Zechner) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.2
 
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "Compaction is fixture-backed; branch summaries and extension-defined custom/label entries remain writer-only.",
+]
+
 [agent]
 name = "pi"
 display = "Pi"
@@ -10,7 +16,7 @@ tier = "A"
 channel = "npm"
 id = "@earendil-works/pi-coding-agent"   # @mariozechner/pi-coding-agent deprecated at 0.73.1 — keep only for historical fixtures
 surveyed = "0.84.3"                      # 2026-08-24; weekly-to-biweekly
-pinned = ""
+pinned = "0.84.3"                     # fixtures + groundtruth doc committed (2026-08-25)
 changelog = "https://github.com/earendil-works/pi/releases"
 
 [source]
@@ -18,12 +24,15 @@ repo = "https://github.com/earendil-works/pi"    # transferred from badlogic/pi-
 persistence_paths = [
   "packages/coding-agent/src/core/session-manager.ts",
   "packages/coding-agent/src/core/messages.ts",
-  "packages/coding-agent/docs/session-format.md",  # vendor documents the session schema — diff per release
+  "packages/coding-agent/src/config.ts",
+  "packages/coding-agent/docs/session-format.md",
+  "packages/ai/src/types.ts",
+  "packages/agent/src/types.ts",
 ]
 
 [fixture]
 headless = "pi -p <prompt> --mode json"  # plus PI_OFFLINE=1, PI_SKIP_VERSION_CHECK=1
 mock_dialect = "openai-chat"             # models.json custom providers; also speaks anthropic-messages + gemini dialects
-home_env = "PI_CODING_AGENT_SESSION_DIR" # session dir override; config still under ~/.pi/agent/
+home_env = "PI_CODING_AGENT_DIR"      # config dir override (~/.pi/agent); sessions live under it unless PI_CODING_AGENT_SESSION_DIR is set
 data_root = "~/.pi"
-notes = "JSONL with versioned SessionHeader first line (v3 current; auto-migrates old). Install with --ignore-scripts. Pre-1.0: breaking format bumps expected; watch for further org/scope moves; cwd-hyphenated session dir naming is an implementation detail."
+notes = "JSONL with versioned SessionHeader first line (v3 current; auto-migrates old). Install with --ignore-scripts. Farm isolates via PI_CODING_AGENT_DIR. Harvest strips auth.json, npm/, git/, logs/, bin/ (credentials, package installs, managed binaries). Writer types at this pin do not include compaction.retainedTail (docs mention it; session-manager.ts does not). Pre-1.0: breaking format bumps expected; watch for further org/scope moves; cwd-hyphenated session dir naming is an implementation detail."

@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"01a03764-c56c-7c56-81a7-0856ceb0bacd","timestamp":"2026-08-25T05:29:06.156Z","cwd":"<PROJECT>"}
+{"type":"session_info","id":"bef15853","parentId":null,"timestamp":"2026-08-25T05:29:06.157Z","name":"rosetta-basic-chat"}
+{"type":"model_change","id":"6fee376d","parentId":"bef15853","timestamp":"2026-08-25T05:29:06.201Z","provider":"mock","modelId":"mock-model"}
+{"type":"thinking_level_change","id":"6e1da386","parentId":"6fee376d","timestamp":"2026-08-25T05:29:06.201Z","thinkingLevel":"off"}
+{"type":"message","id":"824ddffe","parentId":"6e1da386","timestamp":"2026-08-25T05:29:06.207Z","message":{"role":"user","content":[{"type":"text","text":"Reply with a short greeting."}],"timestamp":1787635746206}}
+{"type":"message","id":"9b36fee0","parentId":"824ddffe","timestamp":"2026-08-25T05:29:06.240Z","message":{"role":"assistant","content":[{"type":"text","text":"Hello from rosetta mockmodel. This is a deterministic scripted response."}],"api":"openai-completions","provider":"mock","model":"mock-model","usage":{"input":128,"output":32,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":160,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1787635746215,"responseId":"chatcmpl-mock_0000","rawStopReason":"stop"}}

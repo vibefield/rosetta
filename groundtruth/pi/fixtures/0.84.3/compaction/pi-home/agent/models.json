@@ -1,0 +1,32 @@
+{
+  "providers": {
+    "mock": {
+      "baseUrl": "http://127.0.0.1:50684/v1",
+      "api": "openai-completions",
+      "apiKey": "$MOCK_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsStore": false
+      },
+      "models": [
+        {
+          "id": "mock-model",
+          "name": "Rosetta Mock",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1024,
+          "maxTokens": 4096,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}

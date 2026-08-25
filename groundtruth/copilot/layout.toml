@@ -1,0 +1,227 @@
+format = "rosetta-layout/1"
+agent = "copilot"
+data_root = "~/.copilot"
+
+[[streams]]
+id = "events"
+glob = "session-state/*/events.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "fixture"
+notes = "Primary session event log. Envelope: id, timestamp, parentId, type, data; optional agentId/ephemeral. Writer JSON Schema (npm copilot-*/schemas/session-events.schema.json) lists ~53 persisted types and ~63 ephemeral streaming types that are NOT written to disk. Fixtures prove the subset the CLI actually persists. session-store.db is a derived rebuildable index and is stripped at harvest."
+
+[[streams]]
+id = "session-plans"
+glob = "session-state/*/plan.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-session agent planning document when plan mode is used."
+
+[[streams]]
+id = "session-checkpoints"
+glob = "session-state/*/checkpoints/**"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Checkpoint history. 1.0.80 writes checkpoints/index.md (markdown table); compaction scenarios may add numbered JSON snapshots."
+
+[[streams]]
+id = "session-files"
+glob = "session-state/*/files/**"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Session-scoped artifacts the agent created during the turn."
+
+[[streams]]
+id = "session-research"
+glob = "session-state/*/research/**"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Per-session research/ scratch directory. The CLI creates it empty on every farmed session; no files observed yet."
+
+[[streams]]
+id = "session-workspace"
+glob = "session-state/*/workspace.yaml"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Per-session workspace metadata: id, cwd, client_name, name, timestamps."
+
+[[streams]]
+id = "session-db"
+glob = "session-state/*/session.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Per-session SQLite (todos, todo_deps, inbox_entries). Distinct from the derived session-store.db index. The agent documents this as the default 'session' SQL database in system.message."
+
+[[streams]]
+id = "rewind-snapshots"
+glob = "session-state/*/rewind-file-snapshots/**"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Rewind/file-snapshot tracking. 1.0.80 writes tracking.json {schema, tracking}."
+
+[[streams]]
+id = "session-locks"
+glob = "session-state/*/inuse.*.lock"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Volatile process locks; stripped at harvest."
+
+[[streams]]
+id = "session-store"
+glob = "session-store.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "research"
+notes = "Derived, rebuildable SQLite index (`/chronicle reindex`). EXCLUDE from harvest and from parsers — events.jsonl is the source of truth."
+
+[[streams]]
+id = "settings"
+glob = "settings.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "User-editable JSONC settings (model, autoUpdate, remoteExport, …). Farm writes a hermetic stub; the CLI may rewrite it."
+
+[[streams]]
+id = "config"
+glob = "config.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Automatically managed application state (JSONC with leading comments). May contain authentication — MUST-NOT-PARSE beyond inventory. Farm observed firstLaunchAt only."
+
+[[streams]]
+id = "permissions"
+glob = "permissions-config.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Saved tool/directory approvals keyed by absolute project path."
+
+[[streams]]
+id = "mcp-config"
+glob = "mcp-config.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-level MCP server definitions."
+
+[[streams]]
+id = "lsp-config"
+glob = "lsp-config.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-level LSP server definitions."
+
+[[streams]]
+id = "logs"
+glob = "logs/**/*"
+file_format = "text"
+discipline = "append_only"
+evidence = "research"
+notes = "Per-process debug logs (`process-{timestamp}-{pid}.log`). Volatile; stripped at harvest."
+
+[[streams]]
+id = "command-history"
+glob = "command-history-state/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Interactive reverse-search command history. Not transcript ground truth."
+
+[[streams]]
+id = "agents"
+glob = "agents/**/*"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Personal custom agent definitions (*.agent.md)."
+
+[[streams]]
+id = "skills"
+glob = "skills/**/*"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Personal custom skills (SKILL.md trees)."
+
+[[streams]]
+id = "hooks"
+glob = "hooks/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-level hook scripts."
+
+[[streams]]
+id = "instructions"
+glob = "instructions/**/*"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Additional personal *.instructions.md files."
+
+[[streams]]
+id = "copilot-instructions"
+glob = "copilot-instructions.md"
+file_format = "markdown"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Personal custom instructions applied to every session."
+
+[[streams]]
+id = "extensions"
+glob = "extensions/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "User-authored extension files."
+
+[[streams]]
+id = "installed-plugins"
+glob = "installed-plugins/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Marketplace plugin payloads. Vendor bundle; stripped at harvest."
+
+[[streams]]
+id = "plugin-data"
+glob = "plugin-data/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Persistent data owned by installed plugins."
+
+[[streams]]
+id = "ide"
+glob = "ide/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "IDE integration lock files (VS Code)."
+
+[[streams]]
+id = "mcp-oauth"
+glob = "mcp-oauth-config/**/*"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "MCP OAuth fallback tokens — MUST-NOT-PARSE; inventory only."
+
+[[streams]]
+id = "mcp-secrets"
+glob = "mcp-secrets/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "MCP secret placeholder fallback storage — MUST-NOT-PARSE; inventory only."

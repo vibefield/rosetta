@@ -1,0 +1,13 @@
+[package]
+name = "rosetta-adapter-hermes"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rosetta-adapter-support = { path = "../../adapter-support" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+walkdir.workspace = true

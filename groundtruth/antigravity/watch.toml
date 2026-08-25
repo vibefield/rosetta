@@ -1,25 +1,35 @@
-# Google Antigravity ("AGV") — Tier C (CLI) / D (IDE). Plan: docs/groundtruth/RESEARCH_PLAN.md §5.10
+# Google Antigravity CLI (`agy`) — Tier B (CLI). Plan: docs/groundtruth/RESEARCH_PLAN.md §5.9
+# IDE surface remains survey-and-monitor (Tier D) and is not this data pack.
+
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "IDE persistence is a separate Tier D surface; implicit protobuf and several maintenance streams remain observed/research only.",
+]
 
 [agent]
 name = "antigravity"
-display = "Google Antigravity"
+display = "Antigravity CLI"
 vendor = "Google"
-tier = "C/D"
+tier = "B"
 
 [release]
-channel = "manifest"                     # CLI: Cloud Run JSON manifest {version, url, sha512} -> GCS
-id = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json"
-surveyed = "cli 1.1.19 / ide 2.9.1"      # 2026-08-24
-pinned = ""
-changelog = "https://antigravity.google/changelog"   # IDE: scrape this (releases page is JS-rendered)
+channel = "github-releases"              # GitHub mirrors the Cloud Run manifest pin
+id = "google-antigravity/antigravity-cli"
+surveyed = "1.1.20"                      # 2026-08-25 GitHub latest + darwin_arm64 manifest
+pinned = "1.1.20"                        # fixtures + schemas committed for this version
+changelog = "https://github.com/google-antigravity/antigravity-cli/blob/main/CHANGELOG.md"
+# Authoritative latest-version probe (install.sh):
+# https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<uname>_<arch>.json
+# darwin_arm64 -> {version, url, sha512}. GitHub tag assets are the pinable farm install.
 
-[source]                                 # closed — repo has no license and no source
-repo = ""
+[source]                                 # closed — repo is docs/changelog/examples only
+repo = "https://github.com/google-antigravity/antigravity-cli"
 persistence_paths = []
 
 [fixture]
-headless = "agy -p <prompt> --output-format stream-json"
-mock_dialect = "none"                    # Google OAuth in system keyring; no documented endpoint override
-home_env = ""
-data_root = "~/.gemini/antigravity-ide"  # moved from ~/.gemini/antigravity; CLI: ~/.gemini/antigravity-cli + ~/.config/antigravity
-notes = "Scoped survey-and-monitor. CLI lane = credentialed scheduled runs (test account, keyring pre-seed). IDE lane = manual capture protocol; conversations are unpublished protobuf (.pb) -> SQLite migration; investigate the undocumented local HTTP API the community export tools use. CLI transcript on-disk location UNVERIFIED (may be server-side)."
+headless = "agy -p <prompt> --output-format stream-json --print-timeout 2m --dangerously-skip-permissions"
+mock_dialect = "gemini-generatecontent"  # settings.json modelProvider=gemini + GEMINI_API_KEY + GOOGLE_GEMINI_BASE_URL
+home_env = ""                            # no dedicated override; isolate via empty HOME (~/.gemini/antigravity-cli)
+data_root = "~/.gemini/antigravity-cli"
+notes = "CLI lane is hermetic via Gemini Developer API (docs/cli/install). Harvest $HOME/.gemini/antigravity-cli. Strip bin/, builtin/, log/, updater/, crashes/, presence/, cache/CHANGELOG.md. Resume is --conversation <uuid> or -c via cache/last_conversations.json. SQLite conversations/<id>.db plus transcript JSONL under brain/<id>/.system_generated/logs/. IDE (~/.gemini/antigravity-ide) is a separate Tier D surface."

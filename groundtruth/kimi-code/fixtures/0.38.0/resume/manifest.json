@@ -1,0 +1,57 @@
+{
+  "agent": "kimi-code",
+  "agent_version": "0.38.0",
+  "scenario": "resume",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "kimi-home/device_id",
+      "bytes": 36
+    },
+    {
+      "path": "kimi-home/logs/kimi-code.log",
+      "bytes": 331
+    },
+    {
+      "path": "kimi-home/migrations-effort.json",
+      "bytes": 64
+    },
+    {
+      "path": "kimi-home/session_index.jsonl",
+      "bytes": 201
+    },
+    {
+      "path": "kimi-home/sessions/wd_project_6ffdab58c0f9/session_d44c4ab0-e8e0-4323-be86-69107fc7c8d3/agents/main/wire.jsonl",
+      "bytes": 169224
+    },
+    {
+      "path": "kimi-home/sessions/wd_project_6ffdab58c0f9/session_d44c4ab0-e8e0-4323-be86-69107fc7c8d3/logs/kimi-code.log",
+      "bytes": 816
+    },
+    {
+      "path": "kimi-home/sessions/wd_project_6ffdab58c0f9/session_d44c4ab0-e8e0-4323-be86-69107fc7c8d3/state.json",
+      "bytes": 376
+    },
+    {
+      "path": "kimi-home/workspaces.json",
+      "bytes": 203
+    },
+    {
+      "path": "stderr-1.log",
+      "bytes": 0
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout-1.jsonl",
+      "bytes": 424
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 424
+    }
+  ]
+}

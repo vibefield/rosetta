@@ -49,8 +49,8 @@ dialect there, keeping these invariants:
 - Add pure unit tests under `tools/groundtruth/tests/`. Tests must not require a
   listening socket so they run in restricted CI sandboxes.
 
-Still needed for the roster: OpenAI Chat Completions and Gemini
-`generateContent`.
+Implemented dialects also include OpenAI Chat Completions and Gemini
+`generateContent` (Antigravity CLI `modelProvider=gemini`).
 
 ## 2. Farm runner
 

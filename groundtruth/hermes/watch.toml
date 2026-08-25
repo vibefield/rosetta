@@ -1,5 +1,11 @@
 # Hermes (Nous Research) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.1
 
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "Farm rows cover the six core logical tables; gateway routing, async delegation, and compaction state are schema-only.",
+]
+
 [agent]
 name = "hermes"
 display = "Hermes Agent"
@@ -10,7 +16,9 @@ tier = "A"
 channel = "github-releases"              # dual tags: semver v0.20.x + calver v2026.x.y — normalize to semver
 id = "NousResearch/hermes-agent"
 surveyed = "0.20.5"                      # 2026-08-24; multiple releases per week
-pinned = ""
+pinned = "0.20.5"                       # fixtures + groundtruth doc committed (2026-08-24)
+git_tag = "v2026.8.19"                   # GitHub/Docker calver tag; --version is 0.20.5
+docker_image = "nousresearch/hermes-agent:v2026.8.19"
 changelog = "https://github.com/NousResearch/hermes-agent/releases"
 
 [source]
@@ -21,8 +29,8 @@ persistence_paths = [
 ]
 
 [fixture]
-headless = "hermes -z <prompt> --ignore-user-config --usage-file usage.json"
-mock_dialect = "openai-chat"             # custom endpoint via `hermes model` wizard / config.yaml — provider block shape UNVERIFIED, capture from first farm run
+headless = "hermes chat --query-file <prompt> --yolo --quiet --ignore-rules --toolsets terminal"
+mock_dialect = "openai-chat"             # CONFIRMED 0.20.5: model.provider=custom + model.base_url + model.api_key in config.yaml
 home_env = "HERMES_HOME"
 data_root = "~/.hermes"
-notes = "No npm/brew — use per-release Docker images for pinned installs. Store is SQLite state.db (schema_version table, currently 23; three FTS5 tables). Commit .db harvest PLUS diffable derivatives: sqlite3 .schema dump + export_session() output (format UNVERIFIED). Legacy JSONL in sessions/ is dead."
+notes = "Install via Docker image nousresearch/hermes-agent:<git_tag>, falling back to git clone @ git_tag + uv sync (CPython 3.13; package requires-python <3.14). Mock via config.yaml model.provider=custom + model.base_url. Store is SQLite state.db (WAL; schema_version=26 at 0.20.5). Harvest the .db plus WAL/SHM when present, dump sqlite3 .schema to sources/, and dump non-empty table JSONL next to stdout. Legacy JSONL in sessions/ is dead. Credentials (.env, auth.json), vendor skills/cache/logs, and .update_check are stripped."

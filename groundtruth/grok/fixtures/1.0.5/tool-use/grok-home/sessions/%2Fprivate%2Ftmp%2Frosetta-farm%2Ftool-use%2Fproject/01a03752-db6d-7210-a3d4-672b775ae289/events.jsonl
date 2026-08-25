@@ -1,0 +1,16 @@
+{"ts":"2026-08-25T05:09:32.899Z","type":"turn_started","session_id":"01a03752-db6d-7210-a3d4-672b775ae289","turn_number":0,"model_id":"mock-model","yolo_mode":true,"conversation_message_count":2,"session_relationship":"primary","schema_version":"1.0"}
+{"ts":"2026-08-25T05:09:32.906Z","type":"loop_started","loop_index":0}
+{"ts":"2026-08-25T05:09:32.907Z","type":"phase_changed","phase":"waiting_for_model"}
+{"ts":"2026-08-25T05:09:32.910Z","type":"phase_changed","phase":"tool_execution"}
+{"ts":"2026-08-25T05:09:32.910Z","type":"tool_started","tool_name":"run_terminal_command"}
+{"ts":"2026-08-25T05:09:32.910Z","type":"phase_changed","phase":"permission_prompt"}
+{"ts":"2026-08-25T05:09:32.910Z","type":"permission_requested","tool_name":"run_terminal_command"}
+{"ts":"2026-08-25T05:09:32.911Z","type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow","wait_ms":0}
+{"ts":"2026-08-25T05:09:32.911Z","type":"phase_changed","phase":"tool_execution"}
+{"ts":"2026-08-25T05:09:32.990Z","type":"tool_completed","tool_name":"run_terminal_command","duration_ms":78,"outcome":"success","tool_call_id":"call_mock_0004"}
+{"ts":"2026-08-25T05:09:32.990Z","type":"loop_started","loop_index":1}
+{"ts":"2026-08-25T05:09:32.991Z","type":"phase_changed","phase":"waiting_for_model"}
+{"ts":"2026-08-25T05:09:32.992Z","type":"first_token"}
+{"ts":"2026-08-25T05:09:32.992Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-08-25T05:09:32.992Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-08-25T05:09:32.995Z","type":"turn_ended","outcome":"completed"}

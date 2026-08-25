@@ -2,8 +2,15 @@
 resolver = "3"
 members = [
     "crates/adapter-support",
+    "crates/adapters/antigravity",
     "crates/adapters/claude-code",
     "crates/adapters/codex",
+    "crates/adapters/copilot",
+    "crates/adapters/grok",
+    "crates/adapters/hermes",
+    "crates/adapters/kimi-code",
+    "crates/adapters/opencode",
+    "crates/adapters/pi",
     "crates/capture",
     "crates/core",
     "crates/pipeline",

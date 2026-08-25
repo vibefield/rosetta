@@ -1,5 +1,11 @@
 # Codex CLI (OpenAI) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.7
 
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "No pinned writer-source export or compaction fixture yet; current evidence covers rollouts and the active SQLite state store.",
+]
+
 [agent]
 name = "codex"
 display = "Codex CLI"

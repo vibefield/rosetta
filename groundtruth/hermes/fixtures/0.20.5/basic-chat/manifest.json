@@ -1,0 +1,57 @@
+{
+  "agent": "hermes",
+  "agent_version": "0.20.5",
+  "scenario": "basic-chat",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "hermes-home/SOUL.md",
+      "bytes": 513
+    },
+    {
+      "path": "hermes-home/config.yaml",
+      "bytes": 426
+    },
+    {
+      "path": "hermes-home/state.db",
+      "bytes": 229376
+    },
+    {
+      "path": "messages.jsonl",
+      "bytes": 1149
+    },
+    {
+      "path": "prompt-0.txt",
+      "bytes": 28
+    },
+    {
+      "path": "schema_version.jsonl",
+      "bytes": 16
+    },
+    {
+      "path": "session_model_usage.jsonl",
+      "bytes": 960
+    },
+    {
+      "path": "sessions.jsonl",
+      "bytes": 1618
+    },
+    {
+      "path": "state_meta.jsonl",
+      "bytes": 106
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 36
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 181
+    },
+    {
+      "path": "system_prompts.jsonl",
+      "bytes": 5192
+    }
+  ]
+}

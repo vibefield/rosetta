@@ -1,0 +1,33 @@
+{
+  "agent": "pi",
+  "agent_version": "0.84.3",
+  "scenario": "basic-chat",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "pi-home/agent/models-store.json",
+      "bytes": 2
+    },
+    {
+      "path": "pi-home/agent/models.json",
+      "bytes": 693
+    },
+    {
+      "path": "pi-home/agent/sessions/--private-tmp-rosetta-farm-basic-chat-project--/2026-08-25T05-29-06-156Z_01a03764-c56c-7c56-81a7-0856ceb0bacd.jsonl",
+      "bytes": 1313
+    },
+    {
+      "path": "pi-home/agent/settings.json",
+      "bytes": 111
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 3670
+    }
+  ]
+}

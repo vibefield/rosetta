@@ -10,8 +10,8 @@ from typing import Any
 from .model import GroundTruthError, read_json
 
 CSS = """
-:root{--bg:#fff;--fg:#1a1a1f;--mut:#667;--line:#e2e2ea;--card:#f7f7fa;--chip:#eef0ff;--chipfg:#3a41c4;--fix:#0a7d43;--obs:#8a5a00;--res:#8a2be2}
-@media (prefers-color-scheme:dark){:root{--bg:#101014;--fg:#e8e8ee;--mut:#99a;--line:#2a2a33;--card:#17171d;--chip:#23244a;--chipfg:#aab2ff;--fix:#3fce87;--obs:#e5b45b;--res:#c08aff}}
+:root{--bg:#fff;--fg:#1a1a1f;--mut:#667;--line:#e2e2ea;--card:#f7f7fa;--chip:#eef0ff;--chipfg:#3a41c4;--writer:#0069a8;--fix:#0a7d43;--obs:#8a5a00;--res:#8a2be2}
+@media (prefers-color-scheme:dark){:root{--bg:#101014;--fg:#e8e8ee;--mut:#99a;--line:#2a2a33;--card:#17171d;--chip:#23244a;--chipfg:#aab2ff;--writer:#63b9ed;--fix:#3fce87;--obs:#e5b45b;--res:#c08aff}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 main{max-width:1100px;margin:0 auto;padding:2rem 1.5rem}h1{font-size:1.4rem}
 h2{font-size:1.15rem;border-bottom:1px solid var(--line);padding-bottom:.4rem;margin-top:2.2rem}
@@ -20,7 +20,7 @@ h3{font-size:1rem;margin-top:1.8rem}h4.facet{font-size:.9rem;margin:1.2rem 0 .2r
 table{border-collapse:collapse;width:100%;margin:.6rem 0}th{text-align:left;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);padding:.3rem .5rem}
 td{padding:.3rem .5rem;border-top:1px solid var(--line);vertical-align:top}td.nested{padding:0 0 0 .5rem}.fields{background:var(--card);border-radius:6px;overflow:hidden}
 .fname{font-weight:600}.obs{color:var(--mut);font-size:.85rem;text-align:right}.chip{background:var(--chip);color:var(--chipfg);border-radius:4px;padding:.05rem .4rem;font-size:.85rem}.req{color:var(--fix)}
-.badge{border-radius:4px;padding:.05rem .45rem;font-size:.75rem;text-transform:lowercase}.ev-fixture{color:var(--fix);border:1px solid var(--fix)}.ev-observed{color:var(--obs);border:1px solid var(--obs)}.ev-research{color:var(--res);border:1px solid var(--res)}
+.badge{border-radius:4px;padding:.05rem .45rem;font-size:.75rem;text-transform:lowercase}.ev-writer{color:var(--writer);border:1px solid var(--writer)}.ev-fixture{color:var(--fix);border:1px solid var(--fix)}.ev-observed{color:var(--obs);border:1px solid var(--obs)}.ev-research{color:var(--res);border:1px solid var(--res)}
 details{margin:.25rem 0}summary{cursor:pointer;padding:.35rem .5rem}details.rtype{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:.15rem .4rem;margin:.5rem 0}
 .rname{font-weight:700}.variant,.arr{color:var(--mut);font-size:.85rem;margin:.3rem .5rem}code{background:var(--card);padding:.05rem .3rem;border-radius:4px}a{color:var(--chipfg);text-decoration:none}a:hover{text-decoration:underline}
 """.strip()
@@ -124,7 +124,10 @@ def render(docs: list[dict[str, Any]]) -> str:
         )
         if doc.get("sources"):
             sources = " · ".join(
-                f"{esc(source['generator'])} ({esc(source['agent_version'])}, {esc(source['evidence'])})"
+                f"{esc(source.get('path', source['generator']))} "
+                f"({esc(source['agent_version'])}, {esc(source['evidence'])}"
+                f"{', writer ' + esc(source['writer_version']) if source.get('writer_version') else ''})"
+                f"{f' sha256:{esc(source['sha256'][:12])}' if source.get('sha256') else ''}"
                 for source in doc["sources"]
             )
             body.append(f"<p class='meta'>canonical — merged from: {sources}</p>")

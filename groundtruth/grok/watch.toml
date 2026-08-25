@@ -1,4 +1,10 @@
-# Grok Build (xAI) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.9
+# Grok Build (xAI) — Tier A. Plan: docs/groundtruth/RESEARCH_PLAN.md §5.8
+
+[groundtruth]
+status = "captured"
+known_gaps = [
+  "Plan/subagent variants and compaction lifecycle are organic-only; feedback and checkpoint file bodies remain unobserved.",
+]
 
 [agent]
 name = "grok"
@@ -10,7 +16,7 @@ tier = "A"
 channel = "url"                          # plain-text latest version; install.sh accepts pinned `bash -s X.Y.Z`
 id = "https://x.ai/cli/stable"
 surveyed = "1.0.5"                       # 2026-08-24
-pinned = ""
+pinned = "1.0.5"                         # fixtures + groundtruth doc committed (2026-08-25)
 changelog = "https://x.ai/build/changelog"
 
 [source]
@@ -26,4 +32,4 @@ headless = "grok -p <prompt> --output-format streaming-json"
 mock_dialect = "openai-chat"             # [model.<name>] base_url/env_key, or GROK_MODELS_BASE_URL; XAI_API_KEY skips browser login
 home_env = "GROK_HOME"
 data_root = "~/.grok"
-notes = "updates.jsonl is the authoritative conversation log; chat_history.jsonl = raw model messages. Prior art: crates/codegen/xai-grok-foreign-sessions parses Claude Code + Codex stores. Mirror may lag binaries — fixtures decide on disagreement."
+notes = "updates.jsonl is the authoritative conversation log; chat_history.jsonl = raw model messages. Farm: curl https://x.ai/cli/grok-<ver>-<platform> into an isolated work dir (do not run install.sh — it mutates ~/.grok and shell rc). Mock via [model.mock-model] chat_completions + GROK_MODELS_BASE_URL + XAI_API_KEY. Headless: grok -p --output-format streaming-json --yolo -c to resume. Harvest strips auth, bundled/, downloads/, vendor/, docs/, bin/, completions/, marketplace-cache/, worktrees/, crash/, skills/, plugins/, agents/, personas/, workflows/, *.lock, *.sock. Prior art: xai-grok-foreign-sessions parses Claude Code + Codex stores. Mirror may lag binaries — fixtures decide on disagreement."

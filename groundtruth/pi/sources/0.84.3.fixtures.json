@@ -1,0 +1,3634 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "pi",
+  "agent_version": "0.84.3",
+  "evidence": "fixture",
+  "generator": "tools.groundtruth farm 1",
+  "data_root": "~/.pi",
+  "streams": [
+    {
+      "id": "session",
+      "glob": "agent/sessions/*/*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "JSONL with versioned SessionHeader first line (v1 linear → v2 tree → v3 current). 0.84.3 fixtures: session (parentSession on --fork), session_info (--name), model_change, thinking_level_change, message (user/assistant/toolResult, stopReason=error). Auto-compaction did not fire under a 1024-token mock window; compaction/branch_summary/custom/label remain writer-source (research) until a scenario writes them. Writer types at this pin require compaction.firstKeptEntryId; retainedTail is documented but absent from session-manager.ts. parentId is string|null. Farm strips auth.json, npm/, git/, logs/, bin/.",
+      "discriminator": "type",
+      "record_types": {
+        "compaction": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "details": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "modifiedFiles": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "readFiles": {
+                      "shape": {
+                        "kind": "array"
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "firstKeptEntryId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "fromHook": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "tokensBefore": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "compaction": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "cacheRead": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "cacheWrite": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "cost": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "input": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "reasoning": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "totalTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "message": {
+          "observed": 24,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 24
+              },
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "api": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "openai-completions": 12
+                        }
+                      },
+                      "required": false,
+                      "observed": 12
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "id": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 23
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 23,
+                                  "toolCall": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 24
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 24
+                    },
+                    "errorMessage": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "isError": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 12
+                        }
+                      },
+                      "required": false,
+                      "observed": 12
+                    },
+                    "provider": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 12
+                        }
+                      },
+                      "required": false,
+                      "observed": 12
+                    },
+                    "rawStopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "content_filter": 1,
+                          "stop": 10,
+                          "tool_calls": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 12
+                    },
+                    "responseId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 12
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 12,
+                          "toolResult": 1,
+                          "user": 11
+                        }
+                      },
+                      "required": true,
+                      "observed": 24
+                    },
+                    "stopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "error": 1,
+                          "stop": 10,
+                          "toolUse": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 12
+                    },
+                    "timestamp": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 24
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 12
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 12
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cacheRead": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 12
+                                },
+                                "cacheWrite": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 12
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 12
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 12
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 12
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 12
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 12
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 12
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 12
+                          },
+                          "totalTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 12
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 12
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 24
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 24
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 24
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "message": 24
+                  }
+                },
+                "required": true,
+                "observed": 24
+              }
+            }
+          }
+        },
+        "model_change": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "modelId": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "mock-model": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "any_of",
+                  "variants": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ]
+                },
+                "required": true,
+                "observed": 7
+              },
+              "provider": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "mock": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "model_change": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "session": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentSession": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        },
+        "session_info": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "null"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session_info": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "thinking_level_change": {
+          "observed": 7,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "parentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "thinkingLevel": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "off": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 7
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "thinking_level_change": 7
+                  }
+                },
+                "required": true,
+                "observed": 7
+              }
+            }
+          }
+        }
+      },
+      "facets": [
+        {
+          "id": "content-blocks",
+          "path": "message.message.content[]",
+          "discriminator": "type",
+          "record_types": {
+            "text": {
+              "observed": 23,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 23
+                      }
+                    },
+                    "required": true,
+                    "observed": 23
+                  }
+                }
+              }
+            },
+            "toolCall": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "arguments": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "command": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 1
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "name": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "toolCall": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "message-roles",
+          "path": "message.message (by role)",
+          "discriminator": "role",
+          "record_types": {
+            "assistant": {
+              "observed": 12,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "api": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "openai-completions": 12
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "arguments": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "command": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "name": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 1
+                          },
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false,
+                            "observed": 11
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "text": 11,
+                                "toolCall": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 12
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "errorMessage": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "model": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mock-model": 12
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "provider": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mock": 12
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "rawStopReason": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "content_filter": 1,
+                        "stop": 10,
+                        "tool_calls": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "responseId": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "assistant": 12
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "stopReason": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "error": 1,
+                        "stop": 10,
+                        "toolUse": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "timestamp": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 12
+                  },
+                  "usage": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cacheRead": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 12
+                        },
+                        "cacheWrite": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 12
+                        },
+                        "cost": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "cacheRead": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 12
+                              },
+                              "cacheWrite": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 12
+                              },
+                              "input": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 12
+                              },
+                              "output": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 12
+                              },
+                              "total": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true,
+                                "observed": 12
+                              }
+                            }
+                          },
+                          "required": true,
+                          "observed": 12
+                        },
+                        "input": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 12
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 12
+                        },
+                        "reasoning": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 12
+                        },
+                        "totalTokens": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true,
+                          "observed": 12
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 12
+                  }
+                }
+              }
+            },
+            "toolResult": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "text": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "isError": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "toolResult": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "timestamp": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "toolCallId": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  },
+                  "toolName": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "bash": 1
+                      }
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            },
+            "user": {
+              "observed": 11,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "text": 11
+                              }
+                            },
+                            "required": true,
+                            "observed": 11
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 11
+                  },
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "user": 11
+                      }
+                    },
+                    "required": true,
+                    "observed": 11
+                  },
+                  "timestamp": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true,
+                    "observed": 11
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-call-arguments",
+          "path": "message.message.content[type=toolCall].arguments",
+          "discriminator": "name",
+          "record_types": {
+            "bash": {
+              "observed": 1,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "command": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tool-result",
+          "path": "message.message[role=toolResult] (by toolName)",
+          "discriminator": "tool",
+          "record_types": {
+            "bash": {
+              "observed": 1,
+              "shape": {
+                "kind": "array",
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "text": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "text": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "glob": "agent/settings.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Global settings (~/.pi/agent/settings.json). Project-local .pi/settings.json lives in the cwd, not under ~/.pi. Keys from 0.84.3 docs: defaultProvider, defaultModel, defaultThinkingLevel, compaction, retry, defaultProjectTrust, enableInstallTelemetry, packages, extensions, skills, prompts, themes, sessionDir, defaultTools, …",
+      "record_types": {
+        "": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "compaction": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "enabled": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "keepRecentTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "reserveTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": false,
+                "observed": 1
+              },
+              "defaultProjectTrust": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "enableInstallTelemetry": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 6
+              },
+              "retry": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "enabled": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true,
+                      "observed": 6
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 6
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "models",
+      "glob": "agent/models.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Custom providers (openai-completions / openai-responses / anthropic-messages / google-generative-ai). Farm writes the mock provider here.",
+      "record_types": {
+        "": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "providers": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "mock": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "api": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "openai-completions": 6
+                              }
+                            },
+                            "required": true,
+                            "observed": 6
+                          },
+                          "apiKey": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 6
+                          },
+                          "baseUrl": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 6
+                          },
+                          "compat": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "supportsDeveloperRole": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 6
+                                },
+                                "supportsReasoningEffort": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 6
+                                },
+                                "supportsStore": {
+                                  "shape": {
+                                    "kind": "boolean"
+                                  },
+                                  "required": true,
+                                  "observed": 6
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 6
+                          },
+                          "models": {
+                            "shape": {
+                              "kind": "array",
+                              "items": {
+                                "kind": "object",
+                                "fields": {
+                                  "contextWindow": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  },
+                                  "cost": {
+                                    "shape": {
+                                      "kind": "object",
+                                      "fields": {
+                                        "cacheRead": {
+                                          "shape": {
+                                            "kind": "number"
+                                          },
+                                          "required": true,
+                                          "observed": 6
+                                        },
+                                        "cacheWrite": {
+                                          "shape": {
+                                            "kind": "number"
+                                          },
+                                          "required": true,
+                                          "observed": 6
+                                        },
+                                        "input": {
+                                          "shape": {
+                                            "kind": "number"
+                                          },
+                                          "required": true,
+                                          "observed": 6
+                                        },
+                                        "output": {
+                                          "shape": {
+                                            "kind": "number"
+                                          },
+                                          "required": true,
+                                          "observed": 6
+                                        }
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  },
+                                  "id": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  },
+                                  "input": {
+                                    "shape": {
+                                      "kind": "array",
+                                      "items": {
+                                        "kind": "string"
+                                      }
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  },
+                                  "maxTokens": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  },
+                                  "name": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  },
+                                  "reasoning": {
+                                    "shape": {
+                                      "kind": "boolean"
+                                    },
+                                    "required": true,
+                                    "observed": 6
+                                  }
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 6
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 6
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 6
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "models-store",
+      "glob": "agent/models-store.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "fixture",
+      "notes": "Cached provider model catalog. Farm harvests `{}` on a first empty-home run.",
+      "record_types": {
+        "": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "trust",
+      "glob": "agent/trust.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Saved project-trust decisions. Written by /trust in interactive mode."
+    },
+    {
+      "id": "auth",
+      "glob": "agent/auth.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Credentials (0600) — MUST-NOT-PARSE; inventory only. Farm strips this file."
+    },
+    {
+      "id": "keybindings",
+      "glob": "agent/keybindings.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Custom keybindings overlay."
+    },
+    {
+      "id": "agents-md",
+      "glob": "agent/AGENTS.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Global context file concatenated with cwd/parent AGENTS.md or CLAUDE.md."
+    },
+    {
+      "id": "system-md",
+      "glob": "agent/SYSTEM.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Replaces the default system prompt when present."
+    },
+    {
+      "id": "append-system-md",
+      "glob": "agent/APPEND_SYSTEM.md",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Appended to the system prompt without replacing it."
+    },
+    {
+      "id": "extensions",
+      "glob": "agent/extensions/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User TypeScript extensions. Farm runs with --no-extensions."
+    },
+    {
+      "id": "skills",
+      "glob": "agent/skills/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User skills. Farm runs with --no-skills."
+    },
+    {
+      "id": "prompts",
+      "glob": "agent/prompts/**/*",
+      "file_format": "markdown",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Prompt templates. Farm runs with --no-prompt-templates."
+    },
+    {
+      "id": "themes",
+      "glob": "agent/themes/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Custom themes. Farm runs with --no-themes."
+    },
+    {
+      "id": "tools",
+      "glob": "agent/tools/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User tools directory (getToolsDir)."
+    },
+    {
+      "id": "bin",
+      "glob": "agent/bin/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Managed binaries (fd, rg). Farm strips this tree (vendor bundle)."
+    },
+    {
+      "id": "npm-packages",
+      "glob": "agent/npm/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User-scoped npm pi packages. Farm strips this tree."
+    },
+    {
+      "id": "git-packages",
+      "glob": "agent/git/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "User-scoped git pi packages. Farm strips this tree."
+    },
+    {
+      "id": "debug-log",
+      "glob": "agent/pi-debug.log",
+      "file_format": "text",
+      "discipline": "append_only",
+      "evidence": "research",
+      "notes": "Debug log (getDebugLogPath). Farm strips logs/."
+    },
+    {
+      "id": "farm:headless-stdout",
+      "glob": "<farm>/stdout*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "fixture",
+      "notes": "Headless stream-json stdout — corroboration surface captured by the farm, not part of the agent data root.",
+      "discriminator": "type",
+      "record_types": {
+        "agent_end": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "messages": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "api": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "openai-completions": 11
+                          }
+                        },
+                        "required": false,
+                        "observed": 11
+                      },
+                      "content": {
+                        "shape": {
+                          "kind": "array",
+                          "items": {
+                            "kind": "object",
+                            "fields": {
+                              "arguments": {
+                                "shape": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "command": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    }
+                                  }
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "id": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "name": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 1
+                              },
+                              "text": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": false,
+                                "observed": 21
+                              },
+                              "type": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "text": 21,
+                                    "toolCall": 1
+                                  }
+                                },
+                                "required": true,
+                                "observed": 22
+                              }
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 22
+                      },
+                      "errorMessage": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": false,
+                        "observed": 1
+                      },
+                      "isError": {
+                        "shape": {
+                          "kind": "boolean"
+                        },
+                        "required": false,
+                        "observed": 1
+                      },
+                      "model": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "mock-model": 11
+                          }
+                        },
+                        "required": false,
+                        "observed": 11
+                      },
+                      "provider": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "mock": 11
+                          }
+                        },
+                        "required": false,
+                        "observed": 11
+                      },
+                      "rawStopReason": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "content_filter": 1,
+                            "stop": 9,
+                            "tool_calls": 1
+                          }
+                        },
+                        "required": false,
+                        "observed": 11
+                      },
+                      "responseId": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": false,
+                        "observed": 11
+                      },
+                      "role": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "assistant": 11,
+                            "toolResult": 1,
+                            "user": 10
+                          }
+                        },
+                        "required": true,
+                        "observed": 22
+                      },
+                      "stopReason": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "error": 1,
+                            "stop": 9,
+                            "toolUse": 1
+                          }
+                        },
+                        "required": false,
+                        "observed": 11
+                      },
+                      "timestamp": {
+                        "shape": {
+                          "kind": "number"
+                        },
+                        "required": true,
+                        "observed": 22
+                      },
+                      "toolCallId": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": false,
+                        "observed": 1
+                      },
+                      "toolName": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "bash": 1
+                          }
+                        },
+                        "required": false,
+                        "observed": 1
+                      },
+                      "usage": {
+                        "shape": {
+                          "kind": "object",
+                          "fields": {
+                            "cacheRead": {
+                              "shape": {
+                                "kind": "number"
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "cacheWrite": {
+                              "shape": {
+                                "kind": "number"
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "cost": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "cacheRead": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 11
+                                  },
+                                  "cacheWrite": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 11
+                                  },
+                                  "input": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 11
+                                  },
+                                  "output": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 11
+                                  },
+                                  "total": {
+                                    "shape": {
+                                      "kind": "number"
+                                    },
+                                    "required": true,
+                                    "observed": 11
+                                  }
+                                }
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "input": {
+                              "shape": {
+                                "kind": "number"
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "output": {
+                              "shape": {
+                                "kind": "number"
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "reasoning": {
+                              "shape": {
+                                "kind": "number"
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "totalTokens": {
+                              "shape": {
+                                "kind": "number"
+                              },
+                              "required": true,
+                              "observed": 11
+                            }
+                          }
+                        },
+                        "required": false,
+                        "observed": 11
+                      }
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 10
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "agent_end": 10
+                  }
+                },
+                "required": true,
+                "observed": 10
+              },
+              "willRetry": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 10
+              }
+            }
+          }
+        },
+        "agent_settled": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "agent_settled": 10
+                  }
+                },
+                "required": true,
+                "observed": 10
+              }
+            }
+          }
+        },
+        "agent_start": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "agent_start": 10
+                  }
+                },
+                "required": true,
+                "observed": 10
+              }
+            }
+          }
+        },
+        "compaction_end": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "aborted": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "threshold": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "result": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "details": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "modifiedFiles": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "readFiles": {
+                            "shape": {
+                              "kind": "array"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "estimatedTokensAfter": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "firstKeptEntryId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "summary": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "tokensBefore": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 1
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cacheRead": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "cacheWrite": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "totalTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "compaction_end": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "willRetry": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "compaction_start": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "reason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "threshold": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "compaction_start": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "message_end": {
+          "observed": 22,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "api": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "openai-completions": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "id": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 21
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 21,
+                                  "toolCall": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 22
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 22
+                    },
+                    "errorMessage": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "isError": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "provider": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "rawStopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "content_filter": 1,
+                          "stop": 9,
+                          "tool_calls": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "responseId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 11,
+                          "toolResult": 1,
+                          "user": 10
+                        }
+                      },
+                      "required": true,
+                      "observed": 22
+                    },
+                    "stopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "error": 1,
+                          "stop": 9,
+                          "toolUse": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "timestamp": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 22
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cacheRead": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "cacheWrite": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "totalTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 22
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "message_end": 22
+                  }
+                },
+                "required": true,
+                "observed": 22
+              }
+            }
+          }
+        },
+        "message_start": {
+          "observed": 22,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "api": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "openai-completions": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 11
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 11
+                                }
+                              },
+                              "required": true,
+                              "observed": 11
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 22
+                    },
+                    "isError": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "provider": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "responseId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 8
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 11,
+                          "toolResult": 1,
+                          "user": 10
+                        }
+                      },
+                      "required": true,
+                      "observed": 22
+                    },
+                    "stopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "pending": 11
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    },
+                    "timestamp": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 22
+                    },
+                    "toolCallId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cacheRead": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "cacheWrite": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "totalTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 11
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 22
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "message_start": 22
+                  }
+                },
+                "required": true,
+                "observed": 22
+              }
+            }
+          }
+        },
+        "message_update": {
+          "observed": 42,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "assistantMessageEvent": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 10
+                    },
+                    "contentIndex": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 42
+                    },
+                    "delta": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 20
+                    },
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "toolCall": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "arguments": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "command": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "name": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 1
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "toolCall": 1
+                              }
+                            },
+                            "required": true,
+                            "observed": 1
+                          }
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "toolName": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "bash": 1
+                        }
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "text_delta": 19,
+                          "text_end": 10,
+                          "text_start": 10,
+                          "toolcall_delta": 1,
+                          "toolcall_end": 1,
+                          "toolcall_start": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 42
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 42
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "message_update": 42
+                  }
+                },
+                "required": true,
+                "observed": 42
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "cacheRead": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 42
+                    },
+                    "cacheWrite": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 42
+                    },
+                    "cost": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 42
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 42
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 42
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 42
+                          },
+                          "total": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 42
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 42
+                    },
+                    "input": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 42
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 42
+                    },
+                    "reasoning": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false,
+                      "observed": 39
+                    },
+                    "totalTokens": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 42
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 42
+              }
+            }
+          }
+        },
+        "session": {
+          "observed": 10,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "parentSession": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 1
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 10
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session": 10
+                  }
+                },
+                "required": true,
+                "observed": 10
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true,
+                "observed": 10
+              }
+            }
+          }
+        },
+        "tool_execution_end": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "isError": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "result": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 1
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "toolCallId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "toolName": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "bash": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool_execution_end": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "tool_execution_start": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "args": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "command": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "toolCallId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 1
+              },
+              "toolName": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "bash": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool_execution_start": 1
+                  }
+                },
+                "required": true,
+                "observed": 1
+              }
+            }
+          }
+        },
+        "tool_execution_update": {
+          "observed": 2,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "args": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "command": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 2
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "partialResult": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": true,
+                              "observed": 1
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 1
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 2
+                    },
+                    "details": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false,
+                      "observed": 1
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "toolCallId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2
+              },
+              "toolName": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "bash": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "tool_execution_update": 2
+                  }
+                },
+                "required": true,
+                "observed": 2
+              }
+            }
+          }
+        },
+        "turn_end": {
+          "observed": 11,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "message": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "api": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "openai-completions": 11
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {
+                            "arguments": {
+                              "shape": {
+                                "kind": "object",
+                                "fields": {
+                                  "command": {
+                                    "shape": {
+                                      "kind": "string"
+                                    },
+                                    "required": true,
+                                    "observed": 1
+                                  }
+                                }
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "id": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "name": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 1
+                            },
+                            "text": {
+                              "shape": {
+                                "kind": "string"
+                              },
+                              "required": false,
+                              "observed": 10
+                            },
+                            "type": {
+                              "shape": {
+                                "kind": "string",
+                                "values": {
+                                  "text": 10,
+                                  "toolCall": 1
+                                }
+                              },
+                              "required": true,
+                              "observed": 11
+                            }
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "errorMessage": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false,
+                      "observed": 1
+                    },
+                    "model": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock-model": 11
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "provider": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "mock": 11
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "rawStopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "content_filter": 1,
+                          "stop": 9,
+                          "tool_calls": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "responseId": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "role": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "assistant": 11
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "stopReason": {
+                      "shape": {
+                        "kind": "string",
+                        "values": {
+                          "error": 1,
+                          "stop": 9,
+                          "toolUse": 1
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "timestamp": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true,
+                      "observed": 11
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "cacheRead": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "cacheWrite": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "cost": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {
+                                "cacheRead": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "cacheWrite": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "input": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "output": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                },
+                                "total": {
+                                  "shape": {
+                                    "kind": "number"
+                                  },
+                                  "required": true,
+                                  "observed": 11
+                                }
+                              }
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "input": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "output": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "reasoning": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          },
+                          "totalTokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true,
+                            "observed": 11
+                          }
+                        }
+                      },
+                      "required": true,
+                      "observed": 11
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 11
+              },
+              "toolResults": {
+                "shape": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "object",
+                    "fields": {
+                      "content": {
+                        "shape": {
+                          "kind": "array",
+                          "items": {
+                            "kind": "object",
+                            "fields": {
+                              "text": {
+                                "shape": {
+                                  "kind": "string"
+                                },
+                                "required": true,
+                                "observed": 1
+                              },
+                              "type": {
+                                "shape": {
+                                  "kind": "string",
+                                  "values": {
+                                    "text": 1
+                                  }
+                                },
+                                "required": true,
+                                "observed": 1
+                              }
+                            }
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "isError": {
+                        "shape": {
+                          "kind": "boolean"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "role": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "toolResult": 1
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "timestamp": {
+                        "shape": {
+                          "kind": "number"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "toolCallId": {
+                        "shape": {
+                          "kind": "string"
+                        },
+                        "required": true,
+                        "observed": 1
+                      },
+                      "toolName": {
+                        "shape": {
+                          "kind": "string",
+                          "values": {
+                            "bash": 1
+                          }
+                        },
+                        "required": true,
+                        "observed": 1
+                      }
+                    }
+                  }
+                },
+                "required": true,
+                "observed": 11
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "turn_end": 11
+                  }
+                },
+                "required": true,
+                "observed": 11
+              }
+            }
+          }
+        },
+        "turn_start": {
+          "observed": 11,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "turn_start": 11
+                  }
+                },
+                "required": true,
+                "observed": 11
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

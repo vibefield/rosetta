@@ -1,0 +1,101 @@
+{
+  "agent": "grok",
+  "agent_version": "1.0.5",
+  "scenario": "basic-chat",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "grok-home/.metadata_version",
+      "bytes": 5
+    },
+    {
+      "path": "grok-home/active_sessions.json",
+      "bytes": 2
+    },
+    {
+      "path": "grok-home/agent_id",
+      "bytes": 36
+    },
+    {
+      "path": "grok-home/config.toml",
+      "bytes": 473
+    },
+    {
+      "path": "grok-home/logs/unified.jsonl",
+      "bytes": 13059
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/chat_history.jsonl",
+      "bytes": 7938
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/events.jsonl",
+      "bytes": 703
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/prompt_context.json",
+      "bytes": 432
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/rewind_points.jsonl",
+      "bytes": 103
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/signals.json",
+      "bytes": 1494
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/summary.json",
+      "bytes": 640
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/system_prompt.txt",
+      "bytes": 5519
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/title_refresh_idx",
+      "bytes": 1
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/01a03752-d5a9-73f3-b99f-139cb363ccac/updates.jsonl",
+      "bytes": 1594
+    },
+    {
+      "path": "grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Fbasic-chat%2Fproject/prompt_history.jsonl",
+      "bytes": 152
+    },
+    {
+      "path": "grok-home/sessions/session_search.sqlite",
+      "bytes": 36864
+    },
+    {
+      "path": "grok-home/sessions/session_search.sqlite-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "grok-home/sessions/session_search.sqlite-wal",
+      "bytes": 0
+    },
+    {
+      "path": "grok-home/worktrees.db",
+      "bytes": 40960
+    },
+    {
+      "path": "grok-home/worktrees.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "grok-home/worktrees.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 2184
+    }
+  ]
+}

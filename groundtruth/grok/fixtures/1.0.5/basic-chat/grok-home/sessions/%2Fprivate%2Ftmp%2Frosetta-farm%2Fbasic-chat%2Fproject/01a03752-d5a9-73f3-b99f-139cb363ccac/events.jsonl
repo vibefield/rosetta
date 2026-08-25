@@ -1,0 +1,7 @@
+{"ts":"2026-08-25T05:09:31.426Z","type":"turn_started","session_id":"01a03752-d5a9-73f3-b99f-139cb363ccac","turn_number":0,"model_id":"mock-model","yolo_mode":true,"conversation_message_count":2,"session_relationship":"primary","schema_version":"1.0"}
+{"ts":"2026-08-25T05:09:31.429Z","type":"loop_started","loop_index":0}
+{"ts":"2026-08-25T05:09:31.429Z","type":"phase_changed","phase":"waiting_for_model"}
+{"ts":"2026-08-25T05:09:31.431Z","type":"first_token"}
+{"ts":"2026-08-25T05:09:31.431Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-08-25T05:09:31.431Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-08-25T05:09:31.434Z","type":"turn_ended","outcome":"completed"}

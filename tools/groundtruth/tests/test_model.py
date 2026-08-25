@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import unittest
 
+from pathlib import Path
+
 from tools.groundtruth.model import (
     ShapeAccumulator,
     glob_match,
+    jsonl_record_type,
     merge_docs,
     merge_shapes,
+    sanitize_census_document,
     shape_of,
+    sqlite_schema_name,
 )
 
 
@@ -28,6 +33,33 @@ class ShapeTests(unittest.TestCase):
         shape = shape_of({"a path/that is a value": 1, "another": 2})
         self.assertEqual(list(shape["fields"]), ["<dynamic>"])
         self.assertEqual(shape["fields"]["<dynamic>"]["observed"], 2)
+
+    def test_uuid_and_redaction_keys_collapse(self) -> None:
+        shape = shape_of(
+            {
+                "3baa3d39-d12f-4ac7-89fd-c2eb6369cd09": True,
+                "<PROJECT>": "bd6ccc47-c565-40ec-a71a-ae53ce0b3481",
+            }
+        )
+        self.assertEqual(list(shape["fields"]), ["<dynamic>"])
+        self.assertEqual(shape["fields"]["<dynamic>"]["observed"], 2)
+
+    def test_wide_schema_field_names_are_kept(self) -> None:
+        row = {f"col_{index:02d}": index for index in range(56)}
+        shape = shape_of(row)
+        self.assertEqual(len(shape["fields"]), 56)
+        self.assertIn("col_00", shape["fields"])
+        self.assertNotIn("<dynamic>", shape["fields"])
+
+    def test_sqlite_schema_name_collapses_uuid_files(self) -> None:
+        path = Path("conversations/3baa3d39-d12f-4ac7-89fd-c2eb6369cd09.db")
+        self.assertEqual(sqlite_schema_name(path, path.as_posix()), "conversations.db")
+        self.assertEqual(
+            sqlite_schema_name(
+                Path("conversation_summaries.db"), "conversation_summaries.db"
+            ),
+            "conversation_summaries.db",
+        )
 
     def test_accumulator(self) -> None:
         accumulator = ShapeAccumulator()
@@ -73,12 +105,180 @@ class ShapeTests(unittest.TestCase):
             }
 
         merged = merge_docs(
-            [document("observed", "organic", {"x": 1}), document("fixture", "1.0", {"x": 2})]
+            [
+                document("observed", "organic", {"x": 1}),
+                document("fixture", "1.0", {"x": 2}),
+                document("writer", "1.0", {"x": 3}),
+            ]
         )
         self.assertEqual(merged["agent_version"], "1.0")
+        self.assertEqual(merged["evidence"], "writer")
+        self.assertEqual(merged["streams"][0]["evidence"], "writer")
         record = merged["streams"][0]["record_types"]["event"]
-        self.assertEqual(record["observed"], 2)
-        self.assertEqual(record["evidence"], "fixture")
+        self.assertEqual(record["observed"], 3)
+        self.assertEqual(record["evidence"], "writer")
+
+    def test_census_keeps_protocol_enums_but_not_payload_values(self) -> None:
+        document = {
+            "format": "rosetta-groundtruth/1",
+            "agent": "a",
+            "agent_version": "1.0.0",
+            "evidence": "observed",
+            "generator": "tools.groundtruth census 1",
+            "data_root": "~/.a",
+            "streams": [
+                {
+                    "id": "events",
+                    "discriminator": "type",
+                    "record_types": {
+                        "assistant": {
+                            "observed": 1,
+                            "shape": shape_of(
+                                {
+                                    "type": "assistant",
+                                    "role": "assistant",
+                                    "id": "msg_abcdefgh",
+                                    "title": "private-project",
+                                    "toolName": "mcp__private__deploy",
+                                    "tools": ["Read", "mcp__private__deploy"],
+                                    "byName": {"spaghetti-channel": True},
+                                }
+                            ),
+                        }
+                    },
+                    "facets": [
+                        {
+                            "id": "tool-input",
+                            "discriminator": "name",
+                            "record_types": {
+                                "Bash": {"observed": 1, "shape": shape_of({"x": 1})},
+                                "mcp__private__deploy": {
+                                    "observed": 1,
+                                    "shape": shape_of({"y": 1}),
+                                },
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        sanitized = sanitize_census_document(document)
+        stream = sanitized["streams"][0]
+        fields = stream["record_types"]["assistant"]["shape"]["fields"]
+        self.assertEqual(fields["type"]["shape"]["values"], {"assistant": 1})
+        self.assertEqual(fields["role"]["shape"]["values"], {"assistant": 1})
+        self.assertNotIn("values", fields["id"]["shape"])
+        self.assertNotIn("values", fields["title"]["shape"])
+        self.assertEqual(fields["toolName"]["shape"]["values"], {"mcp__*": 1})
+        self.assertEqual(
+            fields["tools"]["shape"]["items"]["values"],
+            {"Read": 1, "mcp__*": 1},
+        )
+        self.assertEqual(
+            list(fields["byName"]["shape"]["fields"]), ["<dynamic>"]
+        )
+        self.assertEqual(
+            list(stream["facets"][0]["record_types"]), ["Bash", "mcp__*"]
+        )
+
+    def test_census_keeps_sqlite_table_identities(self) -> None:
+        document = {
+            "format": "rosetta-groundtruth/1",
+            "agent": "a",
+            "agent_version": "1.0.0",
+            "evidence": "observed",
+            "generator": "tools.groundtruth census 1",
+            "data_root": "~/.a",
+            "streams": [
+                {
+                    "id": "database",
+                    "discriminator": "table",
+                    "record_types": {
+                        "state.db:messages": {
+                            "observed": 1,
+                            "shape": shape_of({"role": "assistant"}),
+                        }
+                    },
+                }
+            ],
+        }
+        sanitized = sanitize_census_document(document)
+        self.assertEqual(
+            list(sanitized["streams"][0]["record_types"]),
+            ["state.db:messages"],
+        )
+
+    def test_long_protocol_enum_is_not_mistaken_for_payload(self) -> None:
+        shape = shape_of({"type": "permission.record_approval_result"})
+        self.assertEqual(
+            shape["fields"]["type"]["shape"]["values"],
+            {"permission.record_approval_result": 1},
+        )
+
+    def test_census_keeps_session_update_and_tool_completed_types(self) -> None:
+        document = {
+            "format": "rosetta-groundtruth/1",
+            "agent": "grok",
+            "agent_version": "observed",
+            "evidence": "observed",
+            "generator": "tools.groundtruth census 2",
+            "data_root": "~/.grok",
+            "streams": [
+                {
+                    "id": "updates",
+                    "discriminator": "sessionUpdate",
+                    "record_types": {
+                        "tool_call": {
+                            "observed": 1,
+                            "shape": shape_of({"sessionUpdate": "tool_call"}),
+                        },
+                        "agent_thought_chunk": {
+                            "observed": 1,
+                            "shape": shape_of({"sessionUpdate": "agent_thought_chunk"}),
+                        },
+                    },
+                },
+                {
+                    "id": "events",
+                    "discriminator": "type",
+                    "record_types": {
+                        "tool_completed": {
+                            "observed": 1,
+                            "shape": shape_of({"type": "tool_completed"}),
+                        }
+                    },
+                },
+            ],
+        }
+        sanitized = sanitize_census_document(document)
+        self.assertEqual(
+            set(sanitized["streams"][0]["record_types"]),
+            {"tool_call", "agent_thought_chunk"},
+        )
+        self.assertIn("tool_completed", sanitized["streams"][1]["record_types"])
+
+    def test_jsonl_record_type_prefers_session_update(self) -> None:
+        self.assertEqual(jsonl_record_type({"type": "user"}), "user")
+        self.assertEqual(
+            jsonl_record_type(
+                {
+                    "method": "session/update",
+                    "params": {"update": {"sessionUpdate": "tool_call"}},
+                }
+            ),
+            "tool_call",
+        )
+        self.assertEqual(jsonl_record_type({"prompt_index": 0}), "<untyped>")
+        self.assertEqual(
+            jsonl_record_type({"role": "assistant", "content": "hi"}),
+            "assistant",
+        )
+        self.assertEqual(
+            jsonl_record_type(
+                {"role": "meta", "type": "system.version", "version": "0.38.0"}
+            ),
+            "system.version",
+        )
 
 
 if __name__ == "__main__":
