@@ -189,11 +189,13 @@
       adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, consistent
       SQLite snapshots, serializable adapter checkpoints, generation-staged reconciliation,
       SQLite/FTS and rollups, watch-before-scan live scheduling, polling plus rotating audits, the
-      checksummed raw segment ledger, atomic whole-projection rebuild, the store hot tier, and the
-      in-process subscription hub are implemented. The HTTP/WebSocket transport, generated clients,
-      and unimplemented performance promises below remain design targets. Organic Claude Code,
-      Codex, and Grok validation has now established the first measured cold-load baseline; the
-      evidence, bottleneck accounting, and gated optimization specification are recorded below.
+      checksummed raw segment ledger, atomic whole-projection rebuild, the store hot tier, the
+      in-process subscription hub, axum HTTP/WebSocket transport, backend-neutral protocol, and
+      generated TypeScript package are implemented. Consumer migrations, the dedicated metrics
+      stream, and unimplemented performance promises below remain design targets. Organic Claude
+      Code, Codex, and Grok validation established the first measured cold-load baseline; a later
+      checksummed, permission-read-only Codex campaign established FTS5 p50/p95/p99. The evidence,
+      bottleneck accounting, and gated optimization specification are recorded below.
       <code>source_op</code> is only projection-internal staging; the raw ledger is the durable
       replay substrate.</div>
   </div>
@@ -646,7 +648,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">fold (merge · buckets · ids)</td><td>criterion</td><td class="metric">ops/sec</td></tr>
       <tr><td class="cm">ledger append / scan</td><td>criterion</td><td class="metric">MB/sec</td></tr>
       <tr><td class="cm">writer</td><td>criterion, across batch sizes</td><td class="metric">rows/sec · commit ms</td></tr>
-      <tr><td class="cm">queries (heatmap · contribution · timeline · FTS)</td><td>criterion on generated multi-M-row DB</td><td class="metric">ms p95</td></tr>
+      <tr><td class="cm">queries (heatmap · contribution · timeline · FTS)</td><td>criterion + frozen search campaign</td><td class="metric">ms p50 / p95 / p99</td></tr>
       <tr><td class="cm">discovery walk</td><td>criterion</td><td class="metric">dirs/sec</td></tr>
       <tr><td class="cm">live path (fold → ring → hub → frame)</td><td>latency harness</td><td class="metric">p50 / p95 ms</td></tr>
       <tr><td class="cm">view apply (writer → hot tier)</td><td>criterion</td><td class="metric">µs/batch — must vanish next to the commit</td></tr>
@@ -658,11 +660,12 @@ trait <b>AgentAdapter</b>: Send + Sync {
 
   <!-- ================================================================ -->
   <h2>Measured performance and search-finalization specification</h2>
-  <p class="h2-note">Status: <b>proposed, evidence-backed, not yet an implementation commitment.</b>
-  This section records the 2026-08-26 organic validation lane, identifies which conclusions are
-  measurements versus estimates, and specifies the crash-safe seams required before search can be
-  detached from canonical publication. It updates the earlier FTS5 default without turning a local
-  corpus into CI ground truth.</p>
+  <p class="h2-note">Status: <b>partly implemented and evidence-backed.</b> The frozen FTS campaign
+  harness and L3 search/readiness contract exist; asynchronous search publication and an alternate
+  backend remain gated proposals. This section records the 2026-08-26 organic validation lane,
+  identifies measurements versus estimates, and specifies the crash-safe seams required before
+  search can be detached from canonical publication. It updates the earlier FTS5 default without
+  turning a local corpus into CI ground truth.</p>
 
   <div class="callout">
     <b>Decision boundary.</b> Keep the raw ledger as durable truth and SQLite as the only canonical
@@ -681,7 +684,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">M</td><td>Measured on the developer's organic agent histories, macOS 26.5.2
       on arm64, using the shipped <code>--profile</code> counters and <code>/usr/bin/time</code>.</td>
       <td>Corroboration and optimization direction only; never a CI correctness dependency.</td></tr>
-      <tr><td class="cm">C</td><td>Static evidence in the current code at <code>52b6b1d</code>.</td>
+      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>0143643</code>.</td>
       <td>May establish present behavior and a refactoring seam.</td></tr>
       <tr><td class="cm">T</td><td>Automated fixture, replay, SQLite, or crash-protocol test.</td>
       <td>May gate implementation and CI.</td></tr>
@@ -696,9 +699,19 @@ trait <b>AgentAdapter</b>: Send + Sync {
   baselines. The volume was 98% full during the final measurements, so absolute times include a
   documented storage-pressure penalty. Standalone meta-only wall time was not retained; the next
   benchmark must report discover, meta, stream, canonical-finalize, and search-finalize separately.
-  “Frozen” below means the ledger did not change during the comparison: the organic benchmark
-  artifacts were deleted after validation and are not a reproducible fixture. Peak RSS, CPU time,
-  and the SQLite table-versus-FTS byte split were also not retained.</p>
+  The earlier “frozen” rebuild only meant the ledger did not change during that command; its organic
+  artifacts were deleted and cannot support a new comparison. The later FTS campaign improved this:
+  the tool rejected write-permitted input, fingerprinted every ledger file and the query suite,
+  rechecked them before and after each run, and opened SQLite read-only. Its private artifacts were
+  still deleted after recording the structure-free summary and therefore cannot be cited as one side
+  of a future candidate comparison. Peak RSS, CPU time, and the SQLite table-versus-FTS byte split
+  were also not retained.</p>
+  <div class="callout"><b>Hard merge gate.</b> Every performance optimization commit must cite a
+    frozen before/after pair captured before either private artifact is deleted: same campaign ID,
+    permission-read-only checksummed ledger, checksummed query suite, machine label, warmup/cycle counts,
+    schema version, and logical row counts, with equal hit counts and ranked-result digests. Estimates,
+    an unpaired baseline, or an organic one-off are planning evidence only. If one side was deleted,
+    rerun it.</div>
 
   <h3 class="spec">Organic corpus baseline <span class="badge b-bench">M</span></h3>
   <div class="tbl-scroll">
@@ -749,6 +762,13 @@ trait <b>AgentAdapter</b>: Send + Sync {
     </tbody>
   </table>
   </div>
+  <p class="spec-note">The fresh build used to create the later FTS campaign provides a current
+  corroborating point at <code>e28028d</code>: 860,556 framed records / 4.70 GB read produced 313,413
+  messages; bulk FTS was 28.036 s, canonical apply 24.276 s, ledger write 19.758 s, normalization
+  7.067 s, read 5.291 s, validation 4.870 s, buckets 3.154 s, commits 1.385 s, and indexes 1.051 s.
+  The APFS volume was 97% full. Pipeline phases overlap, so these counters must not be summed into a
+  synthetic wall time or compared as a speedup against the older, smaller corpus. They corroborate
+  the same three leading cost centers: search finalization, canonical statements, and ledger IO.</p>
 
   <h3 class="spec">Frozen Codex ledger rebuild <span class="badge b-bench">M</span></h3>
   <p>The final rebuild at <code>52b6b1d</code> replayed 855,952 records from 34 segments and 366
@@ -789,6 +809,33 @@ trait <b>AgentAdapter</b>: Send + Sync {
     </tbody>
   </table>
   </div>
+  <p><b>Frozen percentile follow-up.</b> A fresh Codex projection at <code>e28028d</code>
+  contained 313,413 canonical messages and the same number of FTS rows, with 366 Indexed sessions,
+  zero <code>source_op</code> rows, and zero pending merges. One checksummed 4.67 GB ledger was made
+  permission-read-only and paired with the checksummed committed diagnostic suite. Two identical release-mode replicates
+  ran 5 warmups and 100 measured cycles per case. The fresh-connection lane includes opening a
+  read-only SQLite connection on every query, matching the current HTTP handler's database path but
+  excluding HTTP serialization and blocking-pool scheduling.</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>lane / declared class</th><th>p50 across replicates</th><th>p95 across replicates</th><th>p99 across replicates</th><th>interpretation</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">shared · diagnostic mix</td><td class="metric">25.82–26.37 ms</td><td class="metric">57.47–62.44 ms</td><td class="metric">73.81–161.34 ms</td><td>The high percentile was sensitive to rare local outliers.</td></tr>
+      <tr><td class="cm">fresh · diagnostic mix</td><td class="metric">26.87–26.98 ms</td><td class="metric">59.07–60.08 ms</td><td class="metric">79.48–82.12 ms</td><td>Product-facing database lane was stable across replicates.</td></tr>
+      <tr><td class="cm">fresh · broad ranked</td><td class="metric">55.80–55.82 ms</td><td class="metric">65.55–73.16 ms</td><td class="metric">113.10–117.02 ms</td><td>Fails the 50 ms broad-query tail objective.</td></tr>
+      <tr><td class="cm">fresh · filtered tool</td><td class="metric">51.55–52.10 ms</td><td class="metric">56.46–61.82 ms</td><td class="metric">71.17–95.81 ms</td><td>Filtering inside rank does not rescue a broad term.</td></tr>
+      <tr><td class="cm">fresh · medium ranked</td><td class="metric">26.42–26.57 ms</td><td class="metric">31.33–31.41 ms</td><td class="metric">36.12–39.01 ms</td><td>Comfortably within the warm target in this declared class.</td></tr>
+      <tr><td class="cm">fresh · phrase</td><td class="metric">19.71–19.89 ms</td><td class="metric">23.72–25.29 ms</td><td class="metric">24.57–44.20 ms</td><td>Within target in both replicates.</td></tr>
+      <tr><td class="cm">fresh · selective ranked</td><td class="metric">8.55–8.59 ms</td><td class="metric">10.19–10.23 ms</td><td class="metric">12.06–15.54 ms</td><td>Selective search is already fast.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="spec-note">This closes the FTS5 percentile gap but not the product-mix gap. The suite is
+  explicitly <code>diagnostic</code>, with equal case weights; there is no privacy-preserving observed
+  query-class histogram yet. Its aggregate percentile must not be called “the product p99.” If the
+  actual mix is mostly selective, FTS5 may already meet the product objective; broad ranked search
+  demonstrably does not. Capture the mix before spending the 2–3 bake-off days, and always disclose
+  per-class tails so a selective-heavy aggregate cannot hide the broad failure.</p>
   <p>Codex FTS had 12 segments. FTS5 <code>optimize</code> cost 17 s and improved the common ranked
   query by only about 10%; cache, mmap, and temporary-memory pragma experiments were inconsistent,
   and a tuned rebuild (35.68 s) was slower than the original FTS build (33.85 s). These changes are
@@ -799,9 +846,10 @@ trait <b>AgentAdapter</b>: Send + Sync {
   <table>
     <thead><tr><th>investment</th><th>ROI now</th><th>reason</th></tr></thead>
     <tbody>
-      <tr><td class="cm">readiness vocabulary + backend-neutral contract</td><td class="metric">high architectural ROI</td><td>Prevents the L3 contract from equating canonical availability with search availability; about 2–3 engineering days, with no speed claim by itself.</td></tr>
-      <tr><td class="cm">frozen-snapshot Tantivy prototype</td><td class="metric">high information ROI</td><td>About 2–3 days answers the currently unknown build, p95/p99, relevance, RSS, and byte-cost questions without live dual-write risk.</td></tr>
-      <tr><td class="cm">production asynchronous sidecar</td><td class="metric">conditional</td><td>Materially improves availability only for a persistent daemon or L3 consumers. The current L2 has no HTTP search transport, and a finite CLI that waits for search sees no readiness benefit.</td></tr>
+      <tr><td class="cm">FTS5 p50/p95/p99 baseline</td><td class="metric">highest information ROI · complete</td><td>One small harness answered the cheap decisive question: selective tails are fast, broad tails miss, and the actual product mix is now the missing evidence.</td></tr>
+      <tr><td class="cm">readiness vocabulary + backend-neutral contract</td><td class="metric">architectural ROI realized</td><td>The shipped L3 protocol now distinguishes readiness and carries structured filters, preventing a future lagging index from masquerading as complete empty search.</td></tr>
+      <tr><td class="cm">frozen-snapshot Tantivy prototype</td><td class="metric">conditional information ROI</td><td>Defer its 2–3 days until an observed query-class mix, relevance need, or availability requirement shows that FTS5's fast selective path is insufficient. If opened, it must report build, p95/p99, relevance, RSS, and bytes on the same campaign.</td></tr>
+      <tr><td class="cm">production asynchronous sidecar</td><td class="metric">conditional</td><td>The shipped persistent <code>rosettad serve</code> and HTTP search endpoint provide a real availability consumer: canonical endpoints could publish while search builds. A finite CLI that waits for search still sees no total-wall benefit.</td></tr>
       <tr><td class="cm">Tantivy for cold-build time alone</td><td class="metric">negative</td><td>A roughly 30-second build saving cannot repay 9–15 engineering days at this corpus scale; query latency, relevance, or service availability must justify adoption.</td></tr>
     </tbody>
   </table>
@@ -875,6 +923,11 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
 
 <span class="c">kind = timeline: reload-or-delete one complete message by timeline_id</span>
 <span class="c">kind = session: delete the session term and repopulate every current message</span></pre>
+  <div class="callout"><b>Same-commit schema rule.</b> These tables do not land as anticipatory
+    schema. <code>projection_state</code> and <code>search_dirty</code>, the worker that consumes and
+    acknowledges them, and the crash/coherence tests below arrive in the same commit. Until that
+    consumer exists, synchronous FTS5 remains the shipped implementation and neither table is
+    justified.</div>
   <p><code>projection_epoch</code> is a new random identifier created with each whole private SQLite
   build and never copied across replacement; <code>search_revision</code> is a non-negative integer,
   incremented once per search-relevant SQLite transaction. The search schema version is independent
@@ -952,6 +1005,11 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   does not reduce total wall time; it only changes the readiness boundary.</p>
 
   <h3 class="spec">Tantivy bake-off and adoption gate</h3>
+  <div class="callout"><b>Gate zero: measure FTS5 tails first.</b> Before spending any bake-off days,
+    capture p50/p95/p99 for the declared or privacy-preserving observed product query mix and retain
+    the per-class selective, common, phrase, filtered, and broad results. If the product mix meets its
+    objective and relevance is acceptable, defer the Tantivy track. The current diagnostic campaign
+    proves a broad-tail failure but does not establish how often users issue broad queries.</div>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>deliverable</th><th>engineering estimate <span class="badge b-bench">E</span></th><th>exit evidence</th></tr></thead>
@@ -964,8 +1022,9 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   </table>
   </div>
   <ul class="order">
-    <li><b>Latency:</b> representative selective, common, phrase, and tool-output query corpus;
-    broad-query warm p95 and p99 both below 50 ms, not merely a faster mean.</li>
+    <li><b>Latency:</b> representative selective, common, phrase, filtered-tool, and broad query
+    corpus; report both the declared/observed mix and every class. Product-mix warm p95/p99 must meet
+    its objective, and broad-query p95/p99 must be disclosed rather than hidden by weighting.</li>
     <li><b>Relevance/correctness:</b> judged result set and ordering equal or better; exact agent,
     project, session, time, and kind filters; no cross-epoch hit can hydrate.</li>
     <li><b>Build economics:</b> report wall, CPU, peak RSS, index bytes, and merge tail. Search-ready
@@ -1013,7 +1072,10 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   </div>
   <p>A failed barrier or promotion prevents publication. <code>watch</code> must finish this handoff
   before opening live runners. This proposal changes durability cadence only for first/cold builds;
-  existing projections retain ledger-sync-before-visible-SQLite ordering.</p>
+  existing projections retain ledger-sync-before-visible-SQLite ordering. No candidate below is
+  implementable on an estimate alone: its commit must cite a passing <code>search-bench compare</code>
+  pair (or an equivalently strict phase harness) captured from the same frozen campaign before the
+  private artifacts are deleted.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>ledger candidate</th><th>evidence</th><th>estimate <span class="badge b-bench">E</span></th><th>priority</th></tr></thead>
@@ -1051,7 +1113,8 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   the rejected broad bulk fast path without new evidence: its exact frozen-ledger comparison improved
   canonical apply only from 20.609 s to 19.714 s, while the full ingest regressed from 101.23 s to
   108.23 s. Normalize parallelism is also deferred: normalization was only 6.797 s, while the single
-  writer and IO phases dominate.</p>
+  writer and IO phases dominate. Each candidate is one commit and one frozen before/after pair;
+  correctness goldens, logical projection counts, and ranked search results must remain equal.</p>
 
   <h3 class="spec">Expected bounds and implementation order</h3>
   <div class="tbl-scroll">
@@ -1062,15 +1125,18 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td class="cm">decoupled canonical-ready, rebuild</td><td class="metric">79.53 − 24.83 = 54.70 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, cold</td><td class="metric">about 50–60 s</td><td>Estimate only if isolated sync cost supports staging; overlapping savings must be measured sequentially.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, rebuild</td><td class="metric">about 40–48 s</td><td>Estimate; excludes search-ready time.</td></tr>
-      <tr><td class="cm">search-ready</td><td class="metric">TBD by bake-off</td><td>No performance claim until FTS5 and Tantivy build the same snapshot.</td></tr>
+      <tr><td class="cm">search-ready</td><td class="metric">synchronous FTS5 today</td><td>Async-sidecar time remains TBD; no alternate-backend claim until a gate-zero decision opens the bake-off.</td></tr>
     </tbody>
   </table>
   </div>
   <ol class="order">
-    <li><b>Freeze benchmark inputs for each campaign and report phase gaps.</b> Run baseline and
-    candidates against one checksummed, read-only local ledger before deleting the sensitive
-    artifact; record machine/storage state, standalone meta, index bytes, RSS, and a committed query
-    set. Never add organic content to CI.</li>
+    <li><b>Freeze inputs and capture the baseline before changing code.</b> Use one permission-read-only
+    checksummed ledger and checksummed query suite; retain the private artifacts until every intended
+    before/after pair exists. Record machine/storage state, standalone meta, index bytes, RSS, phase
+    gaps, and FTS5 p50/p95/p99 with at least 100 measured cycles. Never add organic content to CI.</li>
+    <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
+    observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
+    diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>
     <li><b>Split the ledger counter.</b> Measure framing/checksum/copy, buffered write, flush, and
     <code>sync_data</code> count/time before accepting the staged-run estimate.</li>
     <li><b>Stage the private-build durability barrier if sync dominates.</b> Kill-test before/after
@@ -1080,10 +1146,11 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     then consider local merge folding one change at a time.</li>
     <li><b>Make generation election payload-light.</b> Compare pass fingerprints and retain a full
     checksummed replay pass.</li>
-    <li><b>Introduce SearchBackend/readiness with FTS5 as reference.</b> Preserve query semantics and
-    make not-ready explicit before changing engines.</li>
-    <li><b>Run the Tantivy bake-off.</b> Adopt only after latency, relevance, build, live-overhead, and
-    crash gates all pass.</li>
+    <li><b>Introduce SearchBackend/readiness with FTS5 as reference only if the track opens.</b>
+    Preserve query semantics and make not-ready explicit; land the durable repair tables, their
+    worker/acknowledger, and crash tests together.</li>
+    <li><b>Run the Tantivy bake-off last.</b> Adopt only after latency, relevance, build,
+    live-overhead, and crash gates all pass on a retained frozen pair.</li>
   </ol>
 
   <h3 class="spec">Code and test evidence index</h3>
@@ -1092,7 +1159,8 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <thead><tr><th>claim</th><th>current evidence</th></tr></thead>
     <tbody>
       <tr><td>FTS is a finalization gate</td><td><a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a> rebuilds FTS and runs integrity-check before publication.</td></tr>
-      <tr><td>Search read coupling is narrow; write coupling is not</td><td><a href="../crates/store/src/queries.rs"><code>store/src/queries.rs::search</code></a> is the one typed read entry point and HTTP search is not yet shipped, but <a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs</code></a> maintains FTS inside live row transactions.</td></tr>
+      <tr><td>Search read coupling is narrow; write coupling is not</td><td><a href="../crates/store/src/queries.rs"><code>store/src/queries.rs::search_filtered</code></a> is the typed ranked read entry point and <a href="../crates/server/src/http.rs"><code>server/src/http.rs</code></a> exposes it at <code>/api/search</code>; <a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs</code></a> still maintains FTS inside live row transactions.</td></tr>
+      <tr><td>Frozen FTS p50/p95/p99 is executable and fail-closed</td><td><a href="../crates/search-bench/README.md"><code>search-bench</code></a> fingerprints permission-read-only ledgers and databases, checks projection/result equivalence, runs shared/fresh lanes, and rejects incompatible before/after reports.</td></tr>
       <tr><td>Ledger sync is per stream batch</td><td><a href="../crates/pipeline/src/stream.rs"><code>pipeline/src/stream.rs::ingest_file</code></a> calls <code>ledger.flush()</code> before store apply.</td></tr>
       <tr><td>Flush is durable</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> calls <code>sync_data</code>.</td></tr>
       <tr><td>Rebuild reads twice</td><td><a href="../crates/pipeline/src/replay.rs"><code>pipeline/src/replay.rs::rebuild_runtime</code></a> elects survivors, then replays in a second visit.</td></tr>

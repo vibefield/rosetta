@@ -23,10 +23,11 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > `(session, hour, model)`, and generation sweeps use indexed provenance. `source_op` is temporary
 > projection-internal rewrite staging, not a third durable representation. A source's first
 > generation projects directly inside the unpublished cold database; only replacements of an
-> already-active generation need staging. The store
-> hot tier and in-process subscription hub are implemented; HTTP/WS transport and
-> generated clients are pending. Unknown projection schemas fail closed on ordinary
-> open and are replaced only through the explicit ledger rebuild command.
+> already-active generation need staging. The store hot tier, in-process subscription
+> hub, axum REST/WebSocket transport, backend-neutral wire types, and generated TypeScript
+> package are implemented. Consumer migrations and the dedicated metrics stream remain.
+> Unknown projection schemas fail closed on ordinary open and are replaced only through
+> the explicit ledger rebuild command.
 >
 > Organic Claude Code, Codex, and Grok validation on 2026-08-26 established the first
 > measured performance baseline. On the final Codex cold run, FTS5 construction was
@@ -81,9 +82,9 @@ consumer-driven from day one.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  L3  SERVICE PROVIDER                          crates: protocol,    │
-│      REST /v1/search, /v1/sessions …                   server       │
-│      WS   /v1/observe   (snapshot → deltas, resumable)              │
-│      WS   /v1/metrics   (live distilled feed)                       │
+│      REST /api/search, /api/sessions …                server       │
+│      WS   /ws/sessions/{id}, /ws/meta  (resumable)                  │
+│      WS   dedicated metrics feed                   (target)         │
 ├─────────────────────────────────────────────────────────────────────┤
 │  L2  ADAPTERS + NORMALIZER (the runtime)       crates: core,        │
 │      capture: watcher/tailers → raw ledger             capture,     │
@@ -329,13 +330,13 @@ tools (sqlite-viewer style), explicitly documented as *unstable internal format*
 ### 5.2 The three services
 
 **Search (job 1):**
-`GET /v1/search?q=&agent=&project=&session=&from=&to=&kind=` → FTS5 match with snippets,
-highlights, rank; filterable by agent/project/time/entry-kind. Paged, cursor-based.
+`GET /api/search?q=&runtime=&project=&session=&after_ts=&before_ts=&kind=` → FTS5 match
+with snippets and rank, with structured filters applied inside the ranked query.
 
 **Observe (job 2)** — the flagship contract, successor to `observeSession`:
 
 ```
-WS /v1/observe?session=<id>&from=<cursor>
+WS /ws/sessions/<id>?resume=<stamp>
   server → { hello, protocol: "rosetta-observe/1", epoch, seq }
   server → { snapshot }                       # full session state at seq
   server → { delta, seq: n } …                # monotonic per-epoch
@@ -349,8 +350,8 @@ handshake**, its types live in `rosetta-protocol`, and a generated TypeScript pa
 again a silently breaking revision-id derivation. Golden contract tests freeze the wire
 format per protocol version.
 
-`GET /v1/agents`, `/v1/sessions`, `/v1/sessions/{id}` serve the metadata/browse side of
-the agent-view app.
+`GET /api/runtimes`, `/api/projects`, `/api/sessions`, and `/api/sessions/{id}` serve
+the metadata/browse side of the agent-view app; `/ws/meta` streams its changes.
 
 **Metrics (job 3):**
 `WS /v1/metrics?families=usage,lifecycle&agent=…` — live distilled feed. Hot path is
@@ -408,6 +409,12 @@ ingestion.
   independently disposable and may never delay canonical correctness validation.
 - Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
   these indexes because one missing provenance index turns source activation quadratic.
+- A performance optimization is merge-admissible only with a frozen before/after pair
+  from the same permission-read-only checksummed ledger and checksummed query suite, campaign ID,
+  machine, configuration, logical projection counts, and ranked-result digests. Estimates
+  and unpaired organic runs remain planning evidence. The first search step is the FTS5
+  p50/p95/p99 baseline; a Tantivy bake-off starts only if the declared or observed query
+  mix misses the product objective or relevance/availability requires it.
 - Memory-first fan-out for live streams (§5.2); DB commit is not on the notify path.
 - Budgets asserted in CI-able bench: full `~/.claude` cold backfill < 5 s per GB of
   transcripts; watch-event → subscriber frame p99 < 20 ms; search p99 < 50 ms warm.
@@ -436,6 +443,7 @@ rosetta/
 │   ├── store/                # SQLite projection, FTS, change log, rebuild   (L2 persistence, Phase 3)
 │   ├── protocol/             # wire types (serde + ts-rs), versions          (L3 contract, Phase 4)
 │   ├── server/               # axum REST + WS services                       (L3 runtime, Phase 4)
+│   ├── search-bench/         # frozen-input search percentile campaigns     (evidence)
 │   └── rosettad/             # binary: daemon + CLI (run, backfill, probe,
 │                             #   replay-diff, search, doctor)
 ├── groundtruth/              # DATA ONLY; one directory per roster agent

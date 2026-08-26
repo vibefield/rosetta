@@ -54,9 +54,9 @@ fresh ingest/watch backfills use the same private cold-load path, deferring FTS,
 rollups, and read indexes until publication. Live batches retain same-transaction
 derived-state maintenance with indexed provenance and coalesced bucket repairs;
 ordinary schema-version mismatches still fail closed so rebuild is always explicit.
-The store hot tier and in-process subscription hub are implemented. The localhost
-HTTP/WebSocket transport, generated clients, and the two uncaptured roster agents
-remain Phase 4/Phase 1 work.
+The store hot tier, in-process subscription hub, localhost HTTP/WebSocket transport,
+backend-neutral protocol, and generated TypeScript bindings are implemented. Consumer
+migrations and the two uncaptured roster agents remain Phase 4/Phase 1 work.
 
 ## Repo map
 
@@ -73,9 +73,10 @@ crates/                    all Rust crates
   adapters/<agent>/        raw parsers using canonical ground truth as spec
   core/ capture/           LAYER 2 model, discovery, JSONL/SQLite capture, ledger, watch
   pipeline/ store/         LAYER 2 backfill/live/rebuild orchestration + projection/hot tier
-  protocol/ server/        LAYER 3 protocol shell + in-process hub (HTTP/WS pending)
-  rosettad/                discover, ingest, watch, and atomic rebuild CLI
-clients/                   generated consumer packages (TS)          [Phase 4]
+  protocol/ server/        LAYER 3 wire contract + axum REST/WS runtime
+  rosettad/                discover, ingest, watch, serve, and atomic rebuild CLI
+  search-bench/            frozen-input FTS percentile campaign harness
+clients/                   generated TypeScript protocol package      [Phase 4]
 ```
 
 ## Conventions
@@ -90,7 +91,14 @@ clients/                   generated consumer packages (TS)          [Phase 4]
   it; never point tests at live home directories.
 - Keep modules under ~1,000 lines — split before they grow (spaghetti had a
   14,102-line `projection.rs`).
-- A new DB table requires a named consumer. Target ~15 tables total, not 101.
+- A new DB table and its named code consumer land in the same commit. In particular,
+  `projection_state` / `search_dirty` do not land before the asynchronous search worker
+  that consumes and acknowledges them.
+- Every performance optimization commit cites a frozen before/after pair from the same
+  permission-read-only checksummed ledger, checksummed query suite, campaign ID, machine, and
+  configuration, with logical counts and ranked-result digests equal. Estimates and
+  unpaired organic runs do not authorize merge; if an artifact is deleted before the
+  pair exists, rerun that side.
 - Docs discipline: TWO living documents (`ARCHITECTURE.md`, `RESEARCH_PLAN.md`),
   updated in place. No RFC sprawl (spaghetti had 60+ RFCs contradicting each other).
 - Edition 2024, workspace deps, `cargo fmt` + `clippy -D warnings` clean.
@@ -104,3 +112,5 @@ clients/                   generated consumer packages (TS)          [Phase 4]
 - Ground-truth pipeline: `python3 -m tools.groundtruth farm <agent>` (isolated runner
   required unless `--schemas-only`), `census`, `render`, and `check`.
 - Python tool tests: `python3 -m unittest discover -s tools/groundtruth/tests`.
+- Frozen FTS campaigns: `cargo run -p rosetta-search-bench -- help` (protocol and
+  privacy rules in `crates/search-bench/README.md`).
