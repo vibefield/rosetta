@@ -329,6 +329,8 @@ fn flush_chunk(
             adapter_state: adapter
                 .checkpoint_state(file.ctx.state.as_deref())
                 .map_err(PipelineError::Config)?,
+            snapshot_stamp: None,
+            snapshot_revision: None,
         }
         .encode();
         let update = CheckpointUpdate {

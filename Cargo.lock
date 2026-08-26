@@ -303,6 +303,7 @@ name = "rosetta-adapter-antigravity"
 version = "0.1.0"
 dependencies = [
  "rosetta-adapter-support",
+ "rosetta-core",
  "serde",
  "serde_json",
  "walkdir",
@@ -422,6 +423,8 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "notify",
+ "rusqlite",
+ "serde_json",
  "tempfile",
  "walkdir",
 ]
@@ -439,6 +442,7 @@ dependencies = [
 name = "rosetta-pipeline"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "rosetta-adapter-claude-code",
  "rosetta-adapter-codex",
  "rosetta-adapter-support",
@@ -446,6 +450,7 @@ dependencies = [
  "rosetta-capture",
  "rosetta-core",
  "rosetta-store",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

@@ -163,8 +163,18 @@ impl<'a> LiveRunner<'a> {
             self.report.events += 1;
             match event {
                 SourceEvent::Changed(path) => {
-                    if self.files.iter().any(|file| file.relative_path == path) {
-                        changed.insert(path);
+                    let children: Vec<String> = self
+                        .files
+                        .iter()
+                        .filter(|file| {
+                            file.relative_path == path
+                                || crate::snapshot::virtual_db_path(&file.relative_path)
+                                    == Some(path.as_str())
+                        })
+                        .map(|file| file.relative_path.clone())
+                        .collect();
+                    if !children.is_empty() {
+                        changed.extend(children);
                     } else if self.claimed(&path) {
                         needs_admission = true;
                     } else {
@@ -217,10 +227,15 @@ impl<'a> LiveRunner<'a> {
         // The picks come from the store's own rotation state, so restarting
         // the process never restarts the sweep.
         if poll_due && self.opts.audit_files_per_run > 0 {
+            let audit_candidates: Vec<&SessionFile> = self
+                .files
+                .iter()
+                .filter(|file| file.driver != rosetta_adapter_support::StreamDriver::SqliteSnapshot)
+                .collect();
             let picks = crate::stream::rotating_audit_paths(
                 store,
                 &self.runtime.id,
-                &self.files,
+                &audit_candidates,
                 self.opts.audit_files_per_run,
             )?;
             let audit_subset: Vec<SessionFile> = self
@@ -299,7 +314,21 @@ impl<'a> LiveRunner<'a> {
                     }
                 }
                 None => {
-                    if self.claimed(&walked.relative_path) {
+                    // A database file never appears in `files` itself — its
+                    // sessions do, as virtual sources. Nominate them and let
+                    // the snapshot pass's stamp check decide cheaply.
+                    let children: Vec<String> = self
+                        .files
+                        .iter()
+                        .filter(|file| {
+                            crate::snapshot::virtual_db_path(&file.relative_path)
+                                == Some(walked.relative_path.as_str())
+                        })
+                        .map(|file| file.relative_path.clone())
+                        .collect();
+                    if !children.is_empty() {
+                        changed.extend(children);
+                    } else if self.claimed(&walked.relative_path) {
                         *needs_admission = true;
                     }
                 }

@@ -37,6 +37,16 @@ pub struct PipeCheckpoint {
     pub cumulative: Option<TokenSnapshot>,
     /// Adapter-owned, versioned by `normalizer_version` and opaque to pipeline.
     pub adapter_state: Option<serde_json::Value>,
+    /// Snapshot sources only: the db file-set stamp at the last successful
+    /// pass — equal stamps skip even the copy. Additive with a default so
+    /// pre-existing blobs still decode.
+    #[serde(default)]
+    pub snapshot_stamp: Option<String>,
+    /// Snapshot sources only: content revision (blake3 of the serialized
+    /// records) of the projected generation — the writer touched the db but
+    /// this session's content is unchanged when it matches.
+    #[serde(default)]
+    pub snapshot_revision: Option<String>,
 }
 
 impl PipeCheckpoint {
@@ -53,6 +63,8 @@ impl PipeCheckpoint {
             tail: None,
             cumulative: None,
             adapter_state: None,
+            snapshot_stamp: None,
+            snapshot_revision: None,
         }
     }
 

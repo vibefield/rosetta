@@ -5,7 +5,9 @@
 
 use std::path::Path;
 
-use rosetta_adapter_support::{AgentAdapter, FileDiscipline, FileFormat, FileStat, StreamDriver};
+use rosetta_adapter_support::{
+    AgentAdapter, FileDiscipline, FileFormat, FileStat, SkimResult, StreamDriver,
+};
 use rosetta_core::rows::{ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_core::{IngestOp, ids};
 use rosetta_store::{ApplyStats, Batch, Store};
@@ -99,6 +101,33 @@ pub fn meta_ingest_into(
             StreamDriver::JsonLines
                 if stream.file_format == FileFormat::Jsonl
                     && stream.discipline == FileDiscipline::AppendOnly => {}
+            StreamDriver::SqliteSnapshot
+                if stream.file_format == FileFormat::Sqlite
+                    && stream.discipline == FileDiscipline::Database =>
+            {
+                // Sidecars (-wal/-shm/-journal) travel with their database;
+                // only the database itself is a source.
+                if rosetta_capture::is_db_sidecar(&file.relative_path) {
+                    report.files_inventory_only += 1;
+                    continue;
+                }
+                admit_database(
+                    adapter,
+                    runtime,
+                    root,
+                    stream,
+                    driver,
+                    &file.relative_path,
+                    file.size,
+                    file.modified_ms,
+                    &mut report,
+                    &mut projects,
+                    &mut sessions,
+                    &mut files,
+                    instrument,
+                )?;
+                continue;
+            }
             _ => {
                 return Err(PipelineError::Config(format!(
                     "{} opted stream {} into {:?}, but its layout is {:?}/{:?}",
@@ -152,90 +181,28 @@ pub fn meta_ingest_into(
             instrument.add(Metric::BytesRead, first.len() as u64);
             skim = adapter.skim(&stream.id, &stat, &first, &windows.tail);
         }
-        skim_ops.extend(skim.ops);
-        let Some(native_session_id) = skim.session_id else {
+        skim_ops.extend(std::mem::take(&mut skim.ops));
+        let Some(native_session_id) = skim.session_id.clone() else {
             report.files_unidentified += 1;
             continue;
         };
-
-        let session_id = ids::session_id(&runtime.id, &native_session_id);
-        let project_id = skim.cwd.as_deref().map(|cwd| {
-            let project = crate::project::project(cwd);
-            let id = project.id.clone();
-            if !projects.iter().any(|existing| existing.id == id) {
-                projects.push(project);
-            }
-            id
-        });
-
-        let parent_session_id = skim
-            .parent_session_id
-            .as_deref()
-            .map(|native| ids::session_id(&runtime.id, native));
-        let root_session_id = skim
-            .root_session_id
-            .as_deref()
-            .map(|native| ids::session_id(&runtime.id, native))
-            .or_else(|| parent_session_id.clone())
-            .unwrap_or_else(|| session_id.clone());
-        let role = skim.role.unwrap_or(SessionRole::Main);
-
-        // A retained subagent transcript can outlive its parent's transcript.
-        // Materialize an honest parent placeholder so the relationship and FK
-        // survive GC; a later main skim refines the same deterministic row.
-        if let (Some(parent_native), Some(parent_id)) = (
-            skim.parent_session_id.as_deref(),
-            parent_session_id.as_ref(),
-        ) {
-            merge_session(
-                &mut sessions,
-                SessionRow {
-                    id: parent_id.clone(),
-                    native_session_id: parent_native.to_owned(),
-                    runtime_id: runtime.id.clone(),
-                    project_id: project_id.clone(),
-                    parent_session_id: None,
-                    root_session_id: root_session_id.clone(),
-                    role: SessionRole::Main,
-                    title: None,
-                    summary: None,
-                    started_at: skim.started_at.unwrap_or(file.modified_ms),
-                    updated_at: file.modified_ms,
-                    stream_state: StreamState::Pending,
-                },
-            );
-        }
-
-        // One session can span several files (or reappear across runs) —
-        // keep the newest skim's view of the mutable fields.
-        let row = SessionRow {
-            id: session_id.clone(),
-            native_session_id: native_session_id.clone(),
-            runtime_id: runtime.id.clone(),
-            project_id,
-            parent_session_id,
-            root_session_id,
-            role,
-            title: skim.title,
-            summary: None,
-            started_at: skim.started_at.unwrap_or(file.modified_ms),
-            updated_at: file.modified_ms,
-            stream_state: StreamState::Pending,
-        };
-        merge_session(&mut sessions, row);
-
-        files.push(SessionFile {
-            relative_path: file.relative_path.clone(),
-            stream_id: stream.id.clone(),
-            file_format: stream.file_format,
-            discipline: stream.discipline,
-            driver,
-            session_id,
+        admit_identified(
+            runtime,
+            &mut projects,
+            &mut sessions,
+            &mut files,
+            AdmitSource {
+                relative_path: file.relative_path.clone(),
+                stream_id: stream.id.clone(),
+                file_format: stream.file_format,
+                discipline: stream.discipline,
+                driver,
+                size: file.size,
+                modified_ms: file.modified_ms,
+            },
+            skim,
             native_session_id,
-            size: file.size,
-            modified_ms: file.modified_ms,
-            agent_version: skim.agent_version,
-        });
+        );
     }
 
     // A re-skim must never regress ingest progress: a session the stream
@@ -296,4 +263,201 @@ fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
         }
         None => sessions.push(row),
     }
+}
+
+/// Everything the admission of one identified session needs to know about
+/// its source, shared by the skim path and the database path.
+struct AdmitSource {
+    relative_path: String,
+    stream_id: String,
+    file_format: FileFormat,
+    discipline: FileDiscipline,
+    driver: StreamDriver,
+    size: u64,
+    modified_ms: i64,
+}
+
+/// Mint canonical ids from native facts and stage the session, project, and
+/// source-file rows. Identical semantics for a skimmed transcript and a
+/// database-enumerated session.
+fn admit_identified(
+    runtime: &RuntimeRow,
+    projects: &mut Vec<ProjectRow>,
+    sessions: &mut Vec<SessionRow>,
+    files: &mut Vec<SessionFile>,
+    source: AdmitSource,
+    skim: SkimResult,
+    native_session_id: String,
+) {
+    let session_id = ids::session_id(&runtime.id, &native_session_id);
+
+    let project_id = skim.cwd.as_deref().map(|cwd| {
+        let project = crate::project::project(cwd);
+        let id = project.id.clone();
+        if !projects.iter().any(|existing| existing.id == id) {
+            projects.push(project);
+        }
+        id
+    });
+
+    let parent_session_id = skim
+        .parent_session_id
+        .as_deref()
+        .map(|native| ids::session_id(&runtime.id, native));
+    let root_session_id = skim
+        .root_session_id
+        .as_deref()
+        .map(|native| ids::session_id(&runtime.id, native))
+        .or_else(|| parent_session_id.clone())
+        .unwrap_or_else(|| session_id.clone());
+    let role = skim.role.unwrap_or(SessionRole::Main);
+
+    // A retained subagent transcript can outlive its parent's transcript.
+    // Materialize an honest parent placeholder so the relationship and FK
+    // survive GC; a later main skim refines the same deterministic row.
+    if let (Some(parent_native), Some(parent_id)) = (
+        skim.parent_session_id.as_deref(),
+        parent_session_id.as_ref(),
+    ) {
+        merge_session(
+            sessions,
+            SessionRow {
+                id: parent_id.clone(),
+                native_session_id: parent_native.to_owned(),
+                runtime_id: runtime.id.clone(),
+                project_id: project_id.clone(),
+                parent_session_id: None,
+                root_session_id: root_session_id.clone(),
+                role: SessionRole::Main,
+                title: None,
+                summary: None,
+                started_at: skim.started_at.unwrap_or(source.modified_ms),
+                updated_at: source.modified_ms,
+                stream_state: StreamState::Pending,
+            },
+        );
+    }
+
+    // One session can span several files (or reappear across runs) —
+    // keep the newest skim's view of the mutable fields.
+    let row = SessionRow {
+        id: session_id.clone(),
+        native_session_id: native_session_id.clone(),
+        runtime_id: runtime.id.clone(),
+        project_id,
+        parent_session_id,
+        root_session_id,
+        role,
+        title: skim.title,
+        summary: None,
+        started_at: skim.started_at.unwrap_or(source.modified_ms),
+        updated_at: source.modified_ms,
+        stream_state: StreamState::Pending,
+    };
+    merge_session(sessions, row);
+
+    files.push(SessionFile {
+        relative_path: source.relative_path,
+        stream_id: source.stream_id,
+        file_format: source.file_format,
+        discipline: source.discipline,
+        driver: source.driver,
+        session_id,
+        native_session_id,
+        size: source.size,
+        modified_ms: source.modified_ms,
+        agent_version: skim.agent_version,
+    });
+}
+
+/// Meta admission for a `SqliteSnapshot` stream: enumerate the database's
+/// sessions via the adapter's declared plan and admit each as a VIRTUAL
+/// source (`<db-path>#<native-id>`) — its own cursor, its own generation
+/// swaps, its own ledger entries, exactly like a file.
+#[allow(clippy::too_many_arguments)]
+fn admit_database(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    stream: &rosetta_adapter_support::StreamSpec,
+    driver: StreamDriver,
+    db_relative: &str,
+    size: u64,
+    modified_ms: i64,
+    report: &mut MetaReport,
+    projects: &mut Vec<ProjectRow>,
+    sessions: &mut Vec<SessionRow>,
+    files: &mut Vec<SessionFile>,
+    instrument: &Instrument,
+) -> Result<(), PipelineError> {
+    use rosetta_core::rows::SessionRole;
+
+    let Some(plan) = adapter.snapshot_plan(&stream.id) else {
+        return Err(PipelineError::Config(format!(
+            "{} drives stream {} as SqliteSnapshot but declares no snapshot plan",
+            adapter.kind(),
+            stream.id
+        )));
+    };
+    let outcome = instrument.time(Metric::SkimNanos, || {
+        rosetta_capture::snapshot_db(&root.join(db_relative))
+    })?;
+    let snapshot = match outcome {
+        rosetta_capture::SnapshotOutcome::Ready(snapshot) => snapshot,
+        // A racing writer or vanished db is the stream phase's problem.
+        rosetta_capture::SnapshotOutcome::Missing | rosetta_capture::SnapshotOutcome::Unstable => {
+            report.files_vanished += 1;
+            return Ok(());
+        }
+    };
+    report.files_skimmed += 1;
+    instrument.add(Metric::FilesSkimmed, 1);
+
+    for row in snapshot.query_rows(&plan.sessions_sql, None)? {
+        let value: serde_json::Value = serde_json::from_str(&row).map_err(|error| {
+            PipelineError::Config(format!("sessions_sql row is not an object: {error}"))
+        })?;
+        let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+        let Some(native) = text("native_session_id") else {
+            report.files_unidentified += 1;
+            continue;
+        };
+        let skim = SkimResult {
+            ops: Vec::new(),
+            session_id: Some(native.clone()),
+            parent_session_id: text("parent_native_session_id"),
+            root_session_id: text("root_native_session_id"),
+            role: match text("role").as_deref() {
+                Some("subagent") => Some(SessionRole::Subagent),
+                Some("team") => Some(SessionRole::Team),
+                _ => None,
+            },
+            cwd: text("cwd"),
+            agent_version: text("agent_version"),
+            title: text("title"),
+            started_at: value.get("started_at").and_then(|v| v.as_i64()),
+        };
+        let updated = value
+            .get("updated_at")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(modified_ms);
+        admit_identified(
+            runtime,
+            projects,
+            sessions,
+            files,
+            AdmitSource {
+                relative_path: format!("{db_relative}#{native}"),
+                stream_id: stream.id.clone(),
+                file_format: stream.file_format,
+                discipline: stream.discipline,
+                driver,
+                size,
+                modified_ms: updated,
+            },
+            skim,
+            native,
+        );
+    }
+    Ok(())
 }

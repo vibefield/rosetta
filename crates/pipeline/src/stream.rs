@@ -76,10 +76,16 @@ pub fn stream_backfill_into(
     mut ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
-    let audit_paths = rotating_audit_paths(store, &runtime.id, files, opts.audit_files_per_run)?;
+    // Snapshot-driven virtual sources take their own path: no tailing, no
+    // audit lane (every pass hashes full content — audit by construction).
+    let (snapshot_files, tail_files): (Vec<&SessionFile>, Vec<&SessionFile>) = files
+        .iter()
+        .partition(|file| file.driver == rosetta_adapter_support::StreamDriver::SqliteSnapshot);
+    let audit_paths =
+        rotating_audit_paths(store, &runtime.id, &tail_files, opts.audit_files_per_run)?;
     let audit_set: BTreeSet<&str> = audit_paths.iter().map(String::as_str).collect();
     let mut queue = WorkQueue::new();
-    for file in files {
+    for file in &tail_files {
         queue.push(WorkItem {
             lane: Lane::Backfill,
             relative_path: file.relative_path.clone(),
@@ -96,8 +102,9 @@ pub fn stream_backfill_into(
         .collect();
     let mut file_health: BTreeMap<String, bool> = BTreeMap::new();
     while let Some(work) = queue.pop() {
-        let Some(file) = files
+        let Some(file) = tail_files
             .iter()
+            .copied()
             .find(|candidate| candidate.relative_path == work.relative_path)
         else {
             continue;
@@ -135,7 +142,7 @@ pub fn stream_backfill_into(
     // died with the old rows. One forced replay of the affected sessions'
     // other files re-derives those merges; deterministic ids make it cheap
     // noise for everything already present.
-    for file in files {
+    for file in &tail_files {
         if !restarted_sessions.contains(&file.session_id)
             || restarted_files.contains(&file.relative_path)
         {
@@ -163,6 +170,20 @@ pub fn stream_backfill_into(
             report.files_incomplete += 1;
         }
     }
+
+    crate::snapshot::stream_snapshot_sources(
+        adapter,
+        runtime,
+        root,
+        store,
+        &snapshot_files,
+        opts,
+        instrument,
+        &mut ledger,
+        &mut report,
+        &mut file_health,
+        &mut session_health,
+    )?;
 
     let mut last_completed_audit = None;
     for path in &audit_paths {
@@ -210,7 +231,7 @@ pub fn stream_backfill_into(
 pub(crate) fn rotating_audit_paths(
     store: &Store,
     runtime_id: &str,
-    files: &[SessionFile],
+    files: &[&SessionFile],
     limit: usize,
 ) -> Result<Vec<String>, PipelineError> {
     if limit == 0 || files.is_empty() {
@@ -234,7 +255,7 @@ pub(crate) fn rotating_audit_paths(
 
 /// Load-or-create the cursor row for a file, returning its rowid and the
 /// EXACT stored blob (the CAS expectation, decodable or not).
-fn cursor_row(
+pub(crate) fn cursor_row(
     adapter: &dyn AgentAdapter,
     store: &mut Store,
     runtime: &RuntimeRow,
@@ -463,6 +484,8 @@ fn ingest_file(
             tail: Some(batch.checkpoint.encode_hex()),
             cumulative: (!last_reading.is_empty()).then_some(last_reading),
             adapter_state,
+            snapshot_stamp: None,
+            snapshot_revision: None,
         }
         .encode();
 

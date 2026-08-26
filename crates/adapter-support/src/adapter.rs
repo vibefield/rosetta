@@ -20,6 +20,34 @@ use crate::GroundTruthDoc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamDriver {
     JsonLines,
+    /// Rewrite-in-place SQLite databases (opencode, hermes). The pipeline
+    /// snapshots the db, runs the adapter's DECLARED queries, and feeds each
+    /// result row through `ingest_line` as a `{"query": name, "row": {...}}`
+    /// JSON record — adapters never see a database handle.
+    SqliteSnapshot,
+}
+
+/// Declarative extraction plan for a [`StreamDriver::SqliteSnapshot`] stream.
+/// All SQL is executed by the capture layer against a stable private copy.
+#[derive(Debug, Clone)]
+pub struct SnapshotPlan {
+    /// One result row per native session. Recognized columns:
+    /// `native_session_id` (required), `title`, `cwd`, `agent_version`,
+    /// `started_at`, `updated_at` (ms epochs), `parent_native_session_id`,
+    /// `root_native_session_id`, `role` (`main` | `subagent` | `team`).
+    /// Order stably.
+    pub sessions_sql: String,
+    /// Per-session record queries; `?1` binds the native session id, and
+    /// every result row becomes one record. Order stably — record order is
+    /// presentation order.
+    pub record_queries: Vec<SnapshotQuery>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotQuery {
+    /// Lands as the record's `query` field so `ingest_line` can dispatch.
+    pub name: String,
+    pub sql: String,
 }
 
 /// What the pipeline knows about a source file without reading its body.
@@ -145,6 +173,13 @@ pub trait AgentAdapter: Send + Sync {
     /// Bump whenever normalized output or adapter checkpoint semantics change.
     /// A mismatch expires the cursor and starts a source-generation replay.
     fn normalizer_version(&self) -> u32;
+
+    /// The extraction plan for a [`StreamDriver::SqliteSnapshot`] stream.
+    /// Required (and only consulted) for streams whose driver is
+    /// `SqliteSnapshot`.
+    fn snapshot_plan(&self, _stream_id: &str) -> Option<SnapshotPlan> {
+        None
+    }
 
     /// Adapter-private per-file state for [`NormalizeCtx::state`].
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

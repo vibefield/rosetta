@@ -8,10 +8,12 @@ rosetta-core = { path = "../core" }
 rosetta-capture = { path = "../capture" }
 rosetta-adapter-support = { path = "../adapter-support" }
 rosetta-store = { path = "../store" }
+blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
 rosetta-adapter-codex = { path = "../adapters/codex" }
 rosetta-bench-corpus = { path = "../bench-corpus" }

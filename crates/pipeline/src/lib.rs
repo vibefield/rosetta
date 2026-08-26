@@ -19,6 +19,7 @@ pub mod meta;
 mod project;
 pub mod replay;
 pub mod sched;
+mod snapshot;
 pub mod stream;
 
 pub use checkpoint::PipeCheckpoint;
