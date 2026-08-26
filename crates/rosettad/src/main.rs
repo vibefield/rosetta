@@ -1,7 +1,9 @@
-//! rosettad — daemon + CLI binary. For now: the ingest phases as commands.
+//! rosettad — ingestion, live watching, and ledger-backed projection rebuilds.
 //!
 //!   rosettad discover [--home DIR]
 //!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]
+//!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N]
+//!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...]
 //!
 //! `ingest` implies consent for the selected agents (the CLI user asked);
 //! the app flow instead runs `discover`, asks, and flips `enabled` itself.
@@ -10,8 +12,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use rosetta_adapter_antigravity::AntigravityAdapter;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
+use rosetta_adapter_copilot::CopilotAdapter;
+use rosetta_adapter_grok::GrokAdapter;
+use rosetta_adapter_hermes::HermesAdapter;
+use rosetta_adapter_kimi_code::KimiCodeAdapter;
+use rosetta_adapter_opencode::OpenCodeAdapter;
+use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents};
 use rosetta_pipeline::{
@@ -21,7 +30,17 @@ use rosetta_pipeline::{
 use rosetta_store::Store;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
-    vec![&ClaudeCodeAdapter, &CodexAdapter]
+    vec![
+        &AntigravityAdapter,
+        &ClaudeCodeAdapter,
+        &CodexAdapter,
+        &CopilotAdapter,
+        &GrokAdapter,
+        &HermesAdapter,
+        &KimiCodeAdapter,
+        &OpenCodeAdapter,
+        &PiAdapter,
+    ]
 }
 
 fn main() -> ExitCode {
@@ -32,7 +51,7 @@ fn main() -> ExitCode {
         Some("watch") => cmd_watch(&args[1..]),
         Some("rebuild") => cmd_rebuild(&args[1..]),
         _ => {
-            eprintln!("usage: rosettad <discover|ingest|watch> [options]");
+            eprintln!("usage: rosettad <discover|ingest|watch|rebuild> [options]");
             eprintln!("  discover [--home DIR]");
             eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]");
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
@@ -678,6 +697,28 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_contains_every_implemented_adapter() {
+        let kinds = registry()
+            .into_iter()
+            .map(AgentAdapter::kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                "antigravity",
+                "claude-code",
+                "codex",
+                "copilot",
+                "grok",
+                "hermes",
+                "kimi-code",
+                "opencode",
+                "pi",
+            ]
+        );
+    }
 
     fn args(db: &std::path::Path, ledger: &std::path::Path, agent: &str) -> Vec<String> {
         vec![

@@ -4,8 +4,15 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rosetta-adapter-antigravity = { path = "../adapters/antigravity" }
 rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
 rosetta-adapter-codex = { path = "../adapters/codex" }
+rosetta-adapter-copilot = { path = "../adapters/copilot" }
+rosetta-adapter-grok = { path = "../adapters/grok" }
+rosetta-adapter-hermes = { path = "../adapters/hermes" }
+rosetta-adapter-kimi-code = { path = "../adapters/kimi-code" }
+rosetta-adapter-opencode = { path = "../adapters/opencode" }
+rosetta-adapter-pi = { path = "../adapters/pi" }
 rosetta-adapter-support = { path = "../adapter-support" }
 rosetta-capture = { path = "../capture" }
 rosetta-core = { path = "../core" }

@@ -488,8 +488,15 @@ dependencies = [
 name = "rosettad"
 version = "0.1.0"
 dependencies = [
+ "rosetta-adapter-antigravity",
  "rosetta-adapter-claude-code",
  "rosetta-adapter-codex",
+ "rosetta-adapter-copilot",
+ "rosetta-adapter-grok",
+ "rosetta-adapter-hermes",
+ "rosetta-adapter-kimi-code",
+ "rosetta-adapter-opencode",
+ "rosetta-adapter-pi",
  "rosetta-adapter-support",
  "rosetta-capture",
  "rosetta-core",
