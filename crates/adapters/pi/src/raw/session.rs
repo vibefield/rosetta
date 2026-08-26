@@ -413,6 +413,8 @@ pub struct Usage {
     pub cache_read: u64,
     pub cache_write: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<u64>,
     pub total_tokens: u64,
     pub cost: Cost,
