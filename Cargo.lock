@@ -358,7 +358,8 @@ name = "rosetta-adapter-hermes"
 version = "0.1.0"
 dependencies = [
  "rosetta-adapter-support",
- "rusqlite",
+ "rosetta-capture",
+ "rosetta-core",
  "serde",
  "serde_json",
  "walkdir",
@@ -380,6 +381,7 @@ name = "rosetta-adapter-opencode"
 version = "0.1.0"
 dependencies = [
  "rosetta-adapter-support",
+ "rosetta-core",
  "rusqlite",
  "serde",
  "serde_json",
@@ -464,6 +466,11 @@ version = "0.1.0"
 [[package]]
 name = "rosetta-server"
 version = "0.1.0"
+dependencies = [
+ "rosetta-core",
+ "rosetta-store",
+ "rusqlite",
+]
 
 [[package]]
 name = "rosetta-store"

@@ -4,6 +4,7 @@
 //! fail closed so the only indexed copy cannot be destroyed.
 
 pub mod apply;
+pub mod hot;
 pub mod queries;
 pub mod schema;
 
@@ -13,6 +14,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use apply::{ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
+pub use hot::{Effects, HotConfig, MetaMirror, Mutation, Replay, Stamp, TailRings};
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -86,28 +88,63 @@ impl From<serde_json::Error> for StoreError {
 /// exclusively — reads for serving go through their own connections.
 pub struct Store {
     conn: Connection,
+    /// Hot-tier observation: `Some` collects the row-level [`Effects`] of
+    /// every committed batch until drained. `None` (the default) costs
+    /// nothing — backfill and rebuild never allocate a mutation log.
+    effects: Option<Effects>,
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path)?;
         schema::init(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            effects: None,
+        })
     }
 
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
         schema::init(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            effects: None,
+        })
     }
 
     /// Apply one batch in one transaction. On any error — including a
-    /// checkpoint CAS conflict — nothing is committed.
+    /// checkpoint CAS conflict — nothing is committed, and nothing reaches
+    /// the observed effects.
     pub fn apply(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
+        let mut fresh = self.effects.is_some().then(Effects::default);
         let tx = self.conn.transaction()?;
-        let stats = apply::apply_batch(&tx, batch)?;
+        let stats = apply::apply_batch(&tx, batch, fresh.as_mut())?;
         tx.commit()?;
+        if let (Some(pending), Some(committed)) = (self.effects.as_mut(), fresh) {
+            pending.merge(committed);
+        }
         Ok(stats)
+    }
+
+    /// Start collecting hot-tier effects. The daemon enables this before its
+    /// live loop and drains between ticks; leaving it enabled without
+    /// draining trips the overflow flag rather than growing without bound.
+    pub fn observe_effects(&mut self) {
+        if self.effects.is_none() {
+            self.effects = Some(Effects::default());
+        }
+    }
+
+    /// Take everything observed since the last drain (empty when observation
+    /// is disabled). Call strictly after the batches in question committed —
+    /// which is guaranteed here, because [`Store::apply`] merges effects only
+    /// on commit.
+    pub fn drain_effects(&mut self) -> Effects {
+        self.effects
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// Advance the persistent rotating-audit cursor after a source completed

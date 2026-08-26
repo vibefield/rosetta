@@ -6,7 +6,8 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use rosetta_core::rows::{
-    MessageKind, MessageRow, Ms, SessionRole, SessionRow, StreamState, TokenSnapshot, ToolCall,
+    MessageKind, MessageRow, Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+    TokenSnapshot, ToolCall,
 };
 
 use crate::StoreError;
@@ -148,6 +149,73 @@ pub fn session(conn: &Connection, session_id: &str) -> Result<Option<SessionRow>
         .query_row(params![session_id], session_from_row)
         .optional()?;
     Ok(row)
+}
+
+fn project_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
+    let roots: String = row.get("root_paths")?;
+    Ok(ProjectRow {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        root_paths: serde_json::from_str(&roots).unwrap_or_default(),
+        git_repo: row.get("git_repo")?,
+    })
+}
+
+fn json_column(row: &rusqlite::Row<'_>, name: &str) -> rusqlite::Result<Option<serde_json::Value>> {
+    Ok(row
+        .get::<_, Option<String>>(name)?
+        .and_then(|text| serde_json::from_str(&text).ok()))
+}
+
+fn runtime_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeRow> {
+    Ok(RuntimeRow {
+        id: row.get("id")?,
+        kind: row.get("kind")?,
+        data_root: row.get("data_root")?,
+        enabled: row.get("enabled")?,
+        account: json_column(row, "account")?,
+        config: json_column(row, "config")?,
+        skills: json_column(row, "skills")?,
+        versions_seen: json_column(row, "versions_seen")?,
+        discovered_at: row.get("discovered_at")?,
+    })
+}
+
+pub fn project(conn: &Connection, project_id: &str) -> Result<Option<ProjectRow>, StoreError> {
+    Ok(conn
+        .prepare_cached("SELECT * FROM project WHERE id = ?1")?
+        .query_row(params![project_id], project_from_row)
+        .optional()?)
+}
+
+pub fn runtime(conn: &Connection, runtime_id: &str) -> Result<Option<RuntimeRow>, StoreError> {
+    Ok(conn
+        .prepare_cached("SELECT * FROM agent_runtime WHERE id = ?1")?
+        .query_row(params![runtime_id], runtime_from_row)
+        .optional()?)
+}
+
+/// The whole metadata surface, for warming the hot tier's mirror. These are
+/// full-table scans by design — the mirror is fully resident.
+pub fn all_sessions(conn: &Connection) -> Result<Vec<SessionRow>, StoreError> {
+    let mut stmt = conn.prepare_cached("SELECT * FROM session ORDER BY id")?;
+    let rows = stmt.query_map([], session_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+pub fn all_projects(conn: &Connection) -> Result<Vec<ProjectRow>, StoreError> {
+    let mut stmt = conn.prepare_cached("SELECT * FROM project ORDER BY id")?;
+    let rows = stmt.query_map([], project_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+pub fn all_runtimes(conn: &Connection) -> Result<Vec<RuntimeRow>, StoreError> {
+    let mut stmt = conn.prepare_cached("SELECT * FROM agent_runtime ORDER BY id")?;
+    let rows = stmt.query_map([], runtime_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
 }
 
 pub fn cursor_state(

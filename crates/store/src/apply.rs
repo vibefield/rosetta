@@ -17,6 +17,7 @@ use rosetta_core::rows::{
 use rosetta_core::{IngestOp, ids};
 
 use crate::StoreError;
+use crate::hot::{Effects, Mutation};
 
 /// Compare-and-set update for one source file's driver checkpoint.
 #[derive(Debug, Clone)]
@@ -69,10 +70,11 @@ pub struct ApplyStats {
     pub drift_recorded: u64,
 }
 
-/// The columns of an existing message row that FTS resync and usage
-/// replacement need.
+/// The columns of an existing message row that FTS resync, usage
+/// replacement, and hot-tier patch emission need.
 struct OldRow {
     id: i64,
+    timeline_id: String,
     session_id: String,
     content: Option<String>,
     tool_input: Option<String>,
@@ -84,7 +86,7 @@ struct OldRow {
 fn load_old_by_timeline(tx: &Transaction, timeline_id: &str) -> Result<Option<OldRow>, StoreError> {
     load_old(
         tx,
-        "SELECT id, session_id, content, tool_input, tool_result, model, ts
+        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
          FROM message WHERE timeline_id = ?1",
         params![timeline_id],
     )
@@ -97,7 +99,7 @@ fn load_old_by_tool(
 ) -> Result<Option<OldRow>, StoreError> {
     load_old(
         tx,
-        "SELECT id, session_id, content, tool_input, tool_result, model, ts
+        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
          FROM message WHERE session_id = ?1 AND tool_id = ?2",
         params![session_id, tool_id],
     )
@@ -113,12 +115,13 @@ fn load_old(
         .query_row(params, |row| {
             Ok(OldRow {
                 id: row.get(0)?,
-                session_id: row.get(1)?,
-                content: row.get(2)?,
-                tool_input: row.get(3)?,
-                tool_result: row.get(4)?,
-                model: row.get(5)?,
-                ts: row.get(6)?,
+                timeline_id: row.get(1)?,
+                session_id: row.get(2)?,
+                content: row.get(3)?,
+                tool_input: row.get(4)?,
+                tool_result: row.get(5)?,
+                model: row.get(6)?,
+                ts: row.get(7)?,
             })
         })
         .optional()?;
@@ -337,6 +340,7 @@ fn apply_message(
     tx: &Transaction,
     row: &MessageRow,
     stats: &mut ApplyStats,
+    effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let old = load_old_by_timeline(tx, &row.timeline_id)?;
     let new_usage = row.usage.unwrap_or_default();
@@ -463,6 +467,9 @@ fn apply_message(
         }
     }
     touch_session(tx, &row.session_id, row.ts)?;
+    if let Some(fx) = effects {
+        fx.push(Mutation::Message(Box::new(row.clone())));
+    }
     Ok(())
 }
 
@@ -476,6 +483,7 @@ fn apply_tool_result(
     is_error: Option<bool>,
     at: Option<Ms>,
     stats: &mut ApplyStats,
+    effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let Some(old) = load_old_by_tool(tx, session_id, tool_id)? else {
         // The call row hasn't landed yet (out-of-order stream). The source-op
@@ -504,9 +512,20 @@ fn apply_tool_result(
     )?;
     touch_session(tx, session_id, at)?;
     stats.tool_results_merged += 1;
+    if let Some(fx) = effects {
+        fx.push(Mutation::ToolResult {
+            session_id: session_id.to_string(),
+            timeline_id: old.timeline_id,
+            result: result.map(str::to_owned),
+            payload: payload.cloned(),
+            is_error,
+            at,
+        });
+    }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_usage(
     tx: &Transaction,
     session_id: &str,
@@ -515,6 +534,7 @@ fn apply_usage(
     model: Option<&str>,
     tokens: &TokenSnapshot,
     stats: &mut ApplyStats,
+    effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let Some(old) = load_old_by_timeline(tx, response)? else {
         stats.usage_unmatched += 1;
@@ -546,6 +566,15 @@ fn apply_usage(
     )?;
     touch_session(tx, session_id, Some(ts))?;
     stats.usage_applied += 1;
+    if let Some(fx) = effects {
+        fx.push(Mutation::Usage {
+            session_id: session_id.to_string(),
+            timeline_id: old.timeline_id,
+            ts: next_ts,
+            model: next_model,
+            tokens: *tokens,
+        });
+    }
     Ok(())
 }
 
@@ -800,6 +829,7 @@ fn append_source_op(
     op: &IngestOp,
     src_cursor: Option<i64>,
     stats: &mut ApplyStats,
+    mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     if let IngestOp::Message(row) = op {
         let mut row = (**row).clone();
@@ -815,9 +845,12 @@ fn append_source_op(
                 )?
                 .query_row(params![row.session_id], |record| record.get(0))?,
         };
-        return apply_message(tx, &row, stats);
+        if let Some(fx) = effects.as_deref_mut() {
+            fx.touched_sessions.insert(row.session_id.clone());
+        }
+        return apply_message(tx, &row, stats, effects);
     }
-    apply_op(tx, op, src_cursor, stats)
+    apply_op(tx, op, src_cursor, stats, effects)
 }
 
 fn staged_ops(
@@ -863,18 +896,19 @@ fn remove_cursor_projection(tx: &Transaction, cursor_id: i64) -> Result<(), Stor
     .execute(params![cursor_id])?;
 
     let mut stmt = tx.prepare_cached(
-        "SELECT id, session_id, content, tool_input, tool_result, model, ts
+        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
          FROM message WHERE src_cursor = ?1 ORDER BY id",
     )?;
     let rows = stmt.query_map(params![cursor_id], |row| {
         Ok(OldRow {
             id: row.get(0)?,
-            session_id: row.get(1)?,
-            content: row.get(2)?,
-            tool_input: row.get(3)?,
-            tool_result: row.get(4)?,
-            model: row.get(5)?,
-            ts: row.get(6)?,
+            timeline_id: row.get(1)?,
+            session_id: row.get(2)?,
+            content: row.get(3)?,
+            tool_input: row.get(4)?,
+            tool_result: row.get(5)?,
+            model: row.get(6)?,
+            ts: row.get(7)?,
         })
     })?;
     let old_rows = rows.collect::<Result<Vec<_>, _>>()?;
@@ -1001,6 +1035,7 @@ fn activate_cursor(
     tx: &Transaction,
     source: &SourceWrite,
     stats: &mut ApplyStats,
+    effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
     let staged = staged_ops(tx, source.cursor_id, generation)?;
@@ -1025,21 +1060,37 @@ fn activate_cursor(
                         cursor_id: source.cursor_id,
                         message: "session ordinal overflowed".to_string(),
                     })?;
-                apply_message(tx, &row, stats)?;
+                // Effects are suppressed for every per-row apply in this
+                // block: rows carry temporary ordinals until the renumber
+                // below, and none of that may leak into the mutation log.
+                apply_message(tx, &row, stats, None)?;
             }
             IngestOp::FileEdit(_) => edits.push(op),
             IngestOp::ToolResult { .. } | IngestOp::Usage { .. } => merges.push(op),
-            _ => apply_op(tx, op, Some(source.cursor_id), stats)?,
+            _ => apply_op(tx, op, Some(source.cursor_id), stats, None)?,
         }
     }
     for op in edits.into_iter().chain(merges) {
-        apply_op(tx, op, Some(source.cursor_id), stats)?;
+        apply_op(tx, op, Some(source.cursor_id), stats, None)?;
     }
 
     renumber_session(tx, &source.session_id)?;
     recompute_session_buckets(tx, &source.session_id)?;
     tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
         .execute(params![source.cursor_id])?;
+
+    // A swap is one mutation-log entry: the sweep marker. Subscribers take a
+    // replacement snapshot, which sees the renumbered rows — the mirror still
+    // learns precisely which rows to reload from the touch notes.
+    if let Some(fx) = effects {
+        for op in &staged {
+            note_touch(fx, op);
+        }
+        fx.touched_sessions.insert(source.session_id.clone());
+        fx.push(Mutation::SessionSwept {
+            session_id: source.session_id.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -1084,17 +1135,57 @@ fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), S
     Ok(())
 }
 
+/// Record which mirror-backed rows an op may change. Idempotent set inserts;
+/// runs for direct applies AND for staged ops at activation.
+fn note_touch(fx: &mut Effects, op: &IngestOp) {
+    match op {
+        IngestOp::Runtime(row) => {
+            fx.touched_runtimes.insert(row.id.clone());
+        }
+        IngestOp::Project(row) => {
+            fx.touched_projects.insert(row.id.clone());
+        }
+        IngestOp::SessionMeta(row) => {
+            fx.touched_sessions.insert(row.id.clone());
+        }
+        // These touch the session row (`updated_at`, and for workspace obs
+        // the project link plus a possibly-new project row).
+        IngestOp::Message(row) => {
+            fx.touched_sessions.insert(row.session_id.clone());
+        }
+        IngestOp::ToolResult { session_id, .. } | IngestOp::Usage { session_id, .. } => {
+            fx.touched_sessions.insert(session_id.clone());
+        }
+        IngestOp::WorkspaceObs(row) => {
+            let cwd = ids::normalize_root(&row.cwd);
+            fx.touched_projects
+                .insert(ids::project_id(&cwd, row.git_repo.as_deref()));
+            fx.touched_sessions.insert(row.session_id.clone());
+        }
+        // No session/project/runtime row changes.
+        IngestOp::FileEdit(_)
+        | IngestOp::Plan(_)
+        | IngestOp::Task(_)
+        | IngestOp::GitCommit(_)
+        | IngestOp::Drift(_) => {}
+    }
+}
+
 fn apply_op(
     tx: &Transaction,
     op: &IngestOp,
     src_cursor: Option<i64>,
     stats: &mut ApplyStats,
+    mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
+    if let Some(fx) = effects.as_deref_mut() {
+        note_touch(fx, op);
+    }
     match op {
         IngestOp::Runtime(row) => apply_runtime(tx, row)?,
         IngestOp::Project(row) => apply_project(tx, row)?,
         IngestOp::SessionMeta(row) => apply_session(tx, row)?,
-        IngestOp::Message(row) => apply_message(tx, row, stats)?,
+        IngestOp::Message(row) => apply_message(tx, row, stats, effects)?,
         IngestOp::ToolResult {
             session_id,
             tool_id,
@@ -1111,6 +1202,7 @@ fn apply_op(
             *is_error,
             *at,
             stats,
+            effects,
         )?,
         IngestOp::Usage {
             session_id,
@@ -1126,6 +1218,7 @@ fn apply_op(
             model.as_deref(),
             tokens,
             stats,
+            effects,
         )?,
         IngestOp::WorkspaceObs(row) => apply_workspace_obs(tx, row, src_cursor)?,
         IngestOp::FileEdit(row) => apply_file_edit(tx, row, src_cursor)?,
@@ -1137,12 +1230,16 @@ fn apply_op(
     Ok(())
 }
 
-pub(crate) fn apply_batch(tx: &Transaction, batch: &Batch) -> Result<ApplyStats, StoreError> {
+pub(crate) fn apply_batch(
+    tx: &Transaction,
+    batch: &Batch,
+    mut effects: Option<&mut Effects>,
+) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
     match &batch.source {
         None => {
             for op in &batch.ops {
-                apply_op(tx, op, None, &mut stats)?;
+                apply_op(tx, op, None, &mut stats, effects.as_deref_mut())?;
             }
         }
         Some(source) => {
@@ -1193,7 +1290,13 @@ pub(crate) fn apply_batch(tx: &Transaction, batch: &Batch) -> Result<ApplyStats,
                 // from deterministic ids and identity indexes, not a journal.
                 SourceMode::Append => {
                     for op in &batch.ops {
-                        append_source_op(tx, op, Some(source.cursor_id), &mut stats)?;
+                        append_source_op(
+                            tx,
+                            op,
+                            Some(source.cursor_id),
+                            &mut stats,
+                            effects.as_deref_mut(),
+                        )?;
                     }
                 }
                 SourceMode::Activate => {
@@ -1215,7 +1318,7 @@ pub(crate) fn apply_batch(tx: &Transaction, batch: &Batch) -> Result<ApplyStats,
                             message: "active generation changed concurrently".to_string(),
                         });
                     }
-                    activate_cursor(tx, source, &mut stats)?;
+                    activate_cursor(tx, source, &mut stats, effects)?;
                 }
             }
         }
