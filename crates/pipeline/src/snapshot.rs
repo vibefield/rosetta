@@ -218,23 +218,24 @@ pub(crate) fn stream_snapshot_sources(
                     PipelineError::Config("snapshot generation overflowed".to_string())
                 })?;
 
-            if let Some(ledger) = ledger.as_deref_mut()
-                && !records.is_empty()
-            {
-                ledger.append_raw(
-                    &rosetta_capture::SourceDef {
-                        relative_path: file.relative_path.clone(),
-                        stream_id: file.stream_id.clone(),
-                        session_id: file.session_id.clone(),
-                        native_session_id: file.native_session_id.clone(),
-                        agent_version: file.agent_version.clone(),
-                    },
-                    generation,
-                    records
-                        .iter()
-                        .enumerate()
-                        .map(|(index, record)| (index as u64, record.as_bytes())),
-                )?;
+            if let Some(ledger) = ledger.as_deref_mut() {
+                let source = rosetta_capture::SourceDef {
+                    relative_path: file.relative_path.clone(),
+                    stream_id: file.stream_id.clone(),
+                    session_id: file.session_id.clone(),
+                    native_session_id: file.native_session_id.clone(),
+                    agent_version: file.agent_version.clone(),
+                };
+                if !records.is_empty() {
+                    ledger.append_raw(
+                        &source,
+                        generation,
+                        records
+                            .iter()
+                            .enumerate()
+                            .map(|(index, record)| (index as u64, record.as_bytes())),
+                    )?;
+                }
                 ledger.flush()?;
             }
 
@@ -277,6 +278,9 @@ pub(crate) fn stream_snapshot_sources(
                 if !last && ops.len() < CHUNK_OPS {
                     continue;
                 }
+                if last {
+                    seal_generation(ledger, adapter, file, generation, generation_clean)?;
+                }
                 if flush_chunk(
                     adapter,
                     runtime,
@@ -302,6 +306,7 @@ pub(crate) fn stream_snapshot_sources(
             if records.is_empty() && !conflicted {
                 // The session vanished from the database: an empty activation
                 // is a pure sweep of its old contribution.
+                seal_generation(ledger, adapter, file, generation, generation_clean)?;
                 conflicted = flush_chunk(
                     adapter,
                     runtime,
@@ -332,6 +337,32 @@ pub(crate) fn stream_snapshot_sources(
     Ok(())
 }
 
+fn seal_generation(
+    ledger: &mut Option<&mut rosetta_capture::Ledger>,
+    adapter: &dyn AgentAdapter,
+    file: &SessionFile,
+    generation: u64,
+    generation_clean: bool,
+) -> Result<(), PipelineError> {
+    let Some(ledger) = ledger.as_deref_mut() else {
+        return Ok(());
+    };
+    ledger.complete_generation(
+        &rosetta_capture::SourceDef {
+            relative_path: file.relative_path.clone(),
+            stream_id: file.stream_id.clone(),
+            session_id: file.session_id.clone(),
+            native_session_id: file.native_session_id.clone(),
+            agent_version: file.agent_version.clone(),
+        },
+        generation,
+        adapter.normalizer_version(),
+        generation_clean,
+    )?;
+    ledger.flush()?;
+    Ok(())
+}
+
 /// One staged chunk (or the activating final one). Returns true on a
 /// checkpoint conflict — another writer owns the cursor now.
 #[allow(clippy::too_many_arguments)]
@@ -356,10 +387,12 @@ fn flush_chunk(
     let chunk = std::mem::take(ops);
     let first_sequence = *next_sequence;
     *next_sequence += chunk.len() as u64;
-    let mode = if last && generation_clean {
+    let mode = if !last {
+        SourceMode::Stage
+    } else if generation_clean {
         SourceMode::Activate
     } else {
-        SourceMode::Stage
+        SourceMode::Abandon
     };
     let checkpoints = if last {
         let reading = *ctx.cumulative.last_reading();

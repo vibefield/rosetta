@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{CaptureError, io_error};
@@ -27,11 +27,15 @@ const CHECKSUM_BYTES: usize = 8;
 
 const TAG_DEFINE: u8 = 1;
 const TAG_RAW: u8 = 2;
+/// Legacy unversioned canonical-op meta payload.
 const TAG_META: u8 = 3;
+const TAG_GENERATION_COMPLETE: u8 = 4;
+const TAG_META_VERSIONED: u8 = 5;
+const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 /// Everything replay needs to rebuild a normalization context for a source
 /// file. Written into each segment the first time the source appears there.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceDef {
     pub relative_path: String,
     pub stream_id: String,
@@ -49,11 +53,21 @@ pub enum LedgerEntry {
         start_offset: u64,
         payload: Vec<u8>,
     },
-    /// A serialized batch of meta-phase ops (JSON `Vec<IngestOp>` — the
-    /// golden-snapshot format). Raw-first purists averted: without these,
-    /// a rebuild after the agent GC'd its files would lose session titles,
-    /// projects, and runtime rows that only bounded skims ever saw.
-    Meta(String),
+    /// The raw capture for this generation reached a complete source boundary.
+    /// Normalization may still reject it; replay decides cleanliness using its
+    /// current adapter and activates only if every record is acceptable.
+    GenerationComplete {
+        source: SourceDef,
+        generation: u64,
+        normalizer_version: u32,
+        normalized_clean: bool,
+    },
+    /// A versioned serialized batch of meta-phase ops. Version routing keeps
+    /// the durable ledger decodable when the canonical op JSON evolves.
+    Meta {
+        schema_version: u32,
+        payload: String,
+    },
 }
 
 /// Append side. One ledger per runtime; the pipeline owns the write order.
@@ -64,7 +78,7 @@ pub struct Ledger {
     writer: Option<BufWriter<File>>,
     written: u64,
     /// Sources already defined in the CURRENT segment → their local id.
-    defined: HashMap<String, u32>,
+    defined: HashMap<SourceDef, u32>,
 }
 
 impl Ledger {
@@ -113,9 +127,31 @@ impl Ledger {
         Ok(())
     }
 
-    /// Append a serialized meta-ops batch (JSON `Vec<IngestOp>`).
-    pub fn append_meta(&mut self, ops_json: &str) -> Result<(), CaptureError> {
-        self.frame(TAG_META, ops_json.as_bytes())
+    /// Seal a fully captured source generation. The marker may be flushed
+    /// before the projection transaction: it certifies raw completeness, not
+    /// that a particular projection accepted the records.
+    pub fn complete_generation(
+        &mut self,
+        source: &SourceDef,
+        generation: u64,
+        normalizer_version: u32,
+        normalized_clean: bool,
+    ) -> Result<(), CaptureError> {
+        let file_id = self.define(source)?;
+        let mut body = Vec::with_capacity(17);
+        body.extend_from_slice(&file_id.to_be_bytes());
+        body.extend_from_slice(&generation.to_be_bytes());
+        body.extend_from_slice(&normalizer_version.to_be_bytes());
+        body.push(u8::from(normalized_clean));
+        self.frame(TAG_GENERATION_COMPLETE, &body)
+    }
+
+    /// Append a version-routed serialized meta-ops batch.
+    pub fn append_meta(&mut self, schema_version: u32, ops_json: &str) -> Result<(), CaptureError> {
+        let mut body = Vec::with_capacity(4 + ops_json.len());
+        body.extend_from_slice(&schema_version.to_be_bytes());
+        body.extend_from_slice(ops_json.as_bytes());
+        self.frame(TAG_META_VERSIONED, &body)
     }
 
     /// Durably flush everything appended so far. MUST complete before the
@@ -146,7 +182,7 @@ impl Ledger {
         // Ensure the segment exists before deciding the id: rotation clears
         // the map, and ids are segment-local.
         self.ensure_writer()?;
-        if let Some(id) = self.defined.get(&source.relative_path) {
+        if let Some(id) = self.defined.get(source) {
             return Ok(*id);
         }
         let id = self.defined.len() as u32;
@@ -162,7 +198,7 @@ impl Ledger {
             ),
         ]);
         self.frame(TAG_DEFINE, body.as_bytes())?;
-        self.defined.insert(source.relative_path.clone(), id);
+        self.defined.insert(source.clone(), id);
         Ok(id)
     }
 
@@ -216,83 +252,180 @@ pub struct LedgerScan {
 }
 
 pub fn scan(dir: &Path) -> Result<LedgerScan, CaptureError> {
-    let mut out = LedgerScan {
-        entries: Vec::new(),
-        segments: 0,
-        torn_segments: 0,
-    };
-    for (_, path) in segment_files(dir)? {
-        out.segments += 1;
-        let mut bytes = Vec::new();
-        File::open(&path)
-            .and_then(|mut file| file.read_to_end(&mut bytes))
-            .map_err(|error| io_error("reading segment", &path, error))?;
-        if !scan_segment(&bytes, &mut out.entries) {
-            out.torn_segments += 1;
+    let mut entries = Vec::new();
+    let report = visit::<CaptureError, _>(dir, |entry| {
+        entries.push(entry);
+        Ok(())
+    })?;
+    Ok(LedgerScan {
+        entries,
+        segments: report.segments,
+        torn_segments: report.torn_segments,
+    })
+}
+
+/// Aggregate-free scan report. [`visit`] retains at most one frame body and
+/// one buffered filesystem page, so rebuild memory is independent of ledger
+/// lifetime and segment size.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerVisit {
+    pub segments: usize,
+    pub torn_segments: usize,
+    pub entries: u64,
+}
+
+/// Visit every ledger entry in segment order without retaining payloads.
+/// Torn/corrupt tails stop only their segment; callback errors are propagated.
+pub fn visit<E, F>(dir: &Path, mut visitor: F) -> Result<LedgerVisit, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
+    let mut report = LedgerVisit::default();
+    for (_, path) in segment_files(dir).map_err(E::from)? {
+        report.segments += 1;
+        let mut counted = |entry| {
+            report.entries += 1;
+            visitor(entry)
+        };
+        if !scan_segment(&path, &mut counted)? {
+            report.torn_segments += 1;
         }
     }
-    Ok(out)
+    Ok(report)
 }
 
 /// Returns false if the segment ended in a torn/corrupt frame.
-fn scan_segment(bytes: &[u8], entries: &mut Vec<LedgerEntry>) -> bool {
-    let Some(mut rest) = bytes.strip_prefix(SEGMENT_MAGIC) else {
-        return false;
-    };
+fn scan_segment<E, F>(path: &Path, visitor: &mut F) -> Result<bool, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
+    let file =
+        File::open(path).map_err(|error| E::from(io_error("opening segment", path, error)))?;
+    let mut reader = BufReader::new(file);
+    let mut magic = vec![0_u8; SEGMENT_MAGIC.len()];
+    if !read_frame_part(&mut reader, &mut magic, path)? || magic != SEGMENT_MAGIC {
+        return Ok(false);
+    }
     let mut defined: HashMap<u32, SourceDef> = HashMap::new();
-    while !rest.is_empty() {
-        if rest.len() < 5 {
-            return false;
+    loop {
+        let mut head = [0_u8; 5];
+        match reader.read(&mut head[..1]) {
+            Ok(0) => return Ok(true),
+            Ok(1) => {}
+            Ok(_) => unreachable!("one-byte read returned more than one byte"),
+            Err(error) => {
+                return Err(E::from(io_error("reading segment", path, error)));
+            }
         }
-        let tag = rest[0];
-        let body_len = u32::from_be_bytes(rest[1..5].try_into().expect("4 bytes")) as usize;
-        let frame_len = 5 + body_len + CHECKSUM_BYTES;
-        if rest.len() < frame_len {
-            return false;
+        if !read_frame_part(&mut reader, &mut head[1..], path)? {
+            return Ok(false);
         }
-        let body = &rest[5..5 + body_len];
+        let tag = head[0];
+        let body_len = u32::from_be_bytes(head[1..5].try_into().expect("4 bytes")) as usize;
+        if body_len > MAX_FRAME_BYTES {
+            return Ok(false);
+        }
+        let mut body = vec![0_u8; body_len];
+        if !read_frame_part(&mut reader, &mut body, path)? {
+            return Ok(false);
+        }
+        let mut checksum = [0_u8; CHECKSUM_BYTES];
+        if !read_frame_part(&mut reader, &mut checksum, path)? {
+            return Ok(false);
+        }
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&rest[..5]);
-        hasher.update(body);
-        if hasher.finalize().as_bytes()[..CHECKSUM_BYTES] != rest[5 + body_len..frame_len] {
-            return false;
+        hasher.update(&head);
+        hasher.update(&body);
+        if hasher.finalize().as_bytes()[..CHECKSUM_BYTES] != checksum {
+            return Ok(false);
         }
         match tag {
             TAG_DEFINE => {
-                let Some((id, source)) = decode_define(body) else {
-                    return false;
+                let Some((id, source)) = decode_define(&body) else {
+                    return Ok(false);
                 };
                 defined.insert(id, source);
             }
             TAG_RAW => {
                 if body_len < 20 {
-                    return false;
+                    return Ok(false);
                 }
                 let file_id = u32::from_be_bytes(body[0..4].try_into().expect("4 bytes"));
                 let generation = u64::from_be_bytes(body[4..12].try_into().expect("8 bytes"));
                 let start_offset = u64::from_be_bytes(body[12..20].try_into().expect("8 bytes"));
                 let Some(source) = defined.get(&file_id) else {
                     // A raw record before its define: not a valid segment.
-                    return false;
+                    return Ok(false);
                 };
-                entries.push(LedgerEntry::Raw {
+                visitor(LedgerEntry::Raw {
                     source: source.clone(),
                     generation,
                     start_offset,
                     payload: body[20..].to_vec(),
-                });
+                })?;
+            }
+            TAG_GENERATION_COMPLETE => {
+                if body_len != 17 {
+                    return Ok(false);
+                }
+                let file_id = u32::from_be_bytes(body[0..4].try_into().expect("4 bytes"));
+                let generation = u64::from_be_bytes(body[4..12].try_into().expect("8 bytes"));
+                let normalizer_version =
+                    u32::from_be_bytes(body[12..16].try_into().expect("4 bytes"));
+                let normalized_clean = match body[16] {
+                    0 => false,
+                    1 => true,
+                    _ => return Ok(false),
+                };
+                let Some(source) = defined.get(&file_id) else {
+                    return Ok(false);
+                };
+                visitor(LedgerEntry::GenerationComplete {
+                    source: source.clone(),
+                    generation,
+                    normalizer_version,
+                    normalized_clean,
+                })?;
             }
             TAG_META => {
-                let Ok(text) = std::str::from_utf8(body) else {
-                    return false;
+                let Ok(text) = std::str::from_utf8(&body) else {
+                    return Ok(false);
                 };
-                entries.push(LedgerEntry::Meta(text.to_string()));
+                visitor(LedgerEntry::Meta {
+                    schema_version: 0,
+                    payload: text.to_string(),
+                })?;
             }
-            _ => return false,
+            TAG_META_VERSIONED => {
+                if body_len < 4 {
+                    return Ok(false);
+                }
+                let schema_version = u32::from_be_bytes(body[0..4].try_into().expect("4 bytes"));
+                let Ok(text) = std::str::from_utf8(&body[4..]) else {
+                    return Ok(false);
+                };
+                visitor(LedgerEntry::Meta {
+                    schema_version,
+                    payload: text.to_string(),
+                })?;
+            }
+            _ => return Ok(false),
         }
-        rest = &rest[frame_len..];
     }
-    true
+}
+
+fn read_frame_part<E: From<CaptureError>>(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    path: &Path,
+) -> Result<bool, E> {
+    match reader.read_exact(buffer) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(E::from(io_error("reading segment", path, error))),
+    }
 }
 
 fn segment_name(seq: u64) -> String {
@@ -407,7 +540,7 @@ mod tests {
     fn round_trips_raw_and_meta_entries_in_order() {
         let dir = TempDir::new().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger.append_meta("[{\"op\":\"runtime\"}]").unwrap();
+        ledger.append_meta(1, "[{\"op\":\"runtime\"}]").unwrap();
         ledger
             .append_raw(
                 &source("a.jsonl"),
@@ -426,7 +559,10 @@ mod tests {
         assert_eq!(scanned.entries.len(), 4);
         assert_eq!(
             scanned.entries[0],
-            LedgerEntry::Meta("[{\"op\":\"runtime\"}]".to_string())
+            LedgerEntry::Meta {
+                schema_version: 1,
+                payload: "[{\"op\":\"runtime\"}]".to_string(),
+            }
         );
         let LedgerEntry::Raw {
             source: from_scan,
@@ -440,6 +576,56 @@ mod tests {
         assert_eq!(from_scan, &source("a.jsonl"));
         assert_eq!((*generation, *start_offset), (1, 4));
         assert_eq!(payload, b"two");
+    }
+
+    #[test]
+    fn generation_seals_carry_normalizer_outcome_and_source_identity() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let source = source("a.jsonl");
+        ledger
+            .append_raw(&source, 7, [(0_u64, b"record".as_slice())])
+            .unwrap();
+        ledger.complete_generation(&source, 7, 4, false).unwrap();
+        ledger.flush().unwrap();
+
+        let scanned = scan(dir.path()).unwrap();
+        assert!(matches!(
+            &scanned.entries[1],
+            LedgerEntry::GenerationComplete {
+                source: sealed,
+                generation: 7,
+                normalizer_version: 4,
+                normalized_clean: false,
+            } if sealed == &source
+        ));
+    }
+
+    #[test]
+    fn same_path_with_new_source_metadata_gets_a_fresh_definition() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let old = source("a.jsonl");
+        let mut new = old.clone();
+        new.agent_version = Some("2.0.0".to_string());
+        ledger
+            .append_raw(&old, 1, [(0_u64, b"old".as_slice())])
+            .unwrap();
+        ledger
+            .append_raw(&new, 1, [(4_u64, b"new".as_slice())])
+            .unwrap();
+        ledger.flush().unwrap();
+
+        let scanned = scan(dir.path()).unwrap();
+        let sources: Vec<_> = scanned
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                LedgerEntry::Raw { source, .. } => Some(source.agent_version.as_deref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sources, [Some("1.2.3"), Some("2.0.0")]);
     }
 
     #[test]
@@ -466,7 +652,7 @@ mod tests {
             .iter()
             .filter_map(|entry| match entry {
                 LedgerEntry::Raw { payload, .. } => Some(payload.as_slice()),
-                LedgerEntry::Meta(_) => None,
+                LedgerEntry::Meta { .. } | LedgerEntry::GenerationComplete { .. } => None,
             })
             .collect();
         assert_eq!(raw, [b"first".as_slice(), b"second"]);

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
-use rosetta_capture::Ledger;
+use rosetta_capture::{Ledger, LedgerEntry, scan_ledger};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
     IngestOptions, Instrument, discover, expand_data_root, meta_ingest_into, rebuild_runtime,
@@ -166,6 +166,48 @@ fn rebuild_from_ledger_alone_reproduces_the_projection() {
     let world = ingest_then_lose_the_sources();
     assert!(!world.root.exists(), "sources must be fully gone");
 
+    // Crash protocol adversaries: an at-least-once retry writes one exact
+    // source position twice, then a later rewrite dies before its completion
+    // marker. Neither may change the elected projection generation.
+    let scanned = scan_ledger(&world.ledger_dir).unwrap();
+    let (source, generation, offset, payload) = scanned
+        .entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            LedgerEntry::Raw {
+                source,
+                generation,
+                start_offset,
+                payload,
+            } if scanned.entries.iter().any(|candidate| {
+                matches!(
+                    candidate,
+                    LedgerEntry::GenerationComplete {
+                        source: sealed,
+                        generation: sealed_generation,
+                        normalized_clean: true,
+                        ..
+                    } if sealed.relative_path == source.relative_path
+                        && sealed_generation == generation
+                )
+            }) =>
+            {
+                Some((source.clone(), *generation, *start_offset, payload.clone()))
+            }
+            _ => None,
+        })
+        .expect("ledger has one clean raw generation");
+    let mut crash_tail = Ledger::open(&world.ledger_dir).unwrap();
+    crash_tail
+        .append_raw(&source, generation, [(offset, payload.as_slice())])
+        .unwrap();
+    crash_tail
+        .append_raw(&source, generation + 100, [(0, payload.as_slice())])
+        .unwrap();
+    crash_tail.flush().unwrap();
+    drop(crash_tail);
+
     let instrument = Instrument::new();
     let mut rebuilt_store = Store::open_in_memory().unwrap();
     let report = rebuild_runtime(
@@ -179,6 +221,7 @@ fn rebuild_from_ledger_alone_reproduces_the_projection() {
 
     assert!(report.meta_batches >= 1);
     assert!(report.raw_records > 0);
+    assert!(report.duplicate_records_skipped > 0);
     assert!(
         report.stale_records_skipped > 0,
         "the rewritten file's first generation must be skipped"
@@ -214,4 +257,66 @@ fn rebuild_from_ledger_alone_reproduces_the_projection() {
     .unwrap();
     assert_eq!(again.hard_errors, 0);
     assert_eq!(snapshot(&rebuilt_store), world.original);
+}
+
+#[test]
+fn rebuild_never_activates_a_generation_that_normalizes_with_hard_errors() {
+    let adapter = &ClaudeCodeAdapter;
+    let world = ingest_then_lose_the_sources();
+    let scanned = scan_ledger(&world.ledger_dir).unwrap();
+    let (source, generation) = scanned
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LedgerEntry::GenerationComplete {
+                source,
+                generation,
+                normalized_clean: true,
+                ..
+            } => Some((source.clone(), *generation)),
+            _ => None,
+        })
+        .max_by_key(|(_, generation)| *generation)
+        .unwrap();
+    let broken_generation = generation + 100;
+    let mut ledger = Ledger::open(&world.ledger_dir).unwrap();
+    ledger
+        .append_raw(&source, broken_generation, [(0, b"{".as_slice())])
+        .unwrap();
+    // Even if an old writer incorrectly claimed cleanliness, replay trusts
+    // the current normalizer outcome before it exposes the generation.
+    ledger
+        .complete_generation(
+            &source,
+            broken_generation,
+            adapter.normalizer_version(),
+            true,
+        )
+        .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+
+    let mut rebuilt = Store::open_in_memory().unwrap();
+    let report = rebuild_runtime(
+        adapter,
+        &world.runtime,
+        &world.ledger_dir,
+        &mut rebuilt,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert!(report.hard_errors > 0);
+    let cursor = queries::cursor_state(&rebuilt.conn(), &world.runtime.id, &source.relative_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.active_generation, 0);
+    assert_eq!(
+        rebuilt
+            .conn()
+            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "abandoned rebuild staging must be pruned"
+    );
 }

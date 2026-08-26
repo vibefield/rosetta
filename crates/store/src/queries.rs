@@ -226,10 +226,7 @@ pub fn cursor_state(
     let raw = conn
         .prepare_cached(
             "SELECT c.id, c.checkpoint, c.active_generation,
-                    MAX(c.active_generation, COALESCE((
-                      SELECT MAX(so.generation) FROM source_op so WHERE so.cursor_id = c.id
-                    ), 0)),
-                    c.session_id
+                    c.highest_generation, c.session_id
              FROM ingest_cursor c WHERE c.runtime_id = ?1 AND c.path = ?2",
         )?
         .query_row(params![runtime_id, path], |row| {

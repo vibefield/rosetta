@@ -31,6 +31,10 @@ pub use replay::{RebuildReport, rebuild_runtime};
 pub use sched::{Lane, WorkItem, WorkQueue};
 pub use stream::{StreamReport, stream_backfill, stream_backfill_into};
 
+/// Version of the canonical-op envelope stored in ledger meta frames. Replay
+/// routes explicitly by this value instead of assuming today's row JSON.
+pub const LEDGER_META_SCHEMA_VERSION: u32 = 1;
+
 use rosetta_capture::{CaptureError, TailConfig};
 use rosetta_store::StoreError;
 

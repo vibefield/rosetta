@@ -349,6 +349,7 @@ fn ingest_file(
         .ok_or_else(|| PipelineError::Config("source generation overflowed".to_string()))?;
     let mut next_source_sequence = 0_u64;
     let mut generation_clean = true;
+    let mut generation_raw_complete = true;
     if let Some((checkpoint, state)) = resumed {
         ctx.next_ordinal = checkpoint.next_ordinal;
         if let Some(last) = checkpoint.cumulative {
@@ -399,6 +400,7 @@ fn ingest_file(
             highest_generation = source_generation;
             next_source_sequence = 0;
             generation_clean = true;
+            generation_raw_complete = true;
             ctx.next_ordinal = 0;
             ctx.cumulative = CumulativeUsage::new();
             ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
@@ -437,6 +439,7 @@ fn ingest_file(
                     ..
                 } => {
                     generation_clean = false;
+                    generation_raw_complete = false;
                     report.oversized += 1;
                     instrument.add(Metric::RecordsOversized, 1);
                     let _ = payload_len;
@@ -469,6 +472,8 @@ fn ingest_file(
             SourceMode::Append
         } else if complete && generation_clean {
             SourceMode::Activate
+        } else if complete {
+            SourceMode::Abandon
         } else {
             SourceMode::Stage
         };
@@ -499,6 +504,13 @@ fn ingest_file(
         // may reference them. Oversized records are quarantined by the
         // tailer and carry no payload, so only ordinary records land here.
         if let Some(ledger) = ledger.as_deref_mut() {
+            let source = rosetta_capture::SourceDef {
+                relative_path: file.relative_path.clone(),
+                stream_id: file.stream_id.clone(),
+                session_id: file.session_id.clone(),
+                native_session_id: file.native_session_id.clone(),
+                agent_version: file.agent_version.clone(),
+            };
             let raw: Vec<(u64, &[u8])> = batch
                 .items
                 .iter()
@@ -509,18 +521,21 @@ fn ingest_file(
                     TailItem::Oversized { .. } => None,
                 })
                 .collect();
+            let mut wrote = false;
             if !raw.is_empty() {
-                ledger.append_raw(
-                    &rosetta_capture::SourceDef {
-                        relative_path: file.relative_path.clone(),
-                        stream_id: file.stream_id.clone(),
-                        session_id: file.session_id.clone(),
-                        native_session_id: file.native_session_id.clone(),
-                        agent_version: file.agent_version.clone(),
-                    },
+                ledger.append_raw(&source, source_generation, raw)?;
+                wrote = true;
+            }
+            if source_generation != active_generation && complete && generation_raw_complete {
+                ledger.complete_generation(
+                    &source,
                     source_generation,
-                    raw,
+                    adapter.normalizer_version(),
+                    generation_clean,
                 )?;
+                wrote = true;
+            }
+            if wrote {
                 ledger.flush()?;
             }
         }

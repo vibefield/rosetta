@@ -1,12 +1,10 @@
 //! Rebuild-not-migrate, as code: drop the projection, replay the ledger.
 //!
-//! Two passes over one runtime's ledger. Pass one finds each source file's
-//! HIGHEST generation — earlier generations were rewritten away and replaying
-//! them would only stage rows the swap deletes again. Pass two applies
-//! entries in ledger order: meta batches as-is; raw records through the
-//! adapter into per-file contexts, staged in chunks and activated on the
-//! file's final chunk, so the same generation machinery that guards live
-//! ingest guards the rebuild.
+//! Two streaming passes over one runtime's ledger. Pass one finds each source
+//! file's highest SEALED generation; an orphan partial rewrite has no seal and
+//! can never displace the last complete generation. Pass two deduplicates raw
+//! source positions, normalizes them in ledger order, activates at the seal,
+//! and applies later records as append operations.
 //!
 //! Deterministic ids make all of this idempotent — a rebuild interrupted
 //! halfway and rerun converges on the same projection.
@@ -38,6 +36,8 @@ pub struct RebuildReport {
     pub raw_records: u64,
     /// Records from superseded generations, skipped by design.
     pub stale_records_skipped: u64,
+    /// At-least-once ledger writes with an already-seen source offset.
+    pub duplicate_records_skipped: u64,
     /// Records whose generation is already active in the projection — a
     /// re-run of rebuild over the same store skips them wholesale.
     pub records_already_projected: u64,
@@ -55,9 +55,11 @@ struct FileReplay {
     cursor_id: i64,
     cursor_blob: String,
     generation: u64,
-    remaining: u64,
     next_sequence: u64,
     ops: Vec<IngestOp>,
+    last_offset: Option<u64>,
+    generation_clean: bool,
+    activated: bool,
 }
 
 pub fn rebuild_runtime(
@@ -67,31 +69,49 @@ pub fn rebuild_runtime(
     store: &mut Store,
     instrument: &Instrument,
 ) -> Result<RebuildReport, PipelineError> {
-    let scanned = rosetta_capture::scan_ledger(ledger_dir)?;
-    let mut report = RebuildReport {
-        segments: scanned.segments,
-        torn_segments: scanned.torn_segments,
-        ..Default::default()
-    };
+    let mut report = RebuildReport::default();
 
-    // Pass one: the surviving generation per file, and its record count so
-    // pass two knows which chunk is the last (the one that activates).
-    let mut surviving: BTreeMap<String, (u64, u64)> = BTreeMap::new();
-    for entry in &scanned.entries {
-        if let LedgerEntry::Raw {
-            source, generation, ..
-        } = entry
-        {
-            let slot = surviving
-                .entry(source.relative_path.clone())
-                .or_insert((*generation, 0));
-            if *generation > slot.0 {
-                *slot = (*generation, 0);
+    // Pass one: only a raw-complete marker can elect a replacement generation.
+    // Raw-only paths are legacy/unsafe rather than guesses: fail closed instead
+    // of silently promoting a crash-truncated generation.
+    let mut surviving: BTreeMap<String, (u64, SourceDef)> = BTreeMap::new();
+    let mut raw_paths: HashSet<String> = HashSet::new();
+    let mut sealed_paths: HashSet<String> = HashSet::new();
+    let first = rosetta_capture::visit_ledger::<PipelineError, _>(ledger_dir, |entry| {
+        match entry {
+            LedgerEntry::Raw { source, .. } => {
+                raw_paths.insert(source.relative_path);
             }
-            if *generation == slot.0 {
-                slot.1 += 1;
+            LedgerEntry::GenerationComplete {
+                source,
+                generation,
+                normalizer_version,
+                normalized_clean,
+            } => {
+                sealed_paths.insert(source.relative_path.clone());
+                if normalizer_version == adapter.normalizer_version() && !normalized_clean {
+                    return Ok(());
+                }
+                let slot = surviving
+                    .entry(source.relative_path.clone())
+                    .or_insert_with(|| (generation, source.clone()));
+                if generation >= slot.0 {
+                    *slot = (generation, source);
+                }
             }
+            LedgerEntry::Meta { .. } => {}
         }
+        Ok(())
+    })?;
+    report.segments = first.segments;
+    report.torn_segments = first.torn_segments;
+    let mut unsealed: Vec<_> = raw_paths.difference(&sealed_paths).cloned().collect();
+    unsealed.sort();
+    if !unsealed.is_empty() {
+        return Err(PipelineError::Config(format!(
+            "ledger has raw records but no complete-generation marker for: {}",
+            unsealed.join(", ")
+        )));
     }
 
     // The runtime row first: every later FK hangs off it.
@@ -108,10 +128,18 @@ pub fn rebuild_runtime(
     let mut already_projected: HashSet<String> = HashSet::new();
     let mut files: BTreeMap<String, FileReplay> = BTreeMap::new();
 
-    for entry in &scanned.entries {
+    let second = rosetta_capture::visit_ledger::<PipelineError, _>(ledger_dir, |entry| {
         match entry {
-            LedgerEntry::Meta(json) => {
-                let ops: Vec<IngestOp> = serde_json::from_str(json).map_err(|error| {
+            LedgerEntry::Meta {
+                schema_version,
+                payload,
+            } => {
+                if !matches!(schema_version, 0 | crate::LEDGER_META_SCHEMA_VERSION) {
+                    return Err(PipelineError::Config(format!(
+                        "unsupported ledger meta schema version {schema_version}"
+                    )));
+                }
+                let ops: Vec<IngestOp> = serde_json::from_str(&payload).map_err(|error| {
                     PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
                 })?;
                 for op in &ops {
@@ -122,7 +150,7 @@ pub fn rebuild_runtime(
                 report.meta_batches += 1;
                 let stats = instrument.time(Metric::ApplyNanos, || {
                     store.apply(&Batch {
-                        ops: ops.clone(),
+                        ops,
                         checkpoints: vec![],
                         source: None,
                     })
@@ -135,18 +163,16 @@ pub fn rebuild_runtime(
                 start_offset,
                 payload,
             } => {
-                let Some((surviving_generation, record_count)) =
-                    surviving.get(&source.relative_path).copied()
-                else {
-                    continue;
+                let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
+                    return Ok(());
                 };
-                if *generation != surviving_generation {
+                if generation != *surviving_generation {
                     report.stale_records_skipped += 1;
-                    continue;
+                    return Ok(());
                 }
                 if already_projected.contains(&source.relative_path) {
                     report.records_already_projected += 1;
-                    continue;
+                    return Ok(());
                 }
                 if !files.contains_key(&source.relative_path) {
                     // Idempotent re-run: a cursor whose active generation
@@ -157,20 +183,25 @@ pub fn rebuild_runtime(
                     let existing =
                         queries::cursor_state(store.conn(), &runtime.id, &source.relative_path)?;
                     let replay_generation = match &existing {
-                        Some(cursor) if cursor.active_generation >= surviving_generation => {
+                        Some(cursor) if cursor.active_generation >= *surviving_generation => {
                             already_projected.insert(source.relative_path.clone());
                             report.records_already_projected += 1;
-                            continue;
+                            return Ok(());
                         }
-                        Some(cursor) => surviving_generation.max(cursor.highest_generation + 1),
-                        None => surviving_generation,
+                        Some(cursor) => (*surviving_generation).max(
+                            cursor.highest_generation.checked_add(1).ok_or_else(|| {
+                                PipelineError::Config(
+                                    "source generation overflowed during rebuild".to_string(),
+                                )
+                            })?,
+                        ),
+                        None => *surviving_generation,
                     };
                     let replay = open_file(
                         adapter,
                         runtime,
-                        source,
+                        &source,
                         replay_generation,
-                        record_count,
                         store,
                         &mut sessions_seen,
                         &mut report,
@@ -182,25 +213,139 @@ pub fn rebuild_runtime(
                     .get_mut(&source.relative_path)
                     .expect("inserted above");
 
+                if file
+                    .last_offset
+                    .is_some_and(|previous| start_offset <= previous)
+                {
+                    report.duplicate_records_skipped += 1;
+                    return Ok(());
+                }
+                file.last_offset = Some(start_offset);
+                file.ctx.agent_version = source.agent_version.clone();
+
                 report.raw_records += 1;
                 instrument.add(Metric::RecordsFramed, 1);
-                file.ctx.src_offset = Some(*start_offset as i64);
+                file.ctx.src_offset = Some(start_offset as i64);
                 let outcome = instrument.time(Metric::NormalizeNanos, || {
-                    adapter.ingest_line(&mut file.ctx, &file.source.stream_id, payload)
+                    adapter.ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
                 });
                 match &outcome.status {
                     LineStatus::Parsed => report.parsed += 1,
                     LineStatus::UnknownType => report.unknown += 1,
-                    LineStatus::HardError { .. } => report.hard_errors += 1,
+                    LineStatus::HardError { .. } => {
+                        file.generation_clean = false;
+                        report.hard_errors += 1;
+                    }
                 }
                 file.ops.extend(outcome.ops);
-                file.remaining -= 1;
-
-                if file.remaining == 0 || file.ops.len() >= CHUNK_OPS {
-                    flush_chunk(adapter, runtime, file, store, &mut report, instrument)?;
+                if file.ops.len() >= CHUNK_OPS {
+                    let mode = if file.activated {
+                        SourceMode::Append
+                    } else {
+                        SourceMode::Stage
+                    };
+                    flush_chunk(
+                        adapter,
+                        runtime,
+                        file,
+                        mode,
+                        false,
+                        store,
+                        &mut report,
+                        instrument,
+                    )?;
+                }
+            }
+            LedgerEntry::GenerationComplete {
+                source, generation, ..
+            } => {
+                let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
+                    return Ok(());
+                };
+                if generation != *surviving_generation
+                    || already_projected.contains(&source.relative_path)
+                {
+                    return Ok(());
+                }
+                if !files.contains_key(&source.relative_path) {
+                    let existing =
+                        queries::cursor_state(store.conn(), &runtime.id, &source.relative_path)?;
+                    let replay_generation = match &existing {
+                        Some(cursor) if cursor.active_generation >= *surviving_generation => {
+                            already_projected.insert(source.relative_path.clone());
+                            return Ok(());
+                        }
+                        Some(cursor) => (*surviving_generation).max(
+                            cursor.highest_generation.checked_add(1).ok_or_else(|| {
+                                PipelineError::Config(
+                                    "source generation overflowed during rebuild".to_string(),
+                                )
+                            })?,
+                        ),
+                        None => *surviving_generation,
+                    };
+                    let replay = open_file(
+                        adapter,
+                        runtime,
+                        &source,
+                        replay_generation,
+                        store,
+                        &mut sessions_seen,
+                        &mut report,
+                        instrument,
+                    )?;
+                    files.insert(source.relative_path.clone(), replay);
+                }
+                let file = files
+                    .get_mut(&source.relative_path)
+                    .expect("opened for complete marker");
+                if !file.activated {
+                    let mode = if file.generation_clean {
+                        SourceMode::Activate
+                    } else {
+                        SourceMode::Abandon
+                    };
+                    flush_chunk(
+                        adapter,
+                        runtime,
+                        file,
+                        mode,
+                        true,
+                        store,
+                        &mut report,
+                        instrument,
+                    )?;
+                    file.activated = mode == SourceMode::Activate;
                 }
             }
         }
+        Ok(())
+    })?;
+    if first != second {
+        return Err(PipelineError::Config(
+            "ledger changed while rebuild was reading it; stop ingestion and retry".to_string(),
+        ));
+    }
+
+    // Append records may follow the generation's first completion marker.
+    // Publish them exactly as live ingest did, or abandon remaining staged
+    // rows if the sealed base did not normalize cleanly.
+    for file in files.values_mut() {
+        let mode = if file.activated {
+            SourceMode::Append
+        } else {
+            SourceMode::Abandon
+        };
+        flush_chunk(
+            adapter,
+            runtime,
+            file,
+            mode,
+            true,
+            store,
+            &mut report,
+            instrument,
+        )?;
     }
 
     Ok(report)
@@ -212,7 +357,6 @@ fn open_file(
     runtime: &RuntimeRow,
     source: &SourceDef,
     generation: u64,
-    record_count: u64,
     store: &mut Store,
     sessions_seen: &mut HashSet<String>,
     report: &mut RebuildReport,
@@ -290,21 +434,25 @@ fn open_file(
         cursor_id: cursor.id,
         cursor_blob: cursor.checkpoint,
         generation,
-        remaining: record_count,
         next_sequence: 0,
         ops: Vec::new(),
+        last_offset: None,
+        generation_clean: true,
+        activated: false,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flush_chunk(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     file: &mut FileReplay,
+    mode: SourceMode,
+    checkpoint: bool,
     store: &mut Store,
     report: &mut RebuildReport,
     instrument: &Instrument,
 ) -> Result<(), PipelineError> {
-    let last = file.remaining == 0;
     let ops = std::mem::take(&mut file.ops);
     let first_sequence = file.next_sequence;
     file.next_sequence += ops.len() as u64;
@@ -313,7 +461,7 @@ fn flush_chunk(
     // tail None means a still-present source will be re-framed from zero on
     // the next ingest — wasteful, idempotent, correct; a GC'd source simply
     // reports Missing.
-    let checkpoints = if last {
+    let checkpoints = if checkpoint {
         let reading = *file.ctx.cumulative.last_reading();
         let next = PipeCheckpoint {
             v: PIPE_CHECKPOINT_VERSION,
@@ -322,7 +470,7 @@ fn flush_chunk(
             normalizer_version: adapter.normalizer_version(),
             source_generation: file.generation,
             next_source_sequence: file.next_sequence,
-            generation_clean: true,
+            generation_clean: file.generation_clean,
             next_ordinal: file.ctx.next_ordinal,
             tail: None,
             cumulative: (!reading.is_empty()).then_some(reading),
@@ -357,11 +505,7 @@ fn flush_chunk(
                 session_id: file.source.session_id.clone(),
                 generation: file.generation,
                 first_sequence,
-                mode: if last {
-                    SourceMode::Activate
-                } else {
-                    SourceMode::Stage
-                },
+                mode,
             }),
         })
     })?;

@@ -41,6 +41,9 @@ pub enum SourceMode {
     Append,
     /// Persist the final ops, flip the active generation, and atomically rebuild.
     Activate,
+    /// Persist the final diagnostic ops, publish only drift, and discard the
+    /// unclean generation without disturbing the last active projection.
+    Abandon,
 }
 
 #[derive(Debug, Clone)]
@@ -306,10 +309,23 @@ fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), StoreError> {
     tx.prepare_cached(
         "INSERT INTO session
            (id, native_session_id, runtime_id, project_id, parent_session_id,
-            root_session_id, role, title, summary, started_at, updated_at, stream_state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            root_session_id, role, title, summary, started_at, updated_at, stream_state,
+            project_assigned_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                 CASE WHEN ?4 IS NULL THEN NULL ELSE ?10 END)
          ON CONFLICT(id) DO UPDATE SET
-           project_id = COALESCE(excluded.project_id, session.project_id),
+           project_id = CASE
+             WHEN excluded.project_id IS NULL THEN session.project_id
+             WHEN session.project_id IS NULL THEN excluded.project_id
+             WHEN session.project_assigned_at IS NULL
+               OR excluded.project_assigned_at < session.project_assigned_at
+             THEN excluded.project_id ELSE session.project_id END,
+           project_assigned_at = CASE
+             WHEN excluded.project_id IS NULL THEN session.project_assigned_at
+             WHEN session.project_id IS NULL THEN excluded.project_assigned_at
+             WHEN session.project_assigned_at IS NULL
+               OR excluded.project_assigned_at < session.project_assigned_at
+             THEN excluded.project_assigned_at ELSE session.project_assigned_at END,
            parent_session_id = COALESCE(excluded.parent_session_id, session.parent_session_id),
            root_session_id = excluded.root_session_id,
            role = excluded.role,
@@ -340,7 +356,7 @@ fn apply_message(
     tx: &Transaction,
     row: &MessageRow,
     stats: &mut ApplyStats,
-    effects: Option<&mut Effects>,
+    mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let old = load_old_by_timeline(tx, &row.timeline_id)?;
     let new_usage = row.usage.unwrap_or_default();
@@ -467,9 +483,10 @@ fn apply_message(
         }
     }
     touch_session(tx, &row.session_id, row.ts)?;
-    if let Some(fx) = effects {
+    if let Some(fx) = effects.as_deref_mut() {
         fx.push(Mutation::Message(Box::new(row.clone())));
     }
+    apply_pending_for_message(tx, row, stats, effects)?;
     Ok(())
 }
 
@@ -484,13 +501,10 @@ fn apply_tool_result(
     at: Option<Ms>,
     stats: &mut ApplyStats,
     effects: Option<&mut Effects>,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
     let Some(old) = load_old_by_tool(tx, session_id, tool_id)? else {
-        // The call row hasn't landed yet (out-of-order stream). The source-op
-        // journal has the record; generation activation or an audit replay
-        // re-applies it after the call is available.
         stats.tool_results_unmatched += 1;
-        return Ok(());
+        return Ok(false);
     };
     fts_delete(tx, &old)?;
     tx.prepare_cached(
@@ -522,7 +536,7 @@ fn apply_tool_result(
             at,
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -535,10 +549,10 @@ fn apply_usage(
     tokens: &TokenSnapshot,
     stats: &mut ApplyStats,
     effects: Option<&mut Effects>,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
     let Some(old) = load_old_by_timeline(tx, response)? else {
         stats.usage_unmatched += 1;
-        return Ok(());
+        return Ok(false);
     };
     let next_model = model.map(str::to_owned).or_else(|| old.model.clone());
     let next_ts = old.ts.or(Some(ts));
@@ -575,6 +589,91 @@ fn apply_usage(
             tokens: *tokens,
         });
     }
+    Ok(true)
+}
+
+fn pending_key(op: &IngestOp) -> Option<(&'static str, &str, &str)> {
+    match op {
+        IngestOp::ToolResult {
+            session_id,
+            tool_id,
+            ..
+        } => Some(("tool_result", session_id, tool_id)),
+        IngestOp::Usage {
+            session_id,
+            response,
+            ..
+        } => Some(("usage", session_id, response)),
+        _ => None,
+    }
+}
+
+fn queue_pending(
+    tx: &Transaction,
+    op: &IngestOp,
+    src_cursor: Option<i64>,
+) -> Result<(), StoreError> {
+    let Some((kind, session_id, target)) = pending_key(op) else {
+        return Ok(());
+    };
+    tx.prepare_cached(
+        "INSERT INTO pending_merge (kind, session_id, target, op_json, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(kind, session_id, target) DO UPDATE SET
+           op_json = excluded.op_json, src_cursor = excluded.src_cursor",
+    )?
+    .execute(params![
+        kind,
+        session_id,
+        target,
+        serde_json::to_string(op)?,
+        src_cursor,
+    ])?;
+    Ok(())
+}
+
+/// A message may arrive after its usage/result in another file or append
+/// batch. Drain matching derived state in the same transaction that creates
+/// the target so subscribers never observe an intermediate committed state.
+fn apply_pending_for_message(
+    tx: &Transaction,
+    row: &MessageRow,
+    stats: &mut ApplyStats,
+    mut effects: Option<&mut Effects>,
+) -> Result<(), StoreError> {
+    let tool_id = row.tool.as_ref().and_then(|tool| tool.tool_id.as_deref());
+    let mut stmt = tx.prepare_cached(
+        "SELECT kind, target, op_json, src_cursor
+         FROM pending_merge
+         WHERE session_id = ?1
+           AND ((kind = 'usage' AND target = ?2)
+             OR (kind = 'tool_result' AND target = ?3))
+         ORDER BY kind, target",
+    )?;
+    let pending = stmt
+        .query_map(
+            params![row.session_id, row.timeline_id, tool_id],
+            |record| {
+                Ok((
+                    record.get::<_, String>(0)?,
+                    record.get::<_, String>(1)?,
+                    record.get::<_, String>(2)?,
+                    record.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    for (kind, target, json, src_cursor) in pending {
+        tx.prepare_cached(
+            "DELETE FROM pending_merge
+             WHERE kind = ?1 AND session_id = ?2 AND target = ?3",
+        )?
+        .execute(params![kind, row.session_id, target])?;
+        let op: IngestOp = serde_json::from_str(&json)?;
+        apply_op(tx, &op, src_cursor, stats, effects.as_deref_mut())?;
+    }
     Ok(())
 }
 
@@ -607,8 +706,13 @@ fn apply_workspace_obs(
         row.git_repo,
         src_cursor
     ])?;
-    tx.prepare_cached("UPDATE session SET project_id = ?2 WHERE id = ?1")?
-        .execute(params![row.session_id, project_id])?;
+    tx.prepare_cached(
+        "UPDATE session
+         SET project_id = ?2, project_assigned_at = ?3
+         WHERE id = ?1
+           AND (project_assigned_at IS NULL OR ?3 < project_assigned_at)",
+    )?
+    .execute(params![row.session_id, project_id, row.at])?;
     Ok(())
 }
 
@@ -749,11 +853,18 @@ fn apply_drift(
     Ok(())
 }
 
-fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64), StoreError> {
-    let Some((session_id, generation)) = tx
-        .prepare_cached("SELECT session_id, active_generation FROM ingest_cursor WHERE id = ?1")?
+fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64, u64), StoreError> {
+    let Some((session_id, generation, highest)) = tx
+        .prepare_cached(
+            "SELECT session_id, active_generation, highest_generation
+             FROM ingest_cursor WHERE id = ?1",
+        )?
         .query_row(params![cursor_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })
         .optional()?
     else {
@@ -766,7 +877,11 @@ fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64), Store
         cursor_id,
         message: "active generation is negative".to_string(),
     })?;
-    Ok((session_id, generation))
+    let highest = u64::try_from(highest).map_err(|_| StoreError::SourceState {
+        cursor_id,
+        message: "highest generation is negative".to_string(),
+    })?;
+    Ok((session_id, generation, highest))
 }
 
 fn sqlite_u64(cursor_id: i64, label: &str, value: u64) -> Result<i64, StoreError> {
@@ -884,6 +999,7 @@ fn remove_cursor_projection(tx: &Transaction, cursor_id: i64) -> Result<(), Stor
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
         "DELETE FROM workspace_obs WHERE src_cursor = ?1",
+        "DELETE FROM pending_merge WHERE src_cursor = ?1",
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
     }
@@ -1094,6 +1210,25 @@ fn activate_cursor(
     Ok(())
 }
 
+/// Finish an unclean generation without exposing any of its canonical rows.
+/// Drift is observation metadata rather than source contribution, so publish
+/// those facts before pruning every abandoned staged row for this cursor.
+fn abandon_cursor(
+    tx: &Transaction,
+    source: &SourceWrite,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
+    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
+    for op in staged_ops(tx, source.cursor_id, generation)? {
+        if let IngestOp::Drift(fact) = op {
+            apply_drift(tx, &fact, stats)?;
+        }
+    }
+    tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
+        .execute(params![source.cursor_id])?;
+    Ok(())
+}
+
 fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), StoreError> {
     let changed = match &update.expected {
         None => tx
@@ -1193,33 +1328,41 @@ fn apply_op(
             payload,
             is_error,
             at,
-        } => apply_tool_result(
-            tx,
-            session_id,
-            tool_id,
-            result.as_deref(),
-            payload.as_ref(),
-            *is_error,
-            *at,
-            stats,
-            effects,
-        )?,
+        } => {
+            if !apply_tool_result(
+                tx,
+                session_id,
+                tool_id,
+                result.as_deref(),
+                payload.as_ref(),
+                *is_error,
+                *at,
+                stats,
+                effects,
+            )? {
+                queue_pending(tx, op, src_cursor)?;
+            }
+        }
         IngestOp::Usage {
             session_id,
             response,
             ts,
             model,
             tokens,
-        } => apply_usage(
-            tx,
-            session_id,
-            response,
-            *ts,
-            model.as_deref(),
-            tokens,
-            stats,
-            effects,
-        )?,
+        } => {
+            if !apply_usage(
+                tx,
+                session_id,
+                response,
+                *ts,
+                model.as_deref(),
+                tokens,
+                stats,
+                effects,
+            )? {
+                queue_pending(tx, op, src_cursor)?;
+            }
+        }
         IngestOp::WorkspaceObs(row) => apply_workspace_obs(tx, row, src_cursor)?,
         IngestOp::FileEdit(row) => apply_file_edit(tx, row, src_cursor)?,
         IngestOp::Plan(row) => apply_plan(tx, row, src_cursor)?,
@@ -1243,7 +1386,8 @@ pub(crate) fn apply_batch(
             }
         }
         Some(source) => {
-            let (cursor_session, active_generation) = source_state(tx, source.cursor_id)?;
+            let (cursor_session, active_generation, highest_generation) =
+                source_state(tx, source.cursor_id)?;
             if cursor_session != source.session_id {
                 return Err(StoreError::SourceState {
                     cursor_id: source.cursor_id,
@@ -1254,10 +1398,12 @@ pub(crate) fn apply_batch(
                 });
             }
             match source.mode {
-                SourceMode::Stage if source.generation == active_generation => {
+                SourceMode::Stage | SourceMode::Activate | SourceMode::Abandon
+                    if source.generation == active_generation =>
+                {
                     return Err(StoreError::SourceState {
                         cursor_id: source.cursor_id,
-                        message: "cannot stage into the active generation".to_string(),
+                        message: "replacement generation is already active".to_string(),
                     });
                 }
                 SourceMode::Append if source.generation != active_generation => {
@@ -1269,16 +1415,30 @@ pub(crate) fn apply_batch(
                         ),
                     });
                 }
-                SourceMode::Activate if source.generation <= active_generation => {
+                SourceMode::Stage | SourceMode::Activate | SourceMode::Abandon
+                    if source.generation < highest_generation =>
+                {
                     return Err(StoreError::SourceState {
                         cursor_id: source.cursor_id,
                         message: format!(
-                            "activation generation {} must exceed active generation {active_generation}",
-                            source.generation
+                            "replacement generation {} is below highest generation {highest_generation}",
+                            source.generation,
                         ),
                     });
                 }
                 _ => {}
+            }
+
+            if source.mode != SourceMode::Append {
+                tx.prepare_cached(
+                    "UPDATE ingest_cursor
+                     SET highest_generation = MAX(highest_generation, ?2)
+                     WHERE id = ?1",
+                )?
+                .execute(params![
+                    source.cursor_id,
+                    sqlite_u64(source.cursor_id, "generation", source.generation)?,
+                ])?;
             }
 
             match source.mode {
@@ -1319,6 +1479,10 @@ pub(crate) fn apply_batch(
                         });
                     }
                     activate_cursor(tx, source, &mut stats, effects)?;
+                }
+                SourceMode::Abandon => {
+                    persist_source_ops(tx, source, &batch.ops)?;
+                    abandon_cursor(tx, source, &mut stats)?;
                 }
             }
         }

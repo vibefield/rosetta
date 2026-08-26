@@ -229,7 +229,7 @@ pub fn meta_ingest_into(
         let json = serde_json::to_string(&ops).map_err(|error| {
             PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
         })?;
-        ledger.append_meta(&json)?;
+        ledger.append_meta(crate::LEDGER_META_SCHEMA_VERSION, &json)?;
         ledger.flush()?;
     }
     report.stats = instrument.time(Metric::ApplyNanos, || {

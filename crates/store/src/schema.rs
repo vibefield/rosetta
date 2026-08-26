@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -49,7 +49,10 @@ CREATE TABLE IF NOT EXISTS session (
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
-  stream_state      TEXT NOT NULL DEFAULT 'pending'
+  stream_state      TEXT NOT NULL DEFAULT 'pending',
+  -- Internal provenance for the canonical "project at session start" rule.
+  -- Earlier observations may refine the assignment; later cwd changes may not.
+  project_assigned_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
@@ -97,6 +100,9 @@ CREATE TABLE IF NOT EXISTS ingest_cursor (
   path        TEXT NOT NULL,
   session_id  TEXT NOT NULL REFERENCES session(id),
   active_generation INTEGER NOT NULL DEFAULT 0,
+  -- Monotonic even when an unclean staged generation is abandoned. Ledger
+  -- generation ids therefore never alias after a retry or process restart.
+  highest_generation INTEGER NOT NULL DEFAULT 0,
   checkpoint  TEXT NOT NULL,
   updated_at  INTEGER,
   UNIQUE (runtime_id, path)
@@ -116,6 +122,19 @@ CREATE TABLE IF NOT EXISTS source_op (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS source_op_cursor_generation
   ON source_op(cursor_id, generation, sequence);
+
+-- Out-of-order enrichments wait here until their message/tool call exists.
+-- This is derived projection state, not a replay representation; generation
+-- sweeps remove pending rows by provenance just like the other small tables.
+CREATE TABLE IF NOT EXISTS pending_merge (
+  kind       TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES session(id),
+  target     TEXT NOT NULL,
+  op_json    TEXT NOT NULL,
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
+  PRIMARY KEY (kind, session_id, target)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS pending_merge_src ON pending_merge(src_cursor);
 
 CREATE TABLE IF NOT EXISTS message (
   id             INTEGER PRIMARY KEY,

@@ -135,7 +135,7 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
     assert_eq!(hits[0].timeline_id, "m-tool");
     assert_eq!(queries::search(store.conn(), "cargo", 5).unwrap().len(), 1);
 
-    // A result with no matching call is unmatched, not an error.
+    // A result with no matching call is retained until the call arrives.
     let stats = store
         .apply(&Batch {
             ops: vec![IngestOp::ToolResult {
@@ -151,6 +151,46 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         })
         .unwrap();
     assert_eq!(stats.tool_results_unmatched, 1);
+    let pending: i64 = store
+        .conn()
+        .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(pending, 1);
+
+    let mut late_call = message("m-tool-late", 1, MessageKind::ToolUse);
+    late_call.tool = Some(ToolCall {
+        tool_id: Some("toolu_missing".into()),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "true"}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    let stats = store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(late_call))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let late = page
+        .iter()
+        .find(|row| row.timeline_id == "m-tool-late")
+        .unwrap();
+    assert_eq!(
+        late.tool.as_ref().unwrap().result.as_deref(),
+        Some("orphan")
+    );
 }
 
 #[test]
@@ -738,4 +778,174 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
         .unwrap();
     assert_eq!(journal_rows(&store), 0, "appends never journal");
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
+}
+
+#[test]
+fn abandoning_an_unclean_generation_keeps_the_active_projection_and_drift() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: "rt1".into(),
+                stream: "transcript".into(),
+                path: "p/unclean.jsonl".into(),
+                session_id: "s1".into(),
+                expected: None,
+                next: "fresh".into(),
+                updated_at: Some(1),
+            }],
+            source: None,
+        })
+        .unwrap();
+    let cursor = queries::cursor_state(store.conn(), "rt1", "p/unclean.jsonl")
+        .unwrap()
+        .unwrap();
+
+    let mut clean = message("clean", 0, MessageKind::User);
+    clean.content = Some("last clean projection".into());
+    clean.src_cursor = Some(cursor.id);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(clean))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    let mut partial = message("partial", 0, MessageKind::User);
+    partial.content = Some("must stay hidden".into());
+    partial.src_cursor = Some(cursor.id);
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(partial)),
+                IngestOp::Drift(DriftFact {
+                    runtime_id: "rt1".into(),
+                    agent_version: "1".into(),
+                    stream: "transcript".into(),
+                    record_kind: "known".into(),
+                    error_code: "parse_failed".into(),
+                    shape_hash: "shape".into(),
+                    at: Some(2),
+                    sample_cursor: Some(cursor.id),
+                    sample_offset: Some(0),
+                }),
+            ],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 2,
+                mode: SourceMode::Abandon,
+            }),
+        })
+        .unwrap();
+
+    assert_eq!(
+        queries::search(store.conn(), "last clean", 5)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        queries::search(store.conn(), "must stay hidden", 5)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT count FROM drift_agg", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let cursor = queries::cursor_state(store.conn(), "rt1", "p/unclean.jsonl")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (cursor.active_generation, cursor.highest_generation),
+        (1, 2)
+    );
+}
+
+#[test]
+fn workspace_changes_after_session_start_do_not_move_the_project() {
+    use rosetta_core::rows::WorkspaceObsRow;
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::WorkspaceObs(WorkspaceObsRow {
+                session_id: "s1".into(),
+                at: 20_000,
+                cwd: "/w/other".into(),
+                git_branch: None,
+                git_repo: None,
+            })],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some("p1")
+    );
+
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::WorkspaceObs(WorkspaceObsRow {
+                session_id: "s1".into(),
+                at: 9_000,
+                cwd: "/w/earlier".into(),
+                git_branch: None,
+                git_repo: None,
+            })],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let expected = rosetta_core::ids::project_id("/w/earlier", None);
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(expected)
+    );
 }
