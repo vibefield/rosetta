@@ -253,6 +253,28 @@ fn duplicate_prompt_and_usage_rails_emit_once() {
 }
 
 #[test]
+fn session_scoped_usage_is_not_misattributed_to_a_response() {
+    let mut ctx = synthetic_context();
+    let usage = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"usage.record","agentId":"main","model":"mock-model","usage":{"inputOther":100,"output":20,"inputCacheRead":3,"inputCacheCreation":4},"usageScope":"session","time":1}"#,
+    );
+    assert_eq!(usage.status, LineStatus::Parsed);
+    assert!(usage.ops.is_empty());
+
+    let response = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","uuid":"response-1","turnId":"0","step":1,"stepUuid":"step-1","part":{"type":"text","text":"done"}},"time":2}"#,
+    );
+    let [IngestOp::Message(row)] = response.ops.as_slice() else {
+        panic!("expected one response row, got {:?}", response.ops);
+    };
+    assert_eq!(row.usage, None);
+}
+
+#[test]
 fn tool_results_are_merge_ops_not_timeline_rows() {
     let (_, ops, _) = replay(&wire_fixture("tool-use", "main"));
     let tool_rows: Vec<_> = messages(&ops)

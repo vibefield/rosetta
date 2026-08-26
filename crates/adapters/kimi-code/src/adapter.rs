@@ -146,6 +146,12 @@ fn wire_identity(relative_path: &str) -> Option<WireIdentity> {
     let is_subagent = agent
         .strip_prefix("agent-")
         .is_some_and(|suffix| !suffix.is_empty());
+    // The current canonical corpus has one child and its state entry says
+    // `parentAgentId = main`. No child wire carries that field, and the Agent
+    // tool reports its child id only inside free-form result text. Therefore
+    // the current native grammar justifies the enclosing root as parent, but
+    // cannot represent a future nested subagent's immediate parent without
+    // new structural evidence or a wider skim contract.
     Some(WireIdentity {
         native_session_id: format!("{root}/agents/{agent}"),
         parent_session_id: is_subagent.then(|| root.to_owned()),
