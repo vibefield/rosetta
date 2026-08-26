@@ -14,6 +14,14 @@ use rosetta_core::rows::Ms;
 
 use crate::GroundTruthDoc;
 
+/// A stream parser the generic pipeline knows how to frame. Layout inventory
+/// is intentionally broader than this list: an adapter must opt a stream into
+/// normalization instead of every matching file being treated as a transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamDriver {
+    JsonLines,
+}
+
 /// What the pipeline knows about a source file without reading its body.
 #[derive(Debug, Clone)]
 pub struct FileStat {
@@ -35,6 +43,12 @@ pub struct SkimResult {
     /// The session this file belongs to, when the adapter can tell — lets the
     /// pipeline key its cursors and ctx before the stream phase.
     pub session_id: Option<String>,
+    /// Native parent session id for a child stream (for example a Claude Code
+    /// subagent transcript). The pipeline derives both canonical ids together.
+    pub parent_session_id: Option<String>,
+    /// Native root session id when it differs from the immediate parent.
+    pub root_session_id: Option<String>,
+    pub role: Option<rosetta_core::rows::SessionRole>,
     /// Workspace directory the session ran in — drives project assignment.
     pub cwd: Option<String>,
     pub agent_version: Option<String>,
@@ -122,13 +136,54 @@ pub trait AgentAdapter: Send + Sync {
     /// discovery probes data roots with it.
     fn layout(&self) -> &GroundTruthDoc;
 
+    /// Explicit admission control for stream normalization. A layout describes
+    /// everything an agent persists; only streams with a driver are transcript
+    /// inputs. This is deliberately stream-id based because two JSONL files can
+    /// have completely different grammars.
+    fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver>;
+
+    /// Bump whenever normalized output or adapter checkpoint semantics change.
+    /// A mismatch expires the cursor and starts a source-generation replay.
+    fn normalizer_version(&self) -> u32;
+
     /// Adapter-private per-file state for [`NormalizeCtx::state`].
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
         None
     }
 
+    /// Serialize adapter-private state into the pipeline checkpoint. Stateful
+    /// adapters must override both this and [`AgentAdapter::restore_state`].
+    fn checkpoint_state(
+        &self,
+        state: Option<&(dyn Any + Send)>,
+    ) -> Result<Option<serde_json::Value>, String> {
+        match state {
+            None => Ok(None),
+            Some(_) => Err(format!(
+                "{} has adapter state but no checkpoint serializer",
+                self.kind()
+            )),
+        }
+    }
+
+    /// Restore adapter-private state. An invalid payload is an expired cursor,
+    /// never permission to continue with a freshly initialized state halfway
+    /// through a file.
+    fn restore_state(
+        &self,
+        checkpoint: Option<&serde_json::Value>,
+    ) -> Result<Option<Box<dyn Any + Send>>, String> {
+        match checkpoint {
+            None => Ok(self.init_state()),
+            Some(_) => Err(format!(
+                "{} has a checkpoint payload but no state deserializer",
+                self.kind()
+            )),
+        }
+    }
+
     /// Meta phase: bounded bytes in, session/project meta ops out.
-    fn skim(&self, stat: &FileStat, head: &[u8], tail: &[u8]) -> SkimResult;
+    fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], tail: &[u8]) -> SkimResult;
 
     /// Stream phase: one raw record in, canonical ops out. Combines the pure
     /// parse and normalize stages; each adapter keeps its `parse_line` public

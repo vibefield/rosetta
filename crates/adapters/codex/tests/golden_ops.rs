@@ -82,7 +82,7 @@ fn normalize(path: &Path) -> (Vec<IngestOp>, Vec<String>) {
     };
     let head = &text.as_bytes()[..text.len().min(HEAD)];
     let native = adapter
-        .skim(&stat, head, b"")
+        .skim("rollout", &stat, head, b"")
         .session_id
         .expect("a rollout opens with its session_meta");
 

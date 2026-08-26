@@ -15,29 +15,44 @@ use rosetta_capture::TailCheckpoint;
 use rosetta_core::rows::TokenSnapshot;
 use serde::{Deserialize, Serialize};
 
-pub const PIPE_CHECKPOINT_VERSION: u32 = 1;
+pub const PIPE_CHECKPOINT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PipeCheckpoint {
     pub v: u32,
     pub session_id: String,
     pub stream_id: String,
+    pub normalizer_version: u32,
+    /// Store-owned source epoch. It advances on every full replay even when a
+    /// capture checkpoint expired and its local tail generation restarted at 1.
+    pub source_generation: u64,
+    /// Next durable source-op sequence within `source_generation`.
+    pub next_source_sequence: u64,
+    /// Once false, this generation cannot replace the last clean projection.
+    pub generation_clean: bool,
     pub next_ordinal: i64,
     /// Hex-encoded [`TailCheckpoint`]; `None` before the first framed batch.
     pub tail: Option<String>,
     /// Last cumulative usage reading, when the adapter tracks one.
     pub cumulative: Option<TokenSnapshot>,
+    /// Adapter-owned, versioned by `normalizer_version` and opaque to pipeline.
+    pub adapter_state: Option<serde_json::Value>,
 }
 
 impl PipeCheckpoint {
-    pub fn fresh(session_id: &str, stream_id: &str) -> Self {
+    pub fn fresh(session_id: &str, stream_id: &str, normalizer_version: u32) -> Self {
         Self {
             v: PIPE_CHECKPOINT_VERSION,
             session_id: session_id.to_string(),
             stream_id: stream_id.to_string(),
+            normalizer_version,
+            source_generation: 0,
+            next_source_sequence: 0,
+            generation_clean: true,
             next_ordinal: 0,
             tail: None,
             cumulative: None,
+            adapter_state: None,
         }
     }
 
@@ -63,7 +78,7 @@ mod tests {
 
     #[test]
     fn round_trips_and_expires_rather_than_erroring() {
-        let mut checkpoint = PipeCheckpoint::fresh("s1", "transcript");
+        let mut checkpoint = PipeCheckpoint::fresh("s1", "transcript", 7);
         checkpoint.next_ordinal = 42;
         checkpoint.cumulative = Some(TokenSnapshot {
             input: Some(100),
@@ -75,7 +90,7 @@ mod tests {
         // Corruption, foreign formats, and future versions all expire.
         assert!(PipeCheckpoint::decode("").is_none());
         assert!(PipeCheckpoint::decode("{\"not\":\"ours\"}").is_none());
-        let future = encoded.replace("\"v\":1", "\"v\":999");
+        let future = encoded.replace("\"v\":2", "\"v\":999");
         assert!(PipeCheckpoint::decode(&future).is_none());
 
         // A fresh checkpoint has no tail to resume from.

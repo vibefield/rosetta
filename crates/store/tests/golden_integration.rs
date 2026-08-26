@@ -148,12 +148,14 @@ fn apply_adapter_goldens(adapter: &str, kind: &str) -> (u64, u64, u64) {
             .apply(&Batch {
                 ops: scaffolding(&ops, &runtime_id, kind),
                 checkpoints: vec![],
+                source: None,
             })
             .unwrap();
         let stats = store
             .apply(&Batch {
                 ops,
                 checkpoints: vec![],
+                source: None,
             })
             .unwrap();
         inserted += stats.messages_inserted;

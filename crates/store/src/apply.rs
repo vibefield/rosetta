@@ -1,17 +1,18 @@
 //! The write path: one batch, one transaction. Canonical rows, FTS entries,
 //! bucket corrections (new − old), drift aggregates, and the checkpoint CAS
 //! all commit together — aggregates can never drift from the rows they
-//! summarize, and a torn write can never exist (docs/ingest-engine.html,
-//! "Decided — ledger-first, with an explicit crash protocol").
+//! summarize, and a torn projection write can never exist. The current
+//! generation-scoped source-op journal is transactional with these rows; the
+//! separate raw-ledger crash protocol in docs/ingest-engine.html is still pending.
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use rosetta_core::IngestOp;
-use rosetta_core::fold::{bucket_apply, hour_bucket, snapshot_delta};
+use rosetta_core::fold::{HOUR_MS, hour_bucket};
 use rosetta_core::rows::{
     DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, RuntimeRow,
     SessionRow, TaskRow, TokenSnapshot, WorkspaceObsRow,
 };
+use rosetta_core::{IngestOp, ids};
 
 use crate::StoreError;
 
@@ -21,6 +22,7 @@ pub struct CheckpointUpdate {
     pub runtime_id: String,
     pub stream: String,
     pub path: String,
+    pub session_id: String,
     /// `None` means "this file has no cursor yet" — the insert fails if one
     /// appeared concurrently.
     pub expected: Option<String>,
@@ -28,10 +30,30 @@ pub struct CheckpointUpdate {
     pub updated_at: Option<Ms>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceMode {
+    /// Persist ops for an incomplete replacement generation; project nothing.
+    Stage,
+    /// Extend the already-active generation and project only newly persisted ops.
+    Append,
+    /// Persist the final ops, flip the active generation, and atomically rebuild.
+    Activate,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceWrite {
+    pub cursor_id: i64,
+    pub session_id: String,
+    pub generation: u64,
+    pub first_sequence: u64,
+    pub mode: SourceMode,
+}
+
 #[derive(Debug, Default)]
 pub struct Batch {
     pub ops: Vec<IngestOp>,
     pub checkpoints: Vec<CheckpointUpdate>,
+    pub source: Option<SourceWrite>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -49,19 +71,18 @@ pub struct ApplyStats {
 /// replacement need.
 struct OldRow {
     id: i64,
+    session_id: String,
     content: Option<String>,
     tool_input: Option<String>,
     tool_result: Option<String>,
     model: Option<String>,
     ts: Option<Ms>,
-    usage: TokenSnapshot,
 }
 
 fn load_old_by_timeline(tx: &Transaction, timeline_id: &str) -> Result<Option<OldRow>, StoreError> {
     load_old(
         tx,
-        "SELECT id, content, tool_input, tool_result, model, ts,
-                in_tokens, out_tokens, cache_r_tokens, cache_w_tokens, think_tokens
+        "SELECT id, session_id, content, tool_input, tool_result, model, ts
          FROM message WHERE timeline_id = ?1",
         params![timeline_id],
     )
@@ -74,8 +95,7 @@ fn load_old_by_tool(
 ) -> Result<Option<OldRow>, StoreError> {
     load_old(
         tx,
-        "SELECT id, content, tool_input, tool_result, model, ts,
-                in_tokens, out_tokens, cache_r_tokens, cache_w_tokens, think_tokens
+        "SELECT id, session_id, content, tool_input, tool_result, model, ts
          FROM message WHERE session_id = ?1 AND tool_id = ?2",
         params![session_id, tool_id],
     )
@@ -91,18 +111,12 @@ fn load_old(
         .query_row(params, |row| {
             Ok(OldRow {
                 id: row.get(0)?,
-                content: row.get(1)?,
-                tool_input: row.get(2)?,
-                tool_result: row.get(3)?,
-                model: row.get(4)?,
-                ts: row.get(5)?,
-                usage: TokenSnapshot {
-                    input: row.get(6)?,
-                    output: row.get(7)?,
-                    cache_read: row.get(8)?,
-                    cache_write: row.get(9)?,
-                    thinking: row.get(10)?,
-                },
+                session_id: row.get(1)?,
+                content: row.get(2)?,
+                tool_input: row.get(3)?,
+                tool_result: row.get(4)?,
+                model: row.get(5)?,
+                ts: row.get(6)?,
             })
         })
         .optional()?;
@@ -138,27 +152,27 @@ fn fts_insert(
     Ok(())
 }
 
-/// Read-modify-write one usage bucket with None-aware arithmetic. `None`
-/// components stay `None` — "never reported" is not zero.
-fn bucket_touch(
+/// Recompute one bucket from its source rows. Replacement can change hour,
+/// model, kind, or reported-component presence; recomputation makes all of
+/// those moves exact and lets SQL SUM restore NULL when nobody reports a
+/// component.
+fn rebuild_bucket(
     tx: &Transaction,
     session_id: &str,
     hour_ts: Ms,
     model: &str,
-    delta: &TokenSnapshot,
-    message_inc: i64,
-    tool_inc: i64,
 ) -> Result<(), StoreError> {
-    if delta.is_empty() && message_inc == 0 && tool_inc == 0 {
-        return Ok(());
-    }
-    let existing = tx
+    let aggregate = tx
         .prepare_cached(
-            "SELECT in_tokens, out_tokens, cache_r_tokens, cache_w_tokens, think_tokens,
-                    message_count, tool_call_count
-             FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
+            "SELECT SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
+                    SUM(cache_w_tokens), SUM(think_tokens), COUNT(*),
+                    SUM(CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END)
+             FROM message
+             WHERE session_id = ?1
+               AND COALESCE(ts, 0) >= ?2 AND COALESCE(ts, 0) < ?2 + ?4
+               AND COALESCE(model, 'unknown') = ?3",
         )?
-        .query_row(params![session_id, hour_ts, model], |row| {
+        .query_row(params![session_id, hour_ts, model, HOUR_MS], |row| {
             Ok((
                 TokenSnapshot {
                     input: row.get(0)?,
@@ -168,57 +182,52 @@ fn bucket_touch(
                     thinking: row.get(4)?,
                 },
                 row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
+                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
             ))
-        })
-        .optional()?;
-
-    match existing {
-        Some((bucket, messages, tools)) => {
-            let next = bucket_apply(&bucket, delta);
-            tx.prepare_cached(
-                "UPDATE usage_bucket
-                 SET in_tokens = ?4, out_tokens = ?5, cache_r_tokens = ?6,
-                     cache_w_tokens = ?7, think_tokens = ?8,
-                     message_count = ?9, tool_call_count = ?10
-                 WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
-            )?
-            .execute(params![
-                session_id,
-                hour_ts,
-                model,
-                next.input,
-                next.output,
-                next.cache_read,
-                next.cache_write,
-                next.thinking,
-                messages + message_inc,
-                tools + tool_inc,
-            ])?;
-        }
-        None => {
-            let next = bucket_apply(&TokenSnapshot::default(), delta);
-            tx.prepare_cached(
-                "INSERT INTO usage_bucket
-                   (session_id, hour_ts, model, in_tokens, out_tokens, cache_r_tokens,
-                    cache_w_tokens, think_tokens, message_count, tool_call_count)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            )?
-            .execute(params![
-                session_id,
-                hour_ts,
-                model,
-                next.input,
-                next.output,
-                next.cache_read,
-                next.cache_write,
-                next.thinking,
-                message_inc,
-                tool_inc,
-            ])?;
-        }
+        })?;
+    let (tokens, messages, tools) = aggregate;
+    if messages == 0 {
+        tx.prepare_cached(
+            "DELETE FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
+        )?
+        .execute(params![session_id, hour_ts, model])?;
+        return Ok(());
     }
+    tx.prepare_cached(
+        "INSERT INTO usage_bucket
+           (session_id, hour_ts, model, in_tokens, out_tokens, cache_r_tokens,
+            cache_w_tokens, think_tokens, message_count, tool_call_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(session_id, hour_ts, model) DO UPDATE SET
+           in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
+           cache_r_tokens = excluded.cache_r_tokens,
+           cache_w_tokens = excluded.cache_w_tokens,
+           think_tokens = excluded.think_tokens,
+           message_count = excluded.message_count,
+           tool_call_count = excluded.tool_call_count",
+    )?
+    .execute(params![
+        session_id,
+        hour_ts,
+        model,
+        tokens.input,
+        tokens.output,
+        tokens.cache_read,
+        tokens.cache_write,
+        tokens.thinking,
+        messages,
+        tools,
+    ])?;
     Ok(())
+}
+
+fn rebuild_old_bucket(tx: &Transaction, old: &OldRow) -> Result<(), StoreError> {
+    rebuild_bucket(
+        tx,
+        &old.session_id,
+        hour_bucket(old.ts.unwrap_or(0)),
+        bucket_model(old.model.as_deref()),
+    )
 }
 
 fn touch_session(tx: &Transaction, session_id: &str, ts: Option<Ms>) -> Result<(), StoreError> {
@@ -262,6 +271,16 @@ fn apply_runtime(tx: &Transaction, row: &RuntimeRow) -> Result<(), StoreError> {
 }
 
 fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), StoreError> {
+    let mut roots = row.root_paths.clone();
+    if let Some(existing) = tx
+        .prepare_cached("SELECT root_paths FROM project WHERE id = ?1")?
+        .query_row(params![row.id], |record| record.get::<_, String>(0))
+        .optional()?
+    {
+        roots.extend(serde_json::from_str::<Vec<String>>(&existing)?);
+    }
+    roots.sort();
+    roots.dedup();
     tx.prepare_cached(
         "INSERT INTO project (id, name, root_paths, git_repo) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(id) DO UPDATE SET
@@ -272,7 +291,7 @@ fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), StoreError> {
     .execute(params![
         row.id,
         row.name,
-        serde_json::to_string(&row.root_paths)?,
+        serde_json::to_string(&roots)?,
         row.git_repo,
     ])?;
     Ok(())
@@ -327,8 +346,8 @@ fn apply_message(
 
     match old {
         Some(old) => {
-            // Replacement: bucket takes (new − old); FTS resyncs.
-            let delta = snapshot_delta(&new_usage, Some(&old.usage));
+            // Replacement: FTS resyncs, then both old and new aggregate keys
+            // are rebuilt so an hour/model/kind move cannot strand counts.
             fts_delete(tx, &old)?;
             tx.prepare_cached(
                 "UPDATE message SET
@@ -376,14 +395,12 @@ fn apply_message(
                 tool_input.as_deref(),
                 row.tool.as_ref().and_then(|t| t.result.as_deref()),
             )?;
-            bucket_touch(
+            rebuild_old_bucket(tx, &old)?;
+            rebuild_bucket(
                 tx,
                 &row.session_id,
                 hour_bucket(row.ts.unwrap_or(0)),
                 bucket_model(row.model.as_deref()),
-                &delta,
-                0,
-                0,
             )?;
             stats.messages_updated += 1;
         }
@@ -434,16 +451,11 @@ fn apply_message(
                 tool_input.as_deref(),
                 row.tool.as_ref().and_then(|t| t.result.as_deref()),
             )?;
-            let delta = snapshot_delta(&new_usage, None);
-            let is_tool = matches!(row.kind, rosetta_core::rows::MessageKind::ToolUse);
-            bucket_touch(
+            rebuild_bucket(
                 tx,
                 &row.session_id,
                 hour_bucket(row.ts.unwrap_or(0)),
                 bucket_model(row.model.as_deref()),
-                &delta,
-                1,
-                if is_tool { 1 } else { 0 },
             )?;
             stats.messages_inserted += 1;
         }
@@ -464,8 +476,9 @@ fn apply_tool_result(
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
     let Some(old) = load_old_by_tool(tx, session_id, tool_id)? else {
-        // The call row hasn't landed yet (out-of-order stream). The ledger
-        // has the record; a later pass or the row's own arrival re-merges.
+        // The call row hasn't landed yet (out-of-order stream). The source-op
+        // journal has the record; generation activation or an audit replay
+        // re-applies it after the call is available.
         stats.tool_results_unmatched += 1;
         return Ok(());
     };
@@ -505,10 +518,11 @@ fn apply_usage(
         stats.usage_unmatched += 1;
         return Ok(());
     };
-    let delta = snapshot_delta(tokens, Some(&old.usage));
+    let next_model = model.map(str::to_owned).or_else(|| old.model.clone());
+    let next_ts = old.ts.or(Some(ts));
     tx.prepare_cached(
         "UPDATE message SET in_tokens = ?2, out_tokens = ?3, cache_r_tokens = ?4,
-                cache_w_tokens = ?5, think_tokens = ?6
+                cache_w_tokens = ?5, think_tokens = ?6, model = ?7, ts = ?8
          WHERE id = ?1",
     )?
     .execute(params![
@@ -518,27 +532,47 @@ fn apply_usage(
         tokens.cache_read,
         tokens.cache_write,
         tokens.thinking,
+        next_model,
+        next_ts,
     ])?;
-    let model = model.or(old.model.as_deref());
-    let hour = hour_bucket(old.ts.unwrap_or(ts));
-    bucket_touch(tx, session_id, hour, bucket_model(model), &delta, 0, 0)?;
+    rebuild_old_bucket(tx, &old)?;
+    rebuild_bucket(
+        tx,
+        session_id,
+        hour_bucket(next_ts.unwrap_or(0)),
+        bucket_model(next_model.as_deref()),
+    )?;
     touch_session(tx, session_id, Some(ts))?;
     stats.usage_applied += 1;
     Ok(())
 }
 
 fn apply_workspace_obs(tx: &Transaction, row: &WorkspaceObsRow) -> Result<(), StoreError> {
+    let cwd = ids::normalize_root(&row.cwd);
+    let project_id = ids::project_id(&cwd, row.git_repo.as_deref());
+    apply_project(
+        tx,
+        &ProjectRow {
+            id: project_id.clone(),
+            name: ids::project_name(&cwd),
+            root_paths: vec![cwd.clone()],
+            git_repo: row.git_repo.clone(),
+        },
+    )?;
     tx.prepare_cached(
         "INSERT INTO workspace_obs (session_id, at, cwd, git_branch, git_repo)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT DO NOTHING",
     )?
     .execute(params![
         row.session_id,
         row.at,
-        row.cwd,
+        cwd,
         row.git_branch,
         row.git_repo
     ])?;
+    tx.prepare_cached("UPDATE session SET project_id = ?2 WHERE id = ?1")?
+        .execute(params![row.session_id, project_id])?;
     Ok(())
 }
 
@@ -553,7 +587,8 @@ fn apply_file_edit(tx: &Transaction, row: &FileEditRow) -> Result<(), StoreError
     tx.prepare_cached(
         "INSERT INTO file_edit
            (session_id, message_id, path, kind, snapshot_ref, lines_added, lines_removed, at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT DO NOTHING",
     )?
     .execute(params![
         row.session_id,
@@ -617,6 +652,13 @@ fn apply_drift(
     fact: &DriftFact,
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
+    let event_key = serde_json::to_string(fact)?;
+    let inserted = tx
+        .prepare_cached("INSERT OR IGNORE INTO drift_seen (event_key) VALUES (?1)")?
+        .execute(params![event_key])?;
+    if inserted == 0 {
+        return Ok(());
+    }
     tx.prepare_cached(
         "INSERT INTO drift_agg
            (runtime_id, agent_version, stream, record_kind, error_code, shape_hash,
@@ -651,30 +693,248 @@ fn apply_drift(
     Ok(())
 }
 
+fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64), StoreError> {
+    let Some((session_id, generation)) = tx
+        .prepare_cached("SELECT session_id, active_generation FROM ingest_cursor WHERE id = ?1")?
+        .query_row(params![cursor_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()?
+    else {
+        return Err(StoreError::SourceState {
+            cursor_id,
+            message: "cursor does not exist".to_string(),
+        });
+    };
+    let generation = u64::try_from(generation).map_err(|_| StoreError::SourceState {
+        cursor_id,
+        message: "active generation is negative".to_string(),
+    })?;
+    Ok((session_id, generation))
+}
+
+fn sqlite_u64(cursor_id: i64, label: &str, value: u64) -> Result<i64, StoreError> {
+    i64::try_from(value).map_err(|_| StoreError::SourceState {
+        cursor_id,
+        message: format!("{label} exceeds SQLite's signed integer range"),
+    })
+}
+
+/// Persist each normalized op before it can affect the projection. A repeated
+/// key with byte-identical JSON is an at-least-once retry; a different payload
+/// at the same source position is a deterministic-normalizer violation.
+fn persist_source_ops(
+    tx: &Transaction,
+    source: &SourceWrite,
+    ops: &[IngestOp],
+) -> Result<Vec<IngestOp>, StoreError> {
+    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
+    let mut inserted = Vec::new();
+    for (index, op) in ops.iter().enumerate() {
+        let sequence = source
+            .first_sequence
+            .checked_add(index as u64)
+            .ok_or_else(|| StoreError::SourceState {
+                cursor_id: source.cursor_id,
+                message: "source sequence overflowed".to_string(),
+            })?;
+        let sequence_sql = sqlite_u64(source.cursor_id, "sequence", sequence)?;
+        let json = serde_json::to_string(op)?;
+        let changed = tx
+            .prepare_cached(
+                "INSERT INTO source_op (cursor_id, generation, sequence, op_json)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(cursor_id, generation, sequence) DO NOTHING",
+            )?
+            .execute(params![source.cursor_id, generation, sequence_sql, json])?;
+        if changed == 1 {
+            inserted.push(op.clone());
+            continue;
+        }
+        let existing: String = tx
+            .prepare_cached(
+                "SELECT op_json FROM source_op
+                 WHERE cursor_id = ?1 AND generation = ?2 AND sequence = ?3",
+            )?
+            .query_row(params![source.cursor_id, generation, sequence_sql], |row| {
+                row.get(0)
+            })?;
+        if existing != json {
+            return Err(StoreError::SourceConflict {
+                cursor_id: source.cursor_id,
+                generation: source.generation,
+                sequence,
+            });
+        }
+    }
+    Ok(inserted)
+}
+
+fn append_source_op(
+    tx: &Transaction,
+    op: &IngestOp,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
+    if let IngestOp::Message(row) = op {
+        let mut row = (**row).clone();
+        let existing = tx
+            .prepare_cached("SELECT ordinal FROM message WHERE timeline_id = ?1")?
+            .query_row(params![row.timeline_id], |record| record.get::<_, i64>(0))
+            .optional()?;
+        row.ordinal = match existing {
+            Some(ordinal) => ordinal,
+            None => tx
+                .prepare_cached(
+                    "SELECT COALESCE(MAX(ordinal) + 1, 0) FROM message WHERE session_id = ?1",
+                )?
+                .query_row(params![row.session_id], |record| record.get(0))?,
+        };
+        return apply_message(tx, &row, stats);
+    }
+    apply_op(tx, op, stats)
+}
+
+fn active_source_ops(tx: &Transaction, session_id: &str) -> Result<Vec<IngestOp>, StoreError> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT so.op_json
+         FROM source_op so
+         JOIN ingest_cursor c ON c.id = so.cursor_id
+         WHERE c.session_id = ?1 AND c.active_generation > 0
+           AND so.generation = c.active_generation
+         ORDER BY c.path, so.sequence",
+    )?;
+    let rows = stmt.query_map(params![session_id], |row| row.get::<_, String>(0))?;
+    let mut ops = Vec::new();
+    for row in rows {
+        ops.push(serde_json::from_str(&row?)?);
+    }
+    Ok(ops)
+}
+
+fn clear_session_projection(tx: &Transaction, session_id: &str) -> Result<(), StoreError> {
+    // Dependents first. Session metadata itself is retained: meta ingest owns
+    // discoverability, while source ops refine it during the replay below.
+    for sql in [
+        "DELETE FROM file_edit WHERE session_id = ?1",
+        "DELETE FROM git_commit WHERE session_id = ?1",
+        "DELETE FROM task WHERE session_id = ?1",
+        "DELETE FROM plan WHERE session_id = ?1",
+        "DELETE FROM workspace_obs WHERE session_id = ?1",
+        "DELETE FROM usage_bucket WHERE session_id = ?1",
+    ] {
+        tx.prepare_cached(sql)?.execute(params![session_id])?;
+    }
+
+    let mut stmt = tx.prepare_cached(
+        "SELECT id, session_id, content, tool_input, tool_result, model, ts
+         FROM message WHERE session_id = ?1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map(params![session_id], |row| {
+        Ok(OldRow {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            content: row.get(2)?,
+            tool_input: row.get(3)?,
+            tool_result: row.get(4)?,
+            model: row.get(5)?,
+            ts: row.get(6)?,
+        })
+    })?;
+    let old_rows = rows.collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    for old in &old_rows {
+        fts_delete(tx, old)?;
+    }
+    tx.prepare_cached("DELETE FROM message WHERE session_id = ?1")?
+        .execute(params![session_id])?;
+    Ok(())
+}
+
+fn rebuild_session(
+    tx: &Transaction,
+    session_id: &str,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
+    let ops = active_source_ops(tx, session_id)?;
+    clear_session_projection(tx, session_id)?;
+
+    let mut ordinal = 0_i64;
+    let mut edits = Vec::new();
+    let mut merges = Vec::new();
+    for op in &ops {
+        match op {
+            IngestOp::Message(row) => {
+                let mut row = (**row).clone();
+                row.ordinal = ordinal;
+                ordinal = ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| StoreError::SourceState {
+                        cursor_id: row.src_cursor.unwrap_or_default(),
+                        message: "session ordinal overflowed".to_string(),
+                    })?;
+                apply_message(tx, &row, stats)?;
+            }
+            IngestOp::FileEdit(_) => edits.push(op),
+            IngestOp::ToolResult { .. } | IngestOp::Usage { .. } => merges.push(op),
+            // Rebuilt once across all active cursors below.
+            IngestOp::Drift(_) => {}
+            _ => apply_op(tx, op, stats)?,
+        }
+    }
+    for op in edits.into_iter().chain(merges) {
+        apply_op(tx, op, stats)?;
+    }
+    Ok(())
+}
+
+fn rebuild_active_drift(tx: &Transaction, stats: &mut ApplyStats) -> Result<(), StoreError> {
+    tx.execute("DELETE FROM drift_agg", [])?;
+    tx.execute("DELETE FROM drift_seen", [])?;
+    let mut stmt = tx.prepare_cached(
+        "SELECT so.op_json
+         FROM source_op so JOIN ingest_cursor c ON c.id = so.cursor_id
+         WHERE c.active_generation > 0 AND so.generation = c.active_generation
+         ORDER BY c.id, so.sequence",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let json = rows.collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    for text in json {
+        if let IngestOp::Drift(fact) = serde_json::from_str::<IngestOp>(&text)? {
+            apply_drift(tx, &fact, stats)?;
+        }
+    }
+    Ok(())
+}
+
 fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), StoreError> {
     let changed = match &update.expected {
         None => tx
             .prepare_cached(
-                "INSERT INTO ingest_cursor (runtime_id, stream, path, checkpoint, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO ingest_cursor
+                   (runtime_id, stream, path, session_id, checkpoint, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(runtime_id, path) DO NOTHING",
             )?
             .execute(params![
                 update.runtime_id,
                 update.stream,
                 update.path,
+                update.session_id,
                 update.next,
                 update.updated_at,
             ])?,
         Some(expected) => tx
             .prepare_cached(
-                "UPDATE ingest_cursor SET checkpoint = ?4, stream = ?2, updated_at = ?5
-                 WHERE runtime_id = ?1 AND path = ?3 AND checkpoint = ?6",
+                "UPDATE ingest_cursor
+                 SET checkpoint = ?5, stream = ?2, session_id = ?4, updated_at = ?6
+                 WHERE runtime_id = ?1 AND path = ?3 AND checkpoint = ?7",
             )?
             .execute(params![
                 update.runtime_id,
                 update.stream,
                 update.path,
+                update.session_id,
                 update.next,
                 update.updated_at,
                 expected,
@@ -688,56 +948,131 @@ fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), S
     Ok(())
 }
 
+fn apply_op(tx: &Transaction, op: &IngestOp, stats: &mut ApplyStats) -> Result<(), StoreError> {
+    match op {
+        IngestOp::Runtime(row) => apply_runtime(tx, row)?,
+        IngestOp::Project(row) => apply_project(tx, row)?,
+        IngestOp::SessionMeta(row) => apply_session(tx, row)?,
+        IngestOp::Message(row) => apply_message(tx, row, stats)?,
+        IngestOp::ToolResult {
+            session_id,
+            tool_id,
+            result,
+            payload,
+            is_error,
+            at,
+        } => apply_tool_result(
+            tx,
+            session_id,
+            tool_id,
+            result.as_deref(),
+            payload.as_ref(),
+            *is_error,
+            *at,
+            stats,
+        )?,
+        IngestOp::Usage {
+            session_id,
+            response,
+            ts,
+            model,
+            tokens,
+        } => apply_usage(
+            tx,
+            session_id,
+            response,
+            *ts,
+            model.as_deref(),
+            tokens,
+            stats,
+        )?,
+        IngestOp::WorkspaceObs(row) => apply_workspace_obs(tx, row)?,
+        IngestOp::FileEdit(row) => apply_file_edit(tx, row)?,
+        IngestOp::Plan(row) => apply_plan(tx, row)?,
+        IngestOp::Task(row) => apply_task(tx, row)?,
+        IngestOp::GitCommit(row) => apply_git_commit(tx, row)?,
+        IngestOp::Drift(fact) => apply_drift(tx, fact, stats)?,
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_batch(tx: &Transaction, batch: &Batch) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
-    for op in &batch.ops {
-        match op {
-            IngestOp::Runtime(row) => apply_runtime(tx, row)?,
-            IngestOp::Project(row) => apply_project(tx, row)?,
-            IngestOp::SessionMeta(row) => apply_session(tx, row)?,
-            IngestOp::Message(row) => apply_message(tx, row, &mut stats)?,
-            IngestOp::ToolResult {
-                session_id,
-                tool_id,
-                result,
-                payload,
-                is_error,
-                at,
-            } => {
-                apply_tool_result(
-                    tx,
-                    session_id,
-                    tool_id,
-                    result.as_deref(),
-                    payload.as_ref(),
-                    *is_error,
-                    *at,
-                    &mut stats,
-                )?;
+    match &batch.source {
+        None => {
+            for op in &batch.ops {
+                apply_op(tx, op, &mut stats)?;
             }
-            IngestOp::Usage {
-                session_id,
-                response,
-                ts,
-                model,
-                tokens,
-            } => {
-                apply_usage(
-                    tx,
-                    session_id,
-                    response,
-                    *ts,
-                    model.as_deref(),
-                    tokens,
-                    &mut stats,
-                )?;
+        }
+        Some(source) => {
+            let (cursor_session, active_generation) = source_state(tx, source.cursor_id)?;
+            if cursor_session != source.session_id {
+                return Err(StoreError::SourceState {
+                    cursor_id: source.cursor_id,
+                    message: format!(
+                        "batch session {} does not match cursor session {cursor_session}",
+                        source.session_id
+                    ),
+                });
             }
-            IngestOp::WorkspaceObs(row) => apply_workspace_obs(tx, row)?,
-            IngestOp::FileEdit(row) => apply_file_edit(tx, row)?,
-            IngestOp::Plan(row) => apply_plan(tx, row)?,
-            IngestOp::Task(row) => apply_task(tx, row)?,
-            IngestOp::GitCommit(row) => apply_git_commit(tx, row)?,
-            IngestOp::Drift(fact) => apply_drift(tx, fact, &mut stats)?,
+            match source.mode {
+                SourceMode::Stage if source.generation == active_generation => {
+                    return Err(StoreError::SourceState {
+                        cursor_id: source.cursor_id,
+                        message: "cannot stage into the active generation".to_string(),
+                    });
+                }
+                SourceMode::Append if source.generation != active_generation => {
+                    return Err(StoreError::SourceState {
+                        cursor_id: source.cursor_id,
+                        message: format!(
+                            "append generation {} is not active generation {active_generation}",
+                            source.generation
+                        ),
+                    });
+                }
+                SourceMode::Activate if source.generation <= active_generation => {
+                    return Err(StoreError::SourceState {
+                        cursor_id: source.cursor_id,
+                        message: format!(
+                            "activation generation {} must exceed active generation {active_generation}",
+                            source.generation
+                        ),
+                    });
+                }
+                _ => {}
+            }
+
+            let inserted = persist_source_ops(tx, source, &batch.ops)?;
+            match source.mode {
+                SourceMode::Stage => {}
+                SourceMode::Append => {
+                    for op in &inserted {
+                        append_source_op(tx, op, &mut stats)?;
+                    }
+                }
+                SourceMode::Activate => {
+                    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
+                    let changed = tx
+                        .prepare_cached(
+                            "UPDATE ingest_cursor SET active_generation = ?2
+                             WHERE id = ?1 AND active_generation = ?3",
+                        )?
+                        .execute(params![
+                            source.cursor_id,
+                            generation,
+                            sqlite_u64(source.cursor_id, "active generation", active_generation,)?,
+                        ])?;
+                    if changed != 1 {
+                        return Err(StoreError::SourceState {
+                            cursor_id: source.cursor_id,
+                            message: "active generation changed concurrently".to_string(),
+                        });
+                    }
+                    rebuild_session(tx, &source.session_id, &mut stats)?;
+                    rebuild_active_drift(tx, &mut stats)?;
+                }
+            }
         }
     }
     for checkpoint in &batch.checkpoints {

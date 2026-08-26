@@ -13,7 +13,7 @@ use crate::StoreError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeatmapDay {
-    /// Local-time date, `YYYY-MM-DD`.
+    /// Date in the caller-selected timezone, `YYYY-MM-DD`.
     pub day: String,
     pub tokens: i64,
 }
@@ -33,6 +33,18 @@ pub struct SearchHit {
     pub timeline_id: String,
     pub session_id: String,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorState {
+    pub id: i64,
+    pub checkpoint: String,
+    pub active_generation: u64,
+    /// Highest generation with a persisted source op (or the active
+    /// generation when an epoch emitted no ops). New recovery epochs allocate
+    /// strictly above this value instead of reusing abandoned staged rows.
+    pub highest_generation: u64,
+    pub session_id: String,
 }
 
 fn parse_kind(text: &str) -> MessageKind {
@@ -138,6 +150,57 @@ pub fn session(conn: &Connection, session_id: &str) -> Result<Option<SessionRow>
     Ok(row)
 }
 
+pub fn cursor_state(
+    conn: &Connection,
+    runtime_id: &str,
+    path: &str,
+) -> Result<Option<CursorState>, StoreError> {
+    let raw = conn
+        .prepare_cached(
+            "SELECT c.id, c.checkpoint, c.active_generation,
+                    MAX(c.active_generation, COALESCE((
+                      SELECT MAX(so.generation) FROM source_op so WHERE so.cursor_id = c.id
+                    ), 0)),
+                    c.session_id
+             FROM ingest_cursor c WHERE c.runtime_id = ?1 AND c.path = ?2",
+        )?
+        .query_row(params![runtime_id, path], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .optional()?;
+    raw.map(|(id, checkpoint, generation, highest, session_id)| {
+        let active_generation = u64::try_from(generation).map_err(|_| StoreError::SourceState {
+            cursor_id: id,
+            message: "active generation is negative".to_string(),
+        })?;
+        let highest_generation = u64::try_from(highest).map_err(|_| StoreError::SourceState {
+            cursor_id: id,
+            message: "highest generation is negative".to_string(),
+        })?;
+        Ok(CursorState {
+            id,
+            checkpoint,
+            active_generation,
+            highest_generation,
+            session_id,
+        })
+    })
+    .transpose()
+}
+
+pub fn audit_path(conn: &Connection, runtime_id: &str) -> Result<Option<String>, StoreError> {
+    Ok(conn
+        .prepare_cached("SELECT last_path FROM source_audit WHERE runtime_id = ?1")?
+        .query_row(params![runtime_id], |row| row.get(0))
+        .optional()?)
+}
+
 /// Recent sessions, newest first; scoped to a project when given.
 pub fn session_list(
     conn: &Connection,
@@ -194,15 +257,27 @@ pub fn timeline_page(
     Ok(out)
 }
 
-/// GitHub-style activity heatmap for one project: daily token totals in the
-/// viewer's local timezone — possible because buckets are hourly UTC.
+/// Deterministic UTC compatibility wrapper for a GitHub-style activity
+/// heatmap. Viewer-local callers should pass their explicit offset to
+/// [`heatmap_days_in_timezone`].
 pub fn heatmap_days(
     conn: &Connection,
     project_id: &str,
     since_ms: Ms,
 ) -> Result<Vec<HeatmapDay>, StoreError> {
+    heatmap_days_in_timezone(conn, project_id, since_ms, 0)
+}
+
+/// Daily totals in an explicit fixed viewer offset. The daemon's host timezone
+/// is never consulted, so the same query is deterministic across machines.
+pub fn heatmap_days_in_timezone(
+    conn: &Connection,
+    project_id: &str,
+    since_ms: Ms,
+    offset_minutes: i32,
+) -> Result<Vec<HeatmapDay>, StoreError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT date(b.hour_ts / 1000, 'unixepoch', 'localtime') AS day,
+        "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
                     + COALESCE(b.think_tokens,0)) AS tokens
@@ -211,7 +286,7 @@ pub fn heatmap_days(
          WHERE s.project_id = ?1 AND b.hour_ts >= ?2
          GROUP BY day ORDER BY day",
     )?;
-    let rows = stmt.query_map(params![project_id, since_ms], |row| {
+    let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
         Ok(HeatmapDay {
             day: row.get(0)?,
             tokens: row.get(1)?,

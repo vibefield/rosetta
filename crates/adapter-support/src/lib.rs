@@ -6,7 +6,9 @@
 
 pub mod adapter;
 
-pub use adapter::{AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, SkimResult};
+pub use adapter::{
+    AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, SkimResult, StreamDriver,
+};
 
 use std::collections::BTreeMap;
 

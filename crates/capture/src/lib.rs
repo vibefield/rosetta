@@ -9,7 +9,9 @@
 pub mod discovery;
 pub mod tailer;
 
-pub use discovery::{HeadTail, ScannedFile, WalkReport, head_tail, walk};
+pub use discovery::{
+    HeadTail, ScannedFile, WalkReport, first_record, head_tail, walk, walk_filtered,
+};
 pub use tailer::{
     RawRecord, TailBatch, TailCheckpoint, TailConfig, TailItem, TailRead, Tailer, Transition,
 };

@@ -53,7 +53,9 @@ pub fn discover(
         let layout = adapter.layout();
         let root = expand_data_root(&layout.data_root, home);
         let report = instrument.time(Metric::WalkNanos, || {
-            rosetta_capture::walk(&root, opts.max_files)
+            rosetta_capture::walk_filtered(&root, opts.max_files, |path| {
+                layout.matching_stream(path).is_some()
+            })
         })?;
         instrument.add(Metric::FilesWalked, report.files.len() as u64);
 
@@ -63,9 +65,6 @@ pub fn discover(
         let mut total_bytes = 0;
         let mut newest_modified_ms = 0;
         for file in &report.files {
-            if layout.matching_stream(&file.relative_path).is_none() {
-                continue;
-            }
             file_count += 1;
             total_bytes += file.size;
             newest_modified_ms = newest_modified_ms.max(file.modified_ms);

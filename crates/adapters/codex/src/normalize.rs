@@ -16,6 +16,7 @@ use rosetta_core::rows::{
     StreamState, TokenSnapshot, ToolCall, WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, fold, ids};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::rollout::{
@@ -35,7 +36,7 @@ const APPLY_PATCH: &str = "apply_patch";
 /// `model`/`effort` are carried forward because codex stamps them on
 /// `turn_context`, not on the rows they describe; `response` and
 /// `response_total` are the machinery for the cumulative token counters.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CodexState {
     /// Last observed working directory — a change emits a `workspace_obs`.
     cwd: Option<String>,

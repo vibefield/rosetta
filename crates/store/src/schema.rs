@@ -1,13 +1,14 @@
 //! The projection DDL (docs/canonical-model.html, "The SQLite projection").
-//! Stamped with a schema version; on mismatch the projection REBUILDS from
-//! the ledger instead of migrating — rule 4 as code, migrations never exist.
+//! Stamped with a schema version. A mismatch fails closed until the raw-ledger
+//! rebuild path exists; silently dropping the projection before then would be
+//! data loss, not a rebuild.
 
 use rusqlite::Connection;
 
 use crate::StoreError;
 
-/// Bump on any DDL change; openers with a different stamp drop and recreate.
-pub const SCHEMA_VERSION: i64 = 1;
+/// Bump on any DDL change. Existing nonzero versions fail closed.
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -22,6 +23,11 @@ CREATE TABLE IF NOT EXISTS agent_runtime (
   versions_seen TEXT,
   discovered_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS source_audit (
+  runtime_id TEXT PRIMARY KEY REFERENCES agent_runtime(id),
+  last_path  TEXT NOT NULL
+) WITHOUT ROWID;
 
 -- ————— phase 2 · meta ingest ————————————————————————————————————
 CREATE TABLE IF NOT EXISTS project (
@@ -57,6 +63,9 @@ CREATE TABLE IF NOT EXISTS workspace_obs (
   git_repo   TEXT
 );
 CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_obs_identity ON workspace_obs(
+  session_id, at, cwd, COALESCE(git_branch,''), COALESCE(git_repo,'')
+);
 
 CREATE TABLE IF NOT EXISTS plan (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -82,10 +91,25 @@ CREATE TABLE IF NOT EXISTS ingest_cursor (
   runtime_id  TEXT NOT NULL REFERENCES agent_runtime(id),
   stream      TEXT NOT NULL,
   path        TEXT NOT NULL,
+  session_id  TEXT NOT NULL REFERENCES session(id),
+  active_generation INTEGER NOT NULL DEFAULT 0,
   checkpoint  TEXT NOT NULL,
   updated_at  INTEGER,
   UNIQUE (runtime_id, path)
 );
+
+-- Normalized source-op replay journal. Rewritten files stage a new generation
+-- here; activation and projection replacement happen in one transaction. This
+-- is not the planned append-only raw ledger.
+CREATE TABLE IF NOT EXISTS source_op (
+  cursor_id   INTEGER NOT NULL REFERENCES ingest_cursor(id),
+  generation INTEGER NOT NULL,
+  sequence   INTEGER NOT NULL,
+  op_json    TEXT NOT NULL,
+  PRIMARY KEY (cursor_id, generation, sequence)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS source_op_cursor_generation
+  ON source_op(cursor_id, generation, sequence);
 
 CREATE TABLE IF NOT EXISTS message (
   id             INTEGER PRIMARY KEY,
@@ -118,6 +142,7 @@ CREATE TABLE IF NOT EXISTS message (
   UNIQUE (session_id, ordinal)
 );
 CREATE INDEX IF NOT EXISTS message_tool ON message(session_id, tool_id) WHERE tool_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS message_bucket_key ON message(session_id, ts, model);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
   content, tool_input, tool_result,
@@ -137,6 +162,10 @@ CREATE TABLE IF NOT EXISTS file_edit (
 );
 CREATE INDEX IF NOT EXISTS file_edit_session ON file_edit(session_id, at);
 CREATE INDEX IF NOT EXISTS file_edit_path    ON file_edit(path);
+CREATE UNIQUE INDEX IF NOT EXISTS file_edit_identity ON file_edit(
+  session_id, COALESCE(message_id,-1), path, kind,
+  COALESCE(snapshot_ref,''), COALESCE(at,-1)
+);
 
 CREATE TABLE IF NOT EXISTS git_commit (
   commit_id  TEXT NOT NULL,
@@ -159,6 +188,13 @@ CREATE TABLE IF NOT EXISTS drift_agg (
   sample_cursor INTEGER REFERENCES ingest_cursor(id),
   sample_offset INTEGER,
   PRIMARY KEY (runtime_id, agent_version, stream, record_kind, error_code, shape_hash)
+) WITHOUT ROWID;
+
+-- Exact normalized occurrences make aggregate application idempotent. The
+-- source-op JSON is deterministic, so byte-identical fact JSON is a stable
+-- replay identity even for meta/direct batches outside the source journal.
+CREATE TABLE IF NOT EXISTS drift_seen (
+  event_key TEXT PRIMARY KEY
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS usage_bucket (
@@ -199,32 +235,16 @@ LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
 WHERE r.id = r.root_session_id;
 "#;
 
-const DROP_ALL: &str = r#"
-DROP VIEW IF EXISTS session_contribution;
-DROP TABLE IF EXISTS usage_bucket;
-DROP TABLE IF EXISTS drift_agg;
-DROP TABLE IF EXISTS git_commit;
-DROP TABLE IF EXISTS file_edit;
-DROP TABLE IF EXISTS message_fts;
-DROP TABLE IF EXISTS message;
-DROP TABLE IF EXISTS ingest_cursor;
-DROP TABLE IF EXISTS task;
-DROP TABLE IF EXISTS plan;
-DROP TABLE IF EXISTS workspace_obs;
-DROP TABLE IF EXISTS session;
-DROP TABLE IF EXISTS project;
-DROP TABLE IF EXISTS agent_runtime;
-"#;
-
 pub fn init(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     conn.pragma_update(None, "foreign_keys", true)?;
 
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version != 0 && version != SCHEMA_VERSION {
-        // Disposable projection: a stamp mismatch means drop and let the
-        // pipeline rebuild everything from the ledger. Never migrate.
-        conn.execute_batch(DROP_ALL)?;
+        return Err(StoreError::SchemaVersionMismatch {
+            found: version,
+            expected: SCHEMA_VERSION,
+        });
     }
     conn.execute_batch(DDL)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;

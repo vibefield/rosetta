@@ -16,6 +16,7 @@ use rosetta_core::rows::{
     WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, fold, ids};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::transcript::{
@@ -47,7 +48,7 @@ const SPAWN_TOOLS: [&str; 2] = ["Agent", "Task"];
 ///
 /// Only the last workspace observation: every single record repeats `cwd` and
 /// `gitBranch`, and the projection wants transitions, not one row per line.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClaudeCodeState {
     workspace: Option<(String, String)>,
 }

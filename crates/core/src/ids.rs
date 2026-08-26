@@ -17,13 +17,48 @@ pub fn runtime_id(kind: &str, data_root: &str) -> String {
     derive("rosetta/runtime", &[kind, data_root])
 }
 
-/// Rosetta's own project abstraction: normalized root + git repo identity, so
-/// worktrees and renames can merge.
+/// Rosetta's own project abstraction. A repository identity wins when one is
+/// known so worktrees and renamed checkouts merge; otherwise the normalized
+/// workspace root is the stable fallback.
 pub fn project_id(normalized_root: &str, git_repo: Option<&str>) -> String {
-    derive(
-        "rosetta/project",
-        &[normalized_root, git_repo.unwrap_or("")],
-    )
+    match git_repo.filter(|identity| !identity.is_empty()) {
+        Some(identity) => derive("rosetta/project/git", &[identity]),
+        None => derive("rosetta/project/root", &[normalized_root]),
+    }
+}
+
+/// Lexically normalize an agent-reported workspace path without requiring it
+/// to still exist. Both meta and stream phases use this exact transform so a
+/// cwd transition cannot mint a second spelling of the same project.
+pub fn normalize_root(path: &str) -> String {
+    let portable = path.replace('\\', "/");
+    let absolute = portable.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for part in portable.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|last| *last != "..") => {
+                parts.pop();
+            }
+            ".." if !absolute => parts.push(part),
+            ".." => {}
+            _ => parts.push(part),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+pub fn project_name(normalized_root: &str) -> String {
+    normalized_root
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(normalized_root)
+        .to_string()
 }
 
 pub fn session_id(runtime_id: &str, native_session_id: &str) -> String {
@@ -60,6 +95,21 @@ mod tests {
         assert_ne!(session_id("r", "s"), session_id("r", "s2"));
         // Separator injection cannot collide: ("ab","c") != ("a","bc").
         assert_ne!(session_id("ab", "c"), session_id("a", "bc"));
+    }
+
+    #[test]
+    fn roots_normalize_without_filesystem_access() {
+        assert_eq!(normalize_root("/w/./project/../rosetta/"), "/w/rosetta");
+        assert_eq!(normalize_root(r"C:\\w\\rosetta"), "C:/w/rosetta");
+    }
+
+    #[test]
+    fn repository_identity_merges_worktrees_and_root_is_the_fallback() {
+        assert_eq!(
+            project_id("/work/one", Some("https://example.test/acme/repo")),
+            project_id("/work/two", Some("https://example.test/acme/repo"))
+        );
+        assert_ne!(project_id("/work/one", None), project_id("/work/two", None));
     }
 
     #[test]

@@ -135,6 +135,17 @@ fn cmd_discover(args: &[String]) -> Result<(), String> {
             },
         );
     }
+    let truncated: Vec<&str> = discoveries
+        .iter()
+        .filter(|discovery| discovery.walk_truncated)
+        .map(|discovery| discovery.runtime.kind.as_str())
+        .collect();
+    if !truncated.is_empty() {
+        return Err(format!(
+            "discovery coverage was truncated for {}",
+            truncated.join(", ")
+        ));
+    }
     Ok(())
 }
 
@@ -149,6 +160,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
+    let mut failures = Vec::new();
 
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
         if !discovery.installed {
@@ -157,6 +169,9 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         }
         let mut runtime = discovery.runtime.clone();
         runtime.enabled = true; // CLI ingest is explicit consent
+        if discovery.walk_truncated {
+            failures.push(format!("{} discovery walk was truncated", adapter.kind()));
+        }
 
         let (meta, files) = meta_ingest(
             *adapter,
@@ -168,13 +183,31 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
         println!(
-            "{}: meta — {} sessions, {} projects, {} files ({} unidentified)",
+            "{}: meta — {} sessions, {} projects, {} files ({} inventory-only, {} unidentified)",
             adapter.kind(),
             meta.sessions,
             meta.projects,
             meta.files_matched,
+            meta.files_inventory_only,
             meta.files_unidentified,
         );
+        if meta.walk_truncated {
+            failures.push(format!("{} meta walk was truncated", adapter.kind()));
+        }
+        if meta.files_unidentified > 0 {
+            failures.push(format!(
+                "{} left {} streamable files unidentified",
+                adapter.kind(),
+                meta.files_unidentified
+            ));
+        }
+        if meta.files_vanished > 0 {
+            failures.push(format!(
+                "{} lost {} files during meta ingest",
+                adapter.kind(),
+                meta.files_vanished
+            ));
+        }
 
         let stream = stream_backfill(
             *adapter,
@@ -198,10 +231,31 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             stream.stats.tool_results_merged,
             stream.sessions_indexed,
         );
+        if stream.hard_errors > 0
+            || stream.oversized > 0
+            || stream.files_missing > 0
+            || stream.retries_exhausted > 0
+            || stream.conflicts > 0
+            || stream.files_incomplete > 0
+        {
+            failures.push(format!(
+                "{} ingest incomplete: {} hard, {} oversized, {} missing, {} retry-exhausted, {} conflicts, {} incomplete files",
+                adapter.kind(),
+                stream.hard_errors,
+                stream.oversized,
+                stream.files_missing,
+                stream.retries_exhausted,
+                stream.conflicts,
+                stream.files_incomplete,
+            ));
+        }
     }
 
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
+    }
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
     }
     Ok(())
 }

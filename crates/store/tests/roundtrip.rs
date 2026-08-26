@@ -78,6 +78,7 @@ fn base_batch() -> Batch {
             IngestOp::SessionMeta(session("s1")),
         ],
         checkpoints: vec![],
+        source: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         .apply(&Batch {
             ops: vec![IngestOp::Message(Box::new(call))],
             checkpoints: vec![],
+            source: None,
         })
         .unwrap();
     assert_eq!(stats.messages_inserted, 1);
@@ -114,6 +116,7 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
                 at: Some(3_700_000),
             }],
             checkpoints: vec![],
+            source: None,
         })
         .unwrap();
     assert_eq!(stats.tool_results_merged, 1);
@@ -144,6 +147,7 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
                 at: None,
             }],
             checkpoints: vec![],
+            source: None,
         })
         .unwrap();
     assert_eq!(stats.tool_results_unmatched, 1);
@@ -164,6 +168,7 @@ fn usage_replacement_never_double_counts_and_preserves_unknownness() {
         .apply(&Batch {
             ops: vec![IngestOp::Message(Box::new(reply))],
             checkpoints: vec![],
+            source: None,
         })
         .unwrap();
 
@@ -183,6 +188,7 @@ fn usage_replacement_never_double_counts_and_preserves_unknownness() {
                 },
             }],
             checkpoints: vec![],
+            source: None,
         })
         .unwrap();
     assert_eq!(stats.usage_applied, 1);
@@ -203,7 +209,10 @@ fn usage_replacement_never_double_counts_and_preserves_unknownness() {
     // Heatmap sees the corrected totals exactly once.
     let days = queries::heatmap_days(store.conn(), "p1", 0).unwrap();
     assert_eq!(days.len(), 1);
+    assert_eq!(days[0].day, "1970-01-01");
     assert_eq!(days[0].tokens, 200);
+    let west = queries::heatmap_days_in_timezone(store.conn(), "p1", 0, -120).unwrap();
+    assert_eq!(west[0].day, "1969-12-31");
 }
 
 #[test]
@@ -245,6 +254,7 @@ fn contribution_folds_subagents_into_their_root() {
                 }),
             ],
             checkpoints: vec![],
+            source: None,
         })
         .unwrap();
 
@@ -261,7 +271,7 @@ fn contribution_folds_subagents_into_their_root() {
 }
 
 #[test]
-fn drift_aggregates_instead_of_accumulating_rows() {
+fn drift_aggregates_distinct_occurrences_and_deduplicates_replay() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
 
@@ -278,16 +288,17 @@ fn drift_aggregates_instead_of_accumulating_rows() {
     };
     let mut later = fact.clone();
     later.at = Some(9_000);
-    store
-        .apply(&Batch {
-            ops: vec![
-                IngestOp::Drift(fact.clone()),
-                IngestOp::Drift(later),
-                IngestOp::Drift(fact),
-            ],
-            checkpoints: vec![],
-        })
-        .unwrap();
+    let batch = Batch {
+        ops: vec![
+            IngestOp::Drift(fact.clone()),
+            IngestOp::Drift(later),
+            IngestOp::Drift(fact),
+        ],
+        checkpoints: vec![],
+        source: None,
+    };
+    store.apply(&batch).unwrap();
+    store.apply(&batch).unwrap();
 
     let (count, first, last): (i64, i64, i64) = store
         .conn()
@@ -297,7 +308,7 @@ fn drift_aggregates_instead_of_accumulating_rows() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!((count, first, last), (3, 5_000, 9_000));
+    assert_eq!((count, first, last), (2, 5_000, 9_000));
 }
 
 #[test]
@@ -312,10 +323,12 @@ fn checkpoint_cas_rolls_back_the_whole_batch_on_conflict() {
                 runtime_id: "rt1".into(),
                 stream: "transcript".into(),
                 path: "projects/p/s1.jsonl".into(),
+                session_id: "s1".into(),
                 expected: None,
                 next: "ck-v1".into(),
                 updated_at: Some(1),
             }],
+            source: None,
         })
         .unwrap();
     assert_eq!(
@@ -337,10 +350,12 @@ fn checkpoint_cas_rolls_back_the_whole_batch_on_conflict() {
             runtime_id: "rt1".into(),
             stream: "transcript".into(),
             path: "projects/p/s1.jsonl".into(),
+            session_id: "s1".into(),
             expected: Some("ck-v0-stale".into()),
             next: "ck-v2".into(),
             updated_at: Some(2),
         }],
+        source: None,
     });
     assert!(matches!(result, Err(StoreError::CheckpointConflict { .. })));
     let count: i64 = store
@@ -365,6 +380,7 @@ fn reingesting_the_same_message_is_idempotent() {
     let batch = Batch {
         ops: vec![IngestOp::Message(Box::new(reply))],
         checkpoints: vec![],
+        source: None,
     };
     store.apply(&batch).unwrap();
     store.apply(&batch).unwrap(); // replay — deterministic ids make this a no-op
@@ -380,4 +396,111 @@ fn reingesting_the_same_message_is_idempotent() {
     assert_eq!(input, 7, "usage must not double-count on replay");
     assert_eq!(messages, 1, "message_count counts inserts, not replays");
     assert_eq!(queries::search(store.conn(), "hello", 5).unwrap().len(), 1);
+}
+
+#[test]
+fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let mut row = message("m-move", 0, MessageKind::ToolUse);
+    row.usage = Some(TokenSnapshot {
+        input: Some(40),
+        output: Some(5),
+        ..Default::default()
+    });
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(row.clone()))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    row.ts = Some(2 * 3_600_000);
+    row.model = Some("claude-sonnet-5".into());
+    row.kind = MessageKind::Agent;
+    row.usage = None;
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(row))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    let old_count: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM usage_bucket
+             WHERE session_id = 's1' AND hour_ts = 3600000 AND model = 'claude-opus-5'",
+            [],
+            |record| record.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_count, 0, "the old bucket must be emptied");
+    let (input, messages, tools): (Option<i64>, i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT in_tokens, message_count, tool_call_count FROM usage_bucket
+             WHERE session_id = 's1' AND hour_ts = 7200000 AND model = 'claude-sonnet-5'",
+            [],
+            |record| Ok((record.get(0)?, record.get(1)?, record.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(input, None, "a cleared full replacement returns to unknown");
+    assert_eq!((messages, tools), (1, 0));
+}
+
+#[test]
+fn project_upserts_union_root_paths() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut first = project();
+    let mut second = project();
+    first.root_paths = vec!["/w/one".into()];
+    second.root_paths = vec!["/w/two".into()];
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Project(first), IngestOp::Project(second)],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let json: String = store
+        .conn()
+        .query_row(
+            "SELECT root_paths FROM project WHERE id = 'p1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Vec<String>>(&json).unwrap(),
+        ["/w/one", "/w/two"]
+    );
+}
+
+#[test]
+fn schema_mismatch_fails_closed_without_dropping_existing_data() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let conn = rusqlite::Connection::open(db.path()).unwrap();
+    conn.execute("CREATE TABLE sentinel (value TEXT NOT NULL)", [])
+        .unwrap();
+    conn.execute("INSERT INTO sentinel VALUES ('keep-me')", [])
+        .unwrap();
+    conn.pragma_update(None, "user_version", 1).unwrap();
+    drop(conn);
+
+    assert!(matches!(
+        Store::open(db.path()),
+        Err(StoreError::SchemaVersionMismatch {
+            found: 1,
+            expected: 2
+        })
+    ));
+    let conn = rusqlite::Connection::open(db.path()).unwrap();
+    let value: String = conn
+        .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(value, "keep-me");
 }

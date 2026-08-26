@@ -16,3 +16,4 @@ rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
 rosetta-adapter-codex = { path = "../adapters/codex" }
 rosetta-bench-corpus = { path = "../bench-corpus" }
 tempfile.workspace = true
+walkdir.workspace = true

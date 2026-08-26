@@ -28,6 +28,17 @@ pub struct WalkReport {
 /// deterministic reports. A missing root is an empty report, not an error —
 /// discovery probes runtimes that may not be installed.
 pub fn walk(root: &Path, max_files: usize) -> Result<WalkReport, CaptureError> {
+    walk_filtered(root, max_files, |_| true)
+}
+
+/// Walk regular files accepted by `include`. The cap counts accepted files,
+/// not unrelated layout noise. This keeps a large cache/debug directory from
+/// starving transcript discovery before the pipeline can filter it.
+pub fn walk_filtered(
+    root: &Path,
+    max_files: usize,
+    mut include: impl FnMut(&str) -> bool,
+) -> Result<WalkReport, CaptureError> {
     let mut report = WalkReport::default();
     if !root.is_dir() {
         return Ok(report);
@@ -51,16 +62,19 @@ pub fn walk(root: &Path, max_files: usize) -> Result<WalkReport, CaptureError> {
         if !entry.file_type().is_file() {
             continue;
         }
-        if report.files.len() == max_files {
-            report.truncated = true;
-            break;
-        }
         let Ok(relative) = entry.path().strip_prefix(root) else {
             continue;
         };
         let Some(relative_path) = portable_relative(relative) else {
             continue;
         };
+        if !include(&relative_path) {
+            continue;
+        }
+        if report.files.len() == max_files {
+            report.truncated = true;
+            break;
+        }
         let metadata = match entry.metadata() {
             Ok(metadata) => metadata,
             Err(error) if error.io_error().is_some_and(is_not_found) => continue,
@@ -84,6 +98,54 @@ pub fn walk(root: &Path, max_files: usize) -> Result<WalkReport, CaptureError> {
         .files
         .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     Ok(report)
+}
+
+/// Read only the first delimiter-terminated record, bounded by
+/// `max_record_bytes`. A small or newline-free whole file is also a complete
+/// first record; an oversized, missing, or concurrently vanished file yields
+/// `None` and is reported as unidentified by the caller.
+pub fn first_record(
+    path: &Path,
+    delimiter: u8,
+    max_record_bytes: usize,
+    normalize_crlf: bool,
+) -> Result<Option<Vec<u8>>, CaptureError> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error("opening", path, error)),
+    };
+    let mut payload = Vec::with_capacity(max_record_bytes.min(64 * 1024));
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let remaining = max_record_bytes
+            .saturating_add(1)
+            .saturating_sub(payload.len());
+        if remaining == 0 {
+            return Ok(None);
+        }
+        let wanted = remaining.min(buffer.len());
+        let count = file
+            .read(&mut buffer[..wanted])
+            .map_err(|error| io_error("reading the first record of", path, error))?;
+        if count == 0 {
+            break;
+        }
+        if let Some(at) = buffer[..count].iter().position(|byte| *byte == delimiter) {
+            payload.extend_from_slice(&buffer[..at]);
+            if normalize_crlf && payload.last() == Some(&b'\r') {
+                payload.pop();
+            }
+            return (payload.len() <= max_record_bytes)
+                .then_some(payload)
+                .map_or(Ok(None), |payload| Ok(Some(payload)));
+        }
+        payload.extend_from_slice(&buffer[..count]);
+    }
+    if normalize_crlf && payload.last() == Some(&b'\r') {
+        payload.pop();
+    }
+    Ok((!payload.is_empty() && payload.len() <= max_record_bytes).then_some(payload))
 }
 
 pub fn modified_ms(metadata: &std::fs::Metadata) -> i64 {
@@ -195,6 +257,30 @@ mod tests {
         let report = walk(root.path(), 3).unwrap();
         assert_eq!(report.files.len(), 3);
         assert!(report.truncated);
+    }
+
+    #[test]
+    fn filtered_walk_caps_matches_not_unrelated_files() {
+        let root = TempDir::new().unwrap();
+        for index in 0..5 {
+            std::fs::write(root.path().join(format!("noise-{index}.txt")), b"x").unwrap();
+        }
+        std::fs::write(root.path().join("session.jsonl"), b"x\n").unwrap();
+        let report = walk_filtered(root.path(), 1, |path| path.ends_with(".jsonl")).unwrap();
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].relative_path, "session.jsonl");
+        assert!(!report.truncated);
+    }
+
+    #[test]
+    fn first_record_reads_past_the_skim_window_but_stays_bounded() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("rollout.jsonl");
+        let long = format!("{{\"padding\":\"{}\"}}\nsecond\n", "x".repeat(80_000));
+        std::fs::write(&path, &long).unwrap();
+        let record = first_record(&path, b'\n', 100_000, true).unwrap().unwrap();
+        assert_eq!(record.len(), 80_014);
+        assert!(first_record(&path, b'\n', 1_000, true).unwrap().is_none());
     }
 
     #[cfg(unix)]

@@ -15,6 +15,7 @@ pub mod checkpoint;
 pub mod discover;
 pub mod instrument;
 pub mod meta;
+mod project;
 pub mod sched;
 pub mod stream;
 
@@ -72,6 +73,9 @@ pub struct IngestOptions {
     pub tail: TailConfig,
     /// Transient-read retries per file before the lane gives up.
     pub max_retries: u32,
+    /// Files per runtime that receive a rotating forced replay each run. This
+    /// is the bounded audit lane for same-size rewrites outside the tail anchor.
+    pub audit_files_per_run: usize,
 }
 
 impl Default for IngestOptions {
@@ -82,6 +86,7 @@ impl Default for IngestOptions {
             max_files: 100_000,
             tail: TailConfig::json_lines(),
             max_retries: 3,
+            audit_files_per_run: 1,
         }
     }
 }

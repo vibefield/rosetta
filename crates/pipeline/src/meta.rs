@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use rosetta_adapter_support::{AgentAdapter, FileStat};
+use rosetta_adapter_support::{AgentAdapter, FileDiscipline, FileFormat, FileStat, StreamDriver};
 use rosetta_core::rows::{ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_core::{IngestOp, ids};
 use rosetta_store::{ApplyStats, Batch, Store};
@@ -18,6 +18,9 @@ use crate::{IngestOptions, PipelineError};
 pub struct SessionFile {
     pub relative_path: String,
     pub stream_id: String,
+    pub file_format: FileFormat,
+    pub discipline: FileDiscipline,
+    pub driver: StreamDriver,
     pub session_id: String,
     pub native_session_id: String,
     pub size: u64,
@@ -28,11 +31,16 @@ pub struct SessionFile {
 #[derive(Debug, Default)]
 pub struct MetaReport {
     pub files_matched: usize,
+    /// Layout-owned files that have no normalization driver yet. They remain
+    /// inventory, never accidental transcript input.
+    pub files_inventory_only: usize,
     pub files_skimmed: usize,
-    /// Matched files whose session could not be identified from the bounded
-    /// windows — the stream phase will still visit them later; they are
-    /// reported, never silently dropped.
+    /// Matched streamable files whose session could not be identified even
+    /// after the bounded first-record retry. They are reported and withheld
+    /// from streaming; the CLI treats any such file as an incomplete ingest.
     pub files_unidentified: usize,
+    pub files_vanished: usize,
+    pub walk_truncated: bool,
     pub sessions: usize,
     pub projects: usize,
     pub stats: ApplyStats,
@@ -48,19 +56,43 @@ pub fn meta_ingest(
 ) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
     let layout = adapter.layout();
     let walk = instrument.time(Metric::WalkNanos, || {
-        rosetta_capture::walk(root, opts.max_files)
+        rosetta_capture::walk_filtered(root, opts.max_files, |path| {
+            layout.matching_stream(path).is_some()
+        })
     })?;
 
     let mut report = MetaReport::default();
     let mut files = Vec::new();
     let mut projects: Vec<ProjectRow> = Vec::new();
     let mut sessions: Vec<SessionRow> = Vec::new();
+    let mut skim_ops: Vec<IngestOp> = Vec::new();
+    report.walk_truncated = walk.truncated;
 
     for file in &walk.files {
         let Some(stream) = layout.matching_stream(&file.relative_path) else {
             continue;
         };
         report.files_matched += 1;
+
+        let Some(driver) = adapter.stream_driver(&stream.id) else {
+            report.files_inventory_only += 1;
+            continue;
+        };
+        match driver {
+            StreamDriver::JsonLines
+                if stream.file_format == FileFormat::Jsonl
+                    && stream.discipline == FileDiscipline::AppendOnly => {}
+            _ => {
+                return Err(PipelineError::Config(format!(
+                    "{} opted stream {} into {:?}, but its layout is {:?}/{:?}",
+                    adapter.kind(),
+                    stream.id,
+                    driver,
+                    stream.file_format,
+                    stream.discipline
+                )));
+            }
+        }
 
         let Some(windows) = instrument.time(Metric::SkimNanos, || {
             rosetta_capture::head_tail(
@@ -70,7 +102,8 @@ pub fn meta_ingest(
             )
         })?
         else {
-            continue; // vanished between walk and skim — the stream phase's problem
+            report.files_vanished += 1;
+            continue;
         };
         report.files_skimmed += 1;
         instrument.add(Metric::FilesSkimmed, 1);
@@ -84,7 +117,25 @@ pub fn meta_ingest(
             size: file.size,
             modified_ms: file.modified_ms,
         };
-        let skim = adapter.skim(&stat, &windows.head, &windows.tail);
+        let mut skim = adapter.skim(&stream.id, &stat, &windows.head, &windows.tail);
+        // Some opening records legitimately exceed the UI skim window (Codex
+        // session_meta can embed AGENTS.md). Read exactly one bounded record,
+        // never the transcript body, before declaring the file unidentified.
+        if skim.session_id.is_none()
+            && let Some(mut first) = instrument.time(Metric::SkimNanos, || {
+                rosetta_capture::first_record(
+                    &root.join(&file.relative_path),
+                    opts.tail.delimiter,
+                    opts.tail.max_record_bytes,
+                    opts.tail.normalize_crlf,
+                )
+            })?
+        {
+            first.push(opts.tail.delimiter);
+            instrument.add(Metric::BytesRead, first.len() as u64);
+            skim = adapter.skim(&stream.id, &stat, &first, &windows.tail);
+        }
+        skim_ops.extend(skim.ops);
         let Some(native_session_id) = skim.session_id else {
             report.files_unidentified += 1;
             continue;
@@ -92,17 +143,51 @@ pub fn meta_ingest(
 
         let session_id = ids::session_id(&runtime.id, &native_session_id);
         let project_id = skim.cwd.as_deref().map(|cwd| {
-            let id = ids::project_id(cwd, None);
-            if !projects.iter().any(|project| project.id == id) {
-                projects.push(ProjectRow {
-                    id: id.clone(),
-                    name: project_name(cwd),
-                    root_paths: vec![cwd.to_string()],
-                    git_repo: None,
-                });
+            let project = crate::project::project(cwd);
+            let id = project.id.clone();
+            if !projects.iter().any(|existing| existing.id == id) {
+                projects.push(project);
             }
             id
         });
+
+        let parent_session_id = skim
+            .parent_session_id
+            .as_deref()
+            .map(|native| ids::session_id(&runtime.id, native));
+        let root_session_id = skim
+            .root_session_id
+            .as_deref()
+            .map(|native| ids::session_id(&runtime.id, native))
+            .or_else(|| parent_session_id.clone())
+            .unwrap_or_else(|| session_id.clone());
+        let role = skim.role.unwrap_or(SessionRole::Main);
+
+        // A retained subagent transcript can outlive its parent's transcript.
+        // Materialize an honest parent placeholder so the relationship and FK
+        // survive GC; a later main skim refines the same deterministic row.
+        if let (Some(parent_native), Some(parent_id)) = (
+            skim.parent_session_id.as_deref(),
+            parent_session_id.as_ref(),
+        ) {
+            merge_session(
+                &mut sessions,
+                SessionRow {
+                    id: parent_id.clone(),
+                    native_session_id: parent_native.to_owned(),
+                    runtime_id: runtime.id.clone(),
+                    project_id: project_id.clone(),
+                    parent_session_id: None,
+                    root_session_id: root_session_id.clone(),
+                    role: SessionRole::Main,
+                    title: None,
+                    summary: None,
+                    started_at: skim.started_at.unwrap_or(file.modified_ms),
+                    updated_at: file.modified_ms,
+                    stream_state: StreamState::Pending,
+                },
+            );
+        }
 
         // One session can span several files (or reappear across runs) —
         // keep the newest skim's view of the mutable fields.
@@ -111,29 +196,23 @@ pub fn meta_ingest(
             native_session_id: native_session_id.clone(),
             runtime_id: runtime.id.clone(),
             project_id,
-            parent_session_id: None,
-            root_session_id: session_id.clone(),
-            role: SessionRole::Main,
+            parent_session_id,
+            root_session_id,
+            role,
             title: skim.title,
             summary: None,
             started_at: skim.started_at.unwrap_or(file.modified_ms),
             updated_at: file.modified_ms,
             stream_state: StreamState::Pending,
         };
-        match sessions.iter_mut().find(|existing| existing.id == row.id) {
-            Some(existing) => {
-                if row.updated_at >= existing.updated_at {
-                    let started_at = existing.started_at.min(row.started_at);
-                    *existing = row;
-                    existing.started_at = started_at;
-                }
-            }
-            None => sessions.push(row),
-        }
+        merge_session(&mut sessions, row);
 
         files.push(SessionFile {
             relative_path: file.relative_path.clone(),
             stream_id: stream.id.clone(),
+            file_format: stream.file_format,
+            discipline: stream.discipline,
+            driver,
             session_id,
             native_session_id,
             size: file.size,
@@ -149,6 +228,7 @@ pub fn meta_ingest(
             session.stream_state = existing.stream_state;
         }
     }
+    sessions.sort_by_key(|session| !matches!(session.role, SessionRole::Main));
 
     report.sessions = sessions.len();
     report.projects = projects.len();
@@ -160,10 +240,12 @@ pub fn meta_ingest(
     ops.push(IngestOp::Runtime(runtime.clone()));
     ops.extend(projects.into_iter().map(IngestOp::Project));
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
+    ops.extend(skim_ops);
     report.stats = instrument.time(Metric::ApplyNanos, || {
         store.apply(&Batch {
             ops,
             checkpoints: vec![],
+            source: None,
         })
     })?;
     instrument.add(Metric::BatchesApplied, 1);
@@ -173,9 +255,21 @@ pub fn meta_ingest(
     Ok((report, files))
 }
 
-fn project_name(cwd: &str) -> String {
-    cwd.rsplit(['/', '\\'])
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(cwd)
-        .to_string()
+fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
+    match sessions.iter_mut().find(|existing| existing.id == row.id) {
+        Some(existing) => {
+            let started_at = existing.started_at.min(row.started_at);
+            if row.updated_at >= existing.updated_at
+                || (existing.role == SessionRole::Main && row.role != SessionRole::Main)
+            {
+                *existing = row;
+            } else {
+                existing.project_id = existing.project_id.clone().or(row.project_id);
+                existing.parent_session_id =
+                    existing.parent_session_id.clone().or(row.parent_session_id);
+            }
+            existing.started_at = started_at;
+        }
+        None => sessions.push(row),
+    }
 }

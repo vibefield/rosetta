@@ -32,7 +32,12 @@ fn harness(adapter: &dyn AgentAdapter, agent: Agent, sessions: u64, lines: u64) 
     std::fs::create_dir_all(&root).unwrap();
     generate(&CorpusSpec::new(agent, sessions, lines, 42), &root).unwrap();
 
-    let opts = IngestOptions::default();
+    // Individual tests opt into the rotating audit lane explicitly; the phase
+    // baseline exercises quiet incremental tails.
+    let opts = IngestOptions {
+        audit_files_per_run: 0,
+        ..IngestOptions::default()
+    };
     let instrument = Instrument::new();
     let discoveries = discover(&[adapter], home.path(), &opts, &instrument).unwrap();
     assert_eq!(discoveries.len(), 1);
@@ -179,9 +184,18 @@ fn claude_code_phases_end_to_end() {
         .unwrap();
     assert!(drift_rows > 0, "an undeclared type must aggregate as drift");
 
-    // Truncation: the file shrinks → new generation, full idempotent replay
-    // (existing rows update rather than duplicate).
+    // Truncation: the file shrinks → a staged replacement generation. Removed
+    // rows are tombstoned when the clean generation atomically activates.
     let victim = &files_again[1];
+    let before: i64 = h
+        .store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM message WHERE session_id = ?1",
+            [&victim.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
     let path = h.root.join(&victim.relative_path);
     let text = std::fs::read_to_string(&path).unwrap();
     let kept: Vec<&str> = text.lines().take(3).collect();
@@ -197,9 +211,18 @@ fn claude_code_phases_end_to_end() {
     )
     .unwrap();
     assert_eq!(truncated.generations_restarted, 1);
-    assert_eq!(
-        truncated.stats.messages_inserted, 0,
-        "replayed rows are updates, never duplicates"
+    let after: i64 = h
+        .store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM message WHERE session_id = ?1",
+            [&victim.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        after < before,
+        "rows absent from the replacement must be removed"
     );
 
     // The instrument saw the whole run.

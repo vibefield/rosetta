@@ -557,6 +557,8 @@ pub struct SystemLine {
     pub tool_use_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

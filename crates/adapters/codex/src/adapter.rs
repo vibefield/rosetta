@@ -4,7 +4,7 @@ use std::any::Any;
 
 use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
-    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult,
+    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
 };
 
 use crate::normalize::{self, CodexState};
@@ -24,8 +24,40 @@ impl AgentAdapter for CodexAdapter {
         spec::doc()
     }
 
+    fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
+        (stream_id == spec::ROLLOUT).then_some(StreamDriver::JsonLines)
+    }
+
+    fn normalizer_version(&self) -> u32 {
+        1
+    }
+
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
         Some(Box::new(CodexState::default()))
+    }
+
+    fn checkpoint_state(
+        &self,
+        state: Option<&(dyn Any + Send)>,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let state = state
+            .and_then(|state| state.downcast_ref::<CodexState>())
+            .ok_or_else(|| "codex checkpoint state has the wrong type".to_string())?;
+        serde_json::to_value(state)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_state(
+        &self,
+        checkpoint: Option<&serde_json::Value>,
+    ) -> Result<Option<Box<dyn Any + Send>>, String> {
+        match checkpoint {
+            None => Ok(self.init_state()),
+            Some(value) => serde_json::from_value::<CodexState>(value.clone())
+                .map(|state| Some(Box::new(state) as Box<dyn Any + Send>))
+                .map_err(|error| error.to_string()),
+        }
     }
 
     /// Meta phase: the native session facts, and no ops.
@@ -43,12 +75,8 @@ impl AgentAdapter for CodexAdapter {
     /// The tail window still has no consumer: every field below comes from the
     /// opening record, and the file's mtime already gives the pipeline the
     /// session's `updated_at`.
-    fn skim(&self, stat: &FileStat, head: &[u8], _tail: &[u8]) -> SkimResult {
-        let is_rollout = self
-            .layout()
-            .matching_stream(&stat.relative_path)
-            .is_some_and(|stream| stream.id == spec::ROLLOUT);
-        if !is_rollout {
+    fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], _tail: &[u8]) -> SkimResult {
+        if self.stream_driver(stream_id).is_none() {
             return SkimResult::default();
         }
 
@@ -65,6 +93,9 @@ impl AgentAdapter for CodexAdapter {
         SkimResult {
             ops: Vec::new(),
             session_id: Some(meta.id.clone()),
+            parent_session_id: None,
+            root_session_id: None,
+            role: Some(rosetta_core::rows::SessionRole::Main),
             cwd: Some(meta.cwd.clone()),
             agent_version: Some(meta.cli_version.clone()),
             // NOTHING codex writes names a session: `session_meta` carries only
@@ -113,6 +144,7 @@ fn first_complete_line(head: &[u8], whole_file: bool) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{CodexAdapter, first_complete_line};
+    use crate::spec;
     use rosetta_adapter_support::adapter::{AgentAdapter, FileStat, SkimResult};
 
     const ROLLOUT: &str = "sessions/2026/08/24/rollout-2026-08-24T19-35-03-01a036c5.jsonl";
@@ -135,6 +167,9 @@ mod tests {
     fn assert_all_none(result: &SkimResult) {
         assert!(result.ops.is_empty());
         assert!(result.session_id.is_none());
+        assert!(result.parent_session_id.is_none());
+        assert!(result.root_session_id.is_none());
+        assert!(result.role.is_none());
         assert!(result.cwd.is_none());
         assert!(result.agent_version.is_none());
         assert!(result.title.is_none());
@@ -145,7 +180,7 @@ mod tests {
     fn skim_reports_the_native_session_id() {
         let line = session_meta_line("01a036c5-6e18-73f3-8c07-d4430763840b");
         let head = format!("{line}\n{{\"type\":\"event_msg\"");
-        let result = CodexAdapter.skim(&stat(ROLLOUT, 4096), head.as_bytes(), b"");
+        let result = CodexAdapter.skim(spec::ROLLOUT, &stat(ROLLOUT, 4096), head.as_bytes(), b"");
         assert_eq!(
             result.session_id.as_deref(),
             Some("01a036c5-6e18-73f3-8c07-d4430763840b")
@@ -158,7 +193,7 @@ mod tests {
     fn skim_reports_the_rest_of_the_opening_record() {
         let line = session_meta_line("01a036c5-6e18-73f3-8c07-d4430763840b");
         let head = format!("{line}\n{{\"type\":\"event_msg\"");
-        let result = CodexAdapter.skim(&stat(ROLLOUT, 4096), head.as_bytes(), b"");
+        let result = CodexAdapter.skim(spec::ROLLOUT, &stat(ROLLOUT, 4096), head.as_bytes(), b"");
         assert_eq!(result.cwd.as_deref(), Some("/w"));
         assert_eq!(result.agent_version.as_deref(), Some("0.149.1"));
         assert_eq!(result.started_at, Some(1_787_625_303_577));
@@ -170,7 +205,7 @@ mod tests {
     fn skim_ignores_files_outside_the_rollout_stream() {
         let line = session_meta_line("01a036c5");
         let head = format!("{line}\n");
-        let result = CodexAdapter.skim(&stat("config.toml", 64), head.as_bytes(), b"");
+        let result = CodexAdapter.skim("config", &stat("config.toml", 64), head.as_bytes(), b"");
         assert_all_none(&result);
     }
 
@@ -179,7 +214,12 @@ mod tests {
         // A head window that stops mid-record yields nothing rather than a
         // half-parsed session id — or half a workspace path.
         let line = session_meta_line("01a036c5");
-        let result = CodexAdapter.skim(&stat(ROLLOUT, 4096), &line.as_bytes()[..40], b"");
+        let result = CodexAdapter.skim(
+            spec::ROLLOUT,
+            &stat(ROLLOUT, 4096),
+            &line.as_bytes()[..40],
+            b"",
+        );
         assert_all_none(&result);
     }
 
@@ -188,7 +228,7 @@ mod tests {
         // A rollout whose first record is not the session header answers for
         // nothing rather than guessing from a record that repeats no identity.
         let head = "{\"timestamp\":\"2026-08-25T02:35:03.577Z\",\"ordinal\":0,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n";
-        let result = CodexAdapter.skim(&stat(ROLLOUT, 4096), head.as_bytes(), b"");
+        let result = CodexAdapter.skim(spec::ROLLOUT, &stat(ROLLOUT, 4096), head.as_bytes(), b"");
         assert_all_none(&result);
     }
 
