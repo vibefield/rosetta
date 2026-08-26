@@ -7,5 +7,6 @@ edition.workspace = true
 rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
 rosetta-adapter-codex = { path = "../adapters/codex" }
 rosetta-adapter-support = { path = "../adapter-support" }
+rosetta-capture = { path = "../capture" }
 rosetta-pipeline = { path = "../pipeline" }
 rosetta-store = { path = "../store" }

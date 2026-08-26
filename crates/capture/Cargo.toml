@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 blake3.workspace = true
+notify.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]

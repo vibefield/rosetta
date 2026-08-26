@@ -14,6 +14,7 @@
 pub mod checkpoint;
 pub mod discover;
 pub mod instrument;
+pub mod live;
 pub mod meta;
 mod project;
 pub mod sched;
@@ -22,6 +23,7 @@ pub mod stream;
 pub use checkpoint::PipeCheckpoint;
 pub use discover::{Discovery, discover, expand_data_root};
 pub use instrument::{Instrument, Metric};
+pub use live::{LiveOptions, LiveReport, LiveRunner, stream_live};
 pub use meta::{MetaReport, SessionFile, meta_ingest};
 pub use sched::{Lane, WorkItem, WorkQueue};
 pub use stream::{StreamReport, stream_backfill};

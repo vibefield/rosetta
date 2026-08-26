@@ -144,7 +144,7 @@ pub fn stream_backfill(
     Ok(report)
 }
 
-fn rotating_audit_paths(
+pub(crate) fn rotating_audit_paths(
     store: &Store,
     runtime_id: &str,
     files: &[SessionFile],
@@ -464,7 +464,7 @@ fn ingest_file(
             .is_some_and(|checkpoint| checkpoint.incomplete_suffix_len == 0))
 }
 
-fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
+pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
     total.messages_inserted += batch.messages_inserted;
     total.messages_updated += batch.messages_updated;
     total.tool_results_merged += batch.tool_results_merged;

@@ -12,7 +12,10 @@ use std::process::ExitCode;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_support::AgentAdapter;
-use rosetta_pipeline::{IngestOptions, Instrument, discover, meta_ingest, stream_backfill};
+use rosetta_capture::NotifyEvents;
+use rosetta_pipeline::{
+    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, meta_ingest, stream_backfill,
+};
 use rosetta_store::Store;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
@@ -24,10 +27,12 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("discover") => cmd_discover(&args[1..]),
         Some("ingest") => cmd_ingest(&args[1..]),
+        Some("watch") => cmd_watch(&args[1..]),
         _ => {
-            eprintln!("usage: rosettad <discover|ingest> [options]");
+            eprintln!("usage: rosettad <discover|ingest|watch> [options]");
             eprintln!("  discover [--home DIR]");
             eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]");
+            eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             return ExitCode::from(2);
         }
     };
@@ -45,6 +50,7 @@ struct Flags {
     db: Option<PathBuf>,
     agents: Vec<String>,
     profile: bool,
+    ticks: Option<u64>,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -53,6 +59,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         db: None,
         agents: Vec::new(),
         profile: false,
+        ticks: None,
     };
     let mut at = 0;
     while at < args.len() {
@@ -69,6 +76,14 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--profile" => {
                 flags.profile = true;
                 at += 1;
+            }
+            "--ticks" => {
+                let value = take_value(args, &mut at)?;
+                flags.ticks = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--ticks needs a number, got {value}"))?,
+                );
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -256,6 +271,122 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     }
     if !failures.is_empty() {
         return Err(failures.join("; "));
+    }
+    Ok(())
+}
+
+/// Backfill, then hold the projection live: one watcher + runner per
+/// installed runtime, round-robin ticks over a single writer. A hard kill is
+/// always safe — every write is one transaction behind a checkpoint CAS.
+fn cmd_watch(args: &[String]) -> Result<(), String> {
+    let flags = parse_flags(args)?;
+    let db = flags.db.clone().ok_or("watch needs --db PATH")?;
+    let opts = IngestOptions::default();
+    let live = LiveOptions::default();
+    let instrument = Instrument::new();
+    let adapters = selected(&flags)?;
+
+    let mut store =
+        Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+    let discoveries =
+        discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
+
+    let mut runners = Vec::new();
+    for (adapter, discovery) in adapters.iter().zip(&discoveries) {
+        if !discovery.installed {
+            println!("{}: not installed, skipping", adapter.kind());
+            continue;
+        }
+        let mut runtime = discovery.runtime.clone();
+        runtime.enabled = true; // watching is explicit consent
+
+        // Watch BEFORE the backfill scan: a write landing mid-backfill still
+        // produces a hint for the first live tick.
+        let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+
+        let (meta, files) = meta_ingest(
+            *adapter,
+            &runtime,
+            &discovery.root,
+            &mut store,
+            &opts,
+            &instrument,
+        )
+        .map_err(|error| error.to_string())?;
+        let stream = stream_backfill(
+            *adapter,
+            &runtime,
+            &discovery.root,
+            &mut store,
+            &files,
+            &opts,
+            &instrument,
+        )
+        .map_err(|error| error.to_string())?;
+        println!(
+            "{}: backfilled {} sessions ({} rows) — watching {}",
+            adapter.kind(),
+            meta.sessions,
+            stream.stats.messages_inserted,
+            discovery.root.display(),
+        );
+
+        let runner = LiveRunner::start(
+            *adapter,
+            runtime,
+            discovery.root.clone(),
+            Box::new(events),
+            &mut store,
+            opts.clone(),
+            live.clone(),
+            &instrument,
+        )
+        .map_err(|error| error.to_string())?;
+        runners.push((adapter.kind(), runner, 0_u64));
+    }
+    if runners.is_empty() {
+        return Err("nothing to watch: no installed runtimes".to_string());
+    }
+
+    let mut remaining = flags.ticks;
+    loop {
+        match &mut remaining {
+            Some(0) => break,
+            Some(count) => *count -= 1,
+            None => {}
+        }
+        for (kind, runner, seen_batches) in &mut runners {
+            runner
+                .tick(&mut store, &instrument)
+                .map_err(|error| error.to_string())?;
+            let report = runner.report();
+            if report.stream.batches > *seen_batches {
+                *seen_batches = report.stream.batches;
+                println!(
+                    "{kind}: live — {} rows, {} tool results, {} sessions touched",
+                    report.stream.stats.messages_inserted + report.stream.stats.messages_updated,
+                    report.stream.stats.tool_results_merged,
+                    report.stream.sessions_indexed,
+                );
+            }
+        }
+    }
+
+    for (kind, runner, _) in &runners {
+        let report = runner.report();
+        println!(
+            "{kind}: watched {} ticks — {} events ({} ignored), {} polls, {} rescans, {} admissions, {} rows",
+            report.ticks,
+            report.events,
+            report.hints_ignored,
+            report.polls,
+            report.rescans,
+            report.admissions,
+            report.stream.stats.messages_inserted,
+        );
+    }
+    if flags.profile {
+        println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
 }
