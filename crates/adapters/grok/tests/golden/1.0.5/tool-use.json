@@ -1,0 +1,123 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "97915c4c489974e3b51399399e4b55b5ec966f45016fc183b9be10266818ea89",
+    "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
+    "ordinal": 0,
+    "kind": "user",
+    "subtype": null,
+    "uuid": "01a03752-db6d-7210-a3d4-672b775ae289-2",
+    "parent_uuid": null,
+    "ts": 1787634572899,
+    "model": null,
+    "effort": null,
+    "content": "Run the echo command now. [use-tool]",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 1,
+    "src_offset": 0
+  },
+  {
+    "op": "message",
+    "timeline_id": "e1af43376723334988ad9e9c2184aea5c5f476c2eaea03bc41508f0d22a6def5",
+    "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
+    "ordinal": 1,
+    "kind": "tool_use",
+    "subtype": null,
+    "uuid": "01a03752-db6d-7210-a3d4-672b775ae289-4",
+    "parent_uuid": null,
+    "ts": 1787634572910,
+    "model": "mock-model",
+    "effort": null,
+    "content": null,
+    "tool": {
+      "tool_id": "call_mock_0004",
+      "name": "run_terminal_command",
+      "input": {
+        "command": "echo rosetta-mock",
+        "description": "echo mock output"
+      },
+      "result": null,
+      "payload": null,
+      "is_error": null
+    },
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 2,
+    "src_offset": 376
+  },
+  {
+    "op": "tool_result",
+    "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
+    "tool_id": "call_mock_0004",
+    "result": "rosetta-mock\n",
+    "payload": {
+      "command": "echo rosetta-mock",
+      "current_dir": "<PROJECT>",
+      "description": "echo mock output",
+      "exit_code": 0,
+      "output": [
+        114,
+        111,
+        115,
+        101,
+        116,
+        116,
+        97,
+        45,
+        109,
+        111,
+        99,
+        107,
+        10
+      ],
+      "output_file": "<SCENARIO_DIR>/grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Ftool-use%2Fproject/01a03752-db6d-7210-a3d4-672b775ae289/terminal/call_mock_0004.log",
+      "output_for_prompt": "exit: 0\nrosetta-mock\n",
+      "signal": null,
+      "timed_out": false,
+      "total_bytes": 13,
+      "truncated": false,
+      "type": "Bash",
+      "was_bare_echo": true
+    },
+    "is_error": false,
+    "at": 1787634572990
+  },
+  {
+    "op": "message",
+    "timeline_id": "11d3ca430047480da7d3bdf24ead1c6d2ed5d22a3314f23d932938f78e6fa5f0",
+    "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
+    "ordinal": 2,
+    "kind": "agent",
+    "subtype": null,
+    "uuid": "01a03752-db6d-7210-a3d4-672b775ae289-8",
+    "parent_uuid": null,
+    "ts": 1787634572993,
+    "model": "mock-model",
+    "effort": null,
+    "content": "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 5,
+    "src_offset": 3259
+  },
+  {
+    "op": "usage",
+    "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
+    "response": "11d3ca430047480da7d3bdf24ead1c6d2ed5d22a3314f23d932938f78e6fa5f0",
+    "ts": 1787634573010,
+    "model": "mock-model",
+    "tokens": {
+      "input": 256,
+      "output": 64,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
+  }
+]

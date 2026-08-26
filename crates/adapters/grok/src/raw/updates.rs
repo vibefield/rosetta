@@ -10,6 +10,45 @@ use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// A field that is absent on most update variants but may be explicitly null
+/// on the variant that declares it. `Option<Value>` cannot distinguish those
+/// two cases during serde round-trip (`null` also becomes `None`).
+#[derive(Debug, Default)]
+pub enum MaybeValue {
+    #[default]
+    Absent,
+    Present(Value),
+}
+
+impl MaybeValue {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+impl<'de> Deserialize<'de> for MaybeValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(Self::Present)
+    }
+}
+
+impl Serialize for MaybeValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Present(value) => value.serialize(serializer),
+            Self::Absent => Err(serde::ser::Error::custom(
+                "absent MaybeValue must be skipped",
+            )),
+        }
+    }
+}
+
 /// Outcome of parsing one updates.jsonl line.
 #[derive(Debug)]
 pub enum ParsedLine {
@@ -165,10 +204,46 @@ pub struct SessionUpdate {
     pub task_snapshot: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "MaybeValue::is_absent")]
+    pub summary_preview: MaybeValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_after: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_before: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_index_at_compaction: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u64>,
+    #[serde(
+        rename = "currentModeId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub current_mode_id: Option<String>,
     #[serde(rename = "auto", default, skip_serializing_if = "Option::is_none")]
     pub auto_flag: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,6 +258,44 @@ pub struct SessionUpdate {
     pub turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier_max_runs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier_runs_attempted: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_deliverables: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_subagent_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_classifier_details_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_classifier_verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_context_pct: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_subagent_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_tool_call_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_turn_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planning: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_baseline: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_deliverables: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_verify_rounds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_worker_rounds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifying_completion: Option<bool>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -190,5 +303,22 @@ pub struct SessionUpdate {
 impl Drift for SessionUpdate {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::{ParsedLine, parse_line};
+
+    #[test]
+    fn explicit_null_variant_field_round_trips() {
+        let text = r#"{"timestamp":1,"method":"session/update","params":{"sessionId":"s","_meta":{"eventId":"e","agentTimestampMs":1000},"update":{"sessionUpdate":"auto_compact_completed","elapsed_ms":1,"summary_preview":null,"tokens_after":2,"tokens_before":3}}}"#;
+        let original: Value = serde_json::from_str(text).unwrap();
+        let ParsedLine::Known(record) = parse_line(text).unwrap() else {
+            panic!("declared update should parse");
+        };
+        assert_eq!(serde_json::to_value(record).unwrap(), original);
     }
 }

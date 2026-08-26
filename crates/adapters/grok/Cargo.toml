@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 rosetta-adapter-support = { path = "../../adapter-support" }
+rosetta-core = { path = "../../core" }
 serde.workspace = true
 serde_json.workspace = true
 
