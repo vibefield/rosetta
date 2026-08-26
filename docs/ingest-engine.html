@@ -353,7 +353,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       rows+FTS+buckets), <code>queries.rs</code> (typed functions for heatmap / contribution /
       timeline / FTS — consumers never hand-write SQL), <code>hot.rs</code> (the in-process tier
       below: metadata mirror + result caches, mutated only by the writer thread). The writer has two
-      modes: <b>live</b> (rows + FTS + bucket corrections in one tx) and <b>cold rebuild</b>
+      modes: <b>live</b> (rows + FTS + coalesced bucket corrections in one tx) and <b>cold backfill/rebuild</b>
       (bulk-load base rows, defer FTS and selected indexes, build + validate once, then publish
       search readiness — spaghetti's 166× recovery came from exactly this, not parser parallelism).</p>
       <div class="seams"><b>Benches:</b> writer rows/sec across batch sizes; query latency on a

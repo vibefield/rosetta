@@ -50,6 +50,9 @@ JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrite
 deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
 recovery, and an append-only checksummed raw ledger. `rebuild` replays the complete
 ledger into a private projection and atomically installs it only after validation;
+fresh ingest/watch backfills use the same private cold-load path, deferring FTS,
+rollups, and read indexes until publication. Live batches retain same-transaction
+derived-state maintenance with indexed provenance and coalesced bucket repairs;
 ordinary schema-version mismatches still fail closed so rebuild is always explicit.
 The store hot tier and in-process subscription hub are implemented. The localhost
 HTTP/WebSocket transport, generated clients, and the two uncaptured roster agents

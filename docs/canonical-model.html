@@ -800,8 +800,10 @@ CREATE TABLE <b>workspace_obs</b> (
   at         INTEGER NOT NULL,
   cwd        TEXT NOT NULL,
   git_branch TEXT,
-  git_repo   TEXT
+  git_repo   TEXT,
+  src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
+CREATE INDEX workspace_obs_src ON workspace_obs(src_cursor);
 CREATE INDEX workspace_obs_session ON workspace_obs(session_id, at);
 
 CREATE TABLE <b>plan</b> (
@@ -809,8 +811,10 @@ CREATE TABLE <b>plan</b> (
   revision   INTEGER NOT NULL,
   content    TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (session_id, revision)
 ) WITHOUT ROWID;
+CREATE INDEX plan_src ON plan(src_cursor);
 
 CREATE TABLE <b>task</b> (
   id         TEXT PRIMARY KEY,              <span class="c">-- blake3(session · native key)</span>
@@ -818,9 +822,11 @@ CREATE TABLE <b>task</b> (
   status     TEXT NOT NULL,                 <span class="c">-- 'pending' | 'in_progress' | 'completed'</span>
   content    TEXT NOT NULL,
   created_at INTEGER,
-  updated_at INTEGER
+  updated_at INTEGER,
+  src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX task_session ON task(session_id);
+CREATE INDEX task_src ON task(src_cursor);
 
 <span class="h">-- ————— phase 3 · stream —————————————————————————————————————————</span>
 
@@ -867,6 +873,10 @@ CREATE TABLE <b>message</b> (
   UNIQUE (session_id, ordinal)
 );
 CREATE INDEX message_tool ON message(session_id, tool_id) WHERE tool_id IS NOT NULL;
+CREATE INDEX message_src ON message(src_cursor); <span class="c">-- generation reconciliation must never scan the corpus</span>
+CREATE INDEX message_bucket_key ON message(
+  session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
+);                                             <span class="c">-- equality keys precede the timestamp range</span>
 
 CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
   content, tool_input, tool_result,
@@ -874,7 +884,8 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
   tokenize='unicode61 remove_diacritics 2'
 );
 <span class="c">-- no triggers: the stream writer inserts message rows, fts entries,
--- and rollup increments in the SAME transaction</span>
+-- and coalesced rollup corrections in the SAME transaction. A private cold
+-- build defers FTS and read indexes, materializes them once, validates, then publishes.</span>
 
 CREATE TABLE <b>file_edit</b> (
   session_id   TEXT NOT NULL REFERENCES session(id),
@@ -884,18 +895,23 @@ CREATE TABLE <b>file_edit</b> (
   snapshot_ref TEXT,
   lines_added  INTEGER,                     <span class="c">-- LOC: exact from patch payloads, best-effort from writes</span>
   lines_removed INTEGER,
-  at           INTEGER
+  at           INTEGER,
+  src_cursor   INTEGER REFERENCES ingest_cursor(id)
 );
+CREATE INDEX file_edit_src     ON file_edit(src_cursor);
 CREATE INDEX file_edit_session ON file_edit(session_id, at);
 CREATE INDEX file_edit_path    ON file_edit(path);
+CREATE INDEX file_edit_message ON file_edit(message_id) WHERE message_id IS NOT NULL;
 
 CREATE TABLE <b>git_commit</b> (              <span class="c">-- derived; inferred from Bash calls</span>
   commit_id  TEXT NOT NULL,
   session_id TEXT NOT NULL REFERENCES session(id),
   branch     TEXT,
   at         INTEGER,
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (commit_id, session_id)
 ) WITHOUT ROWID;
+CREATE INDEX git_commit_src ON git_commit(src_cursor);
 
 CREATE TABLE <b>drift_agg</b> (               <span class="c">-- aggregated drift — never one row per bad record</span>
   runtime_id    TEXT NOT NULL REFERENCES agent_runtime(id),

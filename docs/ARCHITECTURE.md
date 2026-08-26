@@ -17,7 +17,10 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > runtime handles adapter-selected JSONL and SQLite sources, generation-staged
 > reconciliation, deterministic adapter checkpoints, FTS and rollups, live watching
 > with polling/audit recovery, a checksummed append-only raw ledger, and validated
-> whole-projection rebuild with atomic installation. `source_op` is temporary
+> whole-projection rebuild with atomic installation. Fresh backfill and explicit rebuild
+> use a private projection: FTS, usage buckets, and read-only indexes are built once,
+> validated, and atomically published. Live batches coalesce repairs by
+> `(session, hour, model)`, and generation sweeps use indexed provenance. `source_op` is temporary
 > projection-internal rewrite staging, not a third durable representation. The store
 > hot tier and in-process subscription hub are implemented; HTTP/WS transport and
 > generated clients are pending. Unknown projection schemas fail closed on ordinary
@@ -376,6 +379,10 @@ ingestion.
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
+- Cold loads defer FTS, rollups, and read indexes in an unpublished sibling database;
+  live batches rebuild each distinct affected usage bucket once, never once per message.
+- Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
+  these indexes because one missing provenance index turns source activation quadratic.
 - Memory-first fan-out for live streams (§5.2); DB commit is not on the notify path.
 - Budgets asserted in CI-able bench: full `~/.claude` cold backfill < 5 s per GB of
   transcripts; watch-event → subscriber frame p99 < 20 ms; search p99 < 50 ms warm.
