@@ -31,7 +31,7 @@ impl AgentAdapter for GrokAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        1
+        2
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

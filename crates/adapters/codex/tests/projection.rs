@@ -270,9 +270,15 @@ fn a_line_that_will_not_parse_is_a_hard_error() {
     );
     assert_eq!(drifts(&outcome.ops).len(), 1);
 
-    // A declared record kind whose shape moved is the louder failure: it means
-    // the ground truth is stale, not that a file was torn.
-    let outcome = ingest(&mut ctx, 1, "turn_context", json!({"turn_id": "only"}));
+    // A declared typed field whose representation moved is the louder failure:
+    // it means the ground truth is stale, not that a file was torn. Missing
+    // version-specific context fields are deliberately accepted.
+    let outcome = ingest(
+        &mut ctx,
+        1,
+        "turn_context",
+        json!({"turn_id": "turn", "cwd": 42}),
+    );
     assert_eq!(
         outcome.status,
         LineStatus::HardError {
@@ -346,6 +352,71 @@ fn a_tool_result_merges_by_call_id() {
         }
         other => panic!("expected one tool result, got {other:?}"),
     }
+}
+
+#[test]
+fn modern_block_tool_results_keep_text_and_structure() {
+    let mut ctx = context();
+    let output = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "input_text", "text": "first"},
+                {"type": "input_text", "text": "second"},
+            ],
+        }),
+    );
+    match output.ops.as_slice() {
+        [
+            IngestOp::ToolResult {
+                tool_id,
+                result,
+                payload,
+                ..
+            },
+        ] => {
+            assert_eq!(tool_id, "call_1");
+            assert_eq!(result.as_deref(), Some("first\nsecond"));
+            assert_eq!(
+                *payload,
+                Some(json!([
+                    {"type": "input_text", "text": "first"},
+                    {"type": "input_text", "text": "second"},
+                ]))
+            );
+        }
+        other => panic!("expected one tool result, got {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_records_without_ordinals_use_source_offsets() {
+    let mut ctx = context();
+    ctx.src_offset = Some(1234);
+    let line = serde_json::to_vec(&json!({
+        "timestamp": STAMP,
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "legacy"}],
+        },
+    }))
+    .unwrap();
+    let outcome = CodexAdapter.ingest_line(&mut ctx, "rollout", &line);
+    let row = match outcome.ops.as_slice() {
+        [IngestOp::Message(row)] => row,
+        other => panic!("expected one message row, got {other:?}"),
+    };
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    assert_eq!(
+        row.timeline_id,
+        ids::timeline_id(&ctx.session_id, "rollout-offset#1234")
+    );
 }
 
 #[test]

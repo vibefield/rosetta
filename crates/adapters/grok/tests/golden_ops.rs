@@ -255,6 +255,40 @@ fn chunks_refine_one_logical_message() {
 }
 
 #[test]
+fn response_chunks_do_not_require_redundant_chunk_ids() {
+    let adapter = GrokAdapter;
+    let mut ctx = context(&adapter, "native");
+    let line = r#"{"timestamp":1,"method":"session/update","params":{"sessionId":"native","_meta":{"eventId":"e1","agentTimestampMs":1000,"promptId":"p","streamStartMs":1000},"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}"#;
+    let outcome = adapter.ingest_line(&mut ctx, spec::UPDATES, line.as_bytes());
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    assert!(matches!(outcome.ops.as_slice(), [IngestOp::Message(_)]));
+}
+
+#[test]
+fn failed_tool_updates_are_terminal_error_results() {
+    let adapter = GrokAdapter;
+    let mut ctx = context(&adapter, "native");
+    let line = r#"{"timestamp":1,"method":"session/update","params":{"sessionId":"native","_meta":{"eventId":"e1","agentTimestampMs":1000},"update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","status":"failed","rawOutput":{"message":"boom"}}}}"#;
+    let outcome = adapter.ingest_line(&mut ctx, spec::UPDATES, line.as_bytes());
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    match outcome.ops.as_slice() {
+        [
+            IngestOp::ToolResult {
+                tool_id,
+                result,
+                is_error,
+                ..
+            },
+        ] => {
+            assert_eq!(tool_id, "call-1");
+            assert_eq!(result.as_deref(), Some("boom"));
+            assert_eq!(*is_error, Some(true));
+        }
+        other => panic!("expected a failed tool result, got {other:?}"),
+    }
+}
+
+#[test]
 fn overlapping_rails_are_inventory_and_emit_nothing() {
     let adapter = GrokAdapter;
     let mut replayed = 0usize;

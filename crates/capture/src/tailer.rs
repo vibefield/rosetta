@@ -39,8 +39,12 @@ impl TailConfig {
         Self {
             delimiter: b'\n',
             normalize_crlf: true,
-            max_record_bytes: 4 * 1024 * 1024,
-            max_batch_bytes: 8 * 1024 * 1024,
+            // Transcript records can legitimately carry pasted images or
+            // other inline media. Keep them bounded, but above the largest
+            // fixture/live-corpus records so valid user messages are not
+            // converted into irreversible oversized drift markers.
+            max_record_bytes: 32 * 1024 * 1024,
+            max_batch_bytes: 32 * 1024 * 1024,
             max_records_per_batch: 1_024,
             prefix_anchor_bytes: 4 * 1024,
         }

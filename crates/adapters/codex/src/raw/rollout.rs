@@ -2,7 +2,7 @@
 //! (`sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`).
 //!
 //! Evidence: fixtures/0.149.1 (scenarios basic-chat, tool-use, resume).
-//! Envelope: {timestamp, ordinal, type, payload}. Top-level types observed:
+//! Envelope: {timestamp, ordinal?, type, payload}. Top-level types observed:
 //! session_meta, event_msg, response_item, turn_context, world_state.
 //! Types known from research but not yet fixture-backed (e.g. `compacted`)
 //! parse as `ParsedLine::UnknownType` until a scenario exercises them.
@@ -47,7 +47,10 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RolloutLine {
     pub timestamp: String,
-    pub ordinal: u64,
+    /// Added by newer writers. Legacy rollouts use the source byte offset as
+    /// their deterministic record discriminator during normalization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u64>,
     #[serde(flatten)]
     pub payload: RolloutPayload,
     #[serde(flatten)]
@@ -92,7 +95,9 @@ impl Drift for RolloutPayload {
 /// Session header: identity, provenance, and the full base instruction text.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SessionMeta {
-    pub session_id: String,
+    /// Older writers only stamped `id`; newer ones repeat it here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub id: String,
     pub timestamp: String,
     pub cwd: String,
@@ -100,13 +105,40 @@ pub struct SessionMeta {
     pub originator: String,
     /// Per-record writer version stamp.
     pub cli_version: String,
-    pub source: String,
-    pub thread_source: String,
+    /// A string on older writers and a structured subagent descriptor on newer
+    /// multi-agent writers.
+    pub source: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_source: Option<String>,
     pub model_provider: String,
-    pub history_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_mode: Option<String>,
     /// Large nested structures — kept raw until a consumer needs them typed.
-    pub base_instructions: Value,
-    pub context_window: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<Value>,
+    /// Predecessor of `base_instructions`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_base: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_tools: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_history_start_ordinal: Option<u64>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -160,24 +192,26 @@ pub struct EventMsg {
 pub struct ResponseItem {
     #[serde(rename = "type")]
     pub item_type: String,
-    pub id: String,
-    /// Present on every observed item; content unknown to the public API.
-    pub internal_chat_message_metadata_passthrough: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Absent on some historical tool results; content is not public API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub internal_chat_message_metadata_passthrough: Option<Value>,
     /// message: user | assistant | developer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<ContentBlock>>,
-    /// function_call fields; `arguments` is a JSON-encoded STRING.
+    /// A JSON-encoded string for function calls and an object for tool search.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<String>,
+    pub arguments: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
-    /// function_call_output result; also a STRING payload.
+    /// A string on older writers and content blocks on newer writers.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
+    pub output: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -207,24 +241,39 @@ pub struct ContentBlock {
 /// Per-turn execution context (model, policies, sandbox, workspace).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TurnContext {
-    pub turn_id: String,
-    pub cwd: String,
-    pub model: String,
-    pub approval_policy: String,
-    pub approvals_reviewer: String,
-    pub current_date: String,
-    pub multi_agent_version: String,
-    pub personality: String,
-    pub realtime_active: bool,
-    pub summary: String,
-    pub timezone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realtime_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     /// Nested policy/config objects — kept raw until a consumer needs them.
-    pub collaboration_mode: Value,
-    pub permission_profile: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_permission_profile: Option<Value>,
-    pub sandbox_policy: Value,
-    pub workspace_roots: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_roots: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

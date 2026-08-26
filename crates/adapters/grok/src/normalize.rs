@@ -264,8 +264,6 @@ fn response_chunk(
     let event_id = string(meta, "eventId")?;
     let prompt_id = string(meta, "promptId")?;
     let stream_start = integer(meta.get("streamStartMs").ok_or(())?).ok_or(())?;
-    // Required by the canonical even though streamStartMs owns grouping.
-    integer(meta.get("chunkId").ok_or(())?).ok_or(())?;
 
     let content = line.params.update.content.as_ref().ok_or(())?;
     if content["type"].as_str() != Some("text") {
@@ -449,18 +447,19 @@ fn file_edit(
 fn tool_result(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -> Result<(), ()> {
     let update = &line.params.update;
     let tool_id = update.tool_call_id.as_deref().ok_or(())?;
-    match update.status.as_deref() {
+    let terminal_error = match update.status.as_deref() {
         None | Some("in_progress") => return Ok(()),
-        Some("completed") => {}
+        Some("completed") => None,
+        Some("failed") => Some(true),
         Some(_) => return Err(()),
-    }
+    };
     let result = update
         .content
         .as_ref()
         .and_then(tool_content_text)
         .or_else(|| update.raw_output.as_ref().and_then(raw_output_text));
     let payload = update.raw_output.clone();
-    let is_error = update.raw_output.as_ref().and_then(raw_output_error);
+    let is_error = terminal_error.or_else(|| update.raw_output.as_ref().and_then(raw_output_error));
     ops.push(IngestOp::ToolResult {
         session_id: ctx.session_id.clone(),
         tool_id: tool_id.to_owned(),
@@ -494,16 +493,24 @@ fn raw_output_text(value: &Value) -> Option<String> {
         "raw_output",
         "content",
         "summary",
+        "message",
+        "error",
     ] {
         if let Some(text) = value[key].as_str().filter(|text| !text.is_empty()) {
             return Some(text.to_owned());
         }
     }
-    value
-        .as_object()?
+    let object = value.as_object()?;
+    object
         .values()
         .filter(|value| value.is_object())
         .find_map(raw_output_text)
+        .or_else(|| {
+            object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "type")
+                .find_map(|(_, value)| value.as_str().map(str::to_owned))
+        })
 }
 
 fn raw_output_error(value: &Value) -> Option<bool> {

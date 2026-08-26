@@ -6,8 +6,8 @@
 //! unprojected is silence, undeclared is drift.
 //!
 //! Pure by construction — no IO, no clock, no randomness. Ids are deterministic
-//! blake3 over the session and the envelope `ordinal`, so replaying a file
-//! produces byte-identical ops.
+//! blake3 over the session and the envelope `ordinal` (or the source byte
+//! offset for legacy writers), so replaying a file produces byte-identical ops.
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
@@ -110,11 +110,6 @@ fn project(
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) -> LineStatus {
-    // The envelope ordinal is the only within-session key codex guarantees:
-    // rollout records carry no uuid, and payload ids repeat across records
-    // (an AgentMessage `item_completed` reuses the response item's id).
-    let discriminator = format!("rollout#{}", record.ordinal);
-
     match &record.payload {
         RolloutPayload::SessionMeta(meta) => {
             session_meta(ctx, state, meta, ts, ops);
@@ -125,6 +120,16 @@ fn project(
             LineStatus::Parsed
         }
         RolloutPayload::ResponseItem(item) => {
+            let Some(discriminator) = record_discriminator(record, ctx) else {
+                return hard_into(
+                    ctx,
+                    stream_id,
+                    "response_item",
+                    "missing_record_discriminator",
+                    ts,
+                    ops,
+                );
+            };
             response_item(ctx, state, stream_id, item, &discriminator, ts, ops)
         }
         RolloutPayload::EventMsg(event) => event_msg(ctx, state, stream_id, event, ts, ops),
@@ -153,6 +158,15 @@ fn session_meta(
     // the record was written. Prefer the former, fall back to the latter.
     let started = rfc3339_ms(&meta.timestamp).or(ts).unwrap_or_default();
 
+    let parent_session_id = meta
+        .parent_thread_id
+        .as_deref()
+        .map(|native| ids::session_id(&ctx.runtime_id, native));
+    let (root_session_id, role) = match &parent_session_id {
+        Some(parent) => (parent.clone(), SessionRole::Subagent),
+        None => (ctx.session_id.clone(), SessionRole::Main),
+    };
+
     ops.push(IngestOp::SessionMeta(SessionRow {
         id: ctx.session_id.clone(),
         native_session_id: meta.id.clone(),
@@ -160,11 +174,9 @@ fn session_meta(
         // Left to the pipeline: `workspace_obs` is the documented input to
         // project assignment, so the adapter reports cwd and claims nothing.
         project_id: None,
-        parent_session_id: None,
-        root_session_id: ctx.session_id.clone(),
-        // The canonical observes one `thread_source` (`user`) at 0.149.1 — no
-        // evidence yet for what a spawned thread looks like.
-        role: SessionRole::Main,
+        parent_session_id,
+        root_session_id,
+        role,
         title: None,
         summary: None,
         started_at: started,
@@ -191,21 +203,35 @@ fn turn_context(
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) {
-    let settings = &turn.collaboration_mode["settings"];
+    let settings = turn
+        .collaboration_mode
+        .as_ref()
+        .and_then(|mode| mode.get("settings"));
     // The collaboration mode's setting is the effective one; payload.model is
     // the fallback the canonical marks required.
-    state.model = settings["model"]
-        .as_str()
+    if let Some(model) = settings
+        .and_then(|settings| settings.get("model"))
+        .and_then(Value::as_str)
         .map(str::to_owned)
-        .or_else(|| Some(turn.model.clone()));
-    state.effort = settings["reasoning_effort"].as_str().map(str::to_owned);
+        .or_else(|| turn.model.clone())
+    {
+        state.model = Some(model);
+    }
+    if let Some(effort) = settings
+        .and_then(|settings| settings.get("reasoning_effort"))
+        .and_then(Value::as_str)
+    {
+        state.effort = Some(effort.to_owned());
+    }
 
-    if state.cwd.as_deref() != Some(turn.cwd.as_str()) {
-        state.cwd = Some(turn.cwd.clone());
+    if let Some(cwd) = turn.cwd.as_deref()
+        && state.cwd.as_deref() != Some(cwd)
+    {
+        state.cwd = Some(cwd.to_owned());
         ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
             session_id: ctx.session_id.clone(),
             at: ts.unwrap_or_default(),
-            cwd: turn.cwd.clone(),
+            cwd: cwd.to_owned(),
             git_branch: None,
             git_repo: None,
         }));
@@ -234,7 +260,7 @@ fn response_item(
             };
             let mut row = row(ctx, discriminator, kind, ts);
             row.subtype = subtype;
-            row.uuid = Some(item.id.clone());
+            row.uuid = item.id.clone();
             row.content = block_text(item.content.as_deref());
             if kind == MessageKind::Agent {
                 stamp_model(&mut row, state);
@@ -249,7 +275,7 @@ fn response_item(
         // when the corpus grows one, it projects instead of vanishing.
         "reasoning" => {
             let mut row = row(ctx, discriminator, MessageKind::Thinking, ts);
-            row.uuid = Some(item.id.clone());
+            row.uuid = item.id.clone();
             row.content = block_text(item.content.as_deref()).or_else(|| summary_text(item));
             stamp_model(&mut row, state);
             begin_response(state, &row.timeline_id);
@@ -269,9 +295,9 @@ fn response_item(
                     ops,
                 );
             };
-            let input = tool_input(item.arguments.as_deref());
+            let input = tool_input(item.arguments.as_ref());
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
-            row.uuid = Some(item.id.clone());
+            row.uuid = item.id.clone();
             stamp_model(&mut row, state);
             row.tool = Some(ToolCall {
                 tool_id: item.call_id.clone(),
@@ -315,7 +341,7 @@ fn response_item(
             }
             LineStatus::Parsed
         }
-        "function_call_output" => {
+        "function_call_output" | "custom_tool_call_output" => {
             let Some(tool_id) = item.call_id.clone() else {
                 // Without the correlation id the result can never reach its call.
                 return hard_into(
@@ -327,15 +353,14 @@ fn response_item(
                     ops,
                 );
             };
-            let output = item.output.clone();
+            let (result, payload) = tool_output(item.output.as_ref());
             ops.push(IngestOp::ToolResult {
                 session_id: ctx.session_id.clone(),
                 tool_id,
-                // The canonical types `output` as a bare string at 0.149.1 and
-                // declares no status field anywhere on the record — so success
-                // stays UNKNOWN rather than being sniffed out of the text.
-                payload: output.as_deref().and_then(structured),
-                result: output,
+                // The record declares no status field — success stays UNKNOWN
+                // rather than being sniffed out of its text.
+                payload,
+                result,
                 is_error: None,
                 at: ts,
             });
@@ -512,11 +537,16 @@ fn summary_text(item: &ResponseItem) -> Option<String> {
 
 /// `arguments` is a JSON-encoded STRING (canonical: `function_call.arguments`).
 /// A body that will not parse is kept verbatim rather than dropped.
-fn tool_input(arguments: Option<&str>) -> Value {
+fn tool_input(arguments: Option<&Value>) -> Value {
     let Some(arguments) = arguments else {
         return Value::Null;
     };
-    serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_owned()))
+    match arguments {
+        Value::String(arguments) => {
+            serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_owned()))
+        }
+        value => value.clone(),
+    }
 }
 
 /// Keep a structured tool result structured; plain text stays in `result` alone
@@ -526,6 +556,46 @@ fn structured(output: &str) -> Option<Value> {
         Ok(value @ (Value::Object(_) | Value::Array(_))) => Some(value),
         _ => None,
     }
+}
+
+/// Preserve modern block-valued results without sacrificing the readable text
+/// used by search and display. Historical JSON-encoded strings keep their old
+/// structured-payload behavior.
+fn tool_output(output: Option<&Value>) -> (Option<String>, Option<Value>) {
+    let Some(output) = output else {
+        return (None, None);
+    };
+    match output {
+        Value::String(text) => (Some(text.clone()), structured(text)),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            ((!text.is_empty()).then_some(text), Some(output.clone()))
+        }
+        Value::Object(map) => (
+            map.get("text").and_then(Value::as_str).map(str::to_owned),
+            Some(output.clone()),
+        ),
+        Value::Number(_) | Value::Bool(_) => (Some(output.to_string()), None),
+        Value::Null => (None, None),
+    }
+}
+
+/// The envelope ordinal is the preferred within-session key. Writers before
+/// it was introduced are still append-only, so the record's byte offset is an
+/// equally deterministic fallback supplied by the pipeline.
+fn record_discriminator(record: &RolloutLine, ctx: &NormalizeCtx) -> Option<String> {
+    record
+        .ordinal
+        .map(|ordinal| format!("rollout#{ordinal}"))
+        .or_else(|| {
+            ctx.src_offset
+                .map(|offset| format!("rollout-offset#{offset}"))
+        })
 }
 
 fn number(value: &Value, key: &str) -> Option<i64> {
@@ -760,7 +830,7 @@ fn keys(value: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{APPLY_PATCH, patch_body, patch_edits, structured, tool_input};
+    use super::{APPLY_PATCH, patch_body, patch_edits, structured, tool_input, tool_output};
     use rosetta_core::rows::EditKind;
     use serde_json::{Value, json};
 
@@ -778,11 +848,15 @@ mod tests {
     #[test]
     fn tool_arguments_are_decoded_json_strings() {
         assert_eq!(
-            tool_input(Some(r#"{"cmd":"echo rosetta-mock"}"#)),
+            tool_input(Some(&json!(r#"{"cmd":"echo rosetta-mock"}"#))),
             json!({"cmd": "echo rosetta-mock"})
         );
         // A body that will not parse is kept verbatim, never dropped.
-        assert_eq!(tool_input(Some("not json")), json!("not json"));
+        assert_eq!(tool_input(Some(&json!("not json"))), json!("not json"));
+        assert_eq!(
+            tool_input(Some(&json!({"query": "tools"}))),
+            json!({"query": "tools"})
+        );
         assert_eq!(tool_input(None), Value::Null);
     }
 
@@ -793,6 +867,18 @@ mod tests {
         // just be the same bytes twice.
         assert_eq!(structured("Process exited with code 0"), None);
         assert_eq!(structured("42"), None);
+    }
+
+    #[test]
+    fn block_output_keeps_payload_and_readable_text() {
+        let output = json!([
+            {"type": "input_text", "text": "first"},
+            {"type": "input_text", "text": "second"},
+        ]);
+        assert_eq!(
+            tool_output(Some(&output)),
+            (Some("first\nsecond".to_owned()), Some(output))
+        );
     }
 
     #[test]

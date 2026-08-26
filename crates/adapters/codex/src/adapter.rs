@@ -29,7 +29,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        1
+        2
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -90,12 +90,20 @@ impl AgentAdapter for CodexAdapter {
         let RolloutPayload::SessionMeta(meta) = &record.payload else {
             return SkimResult::default();
         };
+        let (parent_session_id, root_session_id, role) = match &meta.parent_thread_id {
+            Some(parent) => (
+                Some(parent.clone()),
+                Some(parent.clone()),
+                Some(rosetta_core::rows::SessionRole::Subagent),
+            ),
+            None => (None, None, Some(rosetta_core::rows::SessionRole::Main)),
+        };
         SkimResult {
             ops: Vec::new(),
             session_id: Some(meta.id.clone()),
-            parent_session_id: None,
-            root_session_id: None,
-            role: Some(rosetta_core::rows::SessionRole::Main),
+            parent_session_id,
+            root_session_id,
+            role,
             cwd: Some(meta.cwd.clone()),
             agent_version: Some(meta.cli_version.clone()),
             // NOTHING codex writes names a session: `session_meta` carries only
@@ -199,6 +207,35 @@ mod tests {
         assert_eq!(result.started_at, Some(1_787_625_303_577));
         // Codex names no session — see the note on `skim`.
         assert!(result.title.is_none());
+    }
+
+    #[test]
+    fn skim_accepts_legacy_headers_without_envelope_ordinals() {
+        let line = r#"{"timestamp":"2024-05-01T00:00:00Z","type":"session_meta","payload":{"id":"legacy","timestamp":"2024-05-01T00:00:00Z","cwd":"/legacy","originator":"codex_cli_rs","cli_version":"0.85.0","source":"cli","model_provider":"openai","instructions":"legacy"}}"#;
+        let result = CodexAdapter.skim(
+            spec::ROLLOUT,
+            &stat(ROLLOUT, line.len() as u64),
+            line.as_bytes(),
+            b"",
+        );
+        assert_eq!(result.session_id.as_deref(), Some("legacy"));
+        assert_eq!(result.cwd.as_deref(), Some("/legacy"));
+        assert_eq!(result.role, Some(rosetta_core::rows::SessionRole::Main));
+    }
+
+    #[test]
+    fn skim_preserves_current_subagent_topology() {
+        let line = r#"{"timestamp":"2026-08-25T02:35:03.577Z","type":"session_meta","payload":{"id":"child","timestamp":"2026-08-25T02:35:03.577Z","cwd":"/w","originator":"codex_exec","cli_version":"0.149.1","source":{"subagent":{"other":"review"}},"model_provider":"openai","parent_thread_id":"parent"}}"#;
+        let result = CodexAdapter.skim(
+            spec::ROLLOUT,
+            &stat(ROLLOUT, line.len() as u64),
+            line.as_bytes(),
+            b"",
+        );
+        assert_eq!(result.session_id.as_deref(), Some("child"));
+        assert_eq!(result.parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(result.root_session_id.as_deref(), Some("parent"));
+        assert_eq!(result.role, Some(rosetta_core::rows::SessionRole::Subagent));
     }
 
     #[test]
