@@ -24,7 +24,7 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, meta_ingest_into,
+    IngestOptions, Instrument, LiveOptions, LiveRunner, Metric, discover, meta_ingest_into,
     rebuild_runtime, stream_backfill_into,
 };
 use rosetta_store::Store;
@@ -251,8 +251,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
-    let mut store =
-        Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+    let (mut store, private_projection) = open_for_backfill(&db)?;
     let ledgers = ledger_root(&flags, &db);
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
@@ -350,11 +349,17 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         }
     }
 
+    if !failures.is_empty() {
+        if flags.profile {
+            println!("\n== profile ==\n{}", instrument.report());
+        }
+        return Err(failures.join("; "));
+    }
+    if let Some(temp) = private_projection {
+        publish_private_projection(store, temp, &db, &instrument)?;
+    }
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
-    }
-    if !failures.is_empty() {
-        return Err(failures.join("; "));
     }
     Ok(())
 }
@@ -371,8 +376,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
-    let mut store =
-        Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+    let (mut store, private_projection) = open_for_backfill(&db)?;
     let ledgers = ledger_root(&flags, &db);
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
@@ -436,6 +440,11 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     }
     if runners.is_empty() {
         return Err("nothing to watch: no installed runtimes".to_string());
+    }
+    if let Some(temp) = private_projection {
+        publish_private_projection(store, temp, &db, &instrument)?;
+        store = Store::open(&db)
+            .map_err(|error| format!("opening published {}: {error:?}", db.display()))?;
     }
 
     let mut remaining = flags.ticks;
@@ -550,6 +559,62 @@ fn projection_parent(db: &std::path::Path) -> &std::path::Path {
         .unwrap_or_else(|| std::path::Path::new("."))
 }
 
+/// A first ingest is a cold build, not a live mutation: construct it in a
+/// private sibling file so derived indexes can be deferred without exposing
+/// an inconsistent projection. Existing projections always stay in live
+/// mode and retain per-transaction FTS/rollup maintenance.
+fn open_for_backfill(db: &std::path::Path) -> Result<(Store, Option<tempfile::TempPath>), String> {
+    if db.exists() {
+        let store =
+            Store::open(db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+        return Ok((store, None));
+    }
+
+    let parent = projection_parent(db);
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+    let named = tempfile::Builder::new()
+        .prefix(".rosetta-backfill-")
+        .suffix(".sqlite")
+        .tempfile_in(parent)
+        .map_err(|error| {
+            format!(
+                "creating backfill database in {}: {error}",
+                parent.display()
+            )
+        })?;
+    let temp = named.into_temp_path();
+    let store = Store::open_for_rebuild(temp.as_ref())
+        .map_err(|error| format!("opening backfill database {}: {error:?}", temp.display()))?;
+    Ok((store, Some(temp)))
+}
+
+fn publish_private_projection(
+    mut store: Store,
+    temp: tempfile::TempPath,
+    db: &std::path::Path,
+    instrument: &Instrument,
+) -> Result<(), String> {
+    instrument
+        .time(Metric::ApplyNanos, || store.finish_bulk_load())
+        .map_err(|error| format!("finalizing private projection: {error}"))?;
+    drop(store);
+    let finished = rusqlite::Connection::open(&*temp)
+        .map_err(|error| format!("reopening private projection: {error}"))?;
+    make_single_file(&finished, "private projection")?;
+    drop(finished);
+    if let Ok(permissions) = std::fs::metadata(db).map(|metadata| metadata.permissions()) {
+        std::fs::set_permissions(&*temp, permissions)
+            .map_err(|error| format!("preserving projection permissions: {error}"))?;
+    }
+    std::fs::File::open(&*temp)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("syncing private projection: {error}"))?;
+    install_rebuilt_projection(db, temp.as_ref())?;
+    let _installed = temp.keep();
+    Ok(())
+}
+
 fn sidecar(db: &std::path::Path, suffix: &str) -> PathBuf {
     let mut path = db.as_os_str().to_owned();
     path.push(suffix);
@@ -625,7 +690,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     let temp = named.into_temp_path();
 
     let instrument = Instrument::new();
-    let mut store = Store::open(temp.as_ref())
+    let mut store = Store::open_for_rebuild(temp.as_ref())
         .map_err(|error| format!("opening rebuild database {}: {error:?}", temp.display()))?;
     let mut reports = Vec::new();
     for adapter in adapters {
@@ -660,8 +725,14 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         reports.push((adapter.kind(), report));
     }
 
-    make_single_file(store.conn(), "rebuilt projection")?;
+    instrument
+        .time(Metric::ApplyNanos, || store.finish_bulk_load())
+        .map_err(|error| format!("finalizing rebuilt projection: {error}"))?;
     drop(store);
+    let finished = rusqlite::Connection::open(&*temp)
+        .map_err(|error| format!("reopening rebuilt projection: {error}"))?;
+    make_single_file(&finished, "rebuilt projection")?;
+    drop(finished);
     if let Ok(permissions) = std::fs::metadata(&db).map(|metadata| metadata.permissions()) {
         std::fs::set_permissions(&*temp, permissions)
             .map_err(|error| format!("preserving projection permissions: {error}"))?;
@@ -802,6 +873,30 @@ mod tests {
         );
         assert!(connection.prepare("SELECT * FROM sentinel").is_err());
         assert!(!sidecar(&db, "-wal").exists());
+    }
+
+    #[test]
+    fn first_backfill_stays_private_until_finalized_and_published() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        let (store, private) = open_for_backfill(&db).unwrap();
+        assert!(!db.exists());
+        let private = private.expect("a missing projection takes the cold path");
+        assert!(private.exists());
+
+        publish_private_projection(store, private, &db, &Instrument::new()).unwrap();
+        assert!(db.exists());
+        assert!(!sidecar(&db, "-wal").exists());
+        Store::open(&db).unwrap();
+    }
+
+    #[test]
+    fn existing_backfill_target_stays_live() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        drop(Store::open(&db).unwrap());
+        let (_store, private) = open_for_backfill(&db).unwrap();
+        assert!(private.is_none());
     }
 
     #[test]
