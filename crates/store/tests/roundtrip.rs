@@ -949,3 +949,47 @@ fn workspace_changes_after_session_start_do_not_move_the_project() {
         Some(expected)
     );
 }
+
+#[test]
+fn message_timestamps_only_write_when_the_session_clock_advances() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let updated_at = |store: &Store| {
+        store
+            .conn()
+            .query_row(
+                "SELECT updated_at FROM session WHERE id = 's1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+
+    let mut older = message("m-older", 0, MessageKind::User);
+    older.ts = Some(5_000);
+    let before = store.conn().total_changes();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(older))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let older_changes = store.conn().total_changes() - before;
+    assert_eq!(older_changes, 1, "only the message row is new");
+    assert_eq!(updated_at(&store), 10_000);
+
+    let mut newer = message("m-newer", 1, MessageKind::User);
+    newer.ts = Some(20_000);
+    let before = store.conn().total_changes();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(newer))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let newer_changes = store.conn().total_changes() - before;
+    assert_eq!(newer_changes, 2, "the message and session rows both change");
+    assert_eq!(updated_at(&store), 20_000);
+}

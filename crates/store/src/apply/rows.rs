@@ -214,8 +214,13 @@ pub(super) fn rebuild_bucket(
 
 fn touch_session(tx: &Transaction, session_id: &str, ts: Option<Ms>) -> Result<(), StoreError> {
     if let Some(ts) = ts {
-        tx.prepare_cached("UPDATE session SET updated_at = MAX(updated_at, ?2) WHERE id = ?1")?
-            .execute(params![session_id, ts])?;
+        // Meta ingest usually starts from the source file's mtime, which is
+        // newer than its records. Avoid a no-op row write for every message.
+        tx.prepare_cached(
+            "UPDATE session SET updated_at = ?2
+             WHERE id = ?1 AND updated_at < ?2",
+        )?
+        .execute(params![session_id, ts])?;
     }
     Ok(())
 }
