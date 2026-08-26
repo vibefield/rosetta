@@ -1,7 +1,6 @@
 //! The projection DDL (docs/canonical-model.html, "The SQLite projection").
-//! Stamped with a schema version. A mismatch fails closed until the raw-ledger
-//! rebuild path exists; silently dropping the projection before then would be
-//! data loss, not a rebuild.
+//! Stamped with a schema version. A mismatch fails closed on ordinary open;
+//! replacement happens only through an explicit, validated raw-ledger rebuild.
 
 use rusqlite::Connection;
 

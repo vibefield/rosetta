@@ -1,10 +1,8 @@
 //! rosetta-capture — the source IO layer (docs/ingest-engine.html).
 //!
-//! Three concerns live here, all agent-agnostic: the append-delimited
-//! [`tailer`] (ported from spaghetti with its adversarial guarantees), the
-//! data-root [`discovery`] walk, and bounded head/tail reads for the meta
-//! phase. The notify watcher and raw ledger are deliberately later arrivals —
-//! backfill works without them.
+//! Agent-agnostic source IO lives here: append-delimited [`tailer`] reads,
+//! data-root [`discovery`], bounded meta reads, consistent SQLite snapshots,
+//! filesystem notification hints, and the append-only raw ledger.
 
 pub mod discovery;
 pub mod ledger;

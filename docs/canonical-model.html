@@ -201,12 +201,15 @@
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
       <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 tables)&nbsp;&nbsp;→&nbsp;&nbsp;FTS · agent-view</div>
-    <div class="status"><b>Implementation checkpoint · 2026-08-25.</b> This is the target
-      model, not a claim that every box is shipped. The runtime currently backfills Claude Code and
-      Codex JSONL transcripts. Its SQLite DDL includes generation-scoped <code>source_op</code>
-      staging and differs from the illustrative DDL below. That journal is normalized replay state,
-      not the planned append-only raw ledger; schema mismatches therefore fail closed. Watch/live,
-      raw-ledger rebuild, server, and client layers remain pending.</div>
+    <div class="status"><b>Implementation checkpoint · 2026-08-26.</b> This is the target
+      model, not a claim that every box is shipped. All nine captured-agent adapters are registered;
+      the runtime drives their selected JSONL transcript and SQLite snapshot streams. Its SQLite DDL
+      includes generation-scoped <code>source_op</code> staging and differs from the illustrative DDL
+      below. A separate checksummed raw ledger is flushed before projection commits, watch/live adds
+      polling plus rotating audits, and whole-projection rebuild validates into a private database
+      before atomic installation. Ordinary schema mismatches fail closed so rebuild stays explicit.
+      The in-process hot tier and subscription hub exist; HTTP/WebSocket transport and generated
+      clients remain pending.</div>
   </div>
 
   <div class="legend">

@@ -15,13 +15,16 @@ Three layers, strictly separated:
    canonical model, replayable normalization, capture, and storage.
 3. **Services** — the planned localhost REST + WebSocket layer.
 
-Current implementation status: all nine registered agents have ground-truth packs and
-parser crates; the backfill pipeline and SQLite projection currently normalize Claude
-Code and Codex transcript streams. Rewrites are generation-staged and replayable from a
-normalized source-op journal inside the projection. The durable append-only raw ledger,
-filesystem watcher/live lane, REST/WebSocket server, and generated clients have not
-shipped yet. Until the raw-ledger rebuild path exists, a projection schema mismatch
-fails closed instead of deleting the database.
+Current implementation status: all nine captured agents have ground-truth packs,
+runtime adapters, and CLI registration. The generic pipeline ingests adapter-selected
+JSONL transcripts and SQLite session databases, generation-stages rewrites, tails live
+changes with polling/audit recovery, and writes the canonical SQLite projection.
+`ingest` and `watch` durably append source records to a checksummed raw ledger before
+projection commits; `rebuild` validates and replays the whole ledger into a private
+database before atomically replacing the projection. Ordinary opens still fail closed
+on a schema mismatch so replacement is never implicit. The in-process hot tier and
+subscription hub exist; the localhost HTTP/WebSocket surface and generated clients are
+still pending.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
 

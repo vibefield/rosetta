@@ -1,7 +1,7 @@
-//! rosetta-store — the canonical SQLite projection: schema, the transactional
-//! write path, and the typed read surface. It is intended to be disposable once
-//! the durable raw-ledger rebuild path ships. Until then, foreign schema versions
-//! fail closed so the only indexed copy cannot be destroyed.
+//! rosetta-store — the disposable canonical SQLite projection: schema, the
+//! transactional write path, and the typed read surface. Foreign schema versions
+//! fail closed on ordinary open; `rosettad rebuild` explicitly reconstructs and
+//! atomically replaces the projection from the durable raw ledger.
 
 pub mod apply;
 pub mod hot;
@@ -25,9 +25,8 @@ pub enum StoreError {
     CheckpointConflict {
         path: String,
     },
-    /// Until the durable raw-ledger rebuild command ships, opening a projection
-    /// with foreign DDL must fail closed. Dropping it would destroy the only
-    /// indexed copy after an upstream agent has garbage-collected its source.
+    /// Opening a projection with foreign DDL fails closed. Replacement is an
+    /// explicit raw-ledger rebuild, never a side effect of opening the store.
     SchemaVersionMismatch {
         found: i64,
         expected: i64,
@@ -53,7 +52,7 @@ impl fmt::Display for StoreError {
             }
             Self::SchemaVersionMismatch { found, expected } => write!(
                 f,
-                "projection schema version {found} does not match {expected}; rebuild from the raw ledger is not available yet"
+                "projection schema version {found} does not match {expected}; run an explicit raw-ledger rebuild"
             ),
             Self::SourceConflict {
                 cursor_id,

@@ -45,12 +45,15 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
 ## Current phase
 
 **Phase 3 is underway, with Phase 1 gaps still explicit.** Nine agent data packs and
-parser crates are registered. The implemented backfill pipeline/store currently admit
-Claude Code and Codex JSONL transcript streams; the remaining adapters are parser-only.
-The normalized source-op journal provides generation-safe replay inside the current
-projection, but it is not the append-only raw ledger promised by rule 4. Until that
-ledger and rebuild command ship, schema-version mismatch must fail closed. Watch/live
-ingestion and the `protocol`/`server` service surface remain unimplemented.
+runtime adapters are registered in `rosettad`. The generic pipeline handles the
+JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrites,
+deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
+recovery, and an append-only checksummed raw ledger. `rebuild` replays the complete
+ledger into a private projection and atomically installs it only after validation;
+ordinary schema-version mismatches still fail closed so rebuild is always explicit.
+The store hot tier and in-process subscription hub are implemented. The localhost
+HTTP/WebSocket transport, generated clients, and the two uncaptured roster agents
+remain Phase 4/Phase 1 work.
 
 ## Repo map
 
@@ -65,10 +68,10 @@ tools/groundtruth/         LAYER 1 dev tools (stdlib Python): fixture farm,
 crates/                    all Rust crates
   adapter-support/         permissive parser + replay-test primitives
   adapters/<agent>/        raw parsers using canonical ground truth as spec
-  core/ capture/           LAYER 2 model, discovery, bounded reads, JSONL tailing
-  pipeline/ store/         LAYER 2 backfill orchestration and SQLite projection
-  protocol/ server/        LAYER 3 placeholders (service not shipped)
-  rosettad/                discover + ingest CLI (daemon not shipped)
+  core/ capture/           LAYER 2 model, discovery, JSONL/SQLite capture, ledger, watch
+  pipeline/ store/         LAYER 2 backfill/live/rebuild orchestration + projection/hot tier
+  protocol/ server/        LAYER 3 protocol shell + in-process hub (HTTP/WS pending)
+  rosettad/                discover, ingest, watch, and atomic rebuild CLI
 clients/                   generated consumer packages (TS)          [Phase 4]
 ```
 

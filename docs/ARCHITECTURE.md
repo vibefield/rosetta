@@ -12,15 +12,16 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
-> **Implementation checkpoint (2026-08-25).** This document describes the target
-> architecture. Nine ground-truth/parser packs exist; the implemented runtime backfills
-> Claude Code and Codex JSONL transcript streams into SQLite. It has generation-staged
-> reconciliation, deterministic adapter checkpoints, FTS, and rollups. The current
-> `source_op` journal stores normalized operations inside that database so source
-> rewrites can be swapped atomically; it is not the durable raw ledger described below.
-> The filesystem watcher/live lane, raw segment ledger and rebuild command, HTTP/WS
-> services, and generated clients are still pending. Consequently, unknown projection
-> schema versions fail closed rather than being dropped and rebuilt.
+> **Implementation checkpoint (2026-08-26).** This document describes the target
+> architecture. Nine ground-truth/runtime-adapter packs are registered. The generic
+> runtime handles adapter-selected JSONL and SQLite sources, generation-staged
+> reconciliation, deterministic adapter checkpoints, FTS and rollups, live watching
+> with polling/audit recovery, a checksummed append-only raw ledger, and validated
+> whole-projection rebuild with atomic installation. `source_op` is temporary
+> projection-internal rewrite staging, not a third durable representation. The store
+> hot tier and in-process subscription hub are implemented; HTTP/WS transport and
+> generated clients are pending. Unknown projection schemas fail closed on ordinary
+> open and are replaced only through the explicit ledger rebuild command.
 
 ---
 
@@ -215,9 +216,11 @@ capture contract explicit.
   The head hash detects rewrite/truncation (Claude Code rewrites files on compaction);
   on mismatch, the file re-ingests under a new **epoch**. Partial trailing lines are
   buffered, never half-parsed.
-- **Raw ledger**: every raw record is appended, before
-  normalization, to zstd-compressed segment files under `~/.rosetta/ledger/<agent>/`,
-  deduplicated by blake3 content hash, indexed in SQLite. Two reasons this exists:
+- **Raw ledger**: every complete raw record is appended with source/generation metadata
+  to size-rotated segment files, checksummed with blake3, and durably flushed before the
+  corresponding projection transaction. By default `rosettad` stores one runtime
+  ledger at `<projection>.ledger/<agent>/`; `--ledger` overrides that root. Segments are
+  self-describing and scanned incrementally during rebuild. Two reasons this exists:
   1. **Agents garbage-collect their own data** (Claude Code's `cleanupPeriodDays`
      deletes old transcripts). Without a ledger, history — and your FTS index over it —
      silently rots.
@@ -355,8 +358,9 @@ ingestion.
   benchmarked). Start with FTS5; **tantivy only if** FTS5 relevance or latency measurably
   fails us — one store keeping search transactionally consistent with metadata is worth
   a lot.
-- **On-disk layout:** `~/.rosetta/ledger/…` (segments) + `~/.rosetta/rosetta.db`
-  (projection). Ledger is precious; DB is disposable.
+- **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite
+  projection; `--ledger` can relocate the segment root. Ledger is precious; DB is
+  disposable.
 - Target table count: **~15, not 101.** Entities, rollups, ledger index, change log,
   drift, cursors. A new table needs a consumer to justify it.
 
@@ -370,7 +374,7 @@ ingestion.
 > is newer.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
-  blake3 for hashing; zstd for ledger segments.
+  blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
 - Memory-first fan-out for live streams (§5.2); DB commit is not on the notify path.
 - Budgets asserted in CI-able bench: full `~/.claude` cold backfill < 5 s per GB of
@@ -460,6 +464,6 @@ layer's design is frozen.
 |---|---|---|
 | FTS5 vs tantivy | FTS5 | relevance/latency benchmarks fail budgets |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
-| Ledger retention | keep forever (zstd is cheap) | ledger > tens of GB |
+| Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |

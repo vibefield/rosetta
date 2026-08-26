@@ -172,12 +172,14 @@
     crate seam per stage, and measurement infrastructure designed in from day one — every phase and
     every hot component owns a fixture and a bench, so each can be optimized in isolation.
     Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
-    <div class="callout"><b>Implementation checkpoint · 2026-08-25.</b> Backfill, bounded
-      discovery/meta reads, JSONL tail checkpoints, deterministic adapter-state checkpoints,
-      generation-staged source reconciliation, SQLite/FTS, rollups, and the rotating audit lane are
-      implemented for Claude Code and Codex. The watcher/live scheduler, raw segment ledger and
-      rebuild command, hot tier, HTTP/WS server, and benchmark promises below remain design targets.
-      <code>source_op</code> is a normalized transactional replay journal, not the raw ledger.</div>
+    <div class="callout"><b>Implementation checkpoint · 2026-08-26.</b> All nine captured-agent
+      adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, consistent
+      SQLite snapshots, serializable adapter checkpoints, generation-staged reconciliation,
+      SQLite/FTS and rollups, watch-before-scan live scheduling, polling plus rotating audits, the
+      checksummed raw segment ledger, atomic whole-projection rebuild, the store hot tier, and the
+      in-process subscription hub are implemented. The HTTP/WebSocket transport, generated clients,
+      and performance promises below remain design targets. <code>source_op</code> is only
+      projection-internal staging; the raw ledger is the durable replay substrate.</div>
   </div>
 
   <div class="legend">
@@ -677,13 +679,14 @@ trait <b>AgentAdapter</b>: Send + Sync {
   </ol>
 
   <div class="callout">
-    <b>Decided — ledger-first, with an explicit crash protocol.</b> The stream lane appends raw records
-    to the ledger before parsing them: extra write IO during backfill, paid deliberately, because it
+    <b>Decided — ledger-first, with an explicit crash protocol.</b> The stream lane preserves each
+    framed record's original bytes and durably appends them to the ledger before committing their
+    normalized projection: extra write IO during backfill, paid deliberately, because it
     makes rebuild, provenance, and GC-survival unconditional. The ledger and SQLite are separate
     filesystems, so SQLite cannot make both atomic — the ordering does: (1) frame only complete raw
     records; (2) append and durably flush the ledger segment; (3) ONE SQLite transaction — CAS the
-    driver checkpoint, then canonical rows, FTS/live indexes, bucket corrections (new − old), drift
-    aggregates, and ledger references; (4) publish committed mutations to the hub. Invariant: recovery
+    driver checkpoint, then canonical rows, FTS/live indexes, bucket corrections (new − old), and
+    drift aggregates; (4) publish committed mutations to the hub. Invariant: recovery
     may find an orphan ledger tail (harmless); it must never find a database reference to unflushed
     ledger bytes.
   </div>
