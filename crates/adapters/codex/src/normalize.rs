@@ -282,25 +282,34 @@ fn response_item(
             ops.push(IngestOp::Message(Box::new(row)));
             LineStatus::Parsed
         }
-        "function_call" => {
-            let Some(name) = item.name.clone() else {
-                // The canonical marks `name` required; a call without one cannot
-                // become a tool row at all.
-                return hard_into(
-                    ctx,
-                    stream_id,
-                    "response_item/function_call",
-                    "missing_name",
-                    ts,
-                    ops,
-                );
+        "function_call" | "custom_tool_call" => {
+            let custom = item.item_type == "custom_tool_call";
+            let record_kind = if custom {
+                "response_item/custom_tool_call"
+            } else {
+                "response_item/function_call"
             };
-            let input = tool_input(item.arguments.as_ref());
+            let Some(name) = item.name.clone() else {
+                // The writer marks `name` required; a call without one cannot
+                // become a tool row at all.
+                return hard_into(ctx, stream_id, record_kind, "missing_name", ts, ops);
+            };
+            let input = if custom {
+                let Some(input) = item.input.as_ref() else {
+                    return hard_into(ctx, stream_id, record_kind, "missing_input", ts, ops);
+                };
+                Value::String(input.clone())
+            } else {
+                tool_input(item.arguments.as_ref())
+            };
+            let Some(tool_id) = item.call_id.clone() else {
+                return hard_into(ctx, stream_id, record_kind, "missing_call_id", ts, ops);
+            };
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
             row.uuid = item.id.clone();
             stamp_model(&mut row, state);
             row.tool = Some(ToolCall {
-                tool_id: item.call_id.clone(),
+                tool_id: Some(tool_id),
                 name: name.clone(),
                 input: input.clone(),
                 // Merged in later by the writer, keyed on tool_id.
@@ -329,29 +338,13 @@ fn response_item(
                     at: ts,
                 }));
             }
-            if item.call_id.is_none() {
-                ops.push(drift(
-                    ctx,
-                    stream_id,
-                    "response_item/function_call",
-                    "missing_call_id",
-                    &[],
-                    ts,
-                ));
-            }
             LineStatus::Parsed
         }
         "function_call_output" | "custom_tool_call_output" => {
+            let record_kind = format!("response_item/{}", item.item_type);
             let Some(tool_id) = item.call_id.clone() else {
                 // Without the correlation id the result can never reach its call.
-                return hard_into(
-                    ctx,
-                    stream_id,
-                    "response_item/function_call_output",
-                    "missing_call_id",
-                    ts,
-                    ops,
-                );
+                return hard_into(ctx, stream_id, &record_kind, "missing_call_id", ts, ops);
             };
             let (result, payload) = tool_output(item.output.as_ref());
             ops.push(IngestOp::ToolResult {

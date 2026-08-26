@@ -8,7 +8,7 @@ glob = "sessions/*/*/*/rollout-*.jsonl"
 file_format = "jsonl"
 discipline = "append_only"
 evidence = "fixture"
-notes = "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg (task_started/item_completed/token_count/task_complete), response_item (message/function_call/function_call_output), world_state, turn_context. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large."
+notes = "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg, response_item, world_state, turn_context. Pinned writer evidence adds custom_tool_call/custom_tool_call_output to the fixture-backed response items. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large."
 
 [[streams]]
 id = "state-dbs"

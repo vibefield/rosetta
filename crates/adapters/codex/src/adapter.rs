@@ -29,7 +29,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        2
+        3
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

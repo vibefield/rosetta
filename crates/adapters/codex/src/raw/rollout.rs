@@ -186,7 +186,7 @@ pub struct EventMsg {
     pub unknown: Unknown,
 }
 
-/// Conversation item: message / function_call / function_call_output
+/// Conversation item: message / function_call / custom_tool_call and outputs
 /// (open vocabulary — same permissive policy as EventMsg).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ResponseItem {
@@ -207,8 +207,15 @@ pub struct ResponseItem {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Value>,
+    /// Free-form body for `custom_tool_call` (for example `apply_patch`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     /// A string on older writers and content blocks on newer writers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<Value>,

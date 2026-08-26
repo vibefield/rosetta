@@ -3,7 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
-  "No pinned writer-source export or compaction fixture yet; current evidence covers rollouts and the active SQLite state store.",
+  "Pinned writer evidence currently covers the custom-tool call/output gap; there is still no compaction fixture or exhaustive pinned writer-source export.",
 ]
 
 [agent]

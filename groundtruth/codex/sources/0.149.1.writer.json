@@ -1,0 +1,123 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "codex",
+  "agent_version": "0.149.1",
+  "evidence": "writer",
+  "generator": "writer-source openai/codex@rust-v0.149.1 codex-rs/protocol/src/models.rs ResponseItem",
+  "data_root": "~/.codex",
+  "writer_version": "rust-v0.149.1",
+  "streams": [
+    {
+      "id": "rollout",
+      "glob": "sessions/*/*/*/rollout-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg, response_item, world_state, turn_context. Pinned writer evidence adds custom_tool_call/custom_tool_call_output to the fixture-backed response items. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large.",
+      "discriminator": "type",
+      "record_types": {},
+      "facets": [
+        {
+          "id": "event-msg",
+          "path": "event_msg.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {}
+        },
+        {
+          "id": "response-items",
+          "path": "response_item.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {
+            "custom_tool_call": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "id": {
+                    "shape": { "kind": "string" },
+                    "required": false
+                  },
+                  "status": {
+                    "shape": { "kind": "string" },
+                    "required": false
+                  },
+                  "call_id": {
+                    "shape": { "kind": "string" },
+                    "required": true
+                  },
+                  "name": {
+                    "shape": { "kind": "string" },
+                    "required": true
+                  },
+                  "namespace": {
+                    "shape": { "kind": "string" },
+                    "required": false
+                  },
+                  "input": {
+                    "shape": { "kind": "string" },
+                    "required": true
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": { "kind": "object", "fields": {} },
+                    "required": false
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": { "custom_tool_call": 0 }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "custom_tool_call_output": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "id": {
+                    "shape": { "kind": "string" },
+                    "required": false
+                  },
+                  "call_id": {
+                    "shape": { "kind": "string" },
+                    "required": true
+                  },
+                  "name": {
+                    "shape": { "kind": "string" },
+                    "required": false
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "any_of",
+                      "variants": [
+                        { "kind": "string" },
+                        {
+                          "kind": "array",
+                          "items": { "kind": "object", "fields": {} }
+                        }
+                      ]
+                    },
+                    "required": true
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": { "kind": "object", "fields": {} },
+                    "required": false
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": { "custom_tool_call_output": 0 }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

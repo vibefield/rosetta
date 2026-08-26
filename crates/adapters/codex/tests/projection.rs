@@ -355,6 +355,63 @@ fn a_tool_result_merges_by_call_id() {
 }
 
 #[test]
+fn a_custom_tool_call_keeps_its_freeform_input_and_pairs_with_its_output() {
+    let mut ctx = context();
+    let patch = "*** Begin Patch\n*** Add File: added.txt\n+hello\n*** End Patch";
+    let call = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "input": patch,
+        }),
+    );
+    assert_eq!(call.status, LineStatus::Parsed);
+    assert!(drifts(&call.ops).is_empty());
+    match call.ops.as_slice() {
+        [IngestOp::Message(row), IngestOp::FileEdit(edit)] => {
+            let tool = row.tool.as_ref().expect("custom tool call");
+            assert_eq!(tool.tool_id.as_deref(), Some("call_1"));
+            assert_eq!(tool.name, "apply_patch");
+            assert_eq!(tool.input, json!(patch));
+            assert_eq!(edit.message_timeline_id.as_deref(), Some(&*row.timeline_id));
+            assert_eq!(edit.path, "added.txt");
+        }
+        other => panic!("expected a tool row and file edit, got {other:?}"),
+    }
+
+    let output = ingest(
+        &mut ctx,
+        2,
+        "response_item",
+        json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "output": "Done!",
+        }),
+    );
+    assert_eq!(output.status, LineStatus::Parsed);
+    assert!(drifts(&output.ops).is_empty());
+    match output.ops.as_slice() {
+        [
+            IngestOp::ToolResult {
+                tool_id, result, ..
+            },
+        ] => {
+            assert_eq!(tool_id, "call_1");
+            assert_eq!(result.as_deref(), Some("Done!"));
+        }
+        other => panic!("expected one custom tool result, got {other:?}"),
+    }
+}
+
+#[test]
 fn modern_block_tool_results_keep_text_and_structure() {
     let mut ctx = context();
     let output = ingest(

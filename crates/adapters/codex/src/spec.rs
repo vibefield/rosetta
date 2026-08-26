@@ -103,7 +103,13 @@ mod tests {
         assert!(!events.contains("no-such-subtype"));
 
         let items = declared_response_items();
-        for name in ["message", "function_call", "function_call_output"] {
+        for name in [
+            "message",
+            "function_call",
+            "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
+        ] {
             assert!(items.contains(name), "{name} missing from the canonical");
         }
     }
