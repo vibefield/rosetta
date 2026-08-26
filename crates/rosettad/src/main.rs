@@ -596,23 +596,25 @@ fn publish_private_projection(
     instrument: &Instrument,
 ) -> Result<(), String> {
     instrument
-        .time(Metric::ApplyNanos, || store.finish_bulk_load())
+        .finish_bulk_load(&mut store)
         .map_err(|error| format!("finalizing private projection: {error}"))?;
-    drop(store);
-    let finished = rusqlite::Connection::open(&*temp)
-        .map_err(|error| format!("reopening private projection: {error}"))?;
-    make_single_file(&finished, "private projection")?;
-    drop(finished);
-    if let Ok(permissions) = std::fs::metadata(db).map(|metadata| metadata.permissions()) {
-        std::fs::set_permissions(&*temp, permissions)
-            .map_err(|error| format!("preserving projection permissions: {error}"))?;
-    }
-    std::fs::File::open(&*temp)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| format!("syncing private projection: {error}"))?;
-    install_rebuilt_projection(db, temp.as_ref())?;
-    let _installed = temp.keep();
-    Ok(())
+    instrument.time(Metric::PublishNanos, || {
+        drop(store);
+        let finished = rusqlite::Connection::open(&*temp)
+            .map_err(|error| format!("reopening private projection: {error}"))?;
+        make_single_file(&finished, "private projection")?;
+        drop(finished);
+        if let Ok(permissions) = std::fs::metadata(db).map(|metadata| metadata.permissions()) {
+            std::fs::set_permissions(&*temp, permissions)
+                .map_err(|error| format!("preserving projection permissions: {error}"))?;
+        }
+        std::fs::File::open(&*temp)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| format!("syncing private projection: {error}"))?;
+        install_rebuilt_projection(db, temp.as_ref())?;
+        let _installed = temp.keep();
+        Ok(())
+    })
 }
 
 fn sidecar(db: &std::path::Path, suffix: &str) -> PathBuf {
@@ -725,23 +727,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         reports.push((adapter.kind(), report));
     }
 
-    instrument
-        .time(Metric::ApplyNanos, || store.finish_bulk_load())
-        .map_err(|error| format!("finalizing rebuilt projection: {error}"))?;
-    drop(store);
-    let finished = rusqlite::Connection::open(&*temp)
-        .map_err(|error| format!("reopening rebuilt projection: {error}"))?;
-    make_single_file(&finished, "rebuilt projection")?;
-    drop(finished);
-    if let Ok(permissions) = std::fs::metadata(&db).map(|metadata| metadata.permissions()) {
-        std::fs::set_permissions(&*temp, permissions)
-            .map_err(|error| format!("preserving projection permissions: {error}"))?;
-    }
-    std::fs::File::open(&*temp)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| format!("syncing rebuilt projection: {error}"))?;
-    install_rebuilt_projection(&db, temp.as_ref())?;
-    let _installed = temp.keep();
+    publish_private_projection(store, temp, &db, &instrument)?;
 
     for (kind, report) in reports {
         println!(

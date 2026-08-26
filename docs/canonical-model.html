@@ -204,8 +204,9 @@
     <div class="status"><b>Implementation checkpoint · 2026-08-26.</b> This is the target
       model, not a claim that every box is shipped. All nine captured-agent adapters are registered;
       the runtime drives their selected JSONL transcript and SQLite snapshot streams. Its SQLite DDL
-      includes generation-scoped <code>source_op</code> staging and differs from the illustrative DDL
-      below. A separate checksummed raw ledger is flushed before projection commits, watch/live adds
+      includes generation-scoped <code>source_op</code> replacement staging and differs from the
+      illustrative DDL below; first generations project directly only inside unpublished cold
+      databases. A separate checksummed raw ledger is flushed before projection commits, watch/live adds
       polling plus rotating audits, and whole-projection rebuild validates into a private database
       before atomic installation. Ordinary schema mismatches fail closed so rebuild stays explicit.
       The in-process hot tier and subscription hub exist; HTTP/WebSocket transport and generated
@@ -885,7 +886,8 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
 );
 <span class="c">-- no triggers: the stream writer inserts message rows, fts entries,
 -- and coalesced rollup corrections in the SAME transaction. A private cold
--- build defers FTS and read indexes, materializes them once, validates, then publishes.</span>
+-- build projects first generations directly, defers FTS and read indexes,
+-- materializes them once, validates, then publishes.</span>
 
 CREATE TABLE <b>file_edit</b> (
   session_id   TEXT NOT NULL REFERENCES session(id),

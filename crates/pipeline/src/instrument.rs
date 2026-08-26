@@ -5,6 +5,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use rosetta_store::{ApplyStats, Batch, BulkLoadStats, Store, StoreError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
     FilesWalked,
@@ -25,9 +27,20 @@ pub enum Metric {
     ReadNanos,
     NormalizeNanos,
     ApplyNanos,
+    LedgerReadNanos,
+    LedgerWriteNanos,
+    SourceStageNanos,
+    CanonicalApplyNanos,
+    SqliteCommitNanos,
+    BulkBucketNanos,
+    BulkFtsNanos,
+    BulkIndexNanos,
+    BulkValidateNanos,
+    BulkPragmaNanos,
+    PublishNanos,
 }
 
-const METRIC_COUNT: usize = 18;
+const METRIC_COUNT: usize = 29;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -48,6 +61,17 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::ReadNanos, "read time"),
     (Metric::NormalizeNanos, "normalize time"),
     (Metric::ApplyNanos, "apply time"),
+    (Metric::LedgerReadNanos, "ledger read time"),
+    (Metric::LedgerWriteNanos, "ledger write time"),
+    (Metric::SourceStageNanos, "source staging time"),
+    (Metric::CanonicalApplyNanos, "canonical apply time"),
+    (Metric::SqliteCommitNanos, "sqlite commit time"),
+    (Metric::BulkBucketNanos, "bulk bucket time"),
+    (Metric::BulkFtsNanos, "bulk FTS time"),
+    (Metric::BulkIndexNanos, "bulk index time"),
+    (Metric::BulkValidateNanos, "bulk validate time"),
+    (Metric::BulkPragmaNanos, "bulk pragma time"),
+    (Metric::PublishNanos, "publication time"),
 ];
 
 fn index(metric: Metric) -> usize {
@@ -80,6 +104,33 @@ impl Instrument {
         let value = work();
         self.add(metric, started.elapsed().as_nanos() as u64);
         value
+    }
+
+    /// Apply one store batch while retaining both the end-to-end time and the
+    /// store's non-overlapping SQLite subphase measurements.
+    pub fn apply(&self, store: &mut Store, batch: &Batch) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.apply(batch));
+        if let Ok(stats) = &result {
+            self.add(Metric::SourceStageNanos, stats.source_stage_nanos);
+            self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
+            self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
+        }
+        result
+    }
+
+    /// Finalize a private projection and record the independently useful
+    /// bucket, FTS, index, validation, and journal-mode costs.
+    pub fn finish_bulk_load(&self, store: &mut Store) -> Result<BulkLoadStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.finish_bulk_load());
+        if let Ok(stats) = &result {
+            self.add(Metric::BulkBucketNanos, stats.bucket_nanos);
+            self.add(Metric::BulkFtsNanos, stats.fts_nanos);
+            self.add(Metric::BulkIndexNanos, stats.index_nanos);
+            self.add(Metric::SqliteCommitNanos, stats.commit_nanos);
+            self.add(Metric::BulkValidateNanos, stats.validate_nanos);
+            self.add(Metric::BulkPragmaNanos, stats.pragma_nanos);
+        }
+        result
     }
 
     /// Human-readable report: raw counters plus the derived rates the bench
@@ -138,5 +189,9 @@ mod tests {
         assert!(report.contains("records framed"));
         assert!(report.contains("7"));
         assert!(report.contains("records/s"));
+        assert!(report.contains("source staging time"));
+        assert!(report.contains("canonical apply time"));
+        assert!(report.contains("bulk FTS time"));
+        assert!(report.contains("publication time"));
     }
 }

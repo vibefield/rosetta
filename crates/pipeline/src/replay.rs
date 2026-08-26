@@ -11,9 +11,10 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
-use rosetta_capture::{LedgerEntry, SourceDef};
+use rosetta_capture::{CaptureError, LedgerEntry, LedgerVisit, SourceDef};
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_store::{ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
@@ -26,6 +27,36 @@ use crate::stream::merge_stats;
 /// Ops per staged chunk. Small enough to bound memory, large enough that the
 /// per-transaction cost amortizes.
 const CHUNK_OPS: usize = 512;
+
+/// `visit_ledger` interleaves IO/decoding with the caller's normalization and
+/// SQLite work. Time the visitor separately and subtract it so "ledger read"
+/// remains a useful non-overlapping IO/decode measurement.
+fn visit_ledger_profiled<E, F>(
+    ledger_dir: &Path,
+    instrument: &Instrument,
+    mut visitor: F,
+) -> Result<LedgerVisit, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
+    let started = Instant::now();
+    let mut visitor_nanos = 0_u64;
+    let result = rosetta_capture::visit_ledger::<E, _>(ledger_dir, |entry| {
+        let visitor_started = Instant::now();
+        let result = visitor(entry);
+        visitor_nanos = visitor_nanos.saturating_add(
+            u64::try_from(visitor_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+        );
+        result
+    });
+    let total_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    instrument.add(
+        Metric::LedgerReadNanos,
+        total_nanos.saturating_sub(visitor_nanos),
+    );
+    result
+}
 
 #[derive(Debug, Default)]
 pub struct RebuildReport {
@@ -77,7 +108,7 @@ pub fn rebuild_runtime(
     let mut surviving: BTreeMap<String, (u64, SourceDef)> = BTreeMap::new();
     let mut raw_paths: HashSet<String> = HashSet::new();
     let mut sealed_paths: HashSet<String> = HashSet::new();
-    let first = rosetta_capture::visit_ledger::<PipelineError, _>(ledger_dir, |entry| {
+    let first = visit_ledger_profiled::<PipelineError, _>(ledger_dir, instrument, |entry| {
         match entry {
             LedgerEntry::Raw { source, .. } => {
                 raw_paths.insert(source.relative_path);
@@ -115,20 +146,21 @@ pub fn rebuild_runtime(
     }
 
     // The runtime row first: every later FK hangs off it.
-    let stats = instrument.time(Metric::ApplyNanos, || {
-        store.apply(&Batch {
+    let stats = instrument.apply(
+        store,
+        &Batch {
             ops: vec![IngestOp::Runtime(runtime.clone())],
             checkpoints: vec![],
             source: None,
-        })
-    })?;
+        },
+    )?;
     merge_stats(&mut report.stats, &stats);
 
     let mut sessions_seen: HashSet<String> = HashSet::new();
     let mut already_projected: HashSet<String> = HashSet::new();
     let mut files: BTreeMap<String, FileReplay> = BTreeMap::new();
 
-    let second = rosetta_capture::visit_ledger::<PipelineError, _>(ledger_dir, |entry| {
+    let second = visit_ledger_profiled::<PipelineError, _>(ledger_dir, instrument, |entry| {
         match entry {
             LedgerEntry::Meta {
                 schema_version,
@@ -148,13 +180,14 @@ pub fn rebuild_runtime(
                     }
                 }
                 report.meta_batches += 1;
-                let stats = instrument.time(Metric::ApplyNanos, || {
-                    store.apply(&Batch {
+                let stats = instrument.apply(
+                    store,
+                    &Batch {
                         ops,
                         checkpoints: vec![],
                         source: None,
-                    })
-                })?;
+                    },
+                )?;
                 merge_stats(&mut report.stats, &stats);
             }
             LedgerEntry::Raw {
@@ -368,8 +401,9 @@ fn open_file(
     if !sessions_seen.contains(&source.session_id) {
         report.sessions_stubbed += 1;
         sessions_seen.insert(source.session_id.clone());
-        let stats = instrument.time(Metric::ApplyNanos, || {
-            store.apply(&Batch {
+        let stats = instrument.apply(
+            store,
+            &Batch {
                 ops: vec![IngestOp::SessionMeta(SessionRow {
                     id: source.session_id.clone(),
                     native_session_id: source.native_session_id.clone(),
@@ -386,8 +420,8 @@ fn open_file(
                 })],
                 checkpoints: vec![],
                 source: None,
-            })
-        })?;
+            },
+        )?;
         merge_stats(&mut report.stats, &stats);
     }
 
@@ -400,8 +434,9 @@ fn open_file(
     let cursor = match queries::cursor_state(store.conn(), &runtime.id, &source.relative_path)? {
         Some(existing) => existing,
         None => {
-            let stats = instrument.time(Metric::ApplyNanos, || {
-                store.apply(&Batch {
+            let stats = instrument.apply(
+                store,
+                &Batch {
                     ops: vec![],
                     checkpoints: vec![CheckpointUpdate {
                         runtime_id: runtime.id.clone(),
@@ -413,8 +448,8 @@ fn open_file(
                         updated_at: None,
                     }],
                     source: None,
-                })
-            })?;
+                },
+            )?;
             merge_stats(&mut report.stats, &stats);
             queries::cursor_state(store.conn(), &runtime.id, &source.relative_path)?.ok_or_else(
                 || PipelineError::Config("cursor row vanished during rebuild".to_string()),
@@ -496,8 +531,9 @@ fn flush_chunk(
         vec![]
     };
 
-    let stats = instrument.time(Metric::ApplyNanos, || {
-        store.apply(&Batch {
+    let stats = instrument.apply(
+        store,
+        &Batch {
             ops,
             checkpoints,
             source: Some(SourceWrite {
@@ -507,8 +543,8 @@ fn flush_chunk(
                 first_sequence,
                 mode,
             }),
-        })
-    })?;
+        },
+    )?;
     merge_stats(&mut report.stats, &stats);
     instrument.add(Metric::BatchesApplied, 1);
     Ok(())

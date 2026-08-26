@@ -55,6 +55,28 @@ fn base_batch() -> Batch {
     }
 }
 
+fn install_cursor(store: &mut Store, path: &str) -> i64 {
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: "rt1".into(),
+                stream: "transcript".into(),
+                path: path.into(),
+                session_id: "s1".into(),
+                expected: None,
+                next: "fresh".into(),
+                updated_at: None,
+            }],
+            source: None,
+        })
+        .unwrap();
+    queries::cursor_state(store.conn(), "rt1", path)
+        .unwrap()
+        .unwrap()
+        .id
+}
+
 fn message(id: &str, ordinal: i64, ts: i64) -> MessageRow {
     MessageRow {
         timeline_id: id.into(),
@@ -342,6 +364,316 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
         .unwrap();
     assert_eq!(live_stats.bucket_rebuilds, 1);
     assert_eq!(queries::search(store.conn(), "live", 10).unwrap().len(), 1);
+    assert!(matches!(
+        store.finish_bulk_load(),
+        Err(StoreError::BulkLoadState { .. })
+    ));
+}
+
+#[test]
+fn cold_first_generation_projects_without_the_source_journal() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "cold-first.jsonl");
+
+    let mut first = message("cold-first", 0, 1_000);
+    first.src_cursor = Some(cursor_id);
+    let staged = store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(first))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    assert_eq!(staged.source_stage_nanos, 0);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE timeline_id = 'cold-first'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1,
+        "the scratch projection may see rows before publication"
+    );
+
+    let mut second = message("cold-second", 0, 2_000);
+    second.src_cursor = Some(cursor_id);
+    let activated = store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(second))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    assert_eq!(activated.source_stage_nanos, 0);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    let cursor = queries::cursor_state(store.conn(), "rt1", "cold-first.jsonl")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (cursor.active_generation, cursor.highest_generation),
+        (1, 1)
+    );
+
+    store.finish_bulk_load().unwrap();
+    assert_eq!(
+        queries::search(store.conn(), "searchable", 10)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "cold-retry.jsonl");
+
+    let mut stale = message("cold-stale", 0, 1_000);
+    stale.src_cursor = Some(cursor_id);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(stale))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+
+    let mut fresh = message("cold-fresh", 0, 2_000);
+    fresh.src_cursor = Some(cursor_id);
+    let restarted = store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(fresh))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    assert_eq!(restarted.source_sweeps, 1);
+    let (stale, fresh): (i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT
+               SUM(timeline_id = 'cold-stale'),
+               SUM(timeline_id = 'cold-fresh')
+             FROM message",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((stale, fresh), (0, 1));
+
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    store.finish_bulk_load().unwrap();
+}
+
+#[test]
+fn cold_replacement_after_activation_still_swaps_from_the_journal() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "cold-rewrite.jsonl");
+
+    let mut old = message("coldold", 0, 1_000);
+    old.src_cursor = Some(cursor_id);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(old))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    let mut replacement = message("coldreplacement", 0, 2_000);
+    replacement.src_cursor = Some(cursor_id);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(replacement))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    let (old_visible, replacement_visible, staged): (i64, i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM message WHERE timeline_id = 'coldold'),
+               (SELECT COUNT(*) FROM message WHERE timeline_id = 'coldreplacement'),
+               (SELECT COUNT(*) FROM source_op)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((old_visible, replacement_visible, staged), (1, 0, 1));
+
+    let activated = store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    assert_eq!(activated.source_sweeps, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    store.finish_bulk_load().unwrap();
+    assert!(
+        queries::search(store.conn(), "coldold", 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        queries::search(store.conn(), "coldreplacement", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn abandoned_cold_generation_cannot_be_finalized() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "cold-abandon.jsonl");
+    let mut partial = message("cold-partial", 0, 1_000);
+    partial.src_cursor = Some(cursor_id);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(partial))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Abandon,
+            }),
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(matches!(
+        store.finish_bulk_load(),
+        Err(StoreError::BulkLoadState { .. })
+    ));
+}
+
+#[test]
+fn incomplete_cold_generation_cannot_be_finalized() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "cold-incomplete.jsonl");
+    let mut partial = message("cold-incomplete", 0, 1_000);
+    partial.src_cursor = Some(cursor_id);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(partial))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
     assert!(matches!(
         store.finish_bulk_load(),
         Err(StoreError::BulkLoadState { .. })

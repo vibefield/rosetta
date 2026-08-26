@@ -2,11 +2,17 @@
 //! installed projection: replay can therefore defer derived structures and
 //! secondary indexes, validate once, and publish only the finished database.
 
+use std::time::Instant;
+
 use rusqlite::{Connection, Transaction, params};
 
 use rosetta_core::fold::HOUR_MS;
 
-use crate::{StoreError, schema};
+use crate::{BulkLoadStats, StoreError, schema};
+
+fn elapsed_nanos(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
 
 pub(crate) fn prepare(conn: &Connection) -> Result<(), StoreError> {
     // Rollback still works, but a private scratch database does not need a
@@ -20,11 +26,34 @@ pub(crate) fn prepare(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<(), StoreError> {
+/// Refuse to materialize/publish a scratch database while any source is still
+/// between generations. The direct first-generation cold path has no
+/// `source_op` rows, so the cursor generation check is independently required.
+pub(crate) fn validate_complete(conn: &Connection) -> Result<(), StoreError> {
+    let staged: i64 = conn.query_row("SELECT COUNT(*) FROM source_op", [], |row| row.get(0))?;
+    let incomplete: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ingest_cursor
+         WHERE active_generation != highest_generation",
+        [],
+        |row| row.get(0),
+    )?;
+    if staged != 0 || incomplete != 0 {
+        return Err(StoreError::BulkLoadState {
+            message: format!(
+                "cold rebuild has {staged} staged ops and {incomplete} incomplete source generations"
+            ),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<BulkLoadStats, StoreError> {
+    let mut stats = BulkLoadStats::default();
     // One set-based fold replaces per-message and per-session rescans. SUM's
     // NULL behavior preserves the model's never-reported != zero invariant.
     // The CASE implements Rust's div_euclid hour floor for pre-epoch values;
     // SQLite integer division otherwise truncates toward zero.
+    let started = Instant::now();
     tx.execute("DELETE FROM usage_bucket", [])?;
     tx.execute(
         "INSERT INTO usage_bucket
@@ -48,19 +77,24 @@ pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<(), StoreError> {
          GROUP BY session_id, hour_ts, model",
         params![HOUR_MS],
     )?;
+    stats.bucket_nanos = elapsed_nanos(started);
 
     // External-content FTS can rebuild directly from the finished message
     // table. This is the intended FTS5 bulk-load path and avoids tokenizing
     // each row inside thousands of source activation transactions.
+    let started = Instant::now();
     tx.execute("INSERT INTO message_fts(message_fts) VALUES('rebuild')", [])?;
     tx.execute(
         "INSERT INTO message_fts(message_fts, rank) VALUES('integrity-check', 1)",
         [],
     )?;
+    stats.fts_nanos = elapsed_nanos(started);
 
+    let started = Instant::now();
     tx.execute_batch(schema::BULK_CREATE_INDEXES)?;
     tx.execute_batch("ANALYZE;")?;
-    Ok(())
+    stats.index_nanos = elapsed_nanos(started);
+    Ok(stats)
 }
 
 pub(crate) fn validate(conn: &Connection) -> Result<(), StoreError> {

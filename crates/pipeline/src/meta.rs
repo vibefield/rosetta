@@ -227,19 +227,23 @@ pub fn meta_ingest_into(
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
     ops.extend(skim_ops);
     if let Some(ledger) = ledger {
-        let json = serde_json::to_string(&ops).map_err(|error| {
-            PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
+        instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+            let json = serde_json::to_string(&ops).map_err(|error| {
+                PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
+            })?;
+            ledger.append_meta(crate::LEDGER_META_SCHEMA_VERSION, &json)?;
+            ledger.flush()?;
+            Ok(())
         })?;
-        ledger.append_meta(crate::LEDGER_META_SCHEMA_VERSION, &json)?;
-        ledger.flush()?;
     }
-    report.stats = instrument.time(Metric::ApplyNanos, || {
-        store.apply(&Batch {
+    report.stats = instrument.apply(
+        store,
+        &Batch {
             ops,
             checkpoints: vec![],
             source: None,
-        })
-    })?;
+        },
+    )?;
     instrument.add(Metric::BatchesApplied, 1);
 
     // Newest sessions stream first.

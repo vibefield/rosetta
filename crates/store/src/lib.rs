@@ -11,11 +11,26 @@ pub mod schema;
 
 use std::fmt;
 use std::path::Path;
+use std::time::Instant;
 
 use rusqlite::Connection;
 
 pub use apply::{ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
 pub use hot::{Effects, HotConfig, MetaMirror, Mutation, Replay, Stamp, TailRings};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct BulkLoadStats {
+    pub bucket_nanos: u64,
+    pub fts_nanos: u64,
+    pub index_nanos: u64,
+    pub commit_nanos: u64,
+    pub validate_nanos: u64,
+    pub pragma_nanos: u64,
+}
+
+fn elapsed_nanos(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -100,6 +115,10 @@ impl From<serde_json::Error> for StoreError {
 pub struct Store {
     conn: Connection,
     mode: StoreMode,
+    /// An abandoned generation means the private projection was built from an
+    /// incomplete source. Keep accepting batches so callers can finish their
+    /// diagnostic pass, but never allow that scratch file to be published.
+    bulk_abandoned: bool,
     /// Hot-tier observation: `Some` collects the row-level [`Effects`] of
     /// every committed batch until drained. `None` (the default) costs
     /// nothing — backfill and rebuild never allocate a mutation log.
@@ -119,6 +138,7 @@ impl Store {
         Ok(Self {
             conn,
             mode: StoreMode::Live,
+            bulk_abandoned: false,
             effects: None,
         })
     }
@@ -129,6 +149,7 @@ impl Store {
         Ok(Self {
             conn,
             mode: StoreMode::Live,
+            bulk_abandoned: false,
             effects: None,
         })
     }
@@ -164,6 +185,7 @@ impl Store {
         Ok(Self {
             conn,
             mode: StoreMode::Bulk,
+            bulk_abandoned: false,
             effects: None,
         })
     }
@@ -178,8 +200,19 @@ impl Store {
             StoreMode::Live => apply::LIVE_MAINTENANCE,
             StoreMode::Bulk => apply::BULK_MAINTENANCE,
         };
-        let stats = apply::apply_batch(&tx, batch, maintenance, fresh.as_mut())?;
+        let bulk_load = self.mode == StoreMode::Bulk;
+        let mut stats = apply::apply_batch(&tx, batch, maintenance, bulk_load, fresh.as_mut())?;
+        let started = Instant::now();
         tx.commit()?;
+        stats.sqlite_commit_nanos = elapsed_nanos(started);
+        if bulk_load
+            && matches!(
+                batch.source.as_ref().map(|source| source.mode),
+                Some(SourceMode::Abandon)
+            )
+        {
+            self.bulk_abandoned = true;
+        }
         if let (Some(pending), Some(committed)) = (self.effects.as_mut(), fresh) {
             pending.merge(committed);
         }
@@ -189,19 +222,32 @@ impl Store {
     /// Materialize every derived structure for a private cold rebuild, build
     /// deferred indexes, analyze the finished database, and validate it. Only
     /// after this succeeds is the store switched to ordinary live semantics.
-    pub fn finish_bulk_load(&mut self) -> Result<(), StoreError> {
+    pub fn finish_bulk_load(&mut self) -> Result<BulkLoadStats, StoreError> {
         if self.mode != StoreMode::Bulk {
             return Err(StoreError::BulkLoadState {
                 message: "store is not in cold rebuild mode".to_string(),
             });
         }
+        if self.bulk_abandoned {
+            return Err(StoreError::BulkLoadState {
+                message: "cold rebuild contains an abandoned source generation".to_string(),
+            });
+        }
+        bulk::validate_complete(&self.conn)?;
         let tx = self.conn.transaction()?;
-        bulk::finalize(&tx)?;
+        let mut stats = bulk::finalize(&tx)?;
+        let started = Instant::now();
         tx.commit()?;
+        stats.commit_nanos = elapsed_nanos(started);
+        let started = Instant::now();
         bulk::validate(&self.conn)?;
+        stats.validate_nanos = elapsed_nanos(started);
+        let started = Instant::now();
         bulk::restore_live_pragmas(&self.conn)?;
+        stats.pragma_nanos = elapsed_nanos(started);
         self.mode = StoreMode::Live;
-        Ok(())
+        self.bulk_abandoned = false;
+        Ok(stats)
     }
 
     /// Start collecting hot-tier effects. The daemon enables this before its

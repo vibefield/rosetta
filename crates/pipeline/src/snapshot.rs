@@ -145,8 +145,9 @@ pub(crate) fn stream_snapshot_sources(
                 if previous.snapshot_stamp.as_deref() != Some(stamp.as_str()) {
                     let mut next = previous.clone();
                     next.snapshot_stamp = Some(stamp.as_str().to_string());
-                    let applied = instrument.time(Metric::ApplyNanos, || {
-                        store.apply(&Batch {
+                    let applied = instrument.apply(
+                        store,
+                        &Batch {
                             ops: vec![],
                             checkpoints: vec![CheckpointUpdate {
                                 runtime_id: runtime.id.clone(),
@@ -158,8 +159,8 @@ pub(crate) fn stream_snapshot_sources(
                                 updated_at: Some(file.modified_ms),
                             }],
                             source: None,
-                        })
-                    });
+                        },
+                    );
                     match applied {
                         Ok(stats) => {
                             merge_stats(&mut report.stats, &stats);
@@ -191,24 +192,27 @@ pub(crate) fn stream_snapshot_sources(
                 })?;
 
             if let Some(ledger) = ledger.as_deref_mut() {
-                let source = rosetta_capture::SourceDef {
-                    relative_path: file.relative_path.clone(),
-                    stream_id: file.stream_id.clone(),
-                    session_id: file.session_id.clone(),
-                    native_session_id: file.native_session_id.clone(),
-                    agent_version: file.agent_version.clone(),
-                };
-                if !records.is_empty() {
-                    ledger.append_raw(
-                        &source,
-                        generation,
-                        records
-                            .iter()
-                            .enumerate()
-                            .map(|(index, record)| (index as u64, record.as_bytes())),
-                    )?;
-                }
-                ledger.flush()?;
+                instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+                    let source = rosetta_capture::SourceDef {
+                        relative_path: file.relative_path.clone(),
+                        stream_id: file.stream_id.clone(),
+                        session_id: file.session_id.clone(),
+                        native_session_id: file.native_session_id.clone(),
+                        agent_version: file.agent_version.clone(),
+                    };
+                    if !records.is_empty() {
+                        ledger.append_raw(
+                            &source,
+                            generation,
+                            records
+                                .iter()
+                                .enumerate()
+                                .map(|(index, record)| (index as u64, record.as_bytes())),
+                        )?;
+                    }
+                    ledger.flush()?;
+                    Ok(())
+                })?;
             }
 
             let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
@@ -251,7 +255,14 @@ pub(crate) fn stream_snapshot_sources(
                     continue;
                 }
                 if last {
-                    seal_generation(ledger, adapter, file, generation, generation_clean)?;
+                    seal_generation(
+                        ledger,
+                        adapter,
+                        file,
+                        generation,
+                        generation_clean,
+                        instrument,
+                    )?;
                 }
                 if flush_chunk(
                     adapter,
@@ -278,7 +289,14 @@ pub(crate) fn stream_snapshot_sources(
             if records.is_empty() && !conflicted {
                 // The session vanished from the database: an empty activation
                 // is a pure sweep of its old contribution.
-                seal_generation(ledger, adapter, file, generation, generation_clean)?;
+                seal_generation(
+                    ledger,
+                    adapter,
+                    file,
+                    generation,
+                    generation_clean,
+                    instrument,
+                )?;
                 conflicted = flush_chunk(
                     adapter,
                     runtime,
@@ -315,24 +333,27 @@ fn seal_generation(
     file: &SessionFile,
     generation: u64,
     generation_clean: bool,
+    instrument: &Instrument,
 ) -> Result<(), PipelineError> {
     let Some(ledger) = ledger.as_deref_mut() else {
         return Ok(());
     };
-    ledger.complete_generation(
-        &rosetta_capture::SourceDef {
-            relative_path: file.relative_path.clone(),
-            stream_id: file.stream_id.clone(),
-            session_id: file.session_id.clone(),
-            native_session_id: file.native_session_id.clone(),
-            agent_version: file.agent_version.clone(),
-        },
-        generation,
-        adapter.normalizer_version(),
-        generation_clean,
-    )?;
-    ledger.flush()?;
-    Ok(())
+    instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+        ledger.complete_generation(
+            &rosetta_capture::SourceDef {
+                relative_path: file.relative_path.clone(),
+                stream_id: file.stream_id.clone(),
+                session_id: file.session_id.clone(),
+                native_session_id: file.native_session_id.clone(),
+                agent_version: file.agent_version.clone(),
+            },
+            generation,
+            adapter.normalizer_version(),
+            generation_clean,
+        )?;
+        ledger.flush()?;
+        Ok(())
+    })
 }
 
 /// One staged chunk (or the activating final one). Returns true on a
@@ -402,8 +423,9 @@ fn flush_chunk(
     };
 
     let ops_count = chunk.len() as u64;
-    let applied = instrument.time(Metric::ApplyNanos, || {
-        store.apply(&Batch {
+    let applied = instrument.apply(
+        store,
+        &Batch {
             ops: chunk,
             checkpoints,
             source: Some(SourceWrite {
@@ -413,8 +435,8 @@ fn flush_chunk(
                 first_sequence,
                 mode,
             }),
-        })
-    });
+        },
+    );
     match applied {
         Ok(stats) => {
             merge_stats(&mut report.stats, &stats);

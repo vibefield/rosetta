@@ -2,12 +2,16 @@
 //! bucket corrections, drift aggregates, and the checkpoint CAS
 //! all commit together — aggregates can never drift from the rows they
 //! summarize, and a torn projection write can never exist. `source_op` is a
-//! STAGING BUFFER, not a representation: it holds only not-yet-active staged
-//! generations and is pruned at activation. The raw ledger (rosetta-capture)
-//! is the durable replay truth; the projection undoes a source's old
-//! contribution via provenance columns, never via a permanent op journal.
+//! STAGING BUFFER, not a representation: live replacements and replacements
+//! of an already-active source use it, then prune it at activation. A private
+//! cold build projects a source's first generation directly because there is
+//! no prior contribution to protect and the whole database remains
+//! unpublished until validation. The raw ledger (rosetta-capture) is the
+//! durable replay truth; the projection undoes a source's old contribution via
+//! provenance columns, never via a permanent op journal.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
@@ -35,7 +39,9 @@ pub struct CheckpointUpdate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceMode {
-    /// Persist ops for an incomplete replacement generation; project nothing.
+    /// Hold an incomplete replacement generation away from the published
+    /// projection. A private first-generation cold load may project it early;
+    /// that database has no readers and cannot be published before activation.
     Stage,
     /// Extend the already-active generation and project only newly persisted ops.
     Append,
@@ -74,9 +80,21 @@ pub struct ApplyStats {
     /// Distinct session/hour/model keys rebuilt after the batch. This remains
     /// bounded by changed buckets, not changed messages.
     pub bucket_rebuilds: u64,
-    /// Activations that actually removed a prior source contribution. A
-    /// source's first generation takes the empty fast path.
+    /// Generation transitions that actually removed a prior source
+    /// contribution. A source's first generation takes the empty fast path.
     pub source_sweeps: u64,
+    /// JSON serialization plus writes to the temporary `source_op` staging
+    /// table. Zero on ordinary active-generation appends.
+    pub source_stage_nanos: u64,
+    /// Canonical row projection, including generation activation/sweeps and
+    /// live bucket repair, but excluding the SQLite transaction commit.
+    pub canonical_apply_nanos: u64,
+    /// Time spent committing the SQLite transaction after all statements ran.
+    pub sqlite_commit_nanos: u64,
+}
+
+fn elapsed_nanos(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
 mod rows;
@@ -349,43 +367,89 @@ fn persist_source_ops(
     Ok(())
 }
 
-fn append_source_op(
+/// Project a source chunk without serializing it through `source_op`. This is
+/// used for active-generation appends and for a source's first generation in
+/// a private cold build. Message ordinals are collision-free while chunks
+/// arrive and are canonicalized once the generation activates.
+struct DirectProjection<'a> {
+    preserve_message_ordinals: bool,
+    effects: Option<&'a mut Effects>,
+}
+
+fn project_source_ops(
     tx: &Transaction,
-    op: &IngestOp,
-    src_cursor: Option<i64>,
+    source: &SourceWrite,
+    ops: &[IngestOp],
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
-    mut effects: Option<&mut Effects>,
+    mut projection: DirectProjection<'_>,
 ) -> Result<(), StoreError> {
-    if let IngestOp::Message(row) = op {
-        let mut row = (**row).clone();
-        let existing = tx
-            .prepare_cached("SELECT ordinal FROM message WHERE timeline_id = ?1")?
-            .query_row(params![row.timeline_id], |record| record.get::<_, i64>(0))
-            .optional()?;
-        row.ordinal = match existing {
-            Some(ordinal) => ordinal,
-            None => tx
-                .prepare_cached(
-                    "SELECT COALESCE(MAX(ordinal) + 1, 0) FROM message WHERE session_id = ?1",
-                )?
-                .query_row(params![row.session_id], |record| record.get(0))?,
-        };
-        if let Some(fx) = effects.as_deref_mut() {
-            fx.touched_sessions.insert(row.session_id.clone());
+    let mut next_ordinals: BTreeMap<String, i64> = BTreeMap::new();
+    for op in ops {
+        if let IngestOp::Message(row) = op {
+            let mut row = (**row).clone();
+            let existing = if projection.preserve_message_ordinals {
+                tx.prepare_cached("SELECT ordinal FROM message WHERE timeline_id = ?1")?
+                    .query_row(params![row.timeline_id], |record| record.get::<_, i64>(0))
+                    .optional()?
+            } else {
+                None
+            };
+            row.ordinal = match existing {
+                Some(ordinal) => ordinal,
+                None => {
+                    if let Some(next) = next_ordinals.get_mut(&row.session_id) {
+                        let ordinal = *next;
+                        *next = next.checked_add(1).ok_or_else(|| StoreError::SourceState {
+                            cursor_id: source.cursor_id,
+                            message: "session ordinal overflowed".to_string(),
+                        })?;
+                        ordinal
+                    } else {
+                        let ordinal: i64 = tx
+                            .prepare_cached(
+                                "SELECT COALESCE(MAX(ordinal) + 1, 0)
+                                 FROM message WHERE session_id = ?1",
+                            )?
+                            .query_row(params![row.session_id], |record| record.get(0))?;
+                        next_ordinals.insert(
+                            row.session_id.clone(),
+                            ordinal
+                                .checked_add(1)
+                                .ok_or_else(|| StoreError::SourceState {
+                                    cursor_id: source.cursor_id,
+                                    message: "session ordinal overflowed".to_string(),
+                                })?,
+                        );
+                        ordinal
+                    }
+                }
+            };
+            if let Some(fx) = projection.effects.as_deref_mut() {
+                fx.touched_sessions.insert(row.session_id.clone());
+            }
+            apply_message(
+                tx,
+                &row,
+                stats,
+                maintenance,
+                dirty_buckets,
+                projection.effects.as_deref_mut(),
+            )?;
+        } else {
+            apply_op(
+                tx,
+                op,
+                Some(source.cursor_id),
+                stats,
+                maintenance,
+                dirty_buckets,
+                projection.effects.as_deref_mut(),
+            )?;
         }
-        return apply_message(tx, &row, stats, maintenance, dirty_buckets, effects);
     }
-    apply_op(
-        tx,
-        op,
-        src_cursor,
-        stats,
-        maintenance,
-        dirty_buckets,
-        effects,
-    )
+    Ok(())
 }
 
 fn staged_ops(
@@ -516,6 +580,30 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError
         "UPDATE message SET ordinal = -1 - ordinal WHERE session_id = ?1 AND ordinal < 0",
     )?
     .execute(params![session_id])?;
+    Ok(())
+}
+
+fn set_active_generation(
+    tx: &Transaction,
+    source: &SourceWrite,
+    expected_generation: u64,
+) -> Result<(), StoreError> {
+    let changed = tx
+        .prepare_cached(
+            "UPDATE ingest_cursor SET active_generation = ?2
+             WHERE id = ?1 AND active_generation = ?3",
+        )?
+        .execute(params![
+            source.cursor_id,
+            sqlite_u64(source.cursor_id, "generation", source.generation)?,
+            sqlite_u64(source.cursor_id, "active generation", expected_generation,)?,
+        ])?;
+    if changed != 1 {
+        return Err(StoreError::SourceState {
+            cursor_id: source.cursor_id,
+            message: "active generation changed concurrently".to_string(),
+        });
+    }
     Ok(())
 }
 
@@ -781,12 +869,14 @@ pub(crate) fn apply_batch(
     tx: &Transaction,
     batch: &Batch,
     maintenance: Maintenance,
+    bulk_load: bool,
     mut effects: Option<&mut Effects>,
 ) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
     let mut dirty_buckets = BTreeSet::new();
     match &batch.source {
         None => {
+            let started = Instant::now();
             for op in &batch.ops {
                 apply_op(
                     tx,
@@ -798,10 +888,12 @@ pub(crate) fn apply_batch(
                     effects.as_deref_mut(),
                 )?;
             }
+            stats.canonical_apply_nanos += elapsed_nanos(started);
         }
         Some(source) => {
             let (cursor_session, active_generation, highest_generation) =
                 source_state(tx, source.cursor_id)?;
+            let starts_new_generation = source.generation > highest_generation;
             if cursor_session != source.session_id {
                 return Err(StoreError::SourceState {
                     cursor_id: source.cursor_id,
@@ -855,57 +947,125 @@ pub(crate) fn apply_batch(
                 ])?;
             }
 
-            match source.mode {
-                // Staged generations are the ONLY thing the journal holds.
-                SourceMode::Stage => {
-                    persist_source_ops(tx, source, &batch.ops)?;
-                }
-                // The hot path projects directly — replay idempotence comes
-                // from deterministic ids and identity indexes, not a journal.
-                SourceMode::Append => {
-                    for op in &batch.ops {
-                        append_source_op(
+            // No installed reader can observe a private cold database, and a
+            // source with active_generation=0 has no clean contribution that
+            // needs an atomic swap. Project that first generation directly;
+            // later rewrites retain the exact live staging semantics below.
+            let direct_cold_generation =
+                bulk_load && active_generation == 0 && source.mode != SourceMode::Append;
+            if direct_cold_generation {
+                let started = Instant::now();
+                match source.mode {
+                    SourceMode::Stage | SourceMode::Activate => {
+                        // A retry may supersede an incomplete generation before
+                        // it activated. Its direct private contribution is safe
+                        // to sweep because no clean generation exists yet.
+                        if starts_new_generation && cursor_has_projection(tx, source.cursor_id)? {
+                            remove_cursor_projection(
+                                tx,
+                                source.cursor_id,
+                                maintenance,
+                                &mut dirty_buckets,
+                            )?;
+                            stats.source_sweeps += 1;
+                        }
+                        // Effects are intentionally suppressed: this database
+                        // is not observable until it has been finalized.
+                        project_source_ops(
                             tx,
-                            op,
-                            Some(source.cursor_id),
+                            source,
+                            &batch.ops,
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
-                            effects.as_deref_mut(),
+                            DirectProjection {
+                                preserve_message_ordinals: false,
+                                effects: None,
+                            },
                         )?;
+                        if source.mode == SourceMode::Activate {
+                            set_active_generation(tx, source, active_generation)?;
+                            renumber_session(tx, &source.session_id)?;
+                            tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
+                                .execute(params![source.cursor_id])?;
+                        }
                     }
-                }
-                SourceMode::Activate => {
-                    persist_source_ops(tx, source, &batch.ops)?;
-                    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
-                    let changed = tx
-                        .prepare_cached(
-                            "UPDATE ingest_cursor SET active_generation = ?2
-                             WHERE id = ?1 AND active_generation = ?3",
-                        )?
-                        .execute(params![
-                            source.cursor_id,
-                            generation,
-                            sqlite_u64(source.cursor_id, "active generation", active_generation,)?,
-                        ])?;
-                    if changed != 1 {
-                        return Err(StoreError::SourceState {
-                            cursor_id: source.cursor_id,
-                            message: "active generation changed concurrently".to_string(),
-                        });
+                    SourceMode::Abandon => {
+                        // Earlier chunks may already be in the private
+                        // projection. Remove their provenance-owned rows and
+                        // retain only the diagnostic facts from this last
+                        // chunk. Store prevents this scratch database from
+                        // being finalized after an abandon.
+                        for op in &batch.ops {
+                            if let IngestOp::Drift(fact) = op {
+                                apply_drift(tx, fact, &mut stats)?;
+                            }
+                        }
+                        if cursor_has_projection(tx, source.cursor_id)? {
+                            remove_cursor_projection(
+                                tx,
+                                source.cursor_id,
+                                maintenance,
+                                &mut dirty_buckets,
+                            )?;
+                            stats.source_sweeps += 1;
+                        }
+                        tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
+                            .execute(params![source.cursor_id])?;
                     }
-                    activate_cursor(
-                        tx,
-                        source,
-                        &mut stats,
-                        maintenance,
-                        &mut dirty_buckets,
-                        effects,
-                    )?;
+                    SourceMode::Append => unreachable!("append excluded from cold generation"),
                 }
-                SourceMode::Abandon => {
-                    persist_source_ops(tx, source, &batch.ops)?;
-                    abandon_cursor(tx, source, &mut stats)?;
+                stats.canonical_apply_nanos += elapsed_nanos(started);
+            } else {
+                match source.mode {
+                    // Staged generations are the ONLY thing the journal holds.
+                    SourceMode::Stage => {
+                        let started = Instant::now();
+                        persist_source_ops(tx, source, &batch.ops)?;
+                        stats.source_stage_nanos += elapsed_nanos(started);
+                    }
+                    // The hot path projects directly — replay idempotence comes
+                    // from deterministic ids and identity indexes, not a journal.
+                    SourceMode::Append => {
+                        let started = Instant::now();
+                        project_source_ops(
+                            tx,
+                            source,
+                            &batch.ops,
+                            &mut stats,
+                            maintenance,
+                            &mut dirty_buckets,
+                            DirectProjection {
+                                preserve_message_ordinals: true,
+                                effects: effects.as_deref_mut(),
+                            },
+                        )?;
+                        stats.canonical_apply_nanos += elapsed_nanos(started);
+                    }
+                    SourceMode::Activate => {
+                        let started = Instant::now();
+                        persist_source_ops(tx, source, &batch.ops)?;
+                        stats.source_stage_nanos += elapsed_nanos(started);
+                        set_active_generation(tx, source, active_generation)?;
+                        let started = Instant::now();
+                        activate_cursor(
+                            tx,
+                            source,
+                            &mut stats,
+                            maintenance,
+                            &mut dirty_buckets,
+                            effects,
+                        )?;
+                        stats.canonical_apply_nanos += elapsed_nanos(started);
+                    }
+                    SourceMode::Abandon => {
+                        let started = Instant::now();
+                        persist_source_ops(tx, source, &batch.ops)?;
+                        stats.source_stage_nanos += elapsed_nanos(started);
+                        let started = Instant::now();
+                        abandon_cursor(tx, source, &mut stats)?;
+                        stats.canonical_apply_nanos += elapsed_nanos(started);
+                    }
                 }
             }
         }
@@ -913,9 +1073,11 @@ pub(crate) fn apply_batch(
     for checkpoint in &batch.checkpoints {
         apply_checkpoint(tx, checkpoint)?;
     }
+    let started = Instant::now();
     for key in dirty_buckets {
         rebuild_bucket(tx, &key.session_id, key.hour_ts, &key.model)?;
         stats.bucket_rebuilds += 1;
     }
+    stats.canonical_apply_nanos += elapsed_nanos(started);
     Ok(stats)
 }

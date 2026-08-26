@@ -21,7 +21,9 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > use a private projection: FTS, usage buckets, and read-only indexes are built once,
 > validated, and atomically published. Live batches coalesce repairs by
 > `(session, hour, model)`, and generation sweeps use indexed provenance. `source_op` is temporary
-> projection-internal rewrite staging, not a third durable representation. The store
+> projection-internal rewrite staging, not a third durable representation. A source's first
+> generation projects directly inside the unpublished cold database; only replacements of an
+> already-active generation need staging. The store
 > hot tier and in-process subscription hub are implemented; HTTP/WS transport and
 > generated clients are pending. Unknown projection schemas fail closed on ordinary
 > open and are replaced only through the explicit ledger rebuild command.
@@ -379,8 +381,9 @@ ingestion.
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
-- Cold loads defer FTS, rollups, and read indexes in an unpublished sibling database;
-  live batches rebuild each distinct affected usage bucket once, never once per message.
+- Cold loads project each source's first generation directly and defer FTS, rollups, and
+  read indexes in an unpublished sibling database; live batches rebuild each distinct
+  affected usage bucket once, never once per message.
 - Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
   these indexes because one missing provenance index turns source activation quadratic.
 - Memory-first fan-out for live streams (§5.2); DB commit is not on the notify path.

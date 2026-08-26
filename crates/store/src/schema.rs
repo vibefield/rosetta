@@ -110,10 +110,12 @@ CREATE TABLE IF NOT EXISTS ingest_cursor (
 );
 
 -- STAGING BUFFER, not a representation (rule 4): holds only not-yet-active
--- staged generations of rewritten files and is pruned at activation. The raw
--- ledger (rosetta-capture) is the durable replay truth; a source's old
--- contribution is swept by the src_cursor provenance columns instead of a
--- permanent op journal. Empty in steady state.
+-- replacement generations and is pruned at activation. A source's first
+-- generation projects directly when building a private cold database; there
+-- is no old contribution to protect and the database cannot be published
+-- before activation and validation. The raw ledger (rosetta-capture) is the
+-- durable replay truth; replacements sweep old contributions by src_cursor
+-- provenance instead of retaining a permanent op journal. Empty in steady state.
 CREATE TABLE IF NOT EXISTS source_op (
   cursor_id   INTEGER NOT NULL REFERENCES ingest_cursor(id),
   generation INTEGER NOT NULL,

@@ -213,13 +213,14 @@ pub fn stream_backfill_into(
             continue;
         }
         session.stream_state = next;
-        let stats = instrument.time(Metric::ApplyNanos, || {
-            store.apply(&Batch {
+        let stats = instrument.apply(
+            store,
+            &Batch {
                 ops: vec![IngestOp::SessionMeta(session)],
                 checkpoints: vec![],
                 source: None,
-            })
-        })?;
+            },
+        )?;
         merge_stats(&mut report.stats, &stats);
         if complete {
             report.sessions_indexed += 1;
@@ -271,8 +272,9 @@ pub(crate) fn cursor_row(
         adapter.normalizer_version(),
     )
     .encode();
-    instrument.time(Metric::ApplyNanos, || {
-        store.apply(&Batch {
+    instrument.apply(
+        store,
+        &Batch {
             ops: vec![],
             checkpoints: vec![CheckpointUpdate {
                 runtime_id: runtime.id.clone(),
@@ -284,8 +286,8 @@ pub(crate) fn cursor_row(
                 updated_at: Some(file.modified_ms),
             }],
             source: None,
-        })
-    })?;
+        },
+    )?;
     queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)?
         .ok_or_else(|| PipelineError::Config("cursor row vanished after insert".to_string()))
 }
@@ -504,45 +506,49 @@ fn ingest_file(
         // may reference them. Oversized records are quarantined by the
         // tailer and carry no payload, so only ordinary records land here.
         if let Some(ledger) = ledger.as_deref_mut() {
-            let source = rosetta_capture::SourceDef {
-                relative_path: file.relative_path.clone(),
-                stream_id: file.stream_id.clone(),
-                session_id: file.session_id.clone(),
-                native_session_id: file.native_session_id.clone(),
-                agent_version: file.agent_version.clone(),
-            };
-            let raw: Vec<(u64, &[u8])> = batch
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    TailItem::Record(record) => {
-                        Some((record.start_offset, record.payload.as_slice()))
-                    }
-                    TailItem::Oversized { .. } => None,
-                })
-                .collect();
-            let mut wrote = false;
-            if !raw.is_empty() {
-                ledger.append_raw(&source, source_generation, raw)?;
-                wrote = true;
-            }
-            if source_generation != active_generation && complete && generation_raw_complete {
-                ledger.complete_generation(
-                    &source,
-                    source_generation,
-                    adapter.normalizer_version(),
-                    generation_clean,
-                )?;
-                wrote = true;
-            }
-            if wrote {
-                ledger.flush()?;
-            }
+            instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+                let source = rosetta_capture::SourceDef {
+                    relative_path: file.relative_path.clone(),
+                    stream_id: file.stream_id.clone(),
+                    session_id: file.session_id.clone(),
+                    native_session_id: file.native_session_id.clone(),
+                    agent_version: file.agent_version.clone(),
+                };
+                let raw: Vec<(u64, &[u8])> = batch
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        TailItem::Record(record) => {
+                            Some((record.start_offset, record.payload.as_slice()))
+                        }
+                        TailItem::Oversized { .. } => None,
+                    })
+                    .collect();
+                let mut wrote = false;
+                if !raw.is_empty() {
+                    ledger.append_raw(&source, source_generation, raw)?;
+                    wrote = true;
+                }
+                if source_generation != active_generation && complete && generation_raw_complete {
+                    ledger.complete_generation(
+                        &source,
+                        source_generation,
+                        adapter.normalizer_version(),
+                        generation_clean,
+                    )?;
+                    wrote = true;
+                }
+                if wrote {
+                    ledger.flush()?;
+                }
+                Ok(())
+            })?;
         }
 
         let ops_count = ops.len() as u64;
-        let applied = instrument.time(Metric::ApplyNanos, || {
-            store.apply(&Batch {
+        let applied = instrument.apply(
+            store,
+            &Batch {
                 ops,
                 checkpoints: vec![CheckpointUpdate {
                     runtime_id: runtime.id.clone(),
@@ -560,8 +566,8 @@ fn ingest_file(
                     first_sequence,
                     mode: source_mode,
                 }),
-            })
-        });
+            },
+        );
         let stats = match applied {
             Ok(stats) => stats,
             Err(StoreError::CheckpointConflict { .. }) => {
@@ -606,4 +612,7 @@ pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
     total.drift_recorded += batch.drift_recorded;
     total.bucket_rebuilds += batch.bucket_rebuilds;
     total.source_sweeps += batch.source_sweeps;
+    total.source_stage_nanos += batch.source_stage_nanos;
+    total.canonical_apply_nanos += batch.canonical_apply_nanos;
+    total.sqlite_commit_nanos += batch.sqlite_commit_nanos;
 }
