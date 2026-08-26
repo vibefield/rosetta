@@ -310,7 +310,7 @@ pub struct LoopEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_uuid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub part: Option<Value>,
+    pub part: Option<LoopPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -320,9 +320,8 @@ pub struct LoopEvent {
     pub args: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_uuid: Option<String>,
-    /// Tool-dependent result payload; kept raw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
+    pub result: Option<ToolResultBody>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,10 +351,40 @@ pub struct LoopEvent {
 impl Drift for LoopEvent {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
+        if let Some(part) = &self.part {
+            note_unknown(&part.unknown, &format!("{prefix}.part"), out);
+        }
+        if let Some(result) = &self.result {
+            note_unknown(&result.unknown, &format!("{prefix}.result"), out);
+        }
         if let Some(usage) = &self.usage {
             note_unknown(&usage.unknown, &format!("{prefix}.usage"), out);
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LoopPart {
+    #[serde(rename = "type")]
+    pub part_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub think: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolResultBody {
+    pub output: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

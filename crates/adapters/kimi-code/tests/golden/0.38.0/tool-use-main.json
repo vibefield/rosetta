@@ -1,0 +1,122 @@
+[
+  {
+    "op": "workspace_obs",
+    "session_id": "581c1788f90476fa3a04149ca62b9dd69f4656c271bafd1a07e6505840f4dcad",
+    "at": 1787636364484,
+    "cwd": "<PROJECT>",
+    "git_branch": null,
+    "git_repo": null
+  },
+  {
+    "op": "message",
+    "timeline_id": "2a8d471cda1933276981abda517e62ab3175d023bcc66f7b8bca00e40fe13629",
+    "session_id": "581c1788f90476fa3a04149ca62b9dd69f4656c271bafd1a07e6505840f4dcad",
+    "ordinal": 0,
+    "kind": "user",
+    "subtype": null,
+    "uuid": "msg_01M0VPWD6SFWVFXD2WDYR69P07",
+    "parent_uuid": null,
+    "ts": 1787636364507,
+    "model": null,
+    "effort": null,
+    "content": "Run the echo command now. [use-tool]",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 6,
+    "src_offset": 20720
+  },
+  {
+    "op": "message",
+    "timeline_id": "3a2460a34f4bea1df9183ee814e18916da9f67e29480f48424cc41d4903f3b2f",
+    "session_id": "581c1788f90476fa3a04149ca62b9dd69f4656c271bafd1a07e6505840f4dcad",
+    "ordinal": 1,
+    "kind": "system",
+    "subtype": "permission_mode",
+    "uuid": null,
+    "parent_uuid": null,
+    "ts": 1787636364508,
+    "model": null,
+    "effort": null,
+    "content": "<system-reminder>\nAuto permission mode is active. Tool approvals will be handled automatically while this mode remains enabled.\n  - Continue normally without pausing for approval prompts.\n  - Do NOT call AskUserQuestion while auto mode is active. Make a reasonable decision and continue without asking the user.\n  - ExitPlanMode is also approved automatically, without the user reviewing the plan. An auto-approved plan is NOT a signal from the user to start executing — follow the user's original instructions on whether to proceed.\n</system-reminder>",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 7,
+    "src_offset": 20970
+  },
+  {
+    "op": "message",
+    "timeline_id": "ddb859dbeace6d5c56980d5e8fd9a523c51d8b7a506225e3f6243ce9e1b57c3e",
+    "session_id": "581c1788f90476fa3a04149ca62b9dd69f4656c271bafd1a07e6505840f4dcad",
+    "ordinal": 2,
+    "kind": "tool_use",
+    "subtype": null,
+    "uuid": "8eacb047-2398-487b-bffb-9e9aebcd3e6b",
+    "parent_uuid": null,
+    "ts": 1787636364556,
+    "model": "mock-model",
+    "effort": "on",
+    "content": null,
+    "tool": {
+      "tool_id": "call_mock_0001",
+      "name": "Bash",
+      "input": {
+        "command": "echo rosetta-mock"
+      },
+      "result": null,
+      "payload": null,
+      "is_error": null
+    },
+    "branch_tool_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null
+    },
+    "agent_version": null,
+    "src_cursor": 14,
+    "src_offset": 95791
+  },
+  {
+    "op": "tool_result",
+    "session_id": "581c1788f90476fa3a04149ca62b9dd69f4656c271bafd1a07e6505840f4dcad",
+    "tool_id": "call_mock_0001",
+    "result": "rosetta-mock\n",
+    "payload": {
+      "output": "rosetta-mock\n"
+    },
+    "is_error": null,
+    "at": 1787636364563
+  },
+  {
+    "op": "message",
+    "timeline_id": "3780a4a83cbd5d5915a404fb4cfab7332c490604b3f1e9d177b10e44a586c0ba",
+    "session_id": "581c1788f90476fa3a04149ca62b9dd69f4656c271bafd1a07e6505840f4dcad",
+    "ordinal": 3,
+    "kind": "agent",
+    "subtype": null,
+    "uuid": "12abb424-6c82-46fe-965e-b1608af2f143",
+    "parent_uuid": null,
+    "ts": 1787636364579,
+    "model": "mock-model",
+    "effort": "on",
+    "content": "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null
+    },
+    "agent_version": null,
+    "src_cursor": 21,
+    "src_offset": 97737
+  }
+]

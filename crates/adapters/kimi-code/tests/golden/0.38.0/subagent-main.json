@@ -1,0 +1,124 @@
+[
+  {
+    "op": "workspace_obs",
+    "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
+    "at": 1787636369454,
+    "cwd": "<PROJECT>",
+    "git_branch": null,
+    "git_repo": null
+  },
+  {
+    "op": "message",
+    "timeline_id": "a622836639bea35e5d9c9421b62e6a390d49bb9aa0dd2cc7cadaaa3832f8f8a3",
+    "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
+    "ordinal": 0,
+    "kind": "user",
+    "subtype": null,
+    "uuid": "msg_01M0VPWJ2309J7VZS1EMD0CEHM",
+    "parent_uuid": null,
+    "ts": 1787636369477,
+    "model": null,
+    "effort": null,
+    "content": "Delegate a short greeting to a subagent. [use-agent]",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 6,
+    "src_offset": 20736
+  },
+  {
+    "op": "message",
+    "timeline_id": "0b49159e7033eaf0f5c798ba0b113b81e24eb717b635bf7effc1005566abf442",
+    "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
+    "ordinal": 1,
+    "kind": "system",
+    "subtype": "permission_mode",
+    "uuid": null,
+    "parent_uuid": null,
+    "ts": 1787636369478,
+    "model": null,
+    "effort": null,
+    "content": "<system-reminder>\nAuto permission mode is active. Tool approvals will be handled automatically while this mode remains enabled.\n  - Continue normally without pausing for approval prompts.\n  - Do NOT call AskUserQuestion while auto mode is active. Make a reasonable decision and continue without asking the user.\n  - ExitPlanMode is also approved automatically, without the user reviewing the plan. An auto-approved plan is NOT a signal from the user to start executing — follow the user's original instructions on whether to proceed.\n</system-reminder>",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 7,
+    "src_offset": 21002
+  },
+  {
+    "op": "message",
+    "timeline_id": "e7d3f256d06694ff1bae7113eaa0e099c103ccce9f33ef11d0f852849330da19",
+    "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
+    "ordinal": 2,
+    "kind": "tool_use",
+    "subtype": null,
+    "uuid": "e3cd4bab-a627-45fb-a3a4-ebbedf04807a",
+    "parent_uuid": null,
+    "ts": 1787636369524,
+    "model": "mock-model",
+    "effort": "on",
+    "content": null,
+    "tool": {
+      "tool_id": "call_mock_0005",
+      "name": "Agent",
+      "input": {
+        "description": "greet briefly",
+        "prompt": "Reply with a short greeting.",
+        "subagent_type": "explore"
+      },
+      "result": null,
+      "payload": null,
+      "is_error": null
+    },
+    "branch_tool_id": "call_mock_0005",
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null
+    },
+    "agent_version": null,
+    "src_cursor": 14,
+    "src_offset": 95823
+  },
+  {
+    "op": "tool_result",
+    "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
+    "tool_id": "call_mock_0005",
+    "result": "agent_id: agent-0\nactual_subagent_type: explore\nstatus: completed\n\n[summary]\nHello from rosetta mockmodel. This is a deterministic scripted response.",
+    "payload": {
+      "output": "agent_id: agent-0\nactual_subagent_type: explore\nstatus: completed\n\n[summary]\nHello from rosetta mockmodel. This is a deterministic scripted response."
+    },
+    "is_error": null,
+    "at": 1787636369594
+  },
+  {
+    "op": "message",
+    "timeline_id": "a0b857d95c28641a359baa0a7871e23ccc8cb8ef906080b599662daea67dcabc",
+    "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
+    "ordinal": 3,
+    "kind": "agent",
+    "subtype": null,
+    "uuid": "ade4ca3d-fa2e-447a-8392-2d8e5fe13c69",
+    "parent_uuid": null,
+    "ts": 1787636369613,
+    "model": "mock-model",
+    "effort": "on",
+    "content": "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null
+    },
+    "agent_version": null,
+    "src_cursor": 21,
+    "src_offset": 97976
+  }
+]
