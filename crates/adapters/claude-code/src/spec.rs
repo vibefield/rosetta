@@ -1,0 +1,90 @@
+//! The Layer-1 canonical ground truth, compiled in — this adapter's SPEC
+//! (CLAUDE.md iron rule #6). Parser and spec ship as one artifact, so a
+//! regenerated `groundtruth.json` cannot drift away from the code that claims
+//! to implement it: the crate simply stops compiling or its tests fail.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
+
+use rosetta_adapter_support::GroundTruthDoc;
+use serde::Deserialize;
+use serde::de::IgnoredAny;
+
+const CANONICAL: &str = include_str!("../../../../groundtruth/claude-code/groundtruth.json");
+
+/// The two streams that carry timeline records in the same JSONL dialect. Their
+/// censuses are independent samples of one writer, so the adapter unions their
+/// vocabularies — a type missing from one census is not evidence of a different
+/// format, only of a smaller sample.
+const TRANSCRIPT_STREAMS: [&str; 2] = ["transcript", "subagent-transcript"];
+
+/// The layout view every adapter exposes through `AgentAdapter::layout`.
+pub fn doc() -> &'static GroundTruthDoc {
+    static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
+    DOC.get_or_init(|| {
+        GroundTruthDoc::parse(CANONICAL).expect("embedded claude-code groundtruth.json is valid")
+    })
+}
+
+/// Record `type` values the canonical declares for the transcript dialect.
+///
+/// This is the line between "we chose not to project this" and "the agent
+/// changed under us". A declared type the adapter does not map is skipped
+/// silently; anything else is drift. Without the distinction the most common
+/// record in the corpus (`attachment`, 8.7k observed) would report as unknown
+/// on every ingest — exactly the alarm fatigue spaghetti drowned in.
+pub fn declared_transcript_types() -> &'static BTreeSet<String> {
+    static TYPES: OnceLock<BTreeSet<String>> = OnceLock::new();
+    TYPES.get_or_init(|| {
+        let view: RecordTypesView =
+            serde_json::from_str(CANONICAL).expect("embedded groundtruth.json is valid");
+        view.streams
+            .into_iter()
+            .filter(|stream| TRANSCRIPT_STREAMS.contains(&stream.id.as_str()))
+            .flat_map(|stream| stream.record_types.into_keys())
+            .collect()
+    })
+}
+
+/// `GroundTruthDoc` keeps only the layout fields, so the record-type vocabulary
+/// is read through this second, private view of the same bytes.
+#[derive(Deserialize)]
+struct RecordTypesView {
+    streams: Vec<StreamRecordTypes>,
+}
+
+#[derive(Deserialize)]
+struct StreamRecordTypes {
+    id: String,
+    /// Names only — the shapes are the raw types' business, not the router's.
+    #[serde(default)]
+    record_types: BTreeMap<String, IgnoredAny>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{declared_transcript_types, doc};
+
+    #[test]
+    fn embedded_canonical_describes_this_agent() {
+        assert_eq!(doc().agent, "claude-code");
+        assert_eq!(doc().data_root, "~/.claude");
+        assert!(doc().stream("transcript").is_some());
+    }
+
+    #[test]
+    fn declared_types_union_both_transcript_streams() {
+        let types = declared_transcript_types();
+        // Typed and projected.
+        for name in ["user", "assistant", "system", "ai-title"] {
+            assert!(types.contains(name), "{name} missing from the canonical");
+        }
+        // Declared but unprojected — must NOT read as drift.
+        for name in ["attachment", "permission-mode", "bridge-session"] {
+            assert!(types.contains(name), "{name} missing from the canonical");
+        }
+        // Only the subagent stream's census saw this one.
+        assert!(types.contains("fork-context-ref"));
+        assert!(!types.contains("no-such-record-type"));
+    }
+}

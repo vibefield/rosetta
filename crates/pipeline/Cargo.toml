@@ -4,3 +4,15 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rosetta-core = { path = "../core" }
+rosetta-capture = { path = "../capture" }
+rosetta-adapter-support = { path = "../adapter-support" }
+rosetta-store = { path = "../store" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
+rosetta-adapter-codex = { path = "../adapters/codex" }
+rosetta-bench-corpus = { path = "../bench-corpus" }
+tempfile.workspace = true

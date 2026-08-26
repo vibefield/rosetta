@@ -1,0 +1,24 @@
+[package]
+name = "rosetta-bench-corpus"
+version.workspace = true
+edition.workspace = true
+description = "Deterministic synthetic agent corpora for rosetta's benches and profiles"
+
+[lib]
+name = "rosetta_bench_corpus"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bench-corpus"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+# The self-check lane: generated lines are replayed through the real parsers,
+# so "realistic" is a test result rather than a claim.
+[dev-dependencies]
+rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
+rosetta-adapter-codex = { path = "../adapters/codex" }
+rosetta-adapter-support = { path = "../adapter-support" }

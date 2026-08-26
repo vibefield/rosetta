@@ -1,0 +1,42 @@
+[
+  {
+    "native_session_id": "665e3e71-7c12-4810-925a-e8b92cb6f29d",
+    "ops": [
+      {
+        "at": 1787625318686,
+        "cwd": "/private/tmp/rosetta-farm/basic-chat/project",
+        "git_branch": "HEAD",
+        "git_repo": null,
+        "op": "workspace_obs",
+        "session_id": "c7f92295c3519e80a816923d75a2268c74a6202ad9e126a70a65de1efad38ce5"
+      },
+      {
+        "agent_version": "2.1.241",
+        "branch_tool_id": null,
+        "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+        "effort": "high",
+        "kind": "agent",
+        "model": "claude-opus-5",
+        "op": "message",
+        "ordinal": 0,
+        "parent_uuid": "543389fd-4136-42a7-ab61-63add9e5c9fd",
+        "session_id": "c7f92295c3519e80a816923d75a2268c74a6202ad9e126a70a65de1efad38ce5",
+        "src_cursor": 1,
+        "src_offset": 0,
+        "subtype": null,
+        "timeline_id": "f7da0904354cf07e61a9427f8010bec401d84eb611156f6a9c48fc8e5ca66eca",
+        "tool": null,
+        "ts": 1787625318686,
+        "usage": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "input": 128,
+          "output": 32,
+          "thinking": 0
+        },
+        "uuid": "817e4ddf-9ce2-46ee-9320-7afbb1034d20"
+      }
+    ],
+    "transcript": "projects/-private-tmp-rosetta-farm-basic-chat-project/665e3e71-7c12-4810-925a-e8b92cb6f29d.jsonl"
+  }
+]

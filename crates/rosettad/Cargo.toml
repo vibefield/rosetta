@@ -4,3 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rosetta-adapter-claude-code = { path = "../adapters/claude-code" }
+rosetta-adapter-codex = { path = "../adapters/codex" }
+rosetta-adapter-support = { path = "../adapter-support" }
+rosetta-pipeline = { path = "../pipeline" }
+rosetta-store = { path = "../store" }

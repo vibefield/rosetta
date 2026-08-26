@@ -4,6 +4,10 @@
 //! Python tooling under `tools/groundtruth`; this crate contains only the
 //! pieces that production Rust parsers need.
 
+pub mod adapter;
+
+pub use adapter::{AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, SkimResult};
+
 use std::collections::BTreeMap;
 
 use serde::Deserialize;

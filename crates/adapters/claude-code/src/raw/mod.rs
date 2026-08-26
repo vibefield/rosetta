@@ -4,4 +4,4 @@
 
 pub mod transcript;
 
-pub use transcript::{ParsedLine, parse_line};
+pub use transcript::{KnownRecord, ParsedLine, parse_line};

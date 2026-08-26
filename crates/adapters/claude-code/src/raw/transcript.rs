@@ -6,9 +6,11 @@
 //! fixtures alone: a field is required here only if every observed record
 //! carries it.
 //!
-//! Record types typed below: user, assistant, atis-latch, queue-operation,
-//! last-prompt, mode. The other census-observed types (attachment, progress,
-//! system, ai-title, …) parse as `ParsedLine::UnknownType` (soft) until typed.
+//! Record types typed below: user, assistant, system, ai-title, atis-latch,
+//! queue-operation, last-prompt, mode. The remaining canonical types
+//! (attachment, permission-mode, bridge-session, file-history-*) parse as
+//! `ParsedLine::UnknownType` (soft) until typed — the adapter treats a type the
+//! canonical declares as handled-but-unprojected, never as drift.
 //!
 //! Parsing policy (CLAUDE.md): permissive on fields — every struct carries a
 //! `#[serde(flatten)] unknown` map and a non-empty map is a drift observation.
@@ -38,7 +40,16 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
     let rtype = value["type"].as_str().map(str::to_owned);
     let known = matches!(
         rtype.as_deref(),
-        Some("user" | "assistant" | "atis-latch" | "queue-operation" | "last-prompt" | "mode")
+        Some(
+            "user"
+                | "assistant"
+                | "system"
+                | "ai-title"
+                | "atis-latch"
+                | "queue-operation"
+                | "last-prompt"
+                | "mode"
+        )
     );
     if known {
         Ok(ParsedLine::Known(Box::new(serde_json::from_value(value)?)))
@@ -57,6 +68,10 @@ pub enum KnownRecord {
     User(UserLine),
     #[serde(rename = "assistant")]
     Assistant(AssistantLine),
+    #[serde(rename = "system")]
+    System(SystemLine),
+    #[serde(rename = "ai-title")]
+    AiTitle(AiTitleLine),
     #[serde(rename = "atis-latch")]
     AtisLatch(AtisLatchLine),
     #[serde(rename = "queue-operation")]
@@ -72,6 +87,8 @@ impl Drift for KnownRecord {
         match self {
             KnownRecord::User(l) => l.drift(prefix, out),
             KnownRecord::Assistant(l) => l.drift(prefix, out),
+            KnownRecord::System(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::AiTitle(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::AtisLatch(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::QueueOperation(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::LastPrompt(l) => note_unknown(&l.unknown, prefix, out),
@@ -469,6 +486,88 @@ pub struct RecordedUsage {
     pub server_tool_use: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// A lifecycle marker the CLI writes for itself: compaction boundaries, hook
+/// summaries, turn timings, slash-command echoes. `subtype` is the real
+/// discriminator — the payload fields below are per-subtype, so all of them are
+/// optional even where one subtype always carries them (canonical facet
+/// `system-subtypes`: away_summary, bridge_status, compact_boundary,
+/// local_command, stop_hook_summary, turn_duration).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemLine {
+    // Required across all 210 observed records (canonical).
+    pub parent_uuid: Option<String>,
+    pub is_sidechain: bool,
+    pub subtype: String,
+    pub uuid: String,
+    pub timestamp: String,
+    pub session_id: String,
+    pub version: String,
+    pub cwd: String,
+    pub git_branch: String,
+    pub user_type: String,
+    // Optional-by-absence, including per-subtype payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Display text; absent on the purely numeric subtypes (turn_duration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_meta: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    #[serde(
+        default,
+        rename = "session_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_id_snake: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_metadata: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_output: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_errors: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_infos: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_additional_context: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_parent_uuid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_background_agent_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prevented_continuation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    /// Note the trailing `ID` — not the camelCase this record otherwise uses.
+    #[serde(default, rename = "toolUseID", skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// The model-generated session title. Carries no uuid or timestamp — it is a
+/// session-level singleton the CLI rewrites, not a point on the timeline.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTitleLine {
+    pub ai_title: String,
+    pub session_id: String,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

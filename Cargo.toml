@@ -11,6 +11,7 @@ members = [
     "crates/adapters/kimi-code",
     "crates/adapters/opencode",
     "crates/adapters/pi",
+    "crates/bench-corpus",
     "crates/capture",
     "crates/core",
     "crates/pipeline",
@@ -28,3 +29,6 @@ edition = "2024"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
+blake3 = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"
