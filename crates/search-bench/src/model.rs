@@ -236,6 +236,17 @@ pub struct RunReport {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ClassComparison {
+    pub class: String,
+    pub before: LatencySummary,
+    pub after: LatencySummary,
+    pub p50_change_percent: f64,
+    pub p95_change_percent: f64,
+    pub p99_change_percent: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LaneComparison {
     pub lane: String,
     pub before: LatencySummary,
@@ -243,6 +254,7 @@ pub struct LaneComparison {
     pub p50_change_percent: f64,
     pub p95_change_percent: f64,
     pub p99_change_percent: f64,
+    pub classes: Vec<ClassComparison>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

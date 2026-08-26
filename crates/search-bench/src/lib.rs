@@ -2,7 +2,7 @@
 //!
 //! Organic data is useful corroboration but may never become a fixture. This
 //! crate makes the local lane auditable without retaining content: a campaign
-//! begins with a checksummed, permission-read-only ledger and query suite;
+//! begins with a permission-read-only checksummed ledger and checksummed query suite;
 //! every run verifies them before and after, opens SQLite read-only, and emits
 //! only timings, counts, labels, and digests. Query text, snippets, and row ids
 //! never enter the report.

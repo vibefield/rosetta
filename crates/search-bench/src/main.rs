@@ -171,6 +171,14 @@ fn compare(args: &[String]) -> Result<String, String> {
     for lane in &comparison.lanes {
         text.push_str(&comparison_line(&lane.lane, &lane.before, &lane.after));
         text.push('\n');
+        for class in &lane.classes {
+            text.push_str(&comparison_line(
+                &format!("  class: {}", class.class),
+                &class.before,
+                &class.after,
+            ));
+            text.push('\n');
+        }
     }
     if let Some(path) = out {
         text.push_str(&format!("comparison {}\n", path.display()));

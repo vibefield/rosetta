@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::RUN_FORMAT;
-use crate::model::{ComparisonReport, LaneComparison, LatencySummary, RunReport};
+use crate::model::{ClassComparison, ComparisonReport, LaneComparison, LatencySummary, RunReport};
 
 fn percent(before: u64, after: u64) -> f64 {
     if before == 0 {
@@ -20,6 +20,9 @@ fn ensure_compatible(before: &RunReport, after: &RunReport) -> Result<(), String
         || before.query_suite != after.query_suite
     {
         return Err("reports do not share one frozen ledger and query suite".into());
+    }
+    if before.suite_name != after.suite_name || before.suite_basis != after.suite_basis {
+        return Err("reports declare different query suite metadata".into());
     }
     if before.machine != after.machine || before.os != after.os || before.arch != after.arch {
         return Err("reports were not captured on the same declared machine".into());
@@ -62,6 +65,43 @@ fn same_results(
     Ok(())
 }
 
+fn class_comparisons(
+    before: &crate::model::LaneReport,
+    after: &crate::model::LaneReport,
+) -> Result<Vec<ClassComparison>, String> {
+    let after_classes: BTreeMap<&str, _> = after
+        .classes
+        .iter()
+        .map(|class| (class.class.as_str(), class))
+        .collect();
+    if before.classes.len() != after_classes.len() {
+        return Err(format!(
+            "lane `{}` has different declared query classes",
+            before.lane
+        ));
+    }
+    before
+        .classes
+        .iter()
+        .map(|left| {
+            let right = after_classes.get(left.class.as_str()).ok_or_else(|| {
+                format!(
+                    "lane `{}` is missing query class `{}`",
+                    before.lane, left.class
+                )
+            })?;
+            Ok(ClassComparison {
+                class: left.class.clone(),
+                before: left.latency.clone(),
+                after: right.latency.clone(),
+                p50_change_percent: percent(left.latency.p50_nanos, right.latency.p50_nanos),
+                p95_change_percent: percent(left.latency.p95_nanos, right.latency.p95_nanos),
+                p99_change_percent: percent(left.latency.p99_nanos, right.latency.p99_nanos),
+            })
+        })
+        .collect()
+}
+
 pub fn compare_reports(before: &RunReport, after: &RunReport) -> Result<ComparisonReport, String> {
     ensure_compatible(before, after)?;
     let after_lanes: BTreeMap<&str, _> = after
@@ -79,6 +119,7 @@ pub fn compare_reports(before: &RunReport, after: &RunReport) -> Result<Comparis
             .get(left.lane.as_str())
             .ok_or_else(|| format!("after report is missing lane `{}`", left.lane))?;
         same_results(left, right)?;
+        let classes = class_comparisons(left, right)?;
         lanes.push(LaneComparison {
             lane: left.lane.clone(),
             before: left.latency.clone(),
@@ -86,6 +127,7 @@ pub fn compare_reports(before: &RunReport, after: &RunReport) -> Result<Comparis
             p50_change_percent: percent(left.latency.p50_nanos, right.latency.p50_nanos),
             p95_change_percent: percent(left.latency.p95_nanos, right.latency.p95_nanos),
             p99_change_percent: percent(left.latency.p99_nanos, right.latency.p99_nanos),
+            classes,
         });
     }
     Ok(ComparisonReport {
