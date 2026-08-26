@@ -16,13 +16,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use rosetta_adapter_support::AgentAdapter;
-use rosetta_capture::{SourceEvent, SourceEvents};
+use rosetta_capture::{Ledger, SourceEvent, SourceEvents};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_store::Store;
 
 use crate::instrument::Instrument;
-use crate::meta::{SessionFile, meta_ingest};
-use crate::stream::{StreamReport, merge_stats, stream_backfill};
+use crate::meta::{SessionFile, meta_ingest_into};
+use crate::stream::{StreamReport, merge_stats, stream_backfill_into};
 use crate::{IngestOptions, PipelineError};
 
 #[derive(Debug, Clone)]
@@ -69,6 +69,7 @@ pub struct LiveRunner<'a> {
     opts: IngestOptions,
     live: LiveOptions,
     files: Vec<SessionFile>,
+    ledger: Option<Ledger>,
     last_poll: Instant,
     report: LiveReport,
 }
@@ -88,7 +89,34 @@ impl<'a> LiveRunner<'a> {
         live: LiveOptions,
         instrument: &Instrument,
     ) -> Result<Self, PipelineError> {
-        let (_, files) = meta_ingest(adapter, &runtime, &root, store, &opts, instrument)?;
+        Self::start_with_ledger(
+            adapter, runtime, root, events, store, opts, live, None, instrument,
+        )
+    }
+
+    /// [`LiveRunner::start`] with a raw ledger the runner owns: every meta
+    /// batch and framed record from live ticks lands there first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_ledger(
+        adapter: &'a dyn AgentAdapter,
+        runtime: RuntimeRow,
+        root: PathBuf,
+        events: Box<dyn SourceEvents>,
+        store: &mut Store,
+        opts: IngestOptions,
+        live: LiveOptions,
+        mut ledger: Option<Ledger>,
+        instrument: &Instrument,
+    ) -> Result<Self, PipelineError> {
+        let (_, files) = meta_ingest_into(
+            adapter,
+            &runtime,
+            &root,
+            store,
+            &opts,
+            instrument,
+            ledger.as_mut(),
+        )?;
         Ok(Self {
             adapter,
             runtime,
@@ -97,6 +125,7 @@ impl<'a> LiveRunner<'a> {
             opts,
             live,
             files,
+            ledger,
             last_poll: Instant::now(),
             report: LiveReport::default(),
         })
@@ -170,7 +199,7 @@ impl<'a> LiveRunner<'a> {
             // that are actively growing would be the worst possible pick.
             let mut opts = self.opts.clone();
             opts.audit_files_per_run = 0;
-            let outcome = stream_backfill(
+            let outcome = stream_backfill_into(
                 self.adapter,
                 &self.runtime,
                 &self.root,
@@ -178,6 +207,7 @@ impl<'a> LiveRunner<'a> {
                 &subset,
                 &opts,
                 instrument,
+                self.ledger.as_mut(),
             )?;
             merge_stream(&mut self.report.stream, outcome);
         }
@@ -200,7 +230,7 @@ impl<'a> LiveRunner<'a> {
                 .cloned()
                 .collect();
             if !audit_subset.is_empty() {
-                let outcome = stream_backfill(
+                let outcome = stream_backfill_into(
                     self.adapter,
                     &self.runtime,
                     &self.root,
@@ -208,6 +238,7 @@ impl<'a> LiveRunner<'a> {
                     &audit_subset,
                     &self.opts,
                     instrument,
+                    self.ledger.as_mut(),
                 )?;
                 merge_stream(&mut self.report.stream, outcome);
             }
@@ -286,13 +317,14 @@ impl<'a> LiveRunner<'a> {
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
         self.report.admissions += 1;
-        let (_, fresh) = meta_ingest(
+        let (_, fresh) = meta_ingest_into(
             self.adapter,
             &self.runtime,
             &self.root,
             store,
             &self.opts,
             instrument,
+            self.ledger.as_mut(),
         )?;
         for file in &fresh {
             let known = self

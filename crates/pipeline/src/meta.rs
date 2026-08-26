@@ -54,6 +54,23 @@ pub fn meta_ingest(
     opts: &IngestOptions,
     instrument: &Instrument,
 ) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
+    meta_ingest_into(adapter, runtime, root, store, opts, instrument, None)
+}
+
+/// [`meta_ingest`] with a raw ledger attached: the meta ops batch is
+/// journaled (and durably flushed) before it is applied, so a rebuild after
+/// the agent GC'd its files still has the runtime, project, and session
+/// facts that only bounded skims ever saw.
+#[allow(clippy::too_many_arguments)]
+pub fn meta_ingest_into(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
     let layout = adapter.layout();
     let walk = instrument.time(Metric::WalkNanos, || {
         rosetta_capture::walk_filtered(root, opts.max_files, |path| {
@@ -241,6 +258,13 @@ pub fn meta_ingest(
     ops.extend(projects.into_iter().map(IngestOp::Project));
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
     ops.extend(skim_ops);
+    if let Some(ledger) = ledger {
+        let json = serde_json::to_string(&ops).map_err(|error| {
+            PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
+        })?;
+        ledger.append_meta(&json)?;
+        ledger.flush()?;
+    }
     report.stats = instrument.time(Metric::ApplyNanos, || {
         store.apply(&Batch {
             ops,

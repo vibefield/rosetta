@@ -54,6 +54,24 @@ pub fn stream_backfill(
     opts: &IngestOptions,
     instrument: &Instrument,
 ) -> Result<StreamReport, PipelineError> {
+    stream_backfill_into(adapter, runtime, root, store, files, opts, instrument, None)
+}
+
+/// [`stream_backfill`] with a raw ledger attached: every framed record is
+/// appended and durably flushed BEFORE the store transaction that projects
+/// it (the crash protocol — an orphan ledger tail is harmless, a projection
+/// row without flushed raw bytes is not).
+#[allow(clippy::too_many_arguments)]
+pub fn stream_backfill_into(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    files: &[SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    mut ledger: Option<&mut rosetta_capture::Ledger>,
+) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
     let audit_paths = rotating_audit_paths(store, &runtime.id, files, opts.audit_files_per_run)?;
     let audit_set: BTreeSet<&str> = audit_paths.iter().map(String::as_str).collect();
@@ -91,6 +109,7 @@ pub fn stream_backfill(
             instrument,
             &mut report,
             audit_set.contains(file.relative_path.as_str()),
+            ledger.as_deref_mut(),
         )?;
         file_health.insert(file.relative_path.clone(), complete);
         session_health
@@ -218,6 +237,7 @@ fn ingest_file(
     instrument: &Instrument,
     report: &mut StreamReport,
     audit_requested: bool,
+    mut ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<bool, PipelineError> {
     let path = root.join(&file.relative_path);
     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
@@ -406,6 +426,36 @@ fn ingest_file(
         // empty transaction on every re-scan of a quiet file.
         if ops.is_empty() && next_blob == prev_blob && !batch.more_available {
             break;
+        }
+
+        // Ledger-first: the raw bytes are durable before the projection tx
+        // may reference them. Oversized records are quarantined by the
+        // tailer and carry no payload, so only ordinary records land here.
+        if let Some(ledger) = ledger.as_deref_mut() {
+            let raw: Vec<(u64, &[u8])> = batch
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    TailItem::Record(record) => {
+                        Some((record.start_offset, record.payload.as_slice()))
+                    }
+                    TailItem::Oversized { .. } => None,
+                })
+                .collect();
+            if !raw.is_empty() {
+                ledger.append_raw(
+                    &rosetta_capture::SourceDef {
+                        relative_path: file.relative_path.clone(),
+                        stream_id: file.stream_id.clone(),
+                        session_id: file.session_id.clone(),
+                        native_session_id: file.native_session_id.clone(),
+                        agent_version: file.agent_version.clone(),
+                    },
+                    source_generation,
+                    raw,
+                )?;
+                ledger.flush()?;
+            }
         }
 
         let ops_count = ops.len() as u64;

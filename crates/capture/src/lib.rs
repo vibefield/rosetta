@@ -7,12 +7,14 @@
 //! backfill works without them.
 
 pub mod discovery;
+pub mod ledger;
 pub mod tailer;
 pub mod watch;
 
 pub use discovery::{
     HeadTail, ScannedFile, WalkReport, first_record, head_tail, walk, walk_filtered,
 };
+pub use ledger::{Ledger, LedgerEntry, LedgerScan, SourceDef, scan as scan_ledger};
 pub use tailer::{
     RawRecord, TailBatch, TailCheckpoint, TailConfig, TailItem, TailRead, Tailer, Transition,
 };

@@ -479,6 +479,7 @@ dependencies = [
  "rosetta-adapter-codex",
  "rosetta-adapter-support",
  "rosetta-capture",
+ "rosetta-core",
  "rosetta-pipeline",
  "rosetta-store",
 ]

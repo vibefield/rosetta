@@ -12,9 +12,10 @@ use std::process::ExitCode;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_support::AgentAdapter;
-use rosetta_capture::NotifyEvents;
+use rosetta_capture::{Ledger, NotifyEvents};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, meta_ingest, stream_backfill,
+    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, meta_ingest_into,
+    rebuild_runtime, stream_backfill_into,
 };
 use rosetta_store::Store;
 
@@ -28,11 +29,16 @@ fn main() -> ExitCode {
         Some("discover") => cmd_discover(&args[1..]),
         Some("ingest") => cmd_ingest(&args[1..]),
         Some("watch") => cmd_watch(&args[1..]),
+        Some("rebuild") => cmd_rebuild(&args[1..]),
         _ => {
             eprintln!("usage: rosettad <discover|ingest|watch> [options]");
             eprintln!("  discover [--home DIR]");
             eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]");
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
+            eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
+            eprintln!(
+                "  (ingest and watch keep a raw ledger at <db>.ledger/ unless --ledger overrides)"
+            );
             return ExitCode::from(2);
         }
     };
@@ -51,6 +57,7 @@ struct Flags {
     agents: Vec<String>,
     profile: bool,
     ticks: Option<u64>,
+    ledger: Option<PathBuf>,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -60,6 +67,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         agents: Vec::new(),
         profile: false,
         ticks: None,
+        ledger: None,
     };
     let mut at = 0;
     while at < args.len() {
@@ -76,6 +84,9 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--profile" => {
                 flags.profile = true;
                 at += 1;
+            }
+            "--ledger" => {
+                flags.ledger = Some(PathBuf::from(take_value(args, &mut at)?));
             }
             "--ticks" => {
                 let value = take_value(args, &mut at)?;
@@ -98,6 +109,19 @@ fn take_value(args: &[String], at: &mut usize) -> Result<String, String> {
         .ok_or_else(|| format!("{flag} needs a value"))?;
     *at += 2;
     Ok(value.clone())
+}
+
+/// The raw ledger lives beside the projection unless overridden — the
+/// projection is the disposable one of the pair.
+fn ledger_root(flags: &Flags, db: &std::path::Path) -> PathBuf {
+    flags
+        .ledger
+        .clone()
+        .unwrap_or_else(|| db.with_extension("ledger"))
+}
+
+fn open_ledger(root: &std::path::Path, kind: &str) -> Result<Ledger, String> {
+    Ledger::open(&root.join(kind)).map_err(|error| error.to_string())
 }
 
 fn default_home() -> Result<PathBuf, String> {
@@ -173,6 +197,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
 
     let mut store =
         Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+    let ledgers = ledger_root(&flags, &db);
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
     let mut failures = Vec::new();
@@ -187,14 +212,16 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         if discovery.walk_truncated {
             failures.push(format!("{} discovery walk was truncated", adapter.kind()));
         }
+        let mut ledger = open_ledger(&ledgers, adapter.kind())?;
 
-        let (meta, files) = meta_ingest(
+        let (meta, files) = meta_ingest_into(
             *adapter,
             &runtime,
             &discovery.root,
             &mut store,
             &opts,
             &instrument,
+            Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
         println!(
@@ -224,7 +251,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             ));
         }
 
-        let stream = stream_backfill(
+        let stream = stream_backfill_into(
             *adapter,
             &runtime,
             &discovery.root,
@@ -232,6 +259,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             &files,
             &opts,
             &instrument,
+            Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
         println!(
@@ -288,6 +316,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
 
     let mut store =
         Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+    let ledgers = ledger_root(&flags, &db);
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
 
@@ -303,17 +332,19 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         // Watch BEFORE the backfill scan: a write landing mid-backfill still
         // produces a hint for the first live tick.
         let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let mut ledger = open_ledger(&ledgers, adapter.kind())?;
 
-        let (meta, files) = meta_ingest(
+        let (meta, files) = meta_ingest_into(
             *adapter,
             &runtime,
             &discovery.root,
             &mut store,
             &opts,
             &instrument,
+            Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
-        let stream = stream_backfill(
+        let stream = stream_backfill_into(
             *adapter,
             &runtime,
             &discovery.root,
@@ -321,6 +352,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             &files,
             &opts,
             &instrument,
+            Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
         println!(
@@ -331,7 +363,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             discovery.root.display(),
         );
 
-        let runner = LiveRunner::start(
+        let runner = LiveRunner::start_with_ledger(
             *adapter,
             runtime,
             discovery.root.clone(),
@@ -339,6 +371,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             &mut store,
             opts.clone(),
             live.clone(),
+            Some(ledger),
             &instrument,
         )
         .map_err(|error| error.to_string())?;
@@ -387,6 +420,85 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     }
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
+    }
+    Ok(())
+}
+
+/// Drop the projection and replay the raw ledger — rule 4 as a command. The
+/// database file is DELETED first: the ledger is the durable copy.
+fn cmd_rebuild(args: &[String]) -> Result<(), String> {
+    let flags = parse_flags(args)?;
+    let db = flags.db.clone().ok_or("rebuild needs --db PATH")?;
+    let ledgers = ledger_root(&flags, &db);
+    if !ledgers.is_dir() {
+        return Err(format!("no ledger at {}", ledgers.display()));
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = db.as_os_str().to_owned();
+        path.push(suffix);
+        match std::fs::remove_file(std::path::Path::new(&path)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("removing old projection: {error}")),
+        }
+    }
+
+    let instrument = Instrument::new();
+    let mut store =
+        Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
+    let mut failures = Vec::new();
+    for adapter in selected(&flags)? {
+        let dir = ledgers.join(adapter.kind());
+        if !dir.is_dir() {
+            continue;
+        }
+        let layout = adapter.layout();
+        let runtime = rosetta_core::rows::RuntimeRow {
+            id: rosetta_core::ids::runtime_id(adapter.kind(), &layout.data_root),
+            kind: adapter.kind().to_string(),
+            data_root: layout.data_root.clone(),
+            enabled: true,
+            account: None,
+            config: None,
+            skills: None,
+            versions_seen: None,
+            discovered_at: 0,
+        };
+        let report = rebuild_runtime(adapter, &runtime, &dir, &mut store, &instrument)
+            .map_err(|error| error.to_string())?;
+        println!(
+            "{}: rebuilt {} files from {} segments — {} records replayed \
+             ({} stale skipped, {} already projected), {} meta batches, \
+             {} rows inserted, {} sessions stubbed, {} hard errors{}",
+            adapter.kind(),
+            report.files,
+            report.segments,
+            report.raw_records,
+            report.stale_records_skipped,
+            report.records_already_projected,
+            report.meta_batches,
+            report.stats.messages_inserted,
+            report.sessions_stubbed,
+            report.hard_errors,
+            if report.torn_segments > 0 {
+                " (torn tail ignored)"
+            } else {
+                ""
+            },
+        );
+        if report.hard_errors > 0 {
+            failures.push(format!(
+                "{}: {} hard errors during replay",
+                adapter.kind(),
+                report.hard_errors
+            ));
+        }
+    }
+    if flags.profile {
+        println!("\n== profile ==\n{}", instrument.report());
+    }
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
     }
     Ok(())
 }

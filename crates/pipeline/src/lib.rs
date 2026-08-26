@@ -17,6 +17,7 @@ pub mod instrument;
 pub mod live;
 pub mod meta;
 mod project;
+pub mod replay;
 pub mod sched;
 pub mod stream;
 
@@ -24,9 +25,10 @@ pub use checkpoint::PipeCheckpoint;
 pub use discover::{Discovery, discover, expand_data_root};
 pub use instrument::{Instrument, Metric};
 pub use live::{LiveOptions, LiveReport, LiveRunner, stream_live};
-pub use meta::{MetaReport, SessionFile, meta_ingest};
+pub use meta::{MetaReport, SessionFile, meta_ingest, meta_ingest_into};
+pub use replay::{RebuildReport, rebuild_runtime};
 pub use sched::{Lane, WorkItem, WorkQueue};
-pub use stream::{StreamReport, stream_backfill};
+pub use stream::{StreamReport, stream_backfill, stream_backfill_into};
 
 use rosetta_capture::{CaptureError, TailConfig};
 use rosetta_store::StoreError;
