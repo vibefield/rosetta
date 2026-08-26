@@ -29,6 +29,8 @@ use rosetta_pipeline::{
 };
 use rosetta_store::Store;
 
+mod serve;
+
 fn registry() -> Vec<&'static dyn AgentAdapter> {
     vec![
         &AntigravityAdapter,
@@ -49,12 +51,16 @@ fn main() -> ExitCode {
         Some("discover") => cmd_discover(&args[1..]),
         Some("ingest") => cmd_ingest(&args[1..]),
         Some("watch") => cmd_watch(&args[1..]),
+        Some("serve") => serve::cmd_serve(&args[1..]),
         Some("rebuild") => cmd_rebuild(&args[1..]),
         _ => {
-            eprintln!("usage: rosettad <discover|ingest|watch|rebuild> [options]");
+            eprintln!("usage: rosettad <discover|ingest|watch|serve|rebuild> [options]");
             eprintln!("  discover [--home DIR]");
             eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]");
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
+            eprintln!(
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile]"
+            );
             eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
             eprintln!(
                 "  (ingest and watch keep a raw ledger at <db>.ledger/ unless --ledger overrides)"
@@ -78,6 +84,8 @@ struct Flags {
     profile: bool,
     ticks: Option<u64>,
     ledger: Option<PathBuf>,
+    /// serve only: the localhost listen address.
+    addr: Option<String>,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -88,6 +96,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         profile: false,
         ticks: None,
         ledger: None,
+        addr: None,
     };
     let mut at = 0;
     while at < args.len() {
@@ -107,6 +116,9 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--ledger" => {
                 flags.ledger = Some(PathBuf::from(take_value(args, &mut at)?));
+            }
+            "--addr" => {
+                flags.addr = Some(take_value(args, &mut at)?);
             }
             "--ticks" => {
                 let value = take_value(args, &mut at)?;

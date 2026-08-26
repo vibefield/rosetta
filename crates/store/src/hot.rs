@@ -29,7 +29,11 @@ use crate::{StoreError, queries};
 
 /// One projected mutation, as written. At-least-once redelivery is safe:
 /// clients key by `timeline_id` (deterministic ids make replays idempotent).
-#[derive(Debug, Clone, PartialEq)]
+/// This is a wire type: the hub serializes it into WebSocket frames, tagged
+/// by `type`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum Mutation {
     /// Full message-row upsert — insert or replacement — carrying the
     /// ordinal the apply chose.
@@ -155,11 +159,15 @@ impl Effects {
 
 /// A subscription position: ring identity plus the last mutation sequence
 /// covered. Identity is never bound to delivery order — a dead epoch means
-/// "replacement snapshot", never a protocol error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// "replacement snapshot", never a protocol error. Both fields stay far
+/// below 2^53, so the wire carries them as plain numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Stamp {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub epoch: u64,
     /// Sequence of the last mutation this position covers; 0 = none yet.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub seq: u64,
 }
 

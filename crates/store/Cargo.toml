@@ -8,6 +8,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }
 rosetta-core = { path = "../core" }
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# TypeScript binding generation for the wire-visible hot-tier and query
+# types. Enabled by rosetta-protocol; never on by default.
+ts = ["dep:ts-rs", "rosetta-core/ts"]
 
 [dev-dependencies]
 tempfile.workspace = true

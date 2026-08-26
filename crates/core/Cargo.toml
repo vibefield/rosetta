@@ -7,3 +7,9 @@ edition.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { workspace = true }
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# TypeScript binding generation (ts-rs) for the wire-visible row types.
+# Enabled by rosetta-protocol; never on by default.
+ts = ["dep:ts-rs"]

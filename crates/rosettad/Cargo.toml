@@ -17,6 +17,9 @@ rosetta-adapter-support = { path = "../adapter-support" }
 rosetta-capture = { path = "../capture" }
 rosetta-core = { path = "../core" }
 rosetta-pipeline = { path = "../pipeline" }
+rosetta-server = { path = "../server" }
 rosetta-store = { path = "../store" }
+axum.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
+tokio.workspace = true

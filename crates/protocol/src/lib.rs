@@ -1,1 +1,273 @@
-//! rosetta-protocol — see docs/ARCHITECTURE.md §8 for this crate's role.
+//! rosetta-protocol — the L3 wire contract (docs/ARCHITECTURE.md §8).
+//!
+//! One backend-neutral contract, per the 2026-08-26 search specification in
+//! docs/ingest-engine.html: structured filters only (no engine query syntax
+//! on the wire), ordering by score then a stable `timeline_id` tie-break,
+//! numerical scores diagnostic-only, and every search response carrying
+//! readiness + projection identity so a lagging index can never masquerade
+//! as a complete empty result. Row payloads are the `rosetta-core` types
+//! themselves (their serde shape IS the wire shape) — no DTO mirrors, the
+//! spaghetti anti-pattern. TypeScript bindings generate from these types via
+//! ts-rs under the `ts` feature; consumers never hand-write a second parser.
+//!
+//! Pagination follows the exact-watermark rule: a cursor binds the session
+//! watermark at first page; on mismatch the server answers
+//! [`ErrorCode::CursorExpired`] — match or expired, never a silent rebase.
+
+use serde::{Deserialize, Serialize};
+
+pub use rosetta_core::rows::{
+    MessageKind, MessageRow, Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+    TokenSnapshot, ToolCall,
+};
+pub use rosetta_store::hot::{Mutation, Stamp};
+pub use rosetta_store::queries::{ContributionRow, HeatmapDay, SearchHit};
+
+/// Bumped on any breaking change to routes or frame shapes.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Search-readiness vocabulary, exactly as specified — "ingest complete" is
+/// otherwise ambiguous. With synchronous FTS5 inside the canonical
+/// projection (the shipped default), a published projection is `Ready` by
+/// construction; the other states exist so the contract does not change
+/// when a detached search backend arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum SearchReadiness {
+    Ready,
+    Building,
+    CatchingUp,
+    Stale,
+    Failed,
+}
+
+/// Search identity + readiness, stamped on every search response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SearchState {
+    pub readiness: SearchReadiness,
+    /// Random per-build projection identifier once the detached search seam
+    /// lands; `None` while FTS5 is synchronous in the canonical file.
+    pub projection_epoch: Option<String>,
+    /// SQLite search revision the serving index has committed; `None` while
+    /// search is synchronous (index and rows commit together).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub revision: Option<u64>,
+}
+
+impl SearchState {
+    /// The synchronous-FTS5 state: search commits with canonical rows.
+    pub fn synchronous() -> Self {
+        Self {
+            readiness: SearchReadiness::Ready,
+            projection_epoch: None,
+            revision: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct StatusResponse {
+    pub protocol_version: u32,
+    pub schema_version: i64,
+    /// The open projection passed fail-closed schema admission; canonical
+    /// queries are serveable.
+    pub canonical_ready: bool,
+    pub search: SearchState,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RuntimesResponse {
+    pub runtimes: Vec<RuntimeRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ProjectsResponse {
+    pub projects: Vec<ProjectRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionsResponse {
+    pub sessions: Vec<SessionRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionResponse {
+    pub session: SessionRow,
+}
+
+/// One backward page of a session timeline, oldest-first within the page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TimelinePage {
+    pub messages: Vec<MessageRow>,
+    /// Opaque continuation for the next older page; `None` at the top of
+    /// the timeline. Expires (HTTP 410, [`ErrorCode::CursorExpired`]) when
+    /// the session's projection was rewritten under it.
+    pub cursor: Option<String>,
+}
+
+/// Internals of the opaque timeline cursor. Serialized as JSON inside the
+/// opaque string; clients must never construct or inspect it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimelineCursor {
+    pub session_id: String,
+    /// Lowest ordinal already delivered; the next page is strictly older.
+    pub before: i64,
+    /// Exact commit watermark bound at first page.
+    pub watermark: String,
+}
+
+impl TimelineCursor {
+    pub fn encode(&self) -> String {
+        serde_json::to_string(self).expect("cursor serialization is infallible")
+    }
+
+    /// `None` = malformed or foreign — treat exactly like an expired cursor.
+    pub fn decode(text: &str) -> Option<Self> {
+        serde_json::from_str(text).ok()
+    }
+}
+
+/// Search request: structured text plus filters. No backend query syntax.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SearchRequest {
+    pub q: String,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub limit: Option<i64>,
+    pub session: Option<String>,
+    pub runtime: Option<String>,
+    pub project: Option<String>,
+    /// Message kind in wire form (`user`, `agent`, `tool_use`, …).
+    pub kind: Option<String>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub after_ts: Option<Ms>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub before_ts: Option<Ms>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SearchResponse {
+    pub state: SearchState,
+    pub hits: Vec<SearchHit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HeatmapResponse {
+    pub days: Vec<HeatmapDay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ContributionResponse {
+    pub rows: Vec<ContributionRow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum ErrorCode {
+    NotFound,
+    BadRequest,
+    /// The pagination watermark no longer matches: refetch from the head.
+    CursorExpired,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ApiError {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+/// Server→client WebSocket frames. The subscribe protocol is the hub's:
+/// `Hello` stamps the position, a snapshot frame covers everything up to it,
+/// mutations continue from there (at-least-once; clients key by
+/// `timeline_id`), and `Resync` announces a barrier — the server re-stamps
+/// and sends a fresh snapshot immediately after.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "frame", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum ServerFrame {
+    Hello {
+        protocol_version: u32,
+        stamp: Option<Stamp>,
+    },
+    /// Recent window of one session's timeline, oldest-first; older history
+    /// pages through the REST timeline endpoint.
+    TimelineSnapshot {
+        stamp: Stamp,
+        messages: Vec<MessageRow>,
+    },
+    /// The full metadata surface, served from the resident mirror.
+    MetaSnapshot {
+        runtimes: Vec<RuntimeRow>,
+        projects: Vec<ProjectRow>,
+        sessions: Vec<SessionRow>,
+    },
+    /// Replayed ring history between the client's resume stamp and `Hello`'s
+    /// stamp. Same shape as live mutations.
+    Mutation {
+        stamp: Option<Stamp>,
+        mutation: Mutation,
+    },
+    /// Barrier: discard buffered state; a fresh snapshot follows.
+    Resync,
+    Error {
+        error: ApiError,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursors_round_trip_and_reject_foreign_text() {
+        let cursor = TimelineCursor {
+            session_id: "s1".into(),
+            before: 42,
+            watermark: "2.3.7".into(),
+        };
+        assert_eq!(TimelineCursor::decode(&cursor.encode()), Some(cursor));
+        assert_eq!(TimelineCursor::decode("not json"), None);
+        assert_eq!(TimelineCursor::decode("{\"v\":9}"), None);
+    }
+
+    #[test]
+    fn readiness_serializes_in_spec_vocabulary() {
+        assert_eq!(
+            serde_json::to_string(&SearchReadiness::CatchingUp).unwrap(),
+            "\"catching-up\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SearchReadiness::Ready).unwrap(),
+            "\"ready\""
+        );
+    }
+
+    #[test]
+    fn server_frames_tag_by_frame_kind() {
+        let frame = ServerFrame::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            stamp: Some(Stamp { epoch: 7, seq: 3 }),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&frame).unwrap()).unwrap();
+        assert_eq!(json["frame"], "hello");
+        assert_eq!(json["stamp"]["epoch"], 7);
+
+        let resync = serde_json::to_string(&ServerFrame::Resync).unwrap();
+        assert_eq!(resync, "{\"frame\":\"resync\"}");
+    }
+}

@@ -9,6 +9,7 @@ pub type Ms = i64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum SessionRole {
     Main,
     Subagent,
@@ -27,6 +28,7 @@ impl SessionRole {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum StreamState {
     Pending,
     Streaming,
@@ -47,6 +49,7 @@ impl StreamState {
 /// calls are their own rows with the result merged in (docs/canonical-model.html).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum MessageKind {
     User,
     Agent,
@@ -108,6 +111,7 @@ impl TaskStatus {
 /// Per-response token snapshot. Every component is `Option`: `None` means the
 /// agent never reported it, which must never be coerced to zero.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TokenSnapshot {
     pub input: Option<i64>,
     pub output: Option<i64>,
@@ -123,6 +127,7 @@ impl TokenSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ToolCall {
     /// Native correlation id — the merge key for the result.
     pub tool_id: Option<String>,
@@ -136,6 +141,7 @@ pub struct ToolCall {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RuntimeRow {
     pub id: String,
     pub kind: String,
@@ -149,6 +155,7 @@ pub struct RuntimeRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ProjectRow {
     pub id: String,
     pub name: String,
@@ -157,6 +164,7 @@ pub struct ProjectRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SessionRow {
     pub id: String,
     pub native_session_id: String,
@@ -174,6 +182,7 @@ pub struct SessionRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct MessageRow {
     /// Stable, unique within the session — native uuids aren't.
     pub timeline_id: String,

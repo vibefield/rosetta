@@ -12,14 +12,16 @@ use rosetta_core::rows::{
 
 use crate::StoreError;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct HeatmapDay {
     /// Date in the caller-selected timezone, `YYYY-MM-DD`.
     pub day: String,
     pub tokens: i64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ContributionRow {
     pub session_id: String,
     pub project_id: Option<String>,
@@ -29,11 +31,28 @@ pub struct ContributionRow {
     pub loc: i64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SearchHit {
     pub timeline_id: String,
     pub session_id: String,
     pub snippet: String,
+    /// Raw FTS5 bm25 rank (lower is better). Diagnostic only — scores have
+    /// no cross-backend meaning and must never be compared across engines.
+    pub score: f64,
+}
+
+/// Structured search filters. Filtering happens inside the ranked query —
+/// retrieving top K and filtering afterwards would be ranking-incorrect.
+#[derive(Debug, Clone, Default)]
+pub struct SearchFilter {
+    pub session: Option<String>,
+    pub runtime: Option<String>,
+    pub project: Option<String>,
+    /// Message kind, in wire form (`user`, `agent`, `tool_use`, …).
+    pub kind: Option<String>,
+    pub after_ts: Option<Ms>,
+    pub before_ts: Option<Ms>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,19 +439,86 @@ pub fn contribution(
 
 /// Full-text search over message content, tool inputs, and tool results.
 pub fn search(conn: &Connection, query: &str, limit: i64) -> Result<Vec<SearchHit>, StoreError> {
-    let mut stmt = conn.prepare_cached(
+    search_filtered(conn, query, limit, &SearchFilter::default())
+}
+
+/// Ranked search with structured filters applied inside the query, so LIMIT
+/// runs after filtering and ranking stays correct. The filter combinations
+/// are finite, so the prepared-statement cache still applies.
+pub fn search_filtered(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+    filter: &SearchFilter,
+) -> Result<Vec<SearchHit>, StoreError> {
+    use rusqlite::types::Value;
+
+    let mut sql = String::from(
         "SELECT m.timeline_id, m.session_id,
-                snippet(message_fts, -1, '[', ']', '…', 12)
+                snippet(message_fts, -1, '[', ']', '…', 12), rank
          FROM message_fts
          JOIN message m ON m.id = message_fts.rowid
-         WHERE message_fts MATCH ?1
-         ORDER BY rank LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![query, limit], |row| {
+         JOIN session s ON s.id = m.session_id
+         WHERE message_fts MATCH ?1",
+    );
+    let mut binds: Vec<Value> = vec![Value::from(query.to_string())];
+    let clause = |sql: &mut String, predicate: &str, value: Value, binds: &mut Vec<Value>| {
+        binds.push(value);
+        sql.push_str(&format!(" AND {predicate} ?{}", binds.len()));
+    };
+    if let Some(session) = &filter.session {
+        clause(
+            &mut sql,
+            "m.session_id =",
+            Value::from(session.clone()),
+            &mut binds,
+        );
+    }
+    if let Some(runtime) = &filter.runtime {
+        clause(
+            &mut sql,
+            "s.runtime_id =",
+            Value::from(runtime.clone()),
+            &mut binds,
+        );
+    }
+    if let Some(project) = &filter.project {
+        clause(
+            &mut sql,
+            "s.project_id =",
+            Value::from(project.clone()),
+            &mut binds,
+        );
+    }
+    if let Some(kind) = &filter.kind {
+        clause(&mut sql, "m.type =", Value::from(kind.clone()), &mut binds);
+    }
+    if let Some(after) = filter.after_ts {
+        clause(
+            &mut sql,
+            "COALESCE(m.ts, 0) >=",
+            Value::from(after),
+            &mut binds,
+        );
+    }
+    if let Some(before) = filter.before_ts {
+        clause(
+            &mut sql,
+            "COALESCE(m.ts, 0) <=",
+            Value::from(before),
+            &mut binds,
+        );
+    }
+    binds.push(Value::from(limit));
+    sql.push_str(&format!(" ORDER BY rank LIMIT ?{}", binds.len()));
+
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(binds), |row| {
         Ok(SearchHit {
             timeline_id: row.get(0)?,
             session_id: row.get(1)?,
             snippet: row.get(2)?,
+            score: row.get(3)?,
         })
     })?;
     let mut out = Vec::new();
@@ -440,6 +526,27 @@ pub fn search(conn: &Connection, query: &str, limit: i64) -> Result<Vec<SearchHi
         out.push(row?);
     }
     Ok(out)
+}
+
+/// Exact commit watermark for one session's presentation order, per the L3
+/// pagination rule: cursors bind this value and EXPIRE on mismatch — never a
+/// silent rebase. It moves when any of the session's sources activates a
+/// generation (sweep + renumber) or the cursor set itself changes; plain
+/// appends leave it stable, so backward paging survives live appends.
+pub fn session_watermark(conn: &Connection, session_id: &str) -> Result<String, StoreError> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT COUNT(*), COALESCE(SUM(active_generation), 0), COALESCE(MAX(id), 0)
+             FROM ingest_cursor WHERE session_id = ?1",
+        )?
+        .query_row(params![session_id], |row| {
+            Ok(format!(
+                "{}.{}.{}",
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?
+            ))
+        })?)
 }
 
 /// The stored driver checkpoint for one source file, with its cursor rowid

@@ -47,7 +47,13 @@ impl Default for HubConfig {
 /// One delivery to a subscriber.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HubItem {
-    Mutation(Arc<Mutation>),
+    Mutation {
+        /// Ring position after this mutation — the client's resume point.
+        /// `None` on the meta topic, which has no ring (the mirror is the
+        /// state; resync re-reads it wholesale).
+        stamp: Option<Stamp>,
+        mutation: Arc<Mutation>,
+    },
     /// Barrier: delivery has stopped for this subscriber. Call
     /// [`Hub::resync`] and take a replacement snapshot.
     Resync,
@@ -218,6 +224,11 @@ impl Hub {
         state.mirror.sessions().cloned().collect()
     }
 
+    pub fn session(&self, session_id: &str) -> Option<SessionRow> {
+        let state = self.state.lock().expect("hub state poisoned");
+        state.mirror.session(session_id).cloned()
+    }
+
     pub fn projects(&self) -> Vec<ProjectRow> {
         let state = self.state.lock().expect("hub state poisoned");
         state.mirror.projects().cloned().collect()
@@ -273,7 +284,7 @@ impl Hub {
                 continue;
             };
             let item = Arc::new(mutation);
-            state.rings.push(&session_id, item.clone());
+            let stamp = state.rings.push(&session_id, item.clone());
             report.session_mutations += 1;
             for entry in state.subs.values() {
                 if let Topic::Session(topic_session) = &entry.topic
@@ -282,7 +293,10 @@ impl Hub {
                     report.resyncs += u64::from(deliver(
                         &entry.shared,
                         self.config.subscriber_queue,
-                        HubItem::Mutation(item.clone()),
+                        HubItem::Mutation {
+                            stamp,
+                            mutation: item.clone(),
+                        },
                     ));
                 }
             }
@@ -296,7 +310,10 @@ impl Hub {
                     report.resyncs += u64::from(deliver(
                         &entry.shared,
                         self.config.subscriber_queue,
-                        HubItem::Mutation(item.clone()),
+                        HubItem::Mutation {
+                            stamp: None,
+                            mutation: item.clone(),
+                        },
                     ));
                 }
             }

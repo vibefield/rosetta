@@ -163,7 +163,7 @@ fn subscribe_stamps_then_live_mutations_flow_and_replay() {
     let report = h.absorb(1);
     assert_eq!(report.session_mutations, 1);
     match sub.recv_timeout(TICK) {
-        Some(HubItem::Mutation(mutation)) => match mutation.as_ref() {
+        Some(HubItem::Mutation { mutation, .. }) => match mutation.as_ref() {
             Mutation::Message(row) => assert_eq!(row.timeline_id, "m2"),
             other => panic!("expected message, got {other:?}"),
         },
@@ -208,7 +208,7 @@ fn lagging_subscriber_hits_the_barrier_and_resyncs() {
     h.append("m5");
     h.absorb(4);
     match sub.recv_timeout(TICK) {
-        Some(HubItem::Mutation(mutation)) => match mutation.as_ref() {
+        Some(HubItem::Mutation { mutation, .. }) => match mutation.as_ref() {
             Mutation::Message(row) => assert_eq!(row.timeline_id, "m5"),
             other => panic!("expected m5, got {other:?}"),
         },
@@ -226,7 +226,10 @@ fn generation_swap_forces_a_replacement_snapshot() {
     let (sub, stamp) = h.hub.subscribe_session("s1", 0);
     h.append("m1");
     h.absorb(1);
-    assert!(matches!(sub.recv_timeout(TICK), Some(HubItem::Mutation(_))));
+    assert!(matches!(
+        sub.recv_timeout(TICK),
+        Some(HubItem::Mutation { .. })
+    ));
 
     // The source rewrites: stage a replacement generation and activate it.
     h.store
@@ -286,7 +289,7 @@ fn meta_subscribers_get_precise_diffs_and_mirror_serves_lists() {
     let report = h.absorb(1);
     assert_eq!(report.meta_events, 1);
     match sub.recv_timeout(TICK) {
-        Some(HubItem::Mutation(mutation)) => match mutation.as_ref() {
+        Some(HubItem::Mutation { mutation, .. }) => match mutation.as_ref() {
             Mutation::Session(row) => assert_eq!(row.title.as_deref(), Some("Named")),
             other => panic!("expected session diff, got {other:?}"),
         },

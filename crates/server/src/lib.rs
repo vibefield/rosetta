@@ -1,7 +1,12 @@
-//! rosetta-server — the L3 service runtime (docs/ARCHITECTURE.md §8). The
-//! axum REST/WS surface is not shipped yet; what lives here now is [`hub`],
-//! the pub/sub fan-out those services will serve subscriptions from.
+//! rosetta-server — the L3 service runtime (docs/ARCHITECTURE.md §8):
+//! [`hub`] (the pub/sub fan-out), [`http`] (the axum REST surface over
+//! `store::queries` + the hub's mirror), and [`ws`] (WebSocket
+//! subscriptions speaking `rosetta-protocol` frames). Async lives only in
+//! this layer; the ingest engine below stays synchronous.
 
+pub mod http;
 pub mod hub;
+pub mod ws;
 
+pub use http::{AppState, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};
