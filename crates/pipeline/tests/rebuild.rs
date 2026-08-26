@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
-use rosetta_capture::{Ledger, LedgerEntry, scan_ledger};
+use rosetta_capture::{Ledger, LedgerEntry, SourceDef, scan_ledger};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
     IngestOptions, Instrument, discover, expand_data_root, meta_ingest_into, rebuild_runtime,
@@ -20,6 +20,7 @@ use tempfile::TempDir;
 #[derive(Debug, PartialEq)]
 struct Snapshot {
     sessions: usize,
+    indexed_sessions: i64,
     messages: i64,
     tool_rows: i64,
     fts_hits: usize,
@@ -39,6 +40,7 @@ fn snapshot(store: &Store) -> Snapshot {
         sessions: queries::session_list(store.conn(), None, 1000)
             .unwrap()
             .len(),
+        indexed_sessions: one("SELECT COUNT(*) FROM session WHERE stream_state = 'indexed'"),
         messages: one("SELECT COUNT(*) FROM message"),
         tool_rows: one("SELECT COUNT(*) FROM message WHERE tool_result IS NOT NULL"),
         fts_hits: queries::search(store.conn(), "synthetic", 500)
@@ -55,6 +57,24 @@ struct Ledgered {
     ledger_dir: PathBuf,
     runtime: RuntimeRow,
     original: Snapshot,
+}
+
+fn latest_clean_source(ledger_dir: &std::path::Path) -> (SourceDef, u64) {
+    scan_ledger(ledger_dir)
+        .unwrap()
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LedgerEntry::GenerationComplete {
+                source,
+                generation,
+                normalized_clean: true,
+                ..
+            } => Some((source.clone(), *generation)),
+            _ => None,
+        })
+        .max_by_key(|(_, generation)| *generation)
+        .unwrap()
 }
 
 /// Ingest a corpus with the ledger attached, snapshot the projection, then
@@ -263,21 +283,7 @@ fn rebuild_from_ledger_alone_reproduces_the_projection() {
 fn rebuild_never_activates_a_generation_that_normalizes_with_hard_errors() {
     let adapter = &ClaudeCodeAdapter;
     let world = ingest_then_lose_the_sources();
-    let scanned = scan_ledger(&world.ledger_dir).unwrap();
-    let (source, generation) = scanned
-        .entries
-        .iter()
-        .filter_map(|entry| match entry {
-            LedgerEntry::GenerationComplete {
-                source,
-                generation,
-                normalized_clean: true,
-                ..
-            } => Some((source.clone(), *generation)),
-            _ => None,
-        })
-        .max_by_key(|(_, generation)| *generation)
-        .unwrap();
+    let (source, generation) = latest_clean_source(&world.ledger_dir);
     let broken_generation = generation + 100;
     let mut ledger = Ledger::open(&world.ledger_dir).unwrap();
     ledger
@@ -310,6 +316,15 @@ fn rebuild_never_activates_a_generation_that_normalizes_with_hard_errors() {
         .unwrap()
         .unwrap();
     assert_eq!(cursor.active_generation, 0);
+    let state: String = rebuilt
+        .conn()
+        .query_row(
+            "SELECT stream_state FROM session WHERE id = ?1",
+            [&source.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "streaming");
     assert_eq!(
         rebuilt
             .conn()
@@ -319,4 +334,54 @@ fn rebuild_never_activates_a_generation_that_normalizes_with_hard_errors() {
         0,
         "abandoned rebuild staging must be pruned"
     );
+}
+
+#[test]
+fn rebuild_retains_the_clean_generation_but_downgrades_an_unclean_latest_seal() {
+    let adapter = &ClaudeCodeAdapter;
+    let world = ingest_then_lose_the_sources();
+    let (source, generation) = latest_clean_source(&world.ledger_dir);
+    let broken_generation = generation + 100;
+    let mut ledger = Ledger::open(&world.ledger_dir).unwrap();
+    ledger
+        .append_raw(&source, broken_generation, [(0, b"{".as_slice())])
+        .unwrap();
+    ledger
+        .complete_generation(
+            &source,
+            broken_generation,
+            adapter.normalizer_version(),
+            false,
+        )
+        .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+
+    let mut rebuilt = Store::open_in_memory().unwrap();
+    let report = rebuild_runtime(
+        adapter,
+        &world.runtime,
+        &world.ledger_dir,
+        &mut rebuilt,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        report.hard_errors, 0,
+        "the known-bad generation is not replayed"
+    );
+    assert!(report.stale_records_skipped > 0);
+    let cursor = queries::cursor_state(rebuilt.conn(), &world.runtime.id, &source.relative_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.active_generation, generation);
+    let state: String = rebuilt
+        .conn()
+        .query_row(
+            "SELECT stream_state FROM session WHERE id = ?1",
+            [&source.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "streaming");
 }

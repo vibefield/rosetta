@@ -106,6 +106,10 @@ pub fn rebuild_runtime(
     // Raw-only paths are legacy/unsafe rather than guesses: fail closed instead
     // of silently promoting a crash-truncated generation.
     let mut surviving: BTreeMap<String, (u64, SourceDef)> = BTreeMap::new();
+    // The latest seal also owns readiness. A current normalizer may retain an
+    // older clean projection after a failed rewrite, but the session must stay
+    // Streaming until that latest source generation is clean.
+    let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
     let mut raw_paths: HashSet<String> = HashSet::new();
     let mut sealed_paths: HashSet<String> = HashSet::new();
     let first = visit_ledger_profiled::<PipelineError, _>(ledger_dir, instrument, |entry| {
@@ -120,7 +124,15 @@ pub fn rebuild_runtime(
                 normalized_clean,
             } => {
                 sealed_paths.insert(source.relative_path.clone());
-                if normalizer_version == adapter.normalizer_version() && !normalized_clean {
+                let known_unclean =
+                    normalizer_version == adapter.normalizer_version() && !normalized_clean;
+                let latest = latest_seals
+                    .entry(source.relative_path.clone())
+                    .or_insert_with(|| (generation, source.clone(), known_unclean));
+                if generation >= latest.0 {
+                    *latest = (generation, source.clone(), known_unclean);
+                }
+                if known_unclean {
                     return Ok(());
                 }
                 let slot = surviving
@@ -379,6 +391,49 @@ pub fn rebuild_runtime(
             &mut report,
             instrument,
         )?;
+    }
+
+    // Rebuild has the same readiness contract as source backfill: only
+    // sessions whose every sealed source is currently clean are Indexed.
+    // Meta-only sessions are absent from this map and retain Pending.
+    let mut session_health: BTreeMap<String, bool> = BTreeMap::new();
+    for (path, (_, source, known_unclean)) in latest_seals {
+        let clean = if known_unclean {
+            false
+        } else if already_projected.contains(&path) {
+            true
+        } else {
+            files
+                .get(&path)
+                .is_some_and(|file| file.activated && file.generation_clean)
+        };
+        session_health
+            .entry(source.session_id)
+            .and_modify(|healthy| *healthy &= clean)
+            .or_insert(clean);
+    }
+    for (session_id, clean) in session_health {
+        let Some(mut session) = queries::session(store.conn(), &session_id)? else {
+            continue;
+        };
+        let next = if clean {
+            StreamState::Indexed
+        } else {
+            StreamState::Streaming
+        };
+        if session.stream_state == next {
+            continue;
+        }
+        session.stream_state = next;
+        let stats = instrument.apply(
+            store,
+            &Batch {
+                ops: vec![IngestOp::SessionMeta(session)],
+                checkpoints: vec![],
+                source: None,
+            },
+        )?;
+        merge_stats(&mut report.stats, &stats);
     }
 
     Ok(report)
