@@ -562,24 +562,42 @@ fn remove_cursor_projection(
 /// negative space so UNIQUE(session_id, ordinal) never sees a transient
 /// collision.
 fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError> {
+    // Materialize the window once. Putting this ranking subquery directly in
+    // UPDATE's scalar expression lets SQLite execute the full window for each
+    // outer message, which is quadratic on long real-world sessions.
+    tx.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS renumber_message (
+           message_id INTEGER PRIMARY KEY,
+           ordinal INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         DELETE FROM renumber_message;",
+    )?;
     tx.prepare_cached(
-        "UPDATE message SET ordinal = -1 - (
-           SELECT rn FROM (
-             SELECT m.id AS mid,
-                    ROW_NUMBER() OVER (
-                      ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
-                    ) - 1 AS rn
-             FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
-             WHERE m.session_id = ?1
-           ) WHERE mid = message.id
-         )
-         WHERE session_id = ?1",
+        "INSERT INTO renumber_message (message_id, ordinal)
+         SELECT m.id,
+                ROW_NUMBER() OVER (
+                  ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
+                ) - 1
+         FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
+         WHERE m.session_id = ?1",
     )?
     .execute(params![session_id])?;
     tx.prepare_cached(
-        "UPDATE message SET ordinal = -1 - ordinal WHERE session_id = ?1 AND ordinal < 0",
+        "UPDATE message AS m
+         SET ordinal = -1 - ranked.ordinal
+         FROM renumber_message AS ranked
+         WHERE m.id = ranked.message_id",
     )?
-    .execute(params![session_id])?;
+    .execute([])?;
+    tx.prepare_cached(
+        "UPDATE message AS m
+         SET ordinal = -1 - m.ordinal
+         FROM renumber_message AS ranked
+         WHERE m.id = ranked.message_id",
+    )?
+    .execute([])?;
+    tx.prepare_cached("DELETE FROM renumber_message")?
+        .execute([])?;
     Ok(())
 }
 

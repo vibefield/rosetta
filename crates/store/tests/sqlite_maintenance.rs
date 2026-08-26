@@ -681,6 +681,58 @@ fn incomplete_cold_generation_cannot_be_finalized() {
 }
 
 #[test]
+fn large_session_activation_materializes_the_rank_once() {
+    const MESSAGES: i64 = 10_000;
+
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "cold-large.jsonl");
+    let ops = (0..MESSAGES)
+        .map(|ordinal| {
+            let mut row = message(&format!("cold-large-{ordinal}"), ordinal, ordinal);
+            row.src_cursor = Some(cursor_id);
+            IngestOp::Message(Box::new(row))
+        })
+        .collect();
+    store
+        .apply(&Batch {
+            ops,
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    let (count, minimum, maximum, distinct): (i64, i64, i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*), MIN(ordinal), MAX(ordinal), COUNT(DISTINCT ordinal)
+             FROM message WHERE session_id = 's1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (count, minimum, maximum, distinct),
+        (MESSAGES, 0, MESSAGES - 1, MESSAGES)
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM temp.renumber_message", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn cold_rebuild_refuses_an_existing_projection() {
     let database = tempfile::NamedTempFile::new().unwrap();
     drop(Store::open(database.path()).unwrap());
