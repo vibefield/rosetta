@@ -1,0 +1,685 @@
+//! Canonical row upserts plus the FTS and usage-bucket maintenance coupled to
+//! message mutations. Kept behind `apply` so the public write surface remains
+//! one transactional batch operation.
+
+use std::collections::BTreeSet;
+
+use rusqlite::{OptionalExtension, Transaction, params};
+
+use rosetta_core::IngestOp;
+use rosetta_core::fold::{HOUR_MS, hour_bucket};
+use rosetta_core::rows::{MessageRow, Ms, ProjectRow, RuntimeRow, SessionRow, TokenSnapshot};
+
+use crate::StoreError;
+use crate::hot::{Effects, Mutation};
+
+use super::{ApplyStats, apply_op};
+
+/// Derived structures maintained by this apply. A private cold rebuild turns
+/// both off and constructs them once before publishing the projection.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Maintenance {
+    pub fts: bool,
+    pub buckets: bool,
+}
+
+pub(crate) const LIVE_MAINTENANCE: Maintenance = Maintenance {
+    fts: true,
+    buckets: true,
+};
+
+pub(crate) const BULK_MAINTENANCE: Maintenance = Maintenance {
+    fts: false,
+    buckets: false,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct BucketKey {
+    pub(super) session_id: String,
+    pub(super) hour_ts: Ms,
+    pub(super) model: String,
+}
+
+pub(super) fn mark_bucket(
+    dirty: &mut BTreeSet<BucketKey>,
+    maintenance: Maintenance,
+    session_id: &str,
+    ts: Option<Ms>,
+    model: Option<&str>,
+) {
+    if maintenance.buckets {
+        dirty.insert(BucketKey {
+            session_id: session_id.to_string(),
+            hour_ts: hour_bucket(ts.unwrap_or(0)),
+            model: bucket_model(model).to_string(),
+        });
+    }
+}
+
+/// The columns of an existing message row that FTS resync, usage
+/// replacement, and hot-tier patch emission need.
+pub(super) struct OldRow {
+    pub(super) id: i64,
+    pub(super) timeline_id: String,
+    pub(super) session_id: String,
+    pub(super) content: Option<String>,
+    pub(super) tool_input: Option<String>,
+    pub(super) tool_result: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) ts: Option<Ms>,
+}
+
+fn load_old_by_timeline(tx: &Transaction, timeline_id: &str) -> Result<Option<OldRow>, StoreError> {
+    load_old(
+        tx,
+        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
+         FROM message WHERE timeline_id = ?1",
+        params![timeline_id],
+    )
+}
+
+fn load_old_by_tool(
+    tx: &Transaction,
+    session_id: &str,
+    tool_id: &str,
+) -> Result<Option<OldRow>, StoreError> {
+    load_old(
+        tx,
+        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
+         FROM message WHERE session_id = ?1 AND tool_id = ?2",
+        params![session_id, tool_id],
+    )
+}
+
+fn load_old(
+    tx: &Transaction,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Option<OldRow>, StoreError> {
+    let row = tx
+        .prepare_cached(sql)?
+        .query_row(params, |row| {
+            Ok(OldRow {
+                id: row.get(0)?,
+                timeline_id: row.get(1)?,
+                session_id: row.get(2)?,
+                content: row.get(3)?,
+                tool_input: row.get(4)?,
+                tool_result: row.get(5)?,
+                model: row.get(6)?,
+                ts: row.get(7)?,
+            })
+        })
+        .optional()?;
+    Ok(row)
+}
+
+pub(super) fn fts_delete(tx: &Transaction, old: &OldRow) -> Result<(), StoreError> {
+    tx.prepare_cached(
+        "INSERT INTO message_fts (message_fts, rowid, content, tool_input, tool_result)
+         VALUES ('delete', ?1, ?2, ?3, ?4)",
+    )?
+    .execute(params![
+        old.id,
+        old.content,
+        old.tool_input,
+        old.tool_result
+    ])?;
+    Ok(())
+}
+
+fn fts_insert(
+    tx: &Transaction,
+    rowid: i64,
+    content: Option<&str>,
+    tool_input: Option<&str>,
+    tool_result: Option<&str>,
+) -> Result<(), StoreError> {
+    tx.prepare_cached(
+        "INSERT INTO message_fts (rowid, content, tool_input, tool_result)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?
+    .execute(params![rowid, content, tool_input, tool_result])?;
+    Ok(())
+}
+
+/// Recompute one bucket from its source rows. Replacement can change hour,
+/// model, kind, or reported-component presence; recomputation makes all of
+/// those moves exact and lets SQL SUM restore NULL when nobody reports a
+/// component.
+pub(super) fn rebuild_bucket(
+    tx: &Transaction,
+    session_id: &str,
+    hour_ts: Ms,
+    model: &str,
+) -> Result<(), StoreError> {
+    let aggregate = tx
+        .prepare_cached(
+            "SELECT SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
+                    SUM(cache_w_tokens), SUM(think_tokens), COUNT(*),
+                    SUM(CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END)
+             FROM message
+             WHERE session_id = ?1
+               AND COALESCE(ts, 0) >= ?2 AND COALESCE(ts, 0) < ?2 + ?4
+               AND COALESCE(model, 'unknown') = ?3",
+        )?
+        .query_row(params![session_id, hour_ts, model, HOUR_MS], |row| {
+            Ok((
+                TokenSnapshot {
+                    input: row.get(0)?,
+                    output: row.get(1)?,
+                    cache_read: row.get(2)?,
+                    cache_write: row.get(3)?,
+                    thinking: row.get(4)?,
+                },
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            ))
+        })?;
+    let (tokens, messages, tools) = aggregate;
+    if messages == 0 {
+        tx.prepare_cached(
+            "DELETE FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
+        )?
+        .execute(params![session_id, hour_ts, model])?;
+        return Ok(());
+    }
+    tx.prepare_cached(
+        "INSERT INTO usage_bucket
+           (session_id, hour_ts, model, in_tokens, out_tokens, cache_r_tokens,
+            cache_w_tokens, think_tokens, message_count, tool_call_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(session_id, hour_ts, model) DO UPDATE SET
+           in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
+           cache_r_tokens = excluded.cache_r_tokens,
+           cache_w_tokens = excluded.cache_w_tokens,
+           think_tokens = excluded.think_tokens,
+           message_count = excluded.message_count,
+           tool_call_count = excluded.tool_call_count",
+    )?
+    .execute(params![
+        session_id,
+        hour_ts,
+        model,
+        tokens.input,
+        tokens.output,
+        tokens.cache_read,
+        tokens.cache_write,
+        tokens.thinking,
+        messages,
+        tools,
+    ])?;
+    Ok(())
+}
+
+fn touch_session(tx: &Transaction, session_id: &str, ts: Option<Ms>) -> Result<(), StoreError> {
+    if let Some(ts) = ts {
+        tx.prepare_cached("UPDATE session SET updated_at = MAX(updated_at, ?2) WHERE id = ?1")?
+            .execute(params![session_id, ts])?;
+    }
+    Ok(())
+}
+
+fn bucket_model(model: Option<&str>) -> &str {
+    model.unwrap_or("unknown")
+}
+
+pub(super) fn apply_runtime(tx: &Transaction, row: &RuntimeRow) -> Result<(), StoreError> {
+    tx.prepare_cached(
+        "INSERT INTO agent_runtime
+           (id, kind, data_root, enabled, account, config, skills, versions_seen, discovered_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET
+           kind = excluded.kind,
+           data_root = excluded.data_root,
+           -- enabled is the user's consent flag: re-discovery never resets it
+           account = COALESCE(excluded.account, agent_runtime.account),
+           config = COALESCE(excluded.config, agent_runtime.config),
+           skills = COALESCE(excluded.skills, agent_runtime.skills),
+           versions_seen = COALESCE(excluded.versions_seen, agent_runtime.versions_seen)",
+    )?
+    .execute(params![
+        row.id,
+        row.kind,
+        row.data_root,
+        row.enabled,
+        row.account.as_ref().map(|v| v.to_string()),
+        row.config.as_ref().map(|v| v.to_string()),
+        row.skills.as_ref().map(|v| v.to_string()),
+        row.versions_seen.as_ref().map(|v| v.to_string()),
+        row.discovered_at,
+    ])?;
+    Ok(())
+}
+
+pub(super) fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), StoreError> {
+    let mut roots = row.root_paths.clone();
+    if let Some(existing) = tx
+        .prepare_cached("SELECT root_paths FROM project WHERE id = ?1")?
+        .query_row(params![row.id], |record| record.get::<_, String>(0))
+        .optional()?
+    {
+        roots.extend(serde_json::from_str::<Vec<String>>(&existing)?);
+    }
+    roots.sort();
+    roots.dedup();
+    tx.prepare_cached(
+        "INSERT INTO project (id, name, root_paths, git_repo) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           root_paths = excluded.root_paths,
+           git_repo = COALESCE(excluded.git_repo, project.git_repo)",
+    )?
+    .execute(params![
+        row.id,
+        row.name,
+        serde_json::to_string(&roots)?,
+        row.git_repo,
+    ])?;
+    Ok(())
+}
+
+pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), StoreError> {
+    tx.prepare_cached(
+        "INSERT INTO session
+           (id, native_session_id, runtime_id, project_id, parent_session_id,
+            root_session_id, role, title, summary, started_at, updated_at, stream_state,
+            project_assigned_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                 CASE WHEN ?4 IS NULL THEN NULL ELSE ?10 END)
+         ON CONFLICT(id) DO UPDATE SET
+           project_id = CASE
+             WHEN excluded.project_id IS NULL THEN session.project_id
+             WHEN session.project_id IS NULL THEN excluded.project_id
+             WHEN session.project_assigned_at IS NULL
+               OR excluded.project_assigned_at < session.project_assigned_at
+             THEN excluded.project_id ELSE session.project_id END,
+           project_assigned_at = CASE
+             WHEN excluded.project_id IS NULL THEN session.project_assigned_at
+             WHEN session.project_id IS NULL THEN excluded.project_assigned_at
+             WHEN session.project_assigned_at IS NULL
+               OR excluded.project_assigned_at < session.project_assigned_at
+             THEN excluded.project_assigned_at ELSE session.project_assigned_at END,
+           parent_session_id = COALESCE(excluded.parent_session_id, session.parent_session_id),
+           root_session_id = excluded.root_session_id,
+           role = excluded.role,
+           title = COALESCE(excluded.title, session.title),
+           summary = COALESCE(excluded.summary, session.summary),
+           started_at = MIN(session.started_at, excluded.started_at),
+           updated_at = MAX(session.updated_at, excluded.updated_at),
+           stream_state = excluded.stream_state",
+    )?
+    .execute(params![
+        row.id,
+        row.native_session_id,
+        row.runtime_id,
+        row.project_id,
+        row.parent_session_id,
+        row.root_session_id,
+        row.role.as_str(),
+        row.title,
+        row.summary,
+        row.started_at,
+        row.updated_at,
+        row.stream_state.as_str(),
+    ])?;
+    Ok(())
+}
+
+pub(super) fn apply_message(
+    tx: &Transaction,
+    row: &MessageRow,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    mut effects: Option<&mut Effects>,
+) -> Result<(), StoreError> {
+    let old = load_old_by_timeline(tx, &row.timeline_id)?;
+    if let Some(old) = old.as_ref() {
+        mark_bucket(
+            dirty_buckets,
+            maintenance,
+            &old.session_id,
+            old.ts,
+            old.model.as_deref(),
+        );
+    }
+    mark_bucket(
+        dirty_buckets,
+        maintenance,
+        &row.session_id,
+        row.ts,
+        row.model.as_deref(),
+    );
+    let new_usage = row.usage.unwrap_or_default();
+    let tool_input = row.tool.as_ref().map(|tool| tool.input.to_string());
+    let tool_payload = row
+        .tool
+        .as_ref()
+        .and_then(|tool| tool.payload.as_ref().map(|p| p.to_string()));
+
+    match old {
+        Some(old) => {
+            if maintenance.fts {
+                fts_delete(tx, &old)?;
+            }
+            tx.prepare_cached(
+                "UPDATE message SET
+                   session_id = ?2, ordinal = ?3, type = ?4, subtype = ?5, uuid = ?6,
+                   parent_uuid = ?7, ts = ?8, model = ?9, effort = ?10, content = ?11,
+                   tool_id = ?12, tool_name = ?13, tool_input = ?14, tool_result = ?15,
+                   tool_payload = ?16, tool_is_error = ?17, branch_tool_id = ?18,
+                   in_tokens = ?19, out_tokens = ?20, cache_r_tokens = ?21,
+                   cache_w_tokens = ?22, think_tokens = ?23, agent_version = ?24,
+                   src_cursor = ?25, src_offset = ?26
+                 WHERE timeline_id = ?1",
+            )?
+            .execute(params![
+                row.timeline_id,
+                row.session_id,
+                row.ordinal,
+                row.kind.as_str(),
+                row.subtype,
+                row.uuid,
+                row.parent_uuid,
+                row.ts,
+                row.model,
+                row.effort,
+                row.content,
+                row.tool.as_ref().and_then(|t| t.tool_id.as_deref()),
+                row.tool.as_ref().map(|t| t.name.as_str()),
+                tool_input,
+                row.tool.as_ref().and_then(|t| t.result.as_deref()),
+                tool_payload,
+                row.tool.as_ref().and_then(|t| t.is_error),
+                row.branch_tool_id,
+                new_usage.input,
+                new_usage.output,
+                new_usage.cache_read,
+                new_usage.cache_write,
+                new_usage.thinking,
+                row.agent_version,
+                row.src_cursor,
+                row.src_offset,
+            ])?;
+            if maintenance.fts {
+                fts_insert(
+                    tx,
+                    old.id,
+                    row.content.as_deref(),
+                    tool_input.as_deref(),
+                    row.tool.as_ref().and_then(|t| t.result.as_deref()),
+                )?;
+            }
+            stats.messages_updated += 1;
+        }
+        None => {
+            tx.prepare_cached(
+                "INSERT INTO message
+                   (timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
+                    model, effort, content, tool_id, tool_name, tool_input, tool_result,
+                    tool_payload, tool_is_error, branch_tool_id, in_tokens, out_tokens,
+                    cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
+                    src_cursor, src_offset)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                         ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+            )?
+            .execute(params![
+                row.timeline_id,
+                row.session_id,
+                row.ordinal,
+                row.kind.as_str(),
+                row.subtype,
+                row.uuid,
+                row.parent_uuid,
+                row.ts,
+                row.model,
+                row.effort,
+                row.content,
+                row.tool.as_ref().and_then(|t| t.tool_id.as_deref()),
+                row.tool.as_ref().map(|t| t.name.as_str()),
+                tool_input,
+                row.tool.as_ref().and_then(|t| t.result.as_deref()),
+                tool_payload,
+                row.tool.as_ref().and_then(|t| t.is_error),
+                row.branch_tool_id,
+                new_usage.input,
+                new_usage.output,
+                new_usage.cache_read,
+                new_usage.cache_write,
+                new_usage.thinking,
+                row.agent_version,
+                row.src_cursor,
+                row.src_offset,
+            ])?;
+            let rowid = tx.last_insert_rowid();
+            if maintenance.fts {
+                fts_insert(
+                    tx,
+                    rowid,
+                    row.content.as_deref(),
+                    tool_input.as_deref(),
+                    row.tool.as_ref().and_then(|t| t.result.as_deref()),
+                )?;
+            }
+            stats.messages_inserted += 1;
+        }
+    }
+    touch_session(tx, &row.session_id, row.ts)?;
+    if let Some(fx) = effects.as_deref_mut() {
+        fx.push(Mutation::Message(Box::new(row.clone())));
+    }
+    apply_pending_for_message(tx, row, stats, maintenance, dirty_buckets, effects)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_tool_result(
+    tx: &Transaction,
+    session_id: &str,
+    tool_id: &str,
+    result: Option<&str>,
+    payload: Option<&serde_json::Value>,
+    is_error: Option<bool>,
+    at: Option<Ms>,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    effects: Option<&mut Effects>,
+) -> Result<bool, StoreError> {
+    let Some(old) = load_old_by_tool(tx, session_id, tool_id)? else {
+        stats.tool_results_unmatched += 1;
+        return Ok(false);
+    };
+    if maintenance.fts {
+        fts_delete(tx, &old)?;
+    }
+    tx.prepare_cached(
+        "UPDATE message SET tool_result = ?2, tool_payload = ?3, tool_is_error = ?4
+         WHERE id = ?1",
+    )?
+    .execute(params![
+        old.id,
+        result,
+        payload.map(|p| p.to_string()),
+        is_error
+    ])?;
+    if maintenance.fts {
+        fts_insert(
+            tx,
+            old.id,
+            old.content.as_deref(),
+            old.tool_input.as_deref(),
+            result,
+        )?;
+    }
+    touch_session(tx, session_id, at)?;
+    stats.tool_results_merged += 1;
+    if let Some(fx) = effects {
+        fx.push(Mutation::ToolResult {
+            session_id: session_id.to_string(),
+            timeline_id: old.timeline_id,
+            result: result.map(str::to_owned),
+            payload: payload.cloned(),
+            is_error,
+            at,
+        });
+    }
+    Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_usage(
+    tx: &Transaction,
+    session_id: &str,
+    response: &str,
+    ts: Ms,
+    model: Option<&str>,
+    tokens: &TokenSnapshot,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    effects: Option<&mut Effects>,
+) -> Result<bool, StoreError> {
+    let Some(old) = load_old_by_timeline(tx, response)? else {
+        stats.usage_unmatched += 1;
+        return Ok(false);
+    };
+    let next_model = model.map(str::to_owned).or_else(|| old.model.clone());
+    let next_ts = old.ts.or(Some(ts));
+    mark_bucket(
+        dirty_buckets,
+        maintenance,
+        &old.session_id,
+        old.ts,
+        old.model.as_deref(),
+    );
+    mark_bucket(
+        dirty_buckets,
+        maintenance,
+        session_id,
+        next_ts,
+        next_model.as_deref(),
+    );
+    tx.prepare_cached(
+        "UPDATE message SET in_tokens = ?2, out_tokens = ?3, cache_r_tokens = ?4,
+                cache_w_tokens = ?5, think_tokens = ?6, model = ?7, ts = ?8
+         WHERE id = ?1",
+    )?
+    .execute(params![
+        old.id,
+        tokens.input,
+        tokens.output,
+        tokens.cache_read,
+        tokens.cache_write,
+        tokens.thinking,
+        next_model,
+        next_ts,
+    ])?;
+    touch_session(tx, session_id, Some(ts))?;
+    stats.usage_applied += 1;
+    if let Some(fx) = effects {
+        fx.push(Mutation::Usage {
+            session_id: session_id.to_string(),
+            timeline_id: old.timeline_id,
+            ts: next_ts,
+            model: next_model,
+            tokens: *tokens,
+        });
+    }
+    Ok(true)
+}
+
+fn pending_key(op: &IngestOp) -> Option<(&'static str, &str, &str)> {
+    match op {
+        IngestOp::ToolResult {
+            session_id,
+            tool_id,
+            ..
+        } => Some(("tool_result", session_id, tool_id)),
+        IngestOp::Usage {
+            session_id,
+            response,
+            ..
+        } => Some(("usage", session_id, response)),
+        _ => None,
+    }
+}
+
+pub(super) fn queue_pending(
+    tx: &Transaction,
+    op: &IngestOp,
+    src_cursor: Option<i64>,
+) -> Result<(), StoreError> {
+    let Some((kind, session_id, target)) = pending_key(op) else {
+        return Ok(());
+    };
+    tx.prepare_cached(
+        "INSERT INTO pending_merge (kind, session_id, target, op_json, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(kind, session_id, target) DO UPDATE SET
+           op_json = excluded.op_json, src_cursor = excluded.src_cursor",
+    )?
+    .execute(params![
+        kind,
+        session_id,
+        target,
+        serde_json::to_string(op)?,
+        src_cursor,
+    ])?;
+    Ok(())
+}
+
+/// A message may arrive after its usage/result in another file or append
+/// batch. Drain matching derived state in the same transaction that creates
+/// the target so subscribers never observe an intermediate committed state.
+fn apply_pending_for_message(
+    tx: &Transaction,
+    row: &MessageRow,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    mut effects: Option<&mut Effects>,
+) -> Result<(), StoreError> {
+    let tool_id = row.tool.as_ref().and_then(|tool| tool.tool_id.as_deref());
+    let mut stmt = tx.prepare_cached(
+        "SELECT kind, target, op_json, src_cursor
+         FROM pending_merge
+         WHERE session_id = ?1
+           AND ((kind = 'usage' AND target = ?2)
+             OR (kind = 'tool_result' AND target = ?3))
+         ORDER BY kind, target",
+    )?;
+    let pending = stmt
+        .query_map(
+            params![row.session_id, row.timeline_id, tool_id],
+            |record| {
+                Ok((
+                    record.get::<_, String>(0)?,
+                    record.get::<_, String>(1)?,
+                    record.get::<_, String>(2)?,
+                    record.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    for (kind, target, json, src_cursor) in pending {
+        tx.prepare_cached(
+            "DELETE FROM pending_merge
+             WHERE kind = ?1 AND session_id = ?2 AND target = ?3",
+        )?
+        .execute(params![kind, row.session_id, target])?;
+        let op: IngestOp = serde_json::from_str(&json)?;
+        apply_op(
+            tx,
+            &op,
+            src_cursor,
+            stats,
+            maintenance,
+            dirty_buckets,
+            effects.as_deref_mut(),
+        )?;
+    }
+    Ok(())
+}

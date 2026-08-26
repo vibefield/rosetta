@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS plan (
   src_cursor INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (session_id, revision)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS plan_src ON plan(src_cursor);
 
 CREATE TABLE IF NOT EXISTS task (
   id         TEXT PRIMARY KEY,
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS task (
   src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
+CREATE INDEX IF NOT EXISTS task_src ON task(src_cursor);
 
 -- ————— phase 3 · stream —————————————————————————————————————————
 CREATE TABLE IF NOT EXISTS ingest_cursor (
@@ -119,8 +121,8 @@ CREATE TABLE IF NOT EXISTS source_op (
   op_json    TEXT NOT NULL,
   PRIMARY KEY (cursor_id, generation, sequence)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS source_op_cursor_generation
-  ON source_op(cursor_id, generation, sequence);
+-- The WITHOUT ROWID primary key already is the cursor/generation/sequence
+-- index. A duplicate secondary index doubles staged-generation write work.
 
 -- Out-of-order enrichments wait here until their message/tool call exists.
 -- This is derived projection state, not a replay representation; generation
@@ -166,7 +168,14 @@ CREATE TABLE IF NOT EXISTS message (
   UNIQUE (session_id, ordinal)
 );
 CREATE INDEX IF NOT EXISTS message_tool ON message(session_id, tool_id) WHERE tool_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS message_bucket_key ON message(session_id, ts, model);
+-- Generation activation and rewrite reconciliation are provenance lookups.
+-- Without this index, activating each source scans the entire growing table.
+CREATE INDEX IF NOT EXISTS message_src ON message(src_cursor);
+-- Match rebuild_bucket's expressions exactly and put both equality keys
+-- before the timestamp range so SQLite can constrain all three terms.
+CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
+  session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
   content, tool_input, tool_result,
@@ -188,6 +197,7 @@ CREATE TABLE IF NOT EXISTS file_edit (
 CREATE INDEX IF NOT EXISTS file_edit_src ON file_edit(src_cursor);
 CREATE INDEX IF NOT EXISTS file_edit_session ON file_edit(session_id, at);
 CREATE INDEX IF NOT EXISTS file_edit_path    ON file_edit(path);
+CREATE INDEX IF NOT EXISTS file_edit_message ON file_edit(message_id) WHERE message_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS file_edit_identity ON file_edit(
   session_id, COALESCE(message_id,-1), path, kind,
   COALESCE(snapshot_ref,''), COALESCE(at,-1)
@@ -201,6 +211,7 @@ CREATE TABLE IF NOT EXISTS git_commit (
   src_cursor INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (commit_id, session_id)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS git_commit_src ON git_commit(src_cursor);
 
 CREATE TABLE IF NOT EXISTS drift_agg (
   runtime_id    TEXT NOT NULL REFERENCES agent_runtime(id),
@@ -260,6 +271,41 @@ LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
            FROM file_edit f JOIN session s ON s.id = f.session_id
            GROUP BY rid) f ON f.rid = r.id
 WHERE r.id = r.root_session_id;
+"#;
+
+/// Read/presentation indexes that are unnecessary while an unpublished,
+/// empty projection is being rebuilt. Uniqueness, merge-key, and provenance
+/// indexes stay live because the write path relies on them for correctness or
+/// bounded reconciliation.
+pub(crate) const BULK_DROP_INDEXES: &str = r#"
+DROP INDEX IF EXISTS session_project;
+DROP INDEX IF EXISTS session_runtime;
+DROP INDEX IF EXISTS session_parent;
+DROP INDEX IF EXISTS workspace_obs_session;
+DROP INDEX IF EXISTS task_session;
+DROP INDEX IF EXISTS message_bucket_key;
+DROP INDEX IF EXISTS file_edit_session;
+DROP INDEX IF EXISTS file_edit_path;
+DROP INDEX IF EXISTS file_edit_message;
+DROP INDEX IF EXISTS usage_bucket_hour;
+"#;
+
+/// Recreate the deferred indexes once, after all base rows and derived rows
+/// have landed. Building a B-tree from the finished table is substantially
+/// cheaper than maintaining it for every cold-load insert.
+pub(crate) const BULK_CREATE_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS session_parent  ON session(parent_session_id);
+CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at);
+CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
+CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
+  session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
+);
+CREATE INDEX IF NOT EXISTS file_edit_session ON file_edit(session_id, at);
+CREATE INDEX IF NOT EXISTS file_edit_path    ON file_edit(path);
+CREATE INDEX IF NOT EXISTS file_edit_message ON file_edit(message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS usage_bucket_hour ON usage_bucket(hour_ts);
 "#;
 
 pub fn init(conn: &Connection) -> Result<(), StoreError> {

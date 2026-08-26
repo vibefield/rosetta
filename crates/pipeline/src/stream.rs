@@ -604,4 +604,6 @@ pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
     total.usage_applied += batch.usage_applied;
     total.usage_unmatched += batch.usage_unmatched;
     total.drift_recorded += batch.drift_recorded;
+    total.bucket_rebuilds += batch.bucket_rebuilds;
+    total.source_sweeps += batch.source_sweeps;
 }
