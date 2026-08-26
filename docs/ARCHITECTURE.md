@@ -27,6 +27,15 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > hot tier and in-process subscription hub are implemented; HTTP/WS transport and
 > generated clients are pending. Unknown projection schemas fail closed on ordinary
 > open and are replaced only through the explicit ledger rebuild command.
+>
+> Organic Claude Code, Codex, and Grok validation on 2026-08-26 established the first
+> measured performance baseline. On the final Codex cold run, FTS5 construction was
+> 33.85 s of 101.23 s, canonical application 24.08 s, and ledger writing 16.36 s. A
+> frozen-ledger rebuild took 79.53 s, led by FTS5 at 24.83 s. The evidence, readiness
+> split, crash-safe sidecar protocol, and ledger/writer optimization gates are specified
+> in [`docs/ingest-engine.html`](ingest-engine.html) under “Measured performance and
+> search-finalization specification.” Tantivy remains a benchmark candidate, not a
+> selected canonical store or committed dependency.
 
 ---
 
@@ -356,18 +365,25 @@ ingestion.
 ## 6. Storage
 
 - **SQLite** (rusqlite, bundled), WAL, `synchronous=NORMAL`, single-writer daemon,
-  batched transactions. One transaction per ingest batch: facts + FTS + rollups +
-  `change_log` row — consumers can also long-poll/replay the change log as a coarse
-  fallback stream.
-- **FTS5 external-content** over entry text (porter + trigram experiments to be
-  benchmarked). Start with FTS5; **tantivy only if** FTS5 relevance or latency measurably
-  fails us — one store keeping search transactionally consistent with metadata is worth
-  a lot.
+  batched transactions. Today, one live ingest transaction applies canonical facts,
+  FTS maintenance, rollup corrections, and checkpoint/reconciliation state. The target
+  search split moves only disposable search maintenance behind a durable repair set;
+  canonical rows, rollups, and source-generation correctness remain atomic in SQLite.
+- **FTS5 external-content today**, with a backend-neutral search/readiness seam specified
+  before the L3 wire contract freezes. Organic broad-term ranking averaged roughly
+  119–143 ms on the large Codex/Claude projections, while selective retrieval remained
+  sub-millisecond. Decouple canonical-ready from search-ready, retain FTS5 as the offline
+  correctness reference, and run Tantivy only as a disposable sidecar candidate against
+  the same campaign-frozen corpus. Adoption requires the latency, relevance, build,
+  live-overhead, and crash gates in `ingest-engine.html`; SQLite remains canonical either
+  way.
 - **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite
-  projection; `--ledger` can relocate the segment root. Ledger is precious; DB is
-  disposable.
-- Target table count: **~15, not 101.** Entities, rollups, ledger index, change log,
-  drift, cursors. A new table needs a consumer to justify it.
+  projection; `--ledger` can relocate the segment root. An adopted search backend owns an
+  optional disposable `<projection>.search/`. Ledger is precious; DB and search indexes
+  are rebuildable projections.
+- Keep the schema compact rather than chasing a numeric table target. Entities, rollups,
+  drift, cursors, generation staging, and the proposed search revision/repair set each
+  need a named consumer; a new table without one is not justified.
 
 ## 7. Performance playbook
 
@@ -384,6 +400,12 @@ ingestion.
 - Cold loads project each source's first generation directly and defer FTS, rollups, and
   read indexes in an unpublished sibling database; live batches rebuild each distinct
   affected usage bucket once, never once per message.
+- A private cold projection may defer repeated ledger `sync_data` calls only through a
+  run-scoped staged directory: sync every staged file, atomically rename the whole run
+  into the scanner's committed namespace, and sync the runtime directory before SQLite
+  can publish. This optimization remains benchmark-gated on isolated sync time.
+  Existing/live projections retain ledger-sync-before-visible-SQLite ordering. Search is
+  independently disposable and may never delay canonical correctness validation.
 - Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
   these indexes because one missing provenance index turns source activation quadratic.
 - Memory-first fan-out for live streams (§5.2); DB commit is not on the notify path.
@@ -472,7 +494,7 @@ layer's design is frozen.
 
 | Decision | Default | Revisit when |
 |---|---|---|
-| FTS5 vs tantivy | FTS5 | relevance/latency benchmarks fail budgets |
+| FTS5 vs Tantivy | synchronous FTS5 today; offline FTS5 reference + bounded Tantivy bake-off specified | adopt only if the campaign-frozen latency, relevance, build, live-overhead, and crash gates pass |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
