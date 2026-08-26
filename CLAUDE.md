@@ -44,9 +44,13 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
 
 ## Current phase
 
-**Phase 1 — Ground truth.** Exit criteria: `RESEARCH_PLAN.md` §6 (watch.toml +
-layout manifest + raw types + fixtures + schema snapshots per agent, drift pipeline
-exercised). `pipeline`, `store`, `protocol`, `server` stay stubs until Phase 3/4.
+**Phase 3 is underway, with Phase 1 gaps still explicit.** Nine agent data packs and
+parser crates are registered. The implemented backfill pipeline/store currently admit
+Claude Code and Codex JSONL transcript streams; the remaining adapters are parser-only.
+The normalized source-op journal provides generation-safe replay inside the current
+projection, but it is not the append-only raw ledger promised by rule 4. Until that
+ledger and rebuild command ship, schema-version mismatch must fail closed. Watch/live
+ingestion and the `protocol`/`server` service surface remain unimplemented.
 
 ## Repo map
 
@@ -61,10 +65,10 @@ tools/groundtruth/         LAYER 1 dev tools (stdlib Python): fixture farm,
 crates/                    all Rust crates
   adapter-support/         permissive parser + replay-test primitives
   adapters/<agent>/        raw parsers using canonical ground truth as spec
-  core/ capture/           LAYER 2 model and raw ledger
-  pipeline/ store/         LAYER 2 orchestration and projection
-  protocol/ server/        LAYER 3 wire contract and service
-  rosettad/                daemon + CLI binary
+  core/ capture/           LAYER 2 model, discovery, bounded reads, JSONL tailing
+  pipeline/ store/         LAYER 2 backfill orchestration and SQLite projection
+  protocol/ server/        LAYER 3 placeholders (service not shipped)
+  rosettad/                discover + ingest CLI (daemon not shipped)
 clients/                   generated consumer packages (TS)          [Phase 4]
 ```
 
@@ -91,6 +95,6 @@ clients/                   generated consumer packages (TS)          [Phase 4]
 
 - `cargo check` / `cargo test --workspace` / `cargo fmt --all` /
   `cargo clippy --all-targets -- -D warnings`
-- Ground-truth pipeline: `python3 -m tools.groundtruth farm <agent>` (or
-  `--schemas-only`), `census`, `render`, and `check`.
+- Ground-truth pipeline: `python3 -m tools.groundtruth farm <agent>` (isolated runner
+  required unless `--schemas-only`), `census`, `render`, and `check`.
 - Python tool tests: `python3 -m unittest discover -s tools/groundtruth/tests`.

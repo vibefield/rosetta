@@ -74,6 +74,12 @@
   .pipeline b { color: var(--ink); font-weight: 600; }
   .pipeline .cu { color: var(--copper); font-weight: 600; }
   .pipeline .te { color: var(--teal); font-weight: 600; }
+  .status {
+    margin-top: 16px; padding: 13px 16px; border-left: 3px solid var(--copper);
+    background: var(--copper-bg); border-radius: 0 6px 6px 0;
+    font-size: 13px; color: var(--muted); max-width: 90ch;
+  }
+  .status b { color: var(--ink); }
 
   /* ---------- legend ---------- */
   .legend {
@@ -195,6 +201,12 @@
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
       <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 tables)&nbsp;&nbsp;→&nbsp;&nbsp;FTS · agent-view</div>
+    <div class="status"><b>Implementation checkpoint · 2026-08-25.</b> This is the target
+      model, not a claim that every box is shipped. The runtime currently backfills Claude Code and
+      Codex JSONL transcripts. Its SQLite DDL includes generation-scoped <code>source_op</code>
+      staging and differs from the illustrative DDL below. That journal is normalized replay state,
+      not the planned append-only raw ledger; schema mismatches therefore fail closed. Watch/live,
+      raw-ledger rebuild, server, and client layers remain pending.</div>
   </div>
 
   <div class="legend">
@@ -407,7 +419,7 @@
     <div class="card">
       <header><h3>project</h3><span class="hdr-tags"><span class="ph ph-1">meta</span><span class="badge b-ours">ours</span></span></header>
       <div class="fields">
-        <span class="f">id</span><span class="n">blake3 of normalized root + git repo identity — worktrees and renames merge</span>
+        <span class="f">id</span><span class="n">blake3 of git repo identity when known, else normalized root — worktrees and renames merge</span>
         <span class="f">name</span><span class="n">display name (editable)</span>
         <span class="f">root_paths[]</span><span class="n">normalized directories claimed by this project</span>
         <span class="f">git_repo</span><span class="n">remote identity when present</span>

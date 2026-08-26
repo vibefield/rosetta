@@ -12,6 +12,16 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
+> **Implementation checkpoint (2026-08-25).** This document describes the target
+> architecture. Nine ground-truth/parser packs exist; the implemented runtime backfills
+> Claude Code and Codex JSONL transcript streams into SQLite. It has generation-staged
+> reconciliation, deterministic adapter checkpoints, FTS, and rollups. The current
+> `source_op` journal stores normalized operations inside that database so source
+> rewrites can be swapped atomically; it is not the durable raw ledger described below.
+> The filesystem watcher/live lane, raw segment ledger and rebuild command, HTTP/WS
+> services, and generated clients are still pending. Consequently, unknown projection
+> schema versions fail closed rather than being dropped and rebuilt.
+
 ---
 
 ## 1. Lessons from spaghetti (what we keep, what we kill)

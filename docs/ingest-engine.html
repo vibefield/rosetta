@@ -172,6 +172,12 @@
     crate seam per stage, and measurement infrastructure designed in from day one — every phase and
     every hot component owns a fixture and a bench, so each can be optimized in isolation.
     Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
+    <div class="callout"><b>Implementation checkpoint · 2026-08-25.</b> Backfill, bounded
+      discovery/meta reads, JSONL tail checkpoints, deterministic adapter-state checkpoints,
+      generation-staged source reconciliation, SQLite/FTS, rollups, and the rotating audit lane are
+      implemented for Claude Code and Codex. The watcher/live scheduler, raw segment ledger and
+      rebuild command, hot tier, HTTP/WS server, and benchmark promises below remain design targets.
+      <code>source_op</code> is a normalized transactional replay journal, not the raw ledger.</div>
   </div>
 
   <div class="legend">

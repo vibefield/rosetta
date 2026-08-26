@@ -12,11 +12,16 @@ Three layers, strictly separated:
    evidence pipeline. Each captured agent has one canonical `groundtruth.json`
    and one generated `groundtruth.html` report.
 2. **Runtime** — Rust crates under `crates/`: permissive per-agent parsers, one
-   canonical model, replayable normalization, capture, and storage. The DB is a
-   disposable projection of the ledger.
-3. **Services** — Rust protocol/server crates and one daemon (`rosettad`), with
-   localhost REST + WebSocket:
-   `/v1/search`, `/v1/observe`, `/v1/metrics`.
+   canonical model, replayable normalization, capture, and storage.
+3. **Services** — the planned localhost REST + WebSocket layer.
+
+Current implementation status: all nine registered agents have ground-truth packs and
+parser crates; the backfill pipeline and SQLite projection currently normalize Claude
+Code and Codex transcript streams. Rewrites are generation-staged and replayable from a
+normalized source-op journal inside the projection. The durable append-only raw ledger,
+filesystem watcher/live lane, REST/WebSocket server, and generated clients have not
+shipped yet. Until the raw-ledger rebuild path exists, a projection schema mismatch
+fails closed instead of deleting the database.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
 
@@ -32,3 +37,8 @@ python3 -m tools.groundtruth farm codex --schemas-only
 # Verify Rust runtime crates.
 cargo test --workspace
 ```
+
+`farm` without `--schemas-only` installs and executes downloaded agent CLIs. It fails
+closed unless run inside a container/VM (prefer a runner image pinned by SHA-256
+digest), explicitly attested with `ROSETTA_FARM_ISOLATED=1`, or deliberately overridden
+with `--allow-host-execution` on a disposable research machine.
