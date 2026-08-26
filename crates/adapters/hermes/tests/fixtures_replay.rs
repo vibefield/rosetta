@@ -3,9 +3,13 @@
 //! regeneration (new agent version) makes it fail, that failure is the drift
 //! report.
 
-use rosetta_adapter_hermes::raw::{KnownRecord, ParsedRow, parse_row, sqlite_row_to_value};
-use rosetta_adapter_support::{Drift, Evidence, FileFormat, GroundTruthDoc, glob_match};
-use rusqlite::{Connection, OpenFlags};
+use rosetta_adapter_hermes::raw::{KnownRecord, ParsedRow, parse_row};
+use rosetta_adapter_hermes::{HermesAdapter, spec};
+use rosetta_adapter_support::{
+    AgentAdapter, Drift, Evidence, FileFormat, GroundTruthDoc, LineStatus, NormalizeCtx, glob_match,
+};
+use rosetta_capture::{SnapshotOutcome, snapshot_db};
+use rosetta_core::ids;
 use std::path::{Path, PathBuf};
 
 fn fixtures_root() -> PathBuf {
@@ -149,30 +153,47 @@ fn exports_round_trip_losslessly() {
 }
 
 #[test]
-fn sqlite_files_parse_with_the_same_types() {
+fn snapshot_plan_queries_every_committed_database_cleanly() {
+    let adapter = HermesAdapter;
+    let plan = adapter
+        .snapshot_plan(spec::STATE_DB)
+        .expect("snapshot plan");
     for file in state_db_files() {
-        let connection =
-            Connection::open_with_flags(&file, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let tables: Vec<String> = connection
-            .prepare(
-                "SELECT name FROM sqlite_master \
-                 WHERE type='table' AND name NOT LIKE 'sqlite_%' \
-                 AND name NOT LIKE '%fts%' ORDER BY name",
-            )
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        for table in tables {
-            let mut statement = connection
-                .prepare(&format!("SELECT * FROM \"{table}\""))
-                .unwrap();
-            let mut rows = statement.query([]).unwrap();
-            while let Some(row) = rows.next().unwrap() {
-                let value = sqlite_row_to_value(row).unwrap();
-                parse_row(&table, value)
-                    .unwrap_or_else(|error| panic!("{} table {table}: {error}", file.display()));
+        let SnapshotOutcome::Ready(snapshot) = snapshot_db(&file).unwrap() else {
+            panic!("{} did not produce a stable snapshot", file.display());
+        };
+        let sessions = snapshot.query_rows(&plan.sessions_sql, None).unwrap();
+        assert!(!sessions.is_empty(), "{} has no sessions", file.display());
+
+        for session in sessions {
+            let session: serde_json::Value = serde_json::from_str(&session).unwrap();
+            let native = session["native_session_id"]
+                .as_str()
+                .expect("native session id");
+            let runtime_id = ids::runtime_id(adapter.kind(), "~/.hermes");
+            let session_id = ids::session_id(&runtime_id, native);
+            let mut ctx = NormalizeCtx::new(runtime_id, session_id);
+
+            for query in &plan.record_queries {
+                for row in snapshot.query_rows(&query.sql, Some(native)).unwrap() {
+                    let record = serde_json::json!({
+                        "query": query.name,
+                        "row": serde_json::from_str::<serde_json::Value>(&row).unwrap(),
+                    });
+                    let outcome = adapter.ingest_line(
+                        &mut ctx,
+                        spec::STATE_DB,
+                        record.to_string().as_bytes(),
+                    );
+                    assert_eq!(
+                        outcome.status,
+                        LineStatus::Parsed,
+                        "{} query {} row {}",
+                        file.display(),
+                        query.name,
+                        row
+                    );
+                }
             }
         }
     }

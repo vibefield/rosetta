@@ -360,6 +360,7 @@ dependencies = [
  "rosetta-adapter-support",
  "rosetta-capture",
  "rosetta-core",
+ "rusqlite",
  "serde",
  "serde_json",
  "walkdir",

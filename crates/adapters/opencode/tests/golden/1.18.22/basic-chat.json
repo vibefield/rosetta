@@ -1,0 +1,56 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "b71a4f61377878c9e8fcfe9f44a36e0d09726c5db908680f35bf60ddcefaa462",
+    "session_id": "4ee79513106bd4272433f6c9c13d24ccba2291702738455f79960b4d5bc77dc2",
+    "ordinal": 0,
+    "kind": "user",
+    "subtype": null,
+    "uuid": "msg_037618fd20016PK23j1EIeb4r5",
+    "parent_uuid": null,
+    "ts": 1787635536137,
+    "model": null,
+    "effort": null,
+    "content": "\"Reply with a short greeting.\"",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": "1.18.22",
+    "src_cursor": 1,
+    "src_offset": 0
+  },
+  {
+    "op": "workspace_obs",
+    "session_id": "4ee79513106bd4272433f6c9c13d24ccba2291702738455f79960b4d5bc77dc2",
+    "at": 1787635536145,
+    "cwd": "<PROJECT>",
+    "git_branch": null,
+    "git_repo": null
+  },
+  {
+    "op": "message",
+    "timeline_id": "cb898a4c52423d4504c1dffe431008947d6681bdf2fb27f4a517251e06678837",
+    "session_id": "4ee79513106bd4272433f6c9c13d24ccba2291702738455f79960b4d5bc77dc2",
+    "ordinal": 1,
+    "kind": "agent",
+    "subtype": null,
+    "uuid": "msg_037619111001ZXjM6eMpQmu1bo",
+    "parent_uuid": "msg_037618fd20016PK23j1EIeb4r5",
+    "ts": 1787635536875,
+    "model": "mock-model",
+    "effort": null,
+    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    },
+    "agent_version": "1.18.22",
+    "src_cursor": 1,
+    "src_offset": 2
+  }
+]

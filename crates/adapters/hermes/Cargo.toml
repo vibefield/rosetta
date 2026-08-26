@@ -5,9 +5,11 @@ edition.workspace = true
 
 [dependencies]
 rosetta-adapter-support = { path = "../../adapter-support" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rosetta-core = { path = "../../core" }
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+rosetta-capture = { path = "../../capture" }
+rusqlite.workspace = true
 walkdir.workspace = true

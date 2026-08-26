@@ -1,4 +1,4 @@
-//! Raw types for the `state-db` stream (`state.db` and WAL siblings).
+//! Raw types for rows extracted from the `state-db` snapshot stream.
 //!
 //! Evidence: fixtures/0.20.5 (scenarios basic-chat, tool-use, resume),
 //! schema_version = 26. Primary tables typed below: sessions, messages,
@@ -7,11 +7,10 @@
 //! `ParsedRow::UnknownTable` (soft) until a scenario exercises them.
 
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
-use rusqlite::types::ValueRef;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Number, Value};
+use serde_json::Value;
 
-/// Outcome of parsing one SQLite row (or a farm JSONL dump of that row).
+/// Outcome of parsing one snapshot row (or a farm JSONL dump of that row).
 #[derive(Debug)]
 pub enum ParsedRow {
     Known(Box<KnownRecord>),
@@ -70,36 +69,6 @@ pub fn parse_row(table: &str, value: Value) -> Result<ParsedRow, serde_json::Err
         _ => unreachable!(),
     };
     Ok(ParsedRow::Known(Box::new(known)))
-}
-
-/// Convert a rusqlite row into JSON so the same serde types cover live DBs
-/// and the farm JSONL export.
-pub fn sqlite_row_to_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    let stmt = row.as_ref();
-    let mut map = Map::new();
-    for index in 0..stmt.column_count() {
-        let name = stmt.column_name(index)?.to_owned();
-        map.insert(name, value_ref_to_json(row.get_ref(index)?));
-    }
-    Ok(Value::Object(map))
-}
-
-fn value_ref_to_json(value: ValueRef<'_>) -> Value {
-    match value {
-        ValueRef::Null => Value::Null,
-        ValueRef::Integer(number) => Value::Number(number.into()),
-        ValueRef::Real(number) => Number::from_f64(number)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
-        ValueRef::Text(bytes) => Value::String(String::from_utf8_lossy(bytes).into_owned()),
-        ValueRef::Blob(bytes) => Value::Array(
-            bytes
-                .iter()
-                .copied()
-                .map(|byte| Value::Number(i64::from(byte).into()))
-                .collect(),
-        ),
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -240,4 +209,52 @@ pub struct SystemPromptRow {
     pub prompt: String,
     #[serde(flatten)]
     pub unknown: Unknown,
+}
+
+/// One OpenAI-style function call inside `messages.tool_calls`, which Hermes
+/// stores as a JSON-encoded TEXT array.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ToolCallRow {
+    pub id: String,
+    pub call_id: String,
+    pub response_item_id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: ToolFunctionRow,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for ToolCallRow {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        note_unknown(&self.function.unknown, &format!("{prefix}.function"), out);
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ToolFunctionRow {
+    pub name: String,
+    /// JSON encoded a second time by the OpenAI-compatible wire shape.
+    pub arguments: String,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// Fixture-backed terminal result payload stored in a tool-role message's
+/// `content` TEXT column.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ToolResultRow {
+    pub output: String,
+    pub exit_code: i64,
+    /// Required but nullable in the committed successful result.
+    pub error: Option<Value>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for ToolResultRow {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+    }
 }

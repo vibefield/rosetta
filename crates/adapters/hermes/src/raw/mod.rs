@@ -4,4 +4,4 @@
 
 pub mod state;
 
-pub use state::{KnownRecord, ParsedRow, parse_row, sqlite_row_to_value};
+pub use state::{KnownRecord, ParsedRow, parse_row};
