@@ -494,6 +494,8 @@ dependencies = [
  "rosetta-core",
  "rosetta-pipeline",
  "rosetta-store",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]

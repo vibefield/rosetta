@@ -11,3 +11,5 @@ rosetta-capture = { path = "../capture" }
 rosetta-core = { path = "../core" }
 rosetta-pipeline = { path = "../pipeline" }
 rosetta-store = { path = "../store" }
+rusqlite.workspace = true
+tempfile.workspace = true

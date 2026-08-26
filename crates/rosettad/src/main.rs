@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
@@ -120,6 +121,41 @@ fn ledger_root(flags: &Flags, db: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| db.with_extension("ledger"))
 }
 
+/// Cross-process writer/rebuild lock. SQLite owns the lock lifetime, so a
+/// crash releases it automatically instead of leaving a stale pid file.
+struct ProjectionLock {
+    _connection: rusqlite::Connection,
+}
+
+fn projection_lock(db: &std::path::Path) -> Result<ProjectionLock, String> {
+    let mut lock_name = db.as_os_str().to_owned();
+    lock_name.push(".lock");
+    let lock_path = PathBuf::from(lock_name);
+    if let Some(parent) = lock_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+    }
+    let connection = rusqlite::Connection::open(&lock_path)
+        .map_err(|error| format!("opening projection lock {}: {error}", lock_path.display()))?;
+    connection
+        .busy_timeout(Duration::ZERO)
+        .map_err(|error| format!("configuring projection lock: {error}"))?;
+    connection
+        .execute_batch("PRAGMA journal_mode = DELETE; BEGIN EXCLUSIVE;")
+        .map_err(|error| {
+            format!(
+                "projection {} is already owned by another ingest/watch/rebuild process: {error}",
+                db.display()
+            )
+        })?;
+    Ok(ProjectionLock {
+        _connection: connection,
+    })
+}
+
 fn open_ledger(root: &std::path::Path, kind: &str) -> Result<Ledger, String> {
     Ledger::open(&root.join(kind)).map_err(|error| error.to_string())
 }
@@ -194,6 +230,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let opts = IngestOptions::default();
     let instrument = Instrument::new();
     let adapters = selected(&flags)?;
+    let _projection_lock = projection_lock(&db)?;
 
     let mut store =
         Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
@@ -313,6 +350,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let live = LiveOptions::default();
     let instrument = Instrument::new();
     let adapters = selected(&flags)?;
+    let _projection_lock = projection_lock(&db)?;
 
     let mut store =
         Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
@@ -424,8 +462,129 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Drop the projection and replay the raw ledger — rule 4 as a command. The
-/// database file is DELETED first: the ledger is the durable copy.
+fn rebuild_adapters(
+    flags: &Flags,
+    ledgers: &std::path::Path,
+) -> Result<Vec<&'static dyn AgentAdapter>, String> {
+    let requested = selected(flags)?;
+    let mut chosen = Vec::new();
+    for adapter in requested {
+        let dir = ledgers.join(adapter.kind());
+        if dir.is_dir() {
+            if !chosen
+                .iter()
+                .any(|existing: &&dyn AgentAdapter| existing.kind() == adapter.kind())
+            {
+                chosen.push(adapter);
+            }
+        } else if !flags.agents.is_empty() {
+            return Err(format!("no {} ledger at {}", adapter.kind(), dir.display()));
+        }
+    }
+    if chosen.is_empty() {
+        return Err(format!("no runtime ledgers at {}", ledgers.display()));
+    }
+
+    // A partial rebuild would silently erase every unselected runtime from a
+    // shared projection. Require the selected set to cover every ledger dir.
+    for entry in std::fs::read_dir(ledgers)
+        .map_err(|error| format!("listing {}: {error}", ledgers.display()))?
+    {
+        let entry = entry.map_err(|error| format!("listing {}: {error}", ledgers.display()))?;
+        if !entry
+            .file_type()
+            .map_err(|error| format!("stating {}: {error}", entry.path().display()))?
+            .is_dir()
+        {
+            continue;
+        }
+        let kind = entry.file_name().to_string_lossy().into_owned();
+        if !chosen.iter().any(|adapter| adapter.kind() == kind) {
+            return Err(format!(
+                "ledger {kind} would be omitted; rebuild is whole-projection, so select every ledger runtime"
+            ));
+        }
+    }
+
+    for adapter in &chosen {
+        let dir = ledgers.join(adapter.kind());
+        let scan =
+            rosetta_capture::visit_ledger::<rosetta_capture::CaptureError, _>(&dir, |_| Ok(()))
+                .map_err(|error| error.to_string())?;
+        if scan.entries == 0 {
+            return Err(format!("{} ledger is empty", dir.display()));
+        }
+        if scan.torn_segments > 0 {
+            return Err(format!(
+                "{} has {} torn/corrupt segment tails; refusing to replace the projection",
+                dir.display(),
+                scan.torn_segments
+            ));
+        }
+    }
+    Ok(chosen)
+}
+
+fn projection_parent(db: &std::path::Path) -> &std::path::Path {
+    db.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+}
+
+fn sidecar(db: &std::path::Path, suffix: &str) -> PathBuf {
+    let mut path = db.as_os_str().to_owned();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+fn make_single_file(connection: &rusqlite::Connection, label: &str) -> Result<(), String> {
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(|error| format!("configuring {label}: {error}"))?;
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(|error| format!("checkpointing {label}: {error}"))?;
+    let mode: String = connection
+        .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+        .map_err(|error| format!("switching {label} to a single-file journal: {error}"))?;
+    if mode != "delete" {
+        return Err(format!("{label} stayed in unexpected journal mode {mode}"));
+    }
+    Ok(())
+}
+
+fn install_rebuilt_projection(db: &std::path::Path, temp: &std::path::Path) -> Result<(), String> {
+    if db.exists() {
+        let old = rusqlite::Connection::open(db)
+            .map_err(|error| format!("opening old projection {}: {error}", db.display()))?;
+        make_single_file(&old, "old projection")?;
+        drop(old);
+        for suffix in ["-wal", "-shm"] {
+            let path = sidecar(db, suffix);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("removing {}: {error}", path.display())),
+            }
+        }
+    }
+
+    std::fs::rename(temp, db).map_err(|error| {
+        format!(
+            "atomically replacing {} with {}: {error}",
+            db.display(),
+            temp.display()
+        )
+    })?;
+    std::fs::File::open(projection_parent(db))
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("syncing {}: {error}", projection_parent(db).display()))?;
+    Ok(())
+}
+
+/// Rebuild into a private sibling database and atomically install it only
+/// after every runtime replays cleanly. The live projection is never the work
+/// surface, so validation or replay failure leaves it byte-for-byte usable.
 fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("rebuild needs --db PATH")?;
@@ -433,25 +592,25 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     if !ledgers.is_dir() {
         return Err(format!("no ledger at {}", ledgers.display()));
     }
-    for suffix in ["", "-wal", "-shm"] {
-        let mut path = db.as_os_str().to_owned();
-        path.push(suffix);
-        match std::fs::remove_file(std::path::Path::new(&path)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("removing old projection: {error}")),
-        }
-    }
+    let adapters = rebuild_adapters(&flags, &ledgers)?;
+    let _projection_lock = projection_lock(&db)?;
+
+    let parent = projection_parent(&db);
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+    let named = tempfile::Builder::new()
+        .prefix(".rosetta-rebuild-")
+        .suffix(".sqlite")
+        .tempfile_in(parent)
+        .map_err(|error| format!("creating rebuild database in {}: {error}", parent.display()))?;
+    let temp = named.into_temp_path();
 
     let instrument = Instrument::new();
-    let mut store =
-        Store::open(&db).map_err(|error| format!("opening {}: {error:?}", db.display()))?;
-    let mut failures = Vec::new();
-    for adapter in selected(&flags)? {
+    let mut store = Store::open(temp.as_ref())
+        .map_err(|error| format!("opening rebuild database {}: {error:?}", temp.display()))?;
+    let mut reports = Vec::new();
+    for adapter in adapters {
         let dir = ledgers.join(adapter.kind());
-        if !dir.is_dir() {
-            continue;
-        }
         let layout = adapter.layout();
         let runtime = rosetta_core::rows::RuntimeRow {
             id: rosetta_core::ids::runtime_id(adapter.kind(), &layout.data_root),
@@ -466,39 +625,151 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         };
         let report = rebuild_runtime(adapter, &runtime, &dir, &mut store, &instrument)
             .map_err(|error| error.to_string())?;
-        println!(
-            "{}: rebuilt {} files from {} segments — {} records replayed \
-             ({} stale skipped, {} already projected), {} meta batches, \
-             {} rows inserted, {} sessions stubbed, {} hard errors{}",
-            adapter.kind(),
-            report.files,
-            report.segments,
-            report.raw_records,
-            report.stale_records_skipped,
-            report.records_already_projected,
-            report.meta_batches,
-            report.stats.messages_inserted,
-            report.sessions_stubbed,
-            report.hard_errors,
-            if report.torn_segments > 0 {
-                " (torn tail ignored)"
-            } else {
-                ""
-            },
-        );
         if report.hard_errors > 0 {
-            failures.push(format!(
+            return Err(format!(
                 "{}: {} hard errors during replay",
                 adapter.kind(),
                 report.hard_errors
             ));
         }
+        if report.torn_segments > 0 {
+            return Err(format!(
+                "{}: ledger changed or tore during replay",
+                adapter.kind()
+            ));
+        }
+        reports.push((adapter.kind(), report));
+    }
+
+    make_single_file(store.conn(), "rebuilt projection")?;
+    drop(store);
+    if let Ok(permissions) = std::fs::metadata(&db).map(|metadata| metadata.permissions()) {
+        std::fs::set_permissions(&*temp, permissions)
+            .map_err(|error| format!("preserving projection permissions: {error}"))?;
+    }
+    std::fs::File::open(&*temp)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("syncing rebuilt projection: {error}"))?;
+    install_rebuilt_projection(&db, temp.as_ref())?;
+    let _installed = temp.keep();
+
+    for (kind, report) in reports {
+        println!(
+            "{kind}: rebuilt {} files from {} segments — {} records replayed \
+             ({} stale, {} duplicate, {} already projected), {} meta batches, \
+             {} rows inserted, {} sessions stubbed",
+            report.files,
+            report.segments,
+            report.raw_records,
+            report.stale_records_skipped,
+            report.duplicate_records_skipped,
+            report.records_already_projected,
+            report.meta_batches,
+            report.stats.messages_inserted,
+            report.sessions_stubbed,
+        );
     }
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
     }
-    if !failures.is_empty() {
-        return Err(failures.join("; "));
-    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(db: &std::path::Path, ledger: &std::path::Path, agent: &str) -> Vec<String> {
+        vec![
+            "--db".to_string(),
+            db.display().to_string(),
+            "--ledger".to_string(),
+            ledger.display().to_string(),
+            "--agent".to_string(),
+            agent.to_string(),
+        ]
+    }
+
+    fn sentinel(db: &std::path::Path) {
+        let connection = rusqlite::Connection::open(db).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sentinel(value TEXT NOT NULL);
+                 INSERT INTO sentinel VALUES ('keep-me');",
+            )
+            .unwrap();
+    }
+
+    fn assert_sentinel(db: &std::path::Path) {
+        let connection = rusqlite::Connection::open(db).unwrap();
+        let value: String = connection
+            .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "keep-me");
+    }
+
+    #[test]
+    fn unknown_agent_is_validated_before_the_live_projection_is_touched() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        let ledgers = temp.path().join("ledger");
+        std::fs::create_dir(&ledgers).unwrap();
+        sentinel(&db);
+
+        assert!(cmd_rebuild(&args(&db, &ledgers, "not-an-agent")).is_err());
+        assert_sentinel(&db);
+    }
+
+    #[test]
+    fn failed_replay_keeps_the_old_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        let ledgers = temp.path().join("ledger");
+        sentinel(&db);
+        let mut ledger = rosetta_capture::Ledger::open(&ledgers.join("claude-code")).unwrap();
+        ledger.append_meta(999, "[]").unwrap();
+        ledger.flush().unwrap();
+        drop(ledger);
+
+        let error = cmd_rebuild(&args(&db, &ledgers, "claude-code")).unwrap_err();
+        assert!(error.contains("unsupported ledger meta schema"));
+        assert_sentinel(&db);
+    }
+
+    #[test]
+    fn successful_replay_atomically_replaces_the_old_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        let ledgers = temp.path().join("ledger");
+        sentinel(&db);
+        let mut ledger = rosetta_capture::Ledger::open(&ledgers.join("claude-code")).unwrap();
+        ledger
+            .append_meta(rosetta_pipeline::LEDGER_META_SCHEMA_VERSION, "[]")
+            .unwrap();
+        ledger.flush().unwrap();
+        drop(ledger);
+
+        cmd_rebuild(&args(&db, &ledgers, "claude-code")).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM agent_runtime", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert!(connection.prepare("SELECT * FROM sentinel").is_err());
+        assert!(!sidecar(&db, "-wal").exists());
+    }
+
+    #[test]
+    fn projection_lock_excludes_a_second_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        let first = projection_lock(&db).unwrap();
+        assert!(projection_lock(&db).is_err());
+        drop(first);
+        assert!(projection_lock(&db).is_ok());
+    }
 }
