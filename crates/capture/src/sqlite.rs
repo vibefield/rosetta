@@ -1,13 +1,10 @@
 //! Stable snapshots of agent-owned SQLite databases — the source primitive
 //! behind `StreamDriver::SqliteSnapshot` (opencode, hermes).
 //!
-//! A live database cannot be tailed and must never be opened in place: even
-//! a read-only open takes locks in the agent's directory and needs the
-//! `-shm` file. Instead: stamp the file set, COPY `db` + `-wal` to a private
-//! temp dir, re-stamp, and only trust the copy when both stamps agree
-//! (spaghetti's stable-read discipline). The copy is ours, so opening it
-//! read-write and letting SQLite recover the WAL is safe and yields the
-//! writer's latest committed state.
+//! A live database cannot be tailed or copied as unrelated `db`/`-wal` files.
+//! SQLite's online backup API supplies the consistency boundary: it reads one
+//! committed source snapshot into a private database while the agent may keep
+//! writing. Agent crates never see the connection and the source is read-only.
 //!
 //! Queries are DECLARED by adapters and EXECUTED here: agent crates never
 //! see a database handle, and every result row is serialized to one dense
@@ -15,14 +12,18 @@
 //! the ledger and rebuild) consumes with no SQLite involvement at all.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use rusqlite::OpenFlags;
+use rusqlite::backup::{Backup, StepResult};
 use rusqlite::types::ValueRef;
 use serde_json::{Map, Value};
 
 use crate::{CaptureError, io_error};
 
-/// Cheap change signature for a database file set (db + -wal), from
-/// metadata only. Equal stamps mean "no need to copy anything".
+/// Diagnostic metadata for a database file set (db + -wal). It is retained in
+/// checkpoints for observability only; equality is never treated as content
+/// identity or as proof that a snapshot is stable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbStamp(String);
 
@@ -81,8 +82,8 @@ pub struct DbSnapshot {
     stamp: DbStamp,
 }
 
-/// The snapshot attempt's outcome. `Unstable` means the writer raced the
-/// copy — retry later, exactly like a torn tail read.
+/// The snapshot attempt's outcome. `Unstable` means SQLite could not obtain
+/// backup progress within a bounded number of lock retries.
 pub enum SnapshotOutcome {
     Missing,
     Unstable,
@@ -90,37 +91,56 @@ pub enum SnapshotOutcome {
 }
 
 pub fn snapshot(db_path: &Path) -> Result<SnapshotOutcome, CaptureError> {
-    let Some(before) = db_stamp(db_path)? else {
+    let Some(stamp) = db_stamp(db_path)? else {
         return Ok(SnapshotOutcome::Missing);
     };
     let dir = tempfile::TempDir::new()
         .map_err(|error| io_error("creating snapshot dir for", db_path, error))?;
     let copy = dir.path().join("snapshot.db");
-    if let Err(error) = std::fs::copy(db_path, &copy) {
-        return if error.kind() == std::io::ErrorKind::NotFound {
-            Ok(SnapshotOutcome::Missing)
-        } else {
-            Err(io_error("copying", db_path, error))
-        };
-    }
-    match std::fs::copy(wal_path(db_path), wal_path(&copy)) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error("copying wal for", db_path, error)),
-    }
-    // The writer may have raced the two copies; equal stamps prove it didn't.
-    if db_stamp(db_path)? != Some(before.clone()) {
-        return Ok(SnapshotOutcome::Unstable);
-    }
-
-    // Our private copy: read-write open lets SQLite recover the WAL into
-    // the main file, which is exactly the committed state we want.
-    let conn = rusqlite::Connection::open(&copy)
+    let source = match rusqlite::Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(connection) => connection,
+        Err(_) if !db_path.exists() => return Ok(SnapshotOutcome::Missing),
+        Err(error) => {
+            return Err(CaptureError::InvalidConfig(format!(
+                "opening source snapshot {}: {error}",
+                db_path.display()
+            )));
+        }
+    };
+    source
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(|error| CaptureError::InvalidConfig(format!("configuring snapshot: {error}")))?;
+    let mut conn = rusqlite::Connection::open(&copy)
         .map_err(|error| CaptureError::InvalidConfig(format!("opening snapshot: {error}")))?;
+    {
+        let backup = Backup::new(&source, &mut conn)
+            .map_err(|error| CaptureError::InvalidConfig(format!("starting backup: {error}")))?;
+        let mut stalled = 0_u32;
+        loop {
+            match backup
+                .step(256)
+                .map_err(|error| CaptureError::InvalidConfig(format!("backing up: {error}")))?
+            {
+                StepResult::Done => break,
+                StepResult::More => stalled = 0,
+                StepResult::Busy | StepResult::Locked => {
+                    stalled += 1;
+                    if stalled > 400 {
+                        return Ok(SnapshotOutcome::Unstable);
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                _ => return Ok(SnapshotOutcome::Unstable),
+            }
+        }
+    }
     Ok(SnapshotOutcome::Ready(Box::new(DbSnapshot {
         _dir: dir,
         conn,
-        stamp: before,
+        stamp,
     })))
 }
 

@@ -67,7 +67,7 @@ pub(crate) fn stream_snapshot_sources(
         };
 
         let db_path = root.join(db_relative);
-        let Some(stamp) = rosetta_capture::db_stamp(&db_path)? else {
+        let Some(_) = rosetta_capture::db_stamp(&db_path)? else {
             report.files_missing += group.len() as u64 as usize;
             for file in &group {
                 mark(file, false, file_health, session_health);
@@ -75,40 +75,12 @@ pub(crate) fn stream_snapshot_sources(
             continue;
         };
 
-        // Load (or create) every cursor first: the cheap skip needs them, and
-        // a fresh db's sessions all need rows anyway.
+        // Load (or create) every virtual source cursor. Metadata never decides
+        // content identity: every pass takes one SQLite-consistent backup and
+        // hashes the adapter's declared rows.
         let mut cursors = Vec::with_capacity(group.len());
         for file in &group {
             cursors.push(cursor_row(adapter, store, runtime, file, instrument)?);
-        }
-        let decoded: Vec<Option<PipeCheckpoint>> = group
-            .iter()
-            .zip(&cursors)
-            .map(|(file, cursor)| {
-                PipeCheckpoint::decode(&cursor.checkpoint).filter(|checkpoint| {
-                    checkpoint.session_id == file.session_id
-                        && checkpoint.stream_id == file.stream_id
-                        && checkpoint.normalizer_version == adapter.normalizer_version()
-                })
-            })
-            .collect();
-
-        // Equal stamps everywhere: the writer hasn't touched the file set
-        // since the last pass — not even a copy is needed.
-        let unchanged = decoded.iter().zip(&cursors).all(|(checkpoint, cursor)| {
-            checkpoint.as_ref().is_some_and(|checkpoint| {
-                checkpoint.snapshot_stamp.as_deref() == Some(stamp.as_str())
-                    && cursor.active_generation == checkpoint.source_generation
-            })
-        });
-        if unchanged {
-            for (file, checkpoint) in group.iter().zip(&decoded) {
-                let clean = checkpoint
-                    .as_ref()
-                    .is_some_and(|checkpoint| checkpoint.generation_clean);
-                mark(file, clean, file_health, session_health);
-            }
-            continue;
         }
 
         let Some(plan) = adapter.snapshot_plan(&group[0].stream_id) else {
@@ -140,6 +112,7 @@ pub(crate) fn stream_snapshot_sources(
             }
             continue;
         };
+        let stamp = snapshot.stamp().clone();
 
         for (file, cursor) in group.iter().zip(cursors) {
             let mut records = Vec::new();
@@ -168,8 +141,7 @@ pub(crate) fn stream_snapshot_sources(
                 && previous.snapshot_revision.as_deref() == Some(revision.as_str())
                 && cursor.active_generation == previous.source_generation
             {
-                // Same content, newer stamp: refresh so the next pass can
-                // skip without copying.
+                // Same declared content: only refresh the diagnostic stamp.
                 if previous.snapshot_stamp.as_deref() != Some(stamp.as_str()) {
                     let mut next = previous.clone();
                     next.snapshot_stamp = Some(stamp.as_str().to_string());

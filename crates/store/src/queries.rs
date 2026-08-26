@@ -259,6 +259,32 @@ pub fn cursor_state(
     .transpose()
 }
 
+/// Existing virtual sources beneath one physical database path. Snapshot
+/// admission uses these to retain tombstones long enough for an empty
+/// generation to sweep sessions that disappeared from the authoritative DB.
+pub fn cursor_sources_with_prefix(
+    conn: &Connection,
+    runtime_id: &str,
+    path_prefix: &str,
+) -> Result<Vec<(String, String, String)>, StoreError> {
+    let escaped = path_prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("{escaped}%");
+    let mut statement = conn.prepare_cached(
+        "SELECT path, stream, session_id
+         FROM ingest_cursor
+         WHERE runtime_id = ?1 AND path LIKE ?2 ESCAPE '\\'
+         ORDER BY path",
+    )?;
+    let rows = statement.query_map(params![runtime_id, pattern], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
 pub fn audit_path(conn: &Connection, runtime_id: &str) -> Result<Option<String>, StoreError> {
     Ok(conn
         .prepare_cached("SELECT last_path FROM source_audit WHERE runtime_id = ?1")?

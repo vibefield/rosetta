@@ -7,17 +7,18 @@
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use rosetta_adapter_support::{
     AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, LineStatus, NormalizeCtx, SkimResult,
     SnapshotPlan, SnapshotQuery, StreamDriver,
 };
-use rosetta_capture::Ledger;
+use rosetta_capture::{Ledger, ScriptedEvents, db_stamp};
 use rosetta_core::rows::{MessageKind, MessageRow, RuntimeRow};
 use rosetta_core::{IngestOp, ids};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, discover, expand_data_root, meta_ingest_into, rebuild_runtime,
-    stream_backfill_into,
+    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, expand_data_root,
+    meta_ingest_into, rebuild_runtime, stream_backfill_into,
 };
 use rosetta_store::{Store, queries};
 use tempfile::TempDir;
@@ -87,6 +88,14 @@ impl AgentAdapter for FakeDbAgent {
         }
         let row = &value["row"];
         let id = row["id"].as_i64().unwrap_or_default();
+        if row["role"].as_str() == Some("broken") {
+            return LineOutcome {
+                ops: vec![],
+                status: LineStatus::HardError {
+                    code: "broken_fixture_row".to_string(),
+                },
+            };
+        }
         let kind = match row["role"].as_str() {
             Some("user") => MessageKind::User,
             _ => MessageKind::Agent,
@@ -207,7 +216,8 @@ fn database_sessions_flow_end_to_end() {
         2
     );
 
-    // Untouched database: the stamp check skips without even copying.
+    // Untouched declared content: a consistent backup is still audited, but
+    // the revision check writes nothing.
     let quiet = stream_backfill_into(
         adapter,
         &h.runtime,
@@ -221,6 +231,43 @@ fn database_sessions_flow_end_to_end() {
     .unwrap();
     assert_eq!(quiet.batches, 0, "equal stamps must write nothing");
     assert_eq!(quiet.records, 0);
+
+    // Same-size rewrite with the original mtime: metadata is deliberately
+    // identical, yet the full declared-content audit must detect it.
+    let metadata = std::fs::metadata(&h.db).unwrap();
+    let modified = metadata.modified().unwrap();
+    let before_stamp = db_stamp(&h.db).unwrap().unwrap();
+    let conn = rusqlite::Connection::open(&h.db).unwrap();
+    conn.execute(
+        "UPDATE messages SET body = ?1 WHERE id = 2",
+        ["changed same payload"],
+    )
+    .unwrap();
+    drop(conn);
+    assert_eq!(std::fs::metadata(&h.db).unwrap().len(), metadata.len());
+    std::fs::File::options()
+        .write(true)
+        .open(&h.db)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(db_stamp(&h.db).unwrap().unwrap(), before_stamp);
+    let audited = stream_backfill_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert_eq!(audited.generations_restarted, 1);
+    assert_eq!(
+        queries::search(h.store.conn(), "payload", 5).unwrap().len(),
+        1
+    );
 
     // Session A changes (an edit and an append); B's content is unchanged.
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -277,12 +324,28 @@ fn database_sessions_flow_end_to_end() {
     )
     .unwrap();
     drop(conn);
+    let (meta, current_files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert_eq!(meta.sessions, 1);
+    assert_eq!(
+        current_files.len(),
+        2,
+        "the removed session remains a tombstone"
+    );
     let swept = stream_backfill_into(
         adapter,
         &h.runtime,
         &h.root,
         &mut h.store,
-        &files,
+        &current_files,
         &h.opts,
         &h.instrument,
         None,
@@ -299,6 +362,144 @@ fn database_sessions_flow_end_to_end() {
         .query_row("SELECT COUNT(*) FROM source_op", [], |row| row.get(0))
         .unwrap();
     assert_eq!(journal, 0, "snapshot swaps leave the journal empty too");
+}
+
+#[test]
+fn live_database_hint_reenumerates_virtual_session_membership() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    stream_backfill_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+
+    let mut events = ScriptedEvents::default();
+    events.push_changed("agent.db");
+    let mut runner = LiveRunner::start(
+        adapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::new(events),
+        &mut h.store,
+        h.opts.clone(),
+        LiveOptions {
+            tick: Duration::ZERO,
+            poll_interval: Duration::from_secs(3600),
+            max_coalesced: 8,
+        },
+        &h.instrument,
+    )
+    .unwrap();
+
+    let connection = rusqlite::Connection::open(&h.db).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO sessions VALUES ('sess-c', 'Gamma work', '/w/gamma', 9000);
+             INSERT INTO messages VALUES (9, 'sess-c', 'user', 'newly admitted tezcatlipoca');",
+        )
+        .unwrap();
+    drop(connection);
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+
+    assert_eq!(runner.report().admissions, 1);
+    assert_eq!(
+        queries::search(h.store.conn(), "tezcatlipoca", 5)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn repeated_hard_snapshot_generations_are_abandoned_without_staging_growth() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    stream_backfill_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    let connection = rusqlite::Connection::open(&h.db).unwrap();
+    connection
+        .execute("UPDATE messages SET role = 'broken' WHERE id = 2", [])
+        .unwrap();
+    drop(connection);
+
+    let path = files
+        .iter()
+        .find(|file| file.native_session_id == "sess-a")
+        .unwrap()
+        .relative_path
+        .clone();
+    let before = queries::cursor_state(h.store.conn(), &h.runtime.id, &path)
+        .unwrap()
+        .unwrap();
+    for expected_highest in [before.highest_generation + 1, before.highest_generation + 2] {
+        let report = stream_backfill_into(
+            adapter,
+            &h.runtime,
+            &h.root,
+            &mut h.store,
+            &files,
+            &h.opts,
+            &h.instrument,
+            None,
+        )
+        .unwrap();
+        assert_eq!(report.hard_errors, 1);
+        assert_eq!(
+            h.store
+                .conn()
+                .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        let cursor = queries::cursor_state(h.store.conn(), &h.runtime.id, &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.active_generation, before.active_generation);
+        assert_eq!(cursor.highest_generation, expected_highest);
+        assert_eq!(
+            queries::search(h.store.conn(), "first reply", 5)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }
 
 #[test]

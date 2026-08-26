@@ -31,5 +31,5 @@ serde_json = "1"
 walkdir = "2"
 blake3 = "1"
 notify = "8"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["backup", "bundled"] }
 tempfile = "3"

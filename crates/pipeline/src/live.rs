@@ -163,18 +163,21 @@ impl<'a> LiveRunner<'a> {
             self.report.events += 1;
             match event {
                 SourceEvent::Changed(path) => {
+                    let database = self.snapshot_database_hint(&path);
+                    let hinted = database.as_deref().unwrap_or(&path);
                     let children: Vec<String> = self
                         .files
                         .iter()
                         .filter(|file| {
-                            file.relative_path == path
+                            file.relative_path == hinted
                                 || crate::snapshot::virtual_db_path(&file.relative_path)
-                                    == Some(path.as_str())
+                                    == Some(hinted)
                         })
                         .map(|file| file.relative_path.clone())
                         .collect();
                     if !children.is_empty() {
                         changed.extend(children);
+                        needs_admission |= database.is_some();
                     } else if self.claimed(&path) {
                         needs_admission = true;
                     } else {
@@ -269,6 +272,23 @@ impl<'a> LiveRunner<'a> {
             .is_some_and(|stream| self.adapter.stream_driver(&stream.id).is_some())
     }
 
+    /// Normalize a main-db or SQLite sidecar hint to the physical database
+    /// path whose virtual membership and declared content must be reconciled.
+    fn snapshot_database_hint(&self, relative_path: &str) -> Option<String> {
+        let base = ["-wal", "-shm", "-journal"]
+            .iter()
+            .find_map(|suffix| relative_path.strip_suffix(suffix))
+            .unwrap_or(relative_path);
+        let stream = self
+            .adapter
+            .layout()
+            .matching_stream(relative_path)
+            .or_else(|| self.adapter.layout().matching_stream(base))?;
+        (self.adapter.stream_driver(&stream.id)
+            == Some(rosetta_adapter_support::StreamDriver::SqliteSnapshot))
+        .then(|| base.to_string())
+    }
+
     /// Stat scan: the fallback signal, and it must be self-healing — it
     /// compares each file against its CURSOR's observed length, not against
     /// whatever this process last saw. Any growth the watcher missed (before
@@ -317,17 +337,19 @@ impl<'a> LiveRunner<'a> {
                     // A database file never appears in `files` itself — its
                     // sessions do, as virtual sources. Nominate them and let
                     // the snapshot pass's stamp check decide cheaply.
+                    let database = self.snapshot_database_hint(&walked.relative_path);
+                    let hinted = database.as_deref().unwrap_or(walked.relative_path.as_str());
                     let children: Vec<String> = self
                         .files
                         .iter()
                         .filter(|file| {
-                            crate::snapshot::virtual_db_path(&file.relative_path)
-                                == Some(walked.relative_path.as_str())
+                            crate::snapshot::virtual_db_path(&file.relative_path) == Some(hinted)
                         })
                         .map(|file| file.relative_path.clone())
                         .collect();
                     if !children.is_empty() {
                         changed.extend(children);
+                        *needs_admission |= database.is_some();
                     } else if self.claimed(&walked.relative_path) {
                         *needs_admission = true;
                     }

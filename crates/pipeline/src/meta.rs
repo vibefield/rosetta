@@ -115,6 +115,7 @@ pub fn meta_ingest_into(
                     adapter,
                     runtime,
                     root,
+                    store,
                     stream,
                     driver,
                     &file.relative_path,
@@ -379,6 +380,7 @@ fn admit_database(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     root: &Path,
+    store: &Store,
     stream: &rosetta_adapter_support::StreamSpec,
     driver: StreamDriver,
     db_relative: &str,
@@ -458,6 +460,33 @@ fn admit_database(
             skim,
             native,
         );
+    }
+
+    // The database is an authoritative snapshot. Cursors for members no
+    // longer returned by sessions_sql remain as virtual tombstones for this
+    // pass; their empty record query activates a sweep of old contribution.
+    let prefix = format!("{db_relative}#");
+    for (relative_path, cursor_stream, session_id) in
+        rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, &prefix)?
+    {
+        if files.iter().any(|file| file.relative_path == relative_path) {
+            continue;
+        }
+        let Some(native_session_id) = relative_path.strip_prefix(&prefix).map(str::to_owned) else {
+            continue;
+        };
+        files.push(SessionFile {
+            relative_path,
+            stream_id: cursor_stream,
+            file_format: stream.file_format,
+            discipline: stream.discipline,
+            driver,
+            session_id,
+            native_session_id,
+            size,
+            modified_ms,
+            agent_version: None,
+        });
     }
     Ok(())
 }
