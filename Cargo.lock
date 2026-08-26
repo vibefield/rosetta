@@ -809,6 +809,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rosetta-search-bench"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "rosetta-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "rosetta-server"
 version = "0.1.0"
 dependencies = [
