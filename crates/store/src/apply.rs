@@ -574,12 +574,16 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError
     )?;
     tx.prepare_cached(
         "INSERT INTO renumber_message (message_id, ordinal)
-         SELECT m.id,
-                ROW_NUMBER() OVER (
-                  ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
-                ) - 1
-         FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
-         WHERE m.session_id = ?1",
+         SELECT message_id, ranked_ordinal
+         FROM (
+           SELECT m.id AS message_id, m.ordinal AS current_ordinal,
+                  ROW_NUMBER() OVER (
+                    ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
+                  ) - 1 AS ranked_ordinal
+           FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
+           WHERE m.session_id = ?1
+         )
+         WHERE current_ordinal != ranked_ordinal",
     )?
     .execute(params![session_id])?;
     tx.prepare_cached(
