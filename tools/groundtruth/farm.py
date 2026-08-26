@@ -37,6 +37,7 @@ from .render import render_agent
 
 RUN_TIMEOUT_SECONDS = 240
 GENERATOR = "tools.groundtruth farm 1"
+ISOLATED_RUNNER_ENV = "ROSETTA_FARM_ISOLATED"
 
 SCENARIOS: dict[str, tuple[dict[str, Any], ...]] = {
     "claude-code": (
@@ -239,6 +240,38 @@ def _selected_version(
     if not isinstance(version, str) or not version:
         raise GroundTruthError(f"no --version and no release.{key} in watch.toml")
     return version
+
+
+def _running_in_container() -> bool:
+    """Return whether the farm is running inside a common Linux container runtime."""
+
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
+def _require_isolated_runner(*, allow_host_execution: bool) -> None:
+    """Refuse to install and execute downloaded agents on an ordinary host.
+
+    ``ROSETTA_FARM_ISOLATED=1`` is an administrator/user attestation for isolated
+    runners whose container/VM runtime does not expose one of the conventional
+    marker files. ``--allow-host-execution`` is deliberately a separate, noisy
+    escape hatch for controlled research machines.
+    """
+
+    if _running_in_container() or os.environ.get(ISOLATED_RUNNER_ENV) == "1":
+        return
+    if allow_host_execution:
+        print(
+            "WARNING: executing freshly downloaded agent code on the host because "
+            "--allow-host-execution was supplied",
+            file=os.sys.stderr,
+        )
+        return
+    raise GroundTruthError(
+        "fixture generation installs and executes downloaded agent code; run the "
+        "farm in a container/VM (prefer a runner image pinned by sha256 digest), "
+        f"set {ISOLATED_RUNNER_ENV}=1 for an independently isolated runner, or pass "
+        "--allow-host-execution only on a disposable research machine"
+    )
 
 
 @contextmanager
@@ -1897,6 +1930,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--schemas-only", action="store_true")
     parser.add_argument("--scenario", help="regenerate only one named scenario")
+    parser.add_argument(
+        "--allow-host-execution",
+        action="store_true",
+        help="dangerous: install and execute downloaded agent code outside an isolated runner",
+    )
     args = parser.parse_args(argv)
     try:
         if args.schemas_only and args.scenario:
@@ -1907,6 +1945,8 @@ def main(argv: list[str] | None = None) -> int:
         requested = _selected_version(
             watch, args.version, schemas_only=args.schemas_only
         )
+        if not args.schemas_only:
+            _require_isolated_runner(allow_host_execution=args.allow_host_execution)
         version = (
             requested
             if args.schemas_only

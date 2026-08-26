@@ -40,6 +40,14 @@ authoritative channel at a pinned version into an empty `$HOME`); a macOS lane f
 agents whose paths/behavior differ. The empty-home property is the point: the harvested
 data dir contains *only* what the scenario produced.
 
+This is enforced, not merely recommended: fixture generation refuses to run on an
+ordinary host. The container/VM runner image must be controlled by the project and
+referenced by immutable SHA-256 digest in automation; conventional container markers
+are detected automatically, and non-container isolation is explicitly attested with
+`ROSETTA_FARM_ISOLATED=1`. `--allow-host-execution` exists only for disposable research
+machines and emits a warning. An empty `$HOME` and per-agent data-root overrides isolate
+the captured output, but are not a sandbox for freshly downloaded code.
+
 **Mock model server.** One small standard-library Python server
 (`tools/groundtruth/mock_model.py`) returning scripted responses per scenario
 (including canned tool-call requests, streaming deltas, usage

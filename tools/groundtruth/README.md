@@ -30,9 +30,18 @@ python3 -m tools.groundtruth census grok \
   --label observed-YYYY-MM-DD
 ```
 
-`farm` performs networked package installation unless `--schemas-only` is
-used. Every successful schema rebuild writes both `groundtruth.json` and its
-sibling `groundtruth.html`.
+`farm` performs networked package installation and executes the installed agent unless
+`--schemas-only` is used. Fixture generation therefore fails closed on an ordinary
+host. Run it inside a container/VM, preferably from an organization-controlled runner
+image referenced by immutable `@sha256:` digest. Containers with `/.dockerenv` or
+`/run/.containerenv` are detected automatically; other isolated runners must set
+`ROSETTA_FARM_ISOLATED=1`. `--allow-host-execution` is a loud escape hatch intended
+only for disposable research machines. Relocating an agent's `$HOME` protects fixture
+purity but is not a security boundary.
+
+Every successful schema rebuild writes both `groundtruth.json` and its sibling
+`groundtruth.html`. Schema-only rebuilds neither install nor execute an agent and do
+not require runner isolation.
 
 Organic censuses retain real protocol enum values and built-in tool names, but
 remove literal IDs, paths, filenames, prompts, titles, arbitrary map keys, and
