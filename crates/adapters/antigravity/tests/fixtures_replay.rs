@@ -32,6 +32,16 @@ fn transcript_files() -> Vec<PathBuf> {
         .collect()
 }
 
+fn primary_transcript_files() -> Vec<PathBuf> {
+    transcript_files()
+        .into_iter()
+        .filter(|path| {
+            path.to_string_lossy()
+                .ends_with("/.system_generated/logs/transcript.jsonl")
+        })
+        .collect()
+}
+
 #[test]
 fn corpus_exists() {
     assert!(
@@ -107,6 +117,47 @@ fn transcripts_round_trip_losslessly() {
                     no + 1
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn overlapping_transcript_representations_are_exact_copies() {
+    // This is the committed ownership evidence. There is one chunk generation
+    // (`00000000`) in each family and it reproduces the monolithic primary byte
+    // for byte; transcript_full does too. The corpus therefore establishes
+    // duplication, but no later rotation boundary or truncation behavior.
+    for primary in primary_transcript_files() {
+        let logs = primary.parent().expect("logs directory");
+        let paths = [
+            logs.join("transcript_full.jsonl"),
+            logs.join("chunks/transcript/00000000.jsonl"),
+            logs.join("chunks/transcript_full/00000000.jsonl"),
+        ];
+        let expected = std::fs::read(&primary).unwrap();
+        for copy in paths {
+            assert_eq!(
+                std::fs::read(&copy).unwrap(),
+                expected,
+                "{} differs from primary {}",
+                copy.display(),
+                primary.display()
+            );
+        }
+
+        for family in ["transcript", "transcript_full"] {
+            let directory = logs.join("chunks").join(family);
+            let mut names: Vec<_> = std::fs::read_dir(&directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            assert_eq!(
+                names,
+                [std::ffi::OsString::from("00000000.jsonl")],
+                "committed evidence unexpectedly gained a rotation in {}",
+                directory.display()
+            );
         }
     }
 }
