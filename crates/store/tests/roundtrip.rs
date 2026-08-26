@@ -6,7 +6,7 @@ use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole,
     SessionRow, StreamState, TokenSnapshot, ToolCall,
 };
-use rosetta_store::{Batch, CheckpointUpdate, Store, StoreError, queries};
+use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
 
 fn runtime() -> RuntimeRow {
     RuntimeRow {
@@ -495,7 +495,7 @@ fn schema_mismatch_fails_closed_without_dropping_existing_data() {
         Store::open(db.path()),
         Err(StoreError::SchemaVersionMismatch {
             found: 1,
-            expected: 2
+            expected: rosetta_store::schema::SCHEMA_VERSION,
         })
     ));
     let conn = rusqlite::Connection::open(db.path()).unwrap();
@@ -503,4 +503,239 @@ fn schema_mismatch_fails_closed_without_dropping_existing_data() {
         .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
         .unwrap();
     assert_eq!(value, "keep-me");
+}
+
+/// The staged-only invariant, pinned: the journal holds ONLY not-yet-active
+/// staged generations (empty in steady state), appends never journal, and a
+/// swap sweeps EVERY artifact kind an old generation projected — rows, FTS,
+/// small tables, bucket residue. A new table added without provenance fails
+/// here instead of silently corrupting swaps.
+#[test]
+fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
+    use rosetta_core::rows::{
+        EditKind, FileEditRow, PlanRow, TaskRow, TaskStatus, WorkspaceObsRow,
+    };
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: "rt1".into(),
+                stream: "transcript".into(),
+                path: "p/x.jsonl".into(),
+                session_id: "s1".into(),
+                expected: None,
+                next: "blob-v0".into(),
+                updated_at: Some(1),
+            }],
+            source: None,
+        })
+        .unwrap();
+    let cursor = queries::cursor_state(store.conn(), "rt1", "p/x.jsonl")
+        .unwrap()
+        .unwrap();
+
+    let journal_rows = |store: &Store| -> i64 {
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row.get(0))
+            .unwrap()
+    };
+    let count = |store: &Store, sql: &str| -> i64 {
+        store.conn().query_row(sql, [], |row| row.get(0)).unwrap()
+    };
+
+    // Generation 1: one of every artifact kind.
+    let mut m1 = message("g1-user", 0, MessageKind::User);
+    m1.content = Some("generation-one alpha".into());
+    m1.usage = Some(TokenSnapshot {
+        input: Some(10),
+        output: Some(5),
+        ..Default::default()
+    });
+    m1.src_cursor = Some(cursor.id);
+    m1.src_offset = Some(0);
+    let mut m2 = message("g1-tool", 1, MessageKind::ToolUse);
+    m2.tool = Some(ToolCall {
+        tool_id: Some("toolu_g1".into()),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "true"}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    m2.src_cursor = Some(cursor.id);
+    m2.src_offset = Some(100);
+    let gen1: Vec<IngestOp> = vec![
+        IngestOp::Message(Box::new(m1)),
+        IngestOp::Message(Box::new(m2)),
+        IngestOp::ToolResult {
+            session_id: "s1".into(),
+            tool_id: "toolu_g1".into(),
+            result: Some("gen-one result".into()),
+            payload: None,
+            is_error: Some(false),
+            at: Some(3_700_000),
+        },
+        IngestOp::WorkspaceObs(WorkspaceObsRow {
+            session_id: "s1".into(),
+            at: 3_600_000,
+            cwd: "/w/rosetta".into(),
+            git_branch: Some("main".into()),
+            git_repo: None,
+        }),
+        IngestOp::FileEdit(FileEditRow {
+            session_id: "s1".into(),
+            message_timeline_id: Some("g1-tool".into()),
+            path: "/w/rosetta/a.rs".into(),
+            kind: EditKind::Edit,
+            snapshot_ref: None,
+            lines_added: Some(3),
+            lines_removed: Some(1),
+            at: Some(3_600_000),
+        }),
+        IngestOp::Plan(PlanRow {
+            session_id: "s1".into(),
+            revision: 1,
+            content: "gen-one plan".into(),
+            updated_at: 3_600_000,
+        }),
+        IngestOp::Task(TaskRow {
+            id: "t-g1".into(),
+            session_id: "s1".into(),
+            status: TaskStatus::Completed,
+            content: "gen-one task".into(),
+            created_at: Some(3_600_000),
+            updated_at: Some(3_600_500),
+        }),
+    ];
+    let staged = gen1.len() as u64;
+    store
+        .apply(&Batch {
+            ops: gen1,
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    // Staged: journaled, projected NOTHING.
+    assert_eq!(journal_rows(&store), staged as i64);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 0);
+
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: staged,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    assert_eq!(journal_rows(&store), 0, "activation must prune the journal");
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM file_edit"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 1);
+    assert_eq!(queries::search(store.conn(), "alpha", 5).unwrap().len(), 1);
+
+    // Generation 2 rewrite: a single, different message. Everything from
+    // generation 1 must vanish — rows, FTS, small tables, bucket residue.
+    let mut m3 = message("g2-user", 0, MessageKind::User);
+    m3.content = Some("generation-two omega".into());
+    m3.usage = Some(TokenSnapshot {
+        input: Some(7),
+        ..Default::default()
+    });
+    m3.src_cursor = Some(cursor.id);
+    m3.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(m3))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    // Mid-stage: old generation still fully visible.
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
+    assert_eq!(journal_rows(&store), 1);
+
+    store
+        .apply(&Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    assert_eq!(journal_rows(&store), 0);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM file_edit"), 0);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 0);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 0);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 0);
+    assert_eq!(queries::search(store.conn(), "alpha", 5).unwrap().len(), 0);
+    assert_eq!(queries::search(store.conn(), "omega", 5).unwrap().len(), 1);
+    let (buckets, tokens): (i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(in_tokens,0) + COALESCE(out_tokens,0)), 0)
+             FROM usage_bucket WHERE session_id = 's1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((buckets, tokens), (1, 7), "no bucket residue from gen one");
+    let (rows, min_ord, max_ord): (i64, i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*), MIN(ordinal), MAX(ordinal) FROM message WHERE session_id = 's1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((min_ord, max_ord), (0, rows - 1), "ordinals stay dense");
+
+    // The hot path: appends project without journaling.
+    let mut m4 = message("g2-append", 9, MessageKind::User);
+    m4.content = Some("appended".into());
+    m4.src_cursor = Some(cursor.id);
+    m4.src_offset = Some(500);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(m4))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 1,
+                mode: SourceMode::Append,
+            }),
+        })
+        .unwrap();
+    assert_eq!(journal_rows(&store), 0, "appends never journal");
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
 }

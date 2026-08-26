@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -60,8 +60,10 @@ CREATE TABLE IF NOT EXISTS workspace_obs (
   at         INTEGER NOT NULL,
   cwd        TEXT NOT NULL,
   git_branch TEXT,
-  git_repo   TEXT
+  git_repo   TEXT,
+  src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
+CREATE INDEX IF NOT EXISTS workspace_obs_src ON workspace_obs(src_cursor);
 CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at);
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_obs_identity ON workspace_obs(
   session_id, at, cwd, COALESCE(git_branch,''), COALESCE(git_repo,'')
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS plan (
   revision   INTEGER NOT NULL,
   content    TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (session_id, revision)
 ) WITHOUT ROWID;
 
@@ -81,7 +84,8 @@ CREATE TABLE IF NOT EXISTS task (
   status     TEXT NOT NULL,
   content    TEXT NOT NULL,
   created_at INTEGER,
-  updated_at INTEGER
+  updated_at INTEGER,
+  src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 
@@ -98,9 +102,11 @@ CREATE TABLE IF NOT EXISTS ingest_cursor (
   UNIQUE (runtime_id, path)
 );
 
--- Normalized source-op replay journal. Rewritten files stage a new generation
--- here; activation and projection replacement happen in one transaction. This
--- is not the planned append-only raw ledger.
+-- STAGING BUFFER, not a representation (rule 4): holds only not-yet-active
+-- staged generations of rewritten files and is pruned at activation. The raw
+-- ledger (rosetta-capture) is the durable replay truth; a source's old
+-- contribution is swept by the src_cursor provenance columns instead of a
+-- permanent op journal. Empty in steady state.
 CREATE TABLE IF NOT EXISTS source_op (
   cursor_id   INTEGER NOT NULL REFERENCES ingest_cursor(id),
   generation INTEGER NOT NULL,
@@ -158,8 +164,10 @@ CREATE TABLE IF NOT EXISTS file_edit (
   snapshot_ref TEXT,
   lines_added  INTEGER,
   lines_removed INTEGER,
-  at           INTEGER
+  at           INTEGER,
+  src_cursor   INTEGER REFERENCES ingest_cursor(id)
 );
+CREATE INDEX IF NOT EXISTS file_edit_src ON file_edit(src_cursor);
 CREATE INDEX IF NOT EXISTS file_edit_session ON file_edit(session_id, at);
 CREATE INDEX IF NOT EXISTS file_edit_path    ON file_edit(path);
 CREATE UNIQUE INDEX IF NOT EXISTS file_edit_identity ON file_edit(
@@ -172,6 +180,7 @@ CREATE TABLE IF NOT EXISTS git_commit (
   session_id TEXT NOT NULL REFERENCES session(id),
   branch     TEXT,
   at         INTEGER,
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (commit_id, session_id)
 ) WITHOUT ROWID;
 

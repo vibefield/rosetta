@@ -688,6 +688,21 @@ trait <b>AgentAdapter</b>: Send + Sync {
     ledger bytes.
   </div>
 
+  <div class="callout">
+    <b>Decided — the projection carries no second journal.</b> Rule 4 names TWO representations: the
+    raw ledger (durable truth) and the projection (canonical, disposable). Everything else inside the
+    database is projection-internal machinery — derived, same-transaction, prunable — like the FTS
+    index. <code>source_op</code> is exactly that: a staging buffer holding only not-yet-active
+    generations of rewritten files, pruned at activation, empty in steady state. Appends never
+    journal. A swap removes the old generation's contribution via <code>src_cursor</code> provenance
+    columns (messages and the small tables all carry one), renumbers the session's presentation
+    ordinals deterministically (source path · byte offset · insertion order), and recomputes the
+    session's usage buckets from the surviving rows — aggregates can never keep residue a swap should
+    have removed. Drift is additive-only: what was observed stays observed. Cross-file merges into a
+    rewritten file's rows are re-derived by a one-shot forced replay of the session's sibling files
+    (the heal pass), not by replaying a stored op journal.
+  </div>
+
   <footer class="note">
     Companion to <a href="canonical-model.html">canonical-model.html</a> (what gets stored) and
     ARCHITECTURE.md §4–§7 (the layer contracts). Crate names match the workspace as of 2026-08-26:

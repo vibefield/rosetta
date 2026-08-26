@@ -42,6 +42,9 @@ pub struct StreamReport {
     pub retries_exhausted: u64,
     pub files_incomplete: u64,
     pub sessions_indexed: u64,
+    /// Same-session sibling files force-replayed after another file's
+    /// generation restart, so cross-file merges land in the rebuilt rows.
+    pub siblings_healed: u64,
     pub stats: ApplyStats,
 }
 
@@ -85,6 +88,8 @@ pub fn stream_backfill_into(
     }
 
     let mut report = StreamReport::default();
+    let mut restarted_sessions: BTreeSet<String> = BTreeSet::new();
+    let mut restarted_files: BTreeSet<String> = BTreeSet::new();
     let mut session_health: BTreeMap<String, bool> = files
         .iter()
         .map(|file| (file.session_id.clone(), true))
@@ -98,6 +103,7 @@ pub fn stream_backfill_into(
             continue;
         };
         report.files += 1;
+        let restarts_before = report.generations_restarted;
         let complete = ingest_file(
             adapter,
             runtime,
@@ -109,6 +115,44 @@ pub fn stream_backfill_into(
             instrument,
             &mut report,
             audit_set.contains(file.relative_path.as_str()),
+            ledger.as_deref_mut(),
+        )?;
+        if report.generations_restarted > restarts_before {
+            restarted_sessions.insert(file.session_id.clone());
+            restarted_files.insert(file.relative_path.clone());
+        }
+        file_health.insert(file.relative_path.clone(), complete);
+        session_health
+            .entry(file.session_id.clone())
+            .and_modify(|healthy| *healthy &= complete);
+        if !complete {
+            report.files_incomplete += 1;
+        }
+    }
+
+    // A generation restart swept and rebuilt that file's rows — but merge ops
+    // a SIBLING file had contributed into them (grok events into chat rows)
+    // died with the old rows. One forced replay of the affected sessions'
+    // other files re-derives those merges; deterministic ids make it cheap
+    // noise for everything already present.
+    for file in files {
+        if !restarted_sessions.contains(&file.session_id)
+            || restarted_files.contains(&file.relative_path)
+        {
+            continue;
+        }
+        report.siblings_healed += 1;
+        let complete = ingest_file(
+            adapter,
+            runtime,
+            root,
+            store,
+            file,
+            &tailer,
+            opts,
+            instrument,
+            &mut report,
+            true, // forced replay
             ledger.as_deref_mut(),
         )?;
         file_health.insert(file.relative_path.clone(), complete);
