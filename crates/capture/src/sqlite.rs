@@ -11,6 +11,7 @@
 //! JSON object — a record the ordinary `ingest_line` path (and therefore
 //! the ledger and rebuild) consumes with no SQLite involvement at all.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -20,6 +21,44 @@ use rusqlite::types::ValueRef;
 use serde_json::{Map, Value};
 
 use crate::{CaptureError, io_error};
+
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+/// Classification of a walked path before it is admitted as a snapshot
+/// source. Database layout globs commonly include sidecars (for example
+/// `state.db*`), so matching the glob alone is not proof that a path is a
+/// SQLite database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqliteFileStatus {
+    Missing,
+    Database,
+    NotDatabase,
+}
+
+/// Read the fixed SQLite header without opening the file as a database.
+///
+/// Opening an empty lock file through SQLite succeeds by creating an empty
+/// database when write access is available, and can therefore turn a layout
+/// false-positive into a misleading "no such table" error. Header admission
+/// is read-only, bounded, and applies equally to every database adapter.
+pub fn sqlite_file_status(path: &Path) -> Result<SqliteFileStatus, CaptureError> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SqliteFileStatus::Missing);
+        }
+        Err(error) => return Err(io_error("opening SQLite candidate", path, error)),
+    };
+    let mut header = [0_u8; SQLITE_HEADER.len()];
+    match file.read_exact(&mut header) {
+        Ok(()) if &header == SQLITE_HEADER => Ok(SqliteFileStatus::Database),
+        Ok(()) => Ok(SqliteFileStatus::NotDatabase),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Ok(SqliteFileStatus::NotDatabase)
+        }
+        Err(error) => Err(io_error("reading SQLite candidate", path, error)),
+    }
+}
 
 /// Diagnostic metadata for a database file set (db + -wal). It is retained in
 /// checkpoints for observability only; equality is never treated as content
@@ -316,5 +355,26 @@ mod tests {
         assert!(is_db_sidecar("old.db-journal"));
         assert!(!is_db_sidecar("state.db"));
         assert!(!is_db_sidecar("opencode.db"));
+    }
+
+    #[test]
+    fn sqlite_candidates_require_the_file_header() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing.db");
+        assert_eq!(
+            sqlite_file_status(&missing).unwrap(),
+            SqliteFileStatus::Missing
+        );
+
+        let lock = dir.path().join("state.db.fts_rebuild.lock");
+        std::fs::write(&lock, b"locked").unwrap();
+        assert_eq!(
+            sqlite_file_status(&lock).unwrap(),
+            SqliteFileStatus::NotDatabase
+        );
+
+        let db = dir.path().join("state.db");
+        drop(seed_db(&db, false));
+        assert_eq!(sqlite_file_status(&db).unwrap(), SqliteFileStatus::Database);
     }
 }

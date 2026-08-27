@@ -18,7 +18,8 @@ pub use ledger::{
     visit as visit_ledger,
 };
 pub use sqlite::{
-    DbSnapshot, DbStamp, SnapshotOutcome, db_stamp, is_db_sidecar, snapshot as snapshot_db,
+    DbSnapshot, DbStamp, SnapshotOutcome, SqliteFileStatus, db_stamp, is_db_sidecar,
+    snapshot as snapshot_db, sqlite_file_status,
 };
 pub use tailer::{
     RawRecord, TailBatch, TailCheckpoint, TailConfig, TailItem, TailRead, Tailer, Transition,

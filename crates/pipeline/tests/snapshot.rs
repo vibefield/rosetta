@@ -365,6 +365,35 @@ fn database_sessions_flow_end_to_end() {
 }
 
 #[test]
+fn database_glob_auxiliary_files_are_inventory_only() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    std::fs::write(h.root.join("agent.db.fts_rebuild.lock"), b"locked").unwrap();
+
+    let (meta, files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(meta.files_matched, 2);
+    assert_eq!(meta.files_inventory_only, 1);
+    assert_eq!(meta.files_vanished, 0);
+    assert_eq!(meta.sessions, 2);
+    assert_eq!(files.len(), 2);
+    assert!(
+        files
+            .iter()
+            .all(|file| file.relative_path.starts_with("agent.db#"))
+    );
+}
+
+#[test]
 fn live_database_hint_reenumerates_virtual_session_membership() {
     let adapter = &FakeDbAgent;
     let mut h = harness();

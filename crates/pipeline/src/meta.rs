@@ -111,6 +111,22 @@ pub fn meta_ingest_into(
                     report.files_inventory_only += 1;
                     continue;
                 }
+                match instrument.time(Metric::SkimNanos, || {
+                    rosetta_capture::sqlite_file_status(&root.join(&file.relative_path))
+                })? {
+                    rosetta_capture::SqliteFileStatus::Missing => {
+                        report.files_vanished += 1;
+                        continue;
+                    }
+                    rosetta_capture::SqliteFileStatus::NotDatabase => {
+                        // Broad database globs also see agent-owned lock and
+                        // marker files. Preserve them in the inventory count,
+                        // but never manufacture an empty SQLite source.
+                        report.files_inventory_only += 1;
+                        continue;
+                    }
+                    rosetta_capture::SqliteFileStatus::Database => {}
+                }
                 admit_database(
                     adapter,
                     runtime,
