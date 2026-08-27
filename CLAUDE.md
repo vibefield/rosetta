@@ -96,8 +96,9 @@ clients/                   generated TypeScript protocol package      [Phase 4]
   `projection_state` / `search_dirty` do not land before the asynchronous search worker
   that consumes and acknowledges them.
 - Every performance optimization commit cites a frozen before/after pair from the same
-  permission-read-only checksummed ledger, checksummed query suite, campaign ID, machine, and
-  configuration, with logical counts and ranked-result digests equal. Estimates and
+  permission-read-only checksummed source snapshot for cold-write work or the same ledger for
+  replay work, plus one checksummed query suite, campaign ID, machine, and configuration, with
+  logical counts and ranked-result digests equal. Estimates and
   unpaired organic runs do not authorize merge; if an artifact is deleted before the
   pair exists, rerun that side.
 - Docs discipline: TWO living documents (`ARCHITECTURE.md`, `RESEARCH_PLAN.md`),

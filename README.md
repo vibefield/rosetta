@@ -19,12 +19,16 @@ Current implementation status: all nine captured agents have ground-truth packs,
 runtime adapters, and CLI registration. The generic pipeline ingests adapter-selected
 JSONL transcripts and SQLite session databases, generation-stages rewrites, tails live
 changes with polling/audit recovery, and writes the canonical SQLite projection.
-`ingest` and `watch` durably append source records to a checksummed raw ledger before
-projection commits; `rebuild` validates and replays the whole ledger into a private
-database before atomically replacing the projection. Ordinary opens still fail closed
-on a schema mismatch so replacement is never implicit. The in-process hot tier,
-subscription hub, localhost HTTP/WebSocket surface, and generated TypeScript protocol
-package are implemented. Consumer migrations and the dedicated metrics stream remain.
+Existing/live `ingest`, `watch`, and `serve` append source records to a checksummed raw
+ledger durably before visible projection commits. A first cold build uses a private
+same-filesystem ledger tree, syncs every segment and directory entry, atomically promotes
+that tree, and only then publishes the validated SQLite projection; a missing projection
+beside an existing ledger fails closed to `rebuild`. `rebuild` validates and replays the
+whole ledger into a private database before atomically replacing the projection. Ordinary
+opens still fail closed on a schema mismatch so replacement is never implicit. The
+in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, and generated
+TypeScript protocol package are implemented. Consumer migrations and the dedicated
+metrics stream remain.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
 

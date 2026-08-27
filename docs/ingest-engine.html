@@ -185,17 +185,20 @@
     crate seam per stage, and measurement infrastructure designed in from day one — every phase and
     every hot component owns a fixture and a bench, so each can be optimized in isolation.
     Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
-    <div class="callout"><b>Implementation checkpoint · 2026-08-26.</b> All nine captured-agent
+    <div class="callout"><b>Implementation checkpoint · 2026-08-27.</b> All nine captured-agent
       adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, consistent
       SQLite snapshots, serializable adapter checkpoints, generation-staged reconciliation,
       SQLite/FTS and rollups, watch-before-scan live scheduling, polling plus rotating audits, the
-      checksummed raw segment ledger, atomic whole-projection rebuild, the store hot tier, the
+      checksummed raw segment ledger, crash-safe staged cold-ledger publication, atomic
+      whole-projection rebuild, the store hot tier, the
       in-process subscription hub, axum HTTP/WebSocket transport, backend-neutral protocol, and
       generated TypeScript package are implemented. Consumer migrations, the dedicated metrics
       stream, and unimplemented performance promises below remain design targets. Organic Claude
       Code, Codex, and Grok validation established the first measured cold-load baseline; a later
-      checksummed, permission-read-only Codex campaign established FTS5 p50/p95/p99. The evidence,
-      bottleneck accounting, and gated optimization specification are recorded below.
+      checksummed, permission-read-only Codex campaign established FTS5 p50/p95/p99. A newer frozen
+      six-adapter source snapshot established cold-write attribution, non-empty Hermes coverage,
+      staged-ledger savings, and repeated broad-query tails. The evidence, bottleneck accounting,
+      and gated optimization specification are recorded below.
       <code>source_op</code> is only projection-internal staging; the raw ledger is the durable
       replay substrate.</div>
   </div>
@@ -671,10 +674,11 @@ trait <b>AgentAdapter</b>: Send + Sync {
   <h2>Measured performance and search-finalization specification</h2>
   <p class="h2-note">Status: <b>partly implemented and evidence-backed.</b> The frozen FTS campaign
   harness and L3 search/readiness contract exist; asynchronous search publication and an alternate
-  backend remain gated proposals. This section records the 2026-08-26 organic validation lane,
-  identifies measurements versus estimates, and specifies the crash-safe seams required before
-  search can be detached from canonical publication. It updates the earlier FTS5 default without
-  turning a local corpus into CI ground truth.</p>
+  backend remain gated proposals. Crash-safe staged cold-ledger publication is implemented and
+  frozen-pair validated. This section records both the 2026-08-26 organic validation lane and the
+  2026-08-27 frozen-source campaign, identifies measurements versus estimates, and specifies the
+  seams required before search can be detached from canonical publication. It updates the earlier
+  FTS5 default without turning a private corpus into CI ground truth.</p>
 
   <div class="callout">
     <b>Decision boundary.</b> Keep the raw ledger as durable truth and SQLite as the only canonical
@@ -715,11 +719,62 @@ trait <b>AgentAdapter</b>: Send + Sync {
   The original cold-ingest peak RSS and CPU time remain unmeasured. Replay RSS/CPU and the SQLite
   table-versus-FTS byte split are now measured below.</p>
   <div class="callout"><b>Hard merge gate.</b> Every performance optimization commit must cite a
-    frozen before/after pair captured before either private artifact is deleted: same campaign ID,
-    permission-read-only checksummed ledger, checksummed query suite, machine label, warmup/cycle counts,
-    schema version, and logical row counts, with equal hit counts and ranked-result digests. Estimates,
+    frozen before/after pair captured before either private artifact is deleted: the same
+    permission-read-only checksummed source snapshot for cold writes or ledger for replay, plus the
+    same search campaign ID, checksummed query suite, machine label, warmup/cycle counts, schema
+    version, and logical row counts, with equal hit counts and ranked-result digests. Estimates,
     an unpaired baseline, or an organic one-off are planning evidence only. If one side was deleted,
     rerun it.</div>
+
+  <h3 class="spec">Frozen-source cold campaign — 2026-08-27 <span class="badge b-bench">M</span><span class="badge b-pure">T</span></h3>
+  <p>A second, stronger campaign froze the complete roots for all six installed adapters in one
+  permission-read-only, checksummed source snapshot. It contained 181,526 files (about 14 GiB);
+  layout filtering admitted 38,998 files, metadata skimmed 5,926, and discovery identified 6,414
+  sessions. Checksums passed immediately before and after every accepted run. The cold pipeline
+  framed 2,234,095 records, parsed 2,038,136, preserved 195,959 unknown outcomes, emitted 1,791,614
+  canonical operations, and published 773,375 messages with zero hard errors. Antigravity, Claude
+  Code, Codex, Grok, Hermes, and Kimi Code all contributed non-empty streams; Hermes supplied the
+  first non-empty private SQLite-snapshot lane. The pre-baseline dry runs also found and fixed a
+  database-glob false positive and previously unsupported Hermes tool-result variants rather than
+  timing through correctness failures.</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>same frozen cold source</th><th><code>44e8354</code> baseline</th><th><code>f22bd63</code> staged barrier</th><th>interpretation</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">search-ready wall</td><td class="metric">451.54 s</td><td class="metric"><b>352.52 s</b></td><td>−99.02 s / −21.9%; full validation and synchronous FTS5 included.</td></tr>
+      <tr><td class="cm">ledger write</td><td class="metric">96.644 s</td><td class="metric"><b>18.020 s</b></td><td>−78.624 s directly measured; same 2,245,999 frames, 8,538,565,179 frame bytes, and 66 segments.</td></tr>
+      <tr><td class="cm">segment sync calls / time</td><td class="metric">7,435 / 81.139 s</td><td class="metric"><b>66 / 0.128 s</b></td><td>One file barrier per segment replaces one per projection batch.</td></tr>
+      <tr><td class="cm">directory barriers</td><td class="metric">not instrumented</td><td class="metric">12 / 0.0005 s</td><td>Runtime and staged-root entries are durable before atomic promotion; the target parent is synced during publication.</td></tr>
+      <tr><td class="cm">canonical apply</td><td class="metric">115.924 s</td><td class="metric">102.643 s</td><td>−13.281 s observed, but not attributed to the ledger change; a preliminary candidate measured 74.891 s, demonstrating material SQLite/IO variance.</td></tr>
+      <tr><td class="cm">global ordinal finalization</td><td class="metric">43.876 s</td><td class="metric">36.754 s</td><td>Still the largest relational finalizer after canonical application.</td></tr>
+      <tr><td class="cm">usage buckets</td><td class="metric">23.331 s</td><td class="metric">15.061 s</td><td>Set-based and unchanged; the delta is run variance, not a claimed saving.</td></tr>
+      <tr><td class="cm">bulk FTS5</td><td class="metric">83.744 s</td><td class="metric">84.994 s</td><td>Unchanged synchronous search-finalization cost and the next detachable availability boundary.</td></tr>
+      <tr><td class="cm">read / normalize</td><td class="metric">30.094 / 20.401 s</td><td class="metric">22.105 / 16.525 s</td><td>Source bytes and records are exact; external-device/cache variance is visible.</td></tr>
+      <tr><td class="cm">peak RSS</td><td class="metric">525 MiB</td><td class="metric">575 MiB</td><td>About +50 MiB observed; retain as a cold-build tradeoff, not an attributed staging allocation.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The hardened path stages the entire new ledger beside its absent destination, buffer-flushes at
+  the original batch boundaries, syncs every touched segment and child-to-parent directory entry,
+  finalizes and validates SQLite, atomically renames the ledger tree, syncs its parent, and then
+  installs SQLite. <code>ingest</code>, <code>watch</code>, and <code>serve</code> all use this protocol
+  for a first projection; an absent projection beside an existing ledger fails closed to
+  <code>rebuild</code>, preventing generation-number collisions after a crash. Existing/live
+  projections keep per-batch ledger-sync-before-visible-SQLite ordering.</p>
+  <p class="spec-note">The source reports, per-adapter totals, 773,375 message/FTS rows, 5,864
+  Indexed plus 550 Pending sessions, 79 pending merges, all five message-to-bucket token totals, and
+  361,700 tool-use rows matched exactly. <code>quick_check</code> and foreign keys passed. Every raw
+  ledger byte after each runtime's opening meta frame was identical; that frame differed only in the
+  expected six digits of <code>runtime.discovered_at</code> and its checksum. Ranked hit counts and
+  ordered-result digests matched the original frozen search campaign. A ledger-only rebuild took
+  253.54 s and reproduced the same logical and ranked result, although that run predates the split
+  rebuild profile and therefore supplies wall/RSS rather than an attributed read breakdown.</p>
+  <p>The 100-cycle hardened search run measured shared/fresh broad-ranked p95 at 196.59/193.99 ms
+  and p99 at 224.26/209.42 ms; selective-ranked p95 was 10.11/10.91 ms. Repeated broad tails remain
+  far above the 50 ms objective while selective queries are healthy. This clears the technical
+  evidence threshold for a bounded Tantivy prototype, but adoption still depends on declared or
+  privacy-preserving observed product weighting, relevance, build/storage, live-overhead, and crash
+  gates.</p>
 
   <h3 class="spec">Retained six-adapter campaign <span class="badge b-bench">M</span><span class="badge b-pure">T</span></h3>
   <p>At <code>9e9d1c6</code>, one current release build exercised every locally installed adapter:
@@ -1172,7 +1227,10 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
     capture p50/p95/p99 for the declared or privacy-preserving observed product query mix and retain
     the per-class selective, common, phrase, filtered, and broad results. If the product mix meets its
     objective and relevance is acceptable, defer the Tantivy track. The current diagnostic campaign
-    proves a broad-tail failure but does not establish how often users issue broad queries.</div>
+    proves a broad-tail failure but does not establish how often users issue broad queries. The
+    frozen-source run repeated broad-ranked p95 at 193.99–196.59 ms and selective-ranked p95 at
+    10.11–10.91 ms; that is enough to open the bounded prototype for a supported broad-search case,
+    not enough to adopt it without declared/observed weighting.</div>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>deliverable</th><th>engineering estimate <span class="badge b-bench">E</span></th><th>exit evidence</th></tr></thead>
@@ -1203,48 +1261,51 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   requirement. The 2–3 day prototype has high information ROI even if Tantivy is rejected.</p>
 
   <h3 class="spec">Ledger cost: preserve live ordering, stage private-build durability</h3>
-  <p><span class="badge b-io">C</span> The live stream path calls <code>Ledger::flush</code> after every
-  written batch, and <code>flush</code> performs <code>sync_data</code>. This is mandatory when a live
+  <p><span class="badge b-io">C</span> The live stream path calls <code>Ledger::checkpoint</code> after every
+  written batch; the default checkpoint delegates to a durable <code>flush</code> whose file barrier
+  performs <code>sync_data</code>. This is mandatory when a live
   SQLite transaction will become visible. A brand-new private SQLite file does not need the same
   per-batch durability cadence, but delaying sync is safe only if its not-yet-durable ledger segments
-  are staged outside the committed segment namespace.</p>
+  are staged outside the committed segment namespace. That distinction is now implemented.</p>
   <pre class="ddl"><span class="c">existing/live projection — unchanged</span>
 append raw → flush + sync_data → SQLite transaction → visible canonical state
 
-<span class="c">private cold projection — proposed</span>
+<span class="c">private cold projection — shipped</span>
 append raw → buffer-flush/rotate run-scoped staged segments → private SQLite
-seal all sources → finalize/validate SQLite → fsync staged files + directory
-               → promote segments + fsync runtime directory → publish SQLite</pre>
-  <p>Create the stage beneath the target runtime ledger directory so promotion is a same-filesystem
-  rename. Every rotation must explicitly flush and retain its error; the final barrier tracks and
-  syncs <em>all</em> segments touched by the run, not just the current writer. To avoid exposing half
-  a multi-segment run, extend the container layout so the scanner reads legacy root segments plus
-  atomically committed <code>runs/&lt;sequence&gt;-&lt;run-id&gt;/</code> directories and ignores
-  <code>.stage-*</code>. Under the projection lock, rename the entire synced stage directory once,
-  then sync its parent before SQLite may publish. Frame format RLG1 need not change.</p>
+seal all sources → fsync every staged file + child/parent directory entries
+                 → finalize/validate/sync SQLite
+                 → rename whole ledger tree + fsync target parent → publish SQLite</pre>
+  <p>The optimization applies only when both the projection and ledger destination are absent. A
+  same-filesystem sibling holds the complete multi-runtime ledger tree, so one atomic rename exposes
+  either no committed ledger or the whole sealed tree; RLG1 and the scanner layout do not change.
+  Every rotation explicitly flushes and retains its path, and the final barrier syncs <em>all</em>
+  segments touched by the run rather than only the current writer. An absent projection beside an
+  existing ledger fails closed with instructions to rebuild, so a retry cannot reuse generation
+  numbers against an orphan ledger. <code>watch</code> and <code>serve</code> retain watch-before-scan
+  notifications, but open live runners against the promoted ledger only after publication.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>cold-build crash point</th><th>required recovery</th></tr></thead>
     <tbody>
-      <tr><td>Before staged-ledger barrier</td><td>The installed projection and committed segment namespace are unchanged. Discard the stage and private SQLite file, then rescan the sources.</td></tr>
-      <tr><td>After barrier, during run-directory rename</td><td>SQLite is still unpublished. Atomic rename exposes either no run or the complete sealed run; recovery audits the directory and its checksums before reuse.</td></tr>
-      <tr><td>After ledger promotion, before SQLite publication</td><td>The extra complete ledger generations are harmless and replayable; a retry must remain idempotent, as with today's crash between live ledger flush and store commit.</td></tr>
+      <tr><td>Before staged-ledger barrier</td><td>The installed projection and committed ledger destination are unchanged. Graceful failure removes the private tree; a crash artifact remains outside the scanner namespace.</td></tr>
+      <tr><td>After barrier, during whole-tree rename</td><td>SQLite is still unpublished. Same-filesystem rename exposes either no ledger or the complete sealed tree; syncing the target parent makes that choice durable.</td></tr>
+      <tr><td>After ledger promotion, before SQLite publication</td><td>The complete ledger is replayable. A new ingest/watch/serve fails closed because the projection is absent and the ledger exists; <code>rebuild</code> is the recovery path.</td></tr>
       <tr><td>After SQLite publication</td><td>Every referenced raw record was already behind a file and directory durability barrier.</td></tr>
     </tbody>
   </table>
   </div>
-  <p>A failed barrier or promotion prevents publication. <code>watch</code> must finish this handoff
-  before opening live runners. This proposal changes durability cadence only for first/cold builds;
-  existing projections retain ledger-sync-before-visible-SQLite ordering. No candidate below is
-  implementable on an estimate alone: its commit must cite a passing <code>search-bench compare</code>
-  pair (or an equivalently strict phase harness) captured from the same frozen campaign before the
-  private artifacts are deleted.</p>
+  <p>A failed barrier or promotion prevents publication. <code>watch</code> and <code>serve</code>
+  finish this handoff before opening live runners. The change affects only first/cold builds;
+  existing projections retain ledger-sync-before-visible-SQLite ordering. The accepted commits are
+  <code>095aa16</code> (deferred segment sync), <code>af8cfe3</code> (directory barriers), and
+  <code>f22bd63</code> (whole-tree staging, fail-closed recovery, and live-runner handoff). Their
+  frozen before/after evidence is recorded above.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>ledger candidate</th><th>evidence</th><th>estimate <span class="badge b-bench">E</span></th><th>priority</th></tr></thead>
     <tbody>
-      <tr><td class="cm">split ledger profiling</td><td>Frame/copy, buffered write, flush, sync, segment-open, election-read, and replay-read counters landed at <code>e7e64cf</code>. Rebuild exercises reads but performs no ledger writes.</td><td class="metric">implemented; cold-write sample still required</td><td>measure on the next frozen cold source campaign</td></tr>
-      <tr><td class="cm">stage cold runs; one publication barrier</td><td>sync per batch in current code; the retained 95.782 s cold-write parent predates the split counters</td><td class="metric">TBD; no transferable sync saving yet</td><td>only if the split cold run shows sync dominance</td></tr>
+      <tr><td class="cm">split ledger profiling</td><td>Frame/copy, buffered write, flush, file sync, directory sync, segment-open, election-read, and replay-read counters are always on. The frozen baseline and candidate emitted exact frame/byte counts.</td><td class="metric">complete</td><td>retain for regression attribution</td></tr>
+      <tr><td class="cm">stage cold runs; one publication barrier</td><td>96.644 s → 18.020 s ledger time; file sync 81.139 s → 0.128 s and 7,435 → 66 calls; twelve directory barriers cost 0.0005 s</td><td class="metric"><b>landed: −78.624 s ledger / −99.02 s wall</b></td><td>accepted; existing/live cadence unchanged</td></tr>
       <tr><td class="cm">payload-light RLG1 election pass</td><td>A frozen paired scan reduced wall by only 0.19–0.34 s (0.9–1.6%) even though one pair reduced user CPU from 8.66 s to 0.28 s. Seek-heavy variants regressed. In the full candidate run election moved from 21.466 s to 23.711 s while the unchanged replay pass also slowed from 10.208 s to 13.061 s, so no rebuild-wall saving was attributable.</td><td class="metric">rejected: subsecond isolated wall benefit</td><td>do not retry on the current frame format</td></tr>
       <tr><td class="cm">zero-copy raw framing + larger buffer</td><td><code>append_raw</code> allocates and copies every payload into a frame body</td><td class="metric">historical 1–3 s; current TBD</td><td>benchmark after sync change</td></tr>
       <tr><td class="cm">compression / retention GC</td><td>8.45 GB retained mixed ledger; keep-forever policy</td><td class="metric">storage benefit; time unknown</td><td>separate RLG2 experiment</td></tr>
@@ -1270,6 +1331,16 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   writes (9.327 s), tool-result writes (4.286 s), drift apply (2.831 s), and session touches
   (1.034 s); pending target load plus drain is now 0.424 s. These are mixed-corpus measured ceilings,
   not additive saving promises.</p>
+  <p>The newer frozen-source <em>cold</em> path is a second context, not a replacement number for that
+  ledger replay. At <code>f22bd63</code> it attempted 791,171 messages, 361,986 tool results, and
+  153,270 usage merges; canonical apply measured 102.643 s, led by message lookup at 48.249 s,
+  message write at 24.650 s, tool-result write at 5.773 s, pending gate at 4.703 s, drift at 4.620 s,
+  other ops at 4.554 s, and ordinal lookup at 2.632 s. An immediately preceding exact-source
+  candidate measured the same families at 37.537, 15.941, 4.633, 1.803, 4.334, 2.290, and 1.103 s,
+  for 74.891 s canonical total. Directory durability itself measured only 0.0005 s. The 27.752 s
+  canonical spread is therefore storage/cache contention evidence: use statement-family counters
+  and replicated pairs for the next candidate, never subtract one run's full family total as a
+  promised saving.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>canonical candidate</th><th>required semantics</th><th>current evidence</th><th>gate</th></tr></thead>
@@ -1348,15 +1419,18 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <tbody>
       <tr><td class="cm">decoupled canonical-ready, cold</td><td class="metric">101.23 − 33.85 = 67.38 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
       <tr><td class="cm">decoupled canonical-ready, rebuild</td><td class="metric">79.53 − 24.83 = 54.70 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
-      <tr><td class="cm">retained mixed canonical-ready, cold</td><td class="metric">709.00 − 87.00 ≈ 622 s</td><td>Current six-adapter arithmetic forecast; canonical application and ledger IO dominate the remaining wall.</td></tr>
-      <tr><td class="cm">retained mixed canonical-ready, rebuild baseline</td><td class="metric">511.24 − 78.85 = 432.39 s</td><td>Pre-candidate frozen-ledger arithmetic forecast; not an observed asynchronous publication.</td></tr>
+      <tr><td class="cm">earlier retained mixed canonical-ready, cold</td><td class="metric">709.00 − 87.00 ≈ 622 s</td><td>Historical arithmetic forecast from the pre-optimization campaign; superseded for current cold planning by the frozen-source row below.</td></tr>
+      <tr><td class="cm">earlier retained mixed canonical-ready, rebuild</td><td class="metric">511.24 − 78.85 = 432.39 s</td><td>Historical pre-candidate arithmetic forecast; not an observed asynchronous publication.</td></tr>
       <tr><td class="cm">global-ordinal candidate, search-ready</td><td class="metric">317.49 s observed</td><td>Same frozen ledger; exact logical and ranked-result equivalence passed.</td></tr>
       <tr><td class="cm">global-ordinal candidate, canonical-ready arithmetic</td><td class="metric">317.49 − 89.63 = 227.86 s</td><td>Search-detached forecast only; current code still publishes synchronously after FTS.</td></tr>
       <tr><td class="cm">pending-target candidate, search-ready</td><td class="metric">252.02 s observed</td><td>Same frozen ledger; the whole-wall delta includes material FTS/validation variance and is not the pending saving.</td></tr>
       <tr><td class="cm">pending-target candidate, canonical-ready arithmetic</td><td class="metric">252.02 − 71.06 = 180.96 s</td><td>Search-detached forecast only; current code still publishes synchronously after FTS.</td></tr>
+      <tr><td class="cm">frozen-source staged cold, search-ready</td><td class="metric"><b>352.52 s observed</b></td><td>Current six-adapter first-ingest result; exact source, logical, aggregate, integrity, and ranked-search gates passed.</td></tr>
+      <tr><td class="cm">frozen-source staged cold, canonical-ready arithmetic</td><td class="metric">352.52 − 84.99 = 267.53 s</td><td>Current availability forecast if synchronous FTS5 is detached; not yet an observed publication boundary.</td></tr>
+      <tr><td class="cm">frozen ledger rebuild, search-ready</td><td class="metric">253.54 s observed</td><td>Exact logical/ranked equivalence and 623 MB RSS; no split profile was requested, so do not infer a canonical-ready time.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, cold</td><td class="metric">historical Codex: about 50–60 s</td><td>Do not extrapolate to the retained mixed corpus; replace after split counters and sequential pairs.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, rebuild</td><td class="metric">historical Codex: about 40–48 s</td><td>Do not extrapolate to the 511.24 s retained replay; excludes search-ready time.</td></tr>
-      <tr><td class="cm">search-ready</td><td class="metric">synchronous FTS5 today</td><td>Async-sidecar time remains TBD; no alternate-backend claim until a gate-zero decision opens the bake-off.</td></tr>
+      <tr><td class="cm">search-ready</td><td class="metric">synchronous FTS5 today</td><td>Broad-ranked p95 repeats near 194–197 ms while selective p95 is 10–11 ms; the prototype is justified, but alternate-backend build/lag/overhead remain TBD.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1386,20 +1460,21 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     removed 5,918 redundant batches and retained a byte-identical cursor table, but commit time did
     not improve outside its observed range. It was reverted; do not optimize replay by transaction
     count alone.</li>
-    <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
-    observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
-    diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>
-    <li><b>Exercise the landed split ledger-write counter on a frozen cold source campaign.</b> Measure
-    framing/checksum/copy, buffered write, flush, and <code>sync_data</code> count/time before accepting
-    the staged-run estimate. The retained ledger-only replay cannot produce write evidence.</li>
-    <li><b>Stage the private-build durability barrier if sync dominates.</b> Kill-test before/after
-    staged segment sync, during atomic run-directory promotion, and before SQLite publication;
-    rerun cold ingest on the frozen source.</li>
-    <li><b>Introduce SearchBackend/readiness with FTS5 as reference only if the track opens.</b>
-    Preserve query semantics and make not-ready explicit; land the durable repair tables, their
-    worker/acknowledger, and crash tests together.</li>
-    <li><b>Run the Tantivy bake-off last.</b> Adopt only after latency, relevance, build,
-    live-overhead, and crash gates all pass on a retained frozen pair.</li>
+    <li><b>Stage private-build durability — complete.</b> Split counters proved sync dominance; the
+    whole-tree protocol reduced ledger time by 78.624 s and cold wall by 99.02 s. File and directory
+    barriers, atomic promotion, existing-ledger fail-closed behavior, watch/serve handoff, full tests,
+    source checks, SQLite integrity, aggregates, and ranked results all passed.</li>
+    <li><b>Declare the product query weighting while the prototype starts.</b> The repeated broad
+    failure is enough to justify a bounded bake-off because broad search is a supported product
+    operation. A privacy-preserving observed histogram or explicit intended mix is still required
+    before production adoption; the diagnostic equal weighting is not traffic evidence.</li>
+    <li><b>Introduce SearchBackend/readiness with FTS5 as reference.</b> Preserve backend-neutral
+    query semantics and make not-ready explicit. Land synchronization tables only in the same commit
+    as their named worker/acknowledger and crash tests.</li>
+    <li><b>Run the 2–3 day Tantivy prototype on the retained frozen projection.</b> Compare ranked
+    correctness, filters, p50/p95/p99 by class and declared mix, build wall/CPU/RSS/bytes, then reject
+    or proceed. Productionize only after live-overhead, incremental-lag, lifecycle, and all crash
+    gates pass.</li>
   </ol>
 
   <h3 class="spec">Code and test evidence index</h3>
@@ -1410,8 +1485,8 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td>FTS is a finalization gate</td><td><a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a> rebuilds FTS and runs integrity-check before publication.</td></tr>
       <tr><td>Search read coupling is narrow; write coupling is not</td><td><a href="../crates/store/src/queries.rs"><code>store/src/queries.rs::search_filtered</code></a> is the typed ranked read entry point and <a href="../crates/server/src/http.rs"><code>server/src/http.rs</code></a> exposes it at <code>/api/search</code>; <a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs</code></a> still maintains FTS inside live row transactions.</td></tr>
       <tr><td>Frozen FTS p50/p95/p99 is executable and fail-closed</td><td><a href="../crates/search-bench/README.md"><code>search-bench</code></a> fingerprints permission-read-only ledgers and databases, checks projection/result equivalence, runs shared/fresh lanes, and rejects incompatible before/after reports.</td></tr>
-      <tr><td>Ledger sync is per stream batch</td><td><a href="../crates/pipeline/src/stream.rs"><code>pipeline/src/stream.rs::ingest_file</code></a> calls <code>ledger.flush()</code> before store apply.</td></tr>
-      <tr><td>Flush is durable</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> calls <code>sync_data</code>.</td></tr>
+      <tr><td>Live ledger sync is per stream batch</td><td><a href="../crates/pipeline/src/stream.rs"><code>pipeline/src/stream.rs::ingest_file</code></a> calls <code>ledger.checkpoint()</code> before store apply; the default/live ledger makes that checkpoint durable.</td></tr>
+      <tr><td>Cold barrier is durable and atomically published</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> syncs every touched segment and changed directory entry; <a href="../crates/rosettad/src/main.rs"><code>rosettad::ColdLedgerStage</code></a> promotes the whole tree and syncs its parent inside SQLite publication.</td></tr>
       <tr><td>Rebuild reads twice</td><td><a href="../crates/pipeline/src/replay.rs"><code>pipeline/src/replay.rs::rebuild_runtime</code></a> elects survivors, then replays in a second visit.</td></tr>
       <tr><td>Private cold ordinals finalize once; live ordinals remain transactional</td><td><a href="../crates/store/src/apply.rs"><code>store/src/apply.rs::renumber_all_sessions</code></a>, <a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a>, and the multi-source finalization regression in <a href="../crates/store/tests/sqlite_maintenance.rs"><code>sqlite_maintenance.rs</code></a>.</td></tr>
       <tr><td>Pending reconciliation is transaction-local and target-aware</td><td><a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs::PendingGate</code></a> loads primary-key-backed targets by session and updates them on queue/drain; isolation and ordering regressions live in <a href="../crates/store/tests/roundtrip.rs"><code>roundtrip.rs</code></a>.</td></tr>

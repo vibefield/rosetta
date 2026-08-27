@@ -12,7 +12,7 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
-> **Implementation checkpoint (2026-08-26).** This document describes the target
+> **Implementation checkpoint (2026-08-27).** This document describes the target
 > architecture. Nine ground-truth/runtime-adapter packs are registered. The generic
 > runtime handles adapter-selected JSONL and SQLite sources, generation-staged
 > reconciliation, deterministic adapter checkpoints, FTS and rollups, live watching
@@ -38,15 +38,20 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > search-finalization specification.” Tantivy remains a benchmark candidate, not a
 > selected canonical store or committed dependency.
 >
-> A retained current-HEAD campaign now covers all six locally installed adapters on one
-> external SSD. Discovery and standalone metadata took 4.95 s and 9.95 s. Fresh cold
-> publication of 768,280 messages took 709 s: canonical application was 395.84 s,
-> ledger writing 95.78 s, and FTS5 87.00 s. Replaying its permission-read-only 8.45 GB
-> ledger took 511.24 s at 184 MB maximum RSS, led by canonical application at 291.26 s.
-> The cold and rebuilt projections passed exact logical and ranked-search equivalence.
-> This mixed-corpus result changes the bottleneck ordering, not the store decision:
-> canonical statements and ledger IO are the first measurement/optimization targets,
-> while an alternate search backend remains gated on the product query mix.
+> A newer frozen-source campaign covers the six locally installed adapters from one
+> checksummed, permission-read-only snapshot: 181,526 source files, 38,998 matched files,
+> 2,234,095 records, 6,414 sessions, and 773,375 messages. The `44e8354` cold baseline
+> published in 451.54 s. The crash-safe staged-ledger path at `f22bd63` published the
+> exact same logical and ranked-search result in 352.52 s (−99.02 s / −21.9%): ledger
+> write time fell from 96.64 s to 18.02 s, segment syncs from 7,435 to 66, and segment
+> sync time from 81.14 s to 0.13 s. Twelve required directory barriers added 0.0005 s.
+> The same ledger rebuilt in 253.54 s. Remaining cold costs are canonical application
+> (102.64 s in the hardened run), synchronous FTS5 (84.99 s), global ordinal
+> finalization (36.75 s), source read (22.10 s), normalization (16.52 s), and usage
+> buckets (15.06 s); these phases vary materially between otherwise equal runs.
+> Diagnostic broad-ranked FTS p95 is 193.99–196.59 ms while selective-ranked p95 is
+> 10.11–10.91 ms, so a bounded Tantivy sidecar bake-off has high information ROI.
+> SQLite remains the canonical transactional projection.
 
 ---
 
@@ -402,10 +407,10 @@ ingestion.
 > stream-phase concurrency, and the bench/profiler infrastructure (bench-corpus
 > generator, per-stage criterion benches, `rosettad ingest --profile`, the rebuild
 > headline bench) — lives in [`docs/ingest-engine.html`](ingest-engine.html)
-> (rendered design doc, 2026-08-26). Where it and this section disagree, the HTML
+> (rendered design doc, 2026-08-27). Where it and this section disagree, the HTML
 > is newer.
 
-### 7.1 Cross-adapter applicability checkpoint (2026-08-26)
+### 7.1 Cross-adapter applicability checkpoint (2026-08-27)
 
 The store hot path is shared, but the evidence used to optimize it must not be. The
 committed canonical-op goldens and restart tests currently establish this matrix:
@@ -428,19 +433,20 @@ fails if the roster, stream-driver contract, checkpoint round trip, or canonical
 classification changes. Every adapter has full canonical-op goldens; Hermes' snapshot
 projection is frozen alongside the eight existing golden corpora.
 
-The retained organic campaign adds real-source evidence for Antigravity, Claude Code,
-Codex, Grok, and Kimi Code. Hermes was installed and its metadata path was exercised but
-had no streamable session; Copilot, OpenCode, and Pi were not installed. Those four
-streaming cases therefore remain fixture/restart evidence, not organic performance
-evidence, and the SQLite snapshot-driver family still lacks a non-empty organic timing
-lane. The five non-empty runtimes produced 768,280 messages with exact FTS, usage-bucket,
-tool-call, and token aggregates, zero generation/topology/ordinal/staging defects, and a
-ranked-search-digest-equivalent replay result. Semantic backlog remains explicit: 550
+The newer frozen-source campaign adds private real-source evidence for Antigravity,
+Claude Code, Codex, Grok, Hermes, and Kimi Code. Copilot, OpenCode, and Pi were not
+installed and remain fixture/restart evidence rather than real-source performance
+evidence. Hermes now supplies a non-empty SQLite snapshot lane, although its 25 messages
+are too small to extrapolate snapshot-driver throughput. The six non-empty runtimes
+produced 773,375 messages with exact FTS, usage-bucket, tool-call, and token aggregates,
+zero generation/topology/ordinal/staging defects, and ranked-search-digest-equivalent
+cold and ledger-rebuilt projections. Semantic backlog remains explicit: 550
 Claude metadata-only sessions are Pending and 79 result records are unmatched. Seven of
 those results have a call only in their parent/root session, so cross-session correlation
 is not yet closed. The stream also retained 195,484 unknown-type/no-op outcomes plus
-parsed-record unknown-field drift; zero hard errors means preservation succeeded, not
-that every current native shape has canonical semantics.
+parsed-record unknown-field drift; the newer snapshot retained 195,959 unknown outcomes.
+Zero hard errors means preservation succeeded, not that every current native shape has
+canonical semantics.
 
 This makes the optimization boundary explicit:
 
@@ -506,9 +512,9 @@ ranked-search comparison, and `c6319e6` reverted the candidate. The current path
 retains measured ceilings of 13.275 s for message identity lookups, 9.327 s for message
 writes, 4.286 s for tool-result writes, and 1.034 s for session touches. These are costs,
 not additive saving
-promises. The corpus still has no non-empty SQLite snapshot source, so savings for the
-remaining candidates stay planning evidence until a frozen before/after pair covers the
-affected driver families or a declared production-weighted agent mix.
+promises. The corpus now has one non-empty SQLite snapshot source, but it is not large
+enough to transfer JSONL batching or throughput results to Hermes/OpenCode; those claims
+still require a driver-specific frozen pair or a declared production-weighted agent mix.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
@@ -518,18 +524,22 @@ affected driver families or a declared production-weighted agent mix.
   set-based finalizer establishes canonical ordinals before validation/publication; live
   batches and replacement swaps remain transactionally canonical. Live batches rebuild
   each distinct affected usage bucket once, never once per message.
-- A private cold projection may defer repeated ledger `sync_data` calls only through a
-  run-scoped staged directory: sync every staged file, atomically rename the whole run
-  into the scanner's committed namespace, and sync the runtime directory before SQLite
-  can publish. This optimization remains benchmark-gated on isolated sync time.
-  Existing/live projections retain ledger-sync-before-visible-SQLite ordering. Search is
-  independently disposable and may never delay canonical correctness validation.
+- A first cold projection now requires both the projection and ledger destination to be
+  absent. It buffer-flushes into a same-filesystem private ledger tree, syncs every staged
+  segment plus child-to-parent directory entries, atomically promotes the whole tree,
+  syncs its parent, and only then installs the validated SQLite file. A missing projection
+  beside an existing ledger fails closed to `rebuild`, preventing generation collisions.
+  Existing/live projections retain ledger-sync-before-visible-SQLite ordering. The frozen
+  pair measured segment syncs at 7,435 → 66 and ledger time at 96.64 s → 18.02 s; twelve
+  directory barriers cost 0.0005 s. Search is independently disposable and may never
+  delay canonical correctness validation.
 - Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
   these indexes because one missing provenance index turns source activation quadratic.
 - A performance optimization is merge-admissible only with a frozen before/after pair
-  from the same permission-read-only checksummed ledger and checksummed query suite, campaign ID,
-  machine, configuration, logical projection counts, and ranked-result digests. Estimates
-  and unpaired organic runs remain planning evidence. The first search step is the FTS5
+  from the same permission-read-only checksummed source snapshot for cold-write work or
+  the same ledger for replay work, plus one checksummed query suite, campaign ID, machine,
+  configuration, logical projection counts, and ranked-result digests. Estimates and
+  unpaired organic runs remain planning evidence. The first search step is the FTS5
   p50/p95/p99 baseline; a Tantivy bake-off starts only if the declared or observed query
   mix misses the product objective or relevance/availability requires it.
 - Memory-first fan-out for live streams (§5.2); DB commit is not on the notify path.
