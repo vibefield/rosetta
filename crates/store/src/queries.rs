@@ -510,7 +510,13 @@ pub fn search_filtered(
         );
     }
     binds.push(Value::from(limit));
-    sql.push_str(&format!(" ORDER BY rank LIMIT ?{}", binds.len()));
+    // FTS5 may assign the same BM25 score to many documents. Keep the wire
+    // contract deterministic at the LIMIT boundary instead of inheriting
+    // incidental rowid/insertion order from the current projection build.
+    sql.push_str(&format!(
+        " ORDER BY rank, m.timeline_id COLLATE BINARY LIMIT ?{}",
+        binds.len()
+    ));
 
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(binds), |row| {

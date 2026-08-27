@@ -83,6 +83,38 @@ fn base_batch() -> Batch {
 }
 
 #[test]
+fn search_breaks_equal_rank_ties_by_timeline_identity_before_limit() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let rows = ["timeline-zeta", "timeline-alpha", "timeline-middle"]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, timeline_id)| {
+            let mut row = message(timeline_id, ordinal as i64, MessageKind::Agent);
+            row.content = Some("identical equilibrium phrase".into());
+            IngestOp::Message(Box::new(row))
+        })
+        .collect();
+    store
+        .apply(&Batch {
+            ops: rows,
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    let hits = queries::search(store.conn(), "equilibrium", 2).unwrap();
+    assert_eq!(hits[0].score, hits[1].score);
+    assert_eq!(
+        hits.iter()
+            .map(|hit| hit.timeline_id.as_str())
+            .collect::<Vec<_>>(),
+        ["timeline-alpha", "timeline-middle"]
+    );
+}
+
+#[test]
 fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
