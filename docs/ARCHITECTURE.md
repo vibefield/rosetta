@@ -37,6 +37,16 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > in [`docs/ingest-engine.html`](ingest-engine.html) under “Measured performance and
 > search-finalization specification.” Tantivy remains a benchmark candidate, not a
 > selected canonical store or committed dependency.
+>
+> A retained current-HEAD campaign now covers all six locally installed adapters on one
+> external SSD. Discovery and standalone metadata took 4.95 s and 9.95 s. Fresh cold
+> publication of 768,280 messages took 709 s: canonical application was 395.84 s,
+> ledger writing 95.78 s, and FTS5 87.00 s. Replaying its permission-read-only 8.45 GB
+> ledger took 511.24 s at 184 MB maximum RSS, led by canonical application at 291.26 s.
+> The cold and rebuilt projections passed exact logical and ranked-search equivalence.
+> This mixed-corpus result changes the bottleneck ordering, not the store decision:
+> canonical statements and ledger IO are the first measurement/optimization targets,
+> while an alternate search backend remains gated on the product query mix.
 
 ---
 
@@ -418,6 +428,20 @@ fails if the roster, stream-driver contract, checkpoint round trip, or canonical
 classification changes. Every adapter has full canonical-op goldens; Hermes' snapshot
 projection is frozen alongside the eight existing golden corpora.
 
+The retained organic campaign adds real-source evidence for Antigravity, Claude Code,
+Codex, Grok, and Kimi Code. Hermes was installed and its metadata path was exercised but
+had no streamable session; Copilot, OpenCode, and Pi were not installed. Those four
+streaming cases therefore remain fixture/restart evidence, not organic performance
+evidence, and the SQLite snapshot-driver family still lacks a non-empty organic timing
+lane. The five non-empty runtimes produced 768,280 messages with exact FTS, usage-bucket,
+tool-call, and token aggregates, zero generation/topology/ordinal/staging defects, and a
+ranked-search-digest-equivalent replay result. Semantic backlog remains explicit: 550
+Claude metadata-only sessions are Pending and 79 result records are unmatched. Seven of
+those results have a call only in their parent/root session, so cross-session correlation
+is not yet closed. The stream also retained 195,484 unknown-type/no-op outcomes plus
+parsed-record unknown-field drift; zero hard errors means preservation succeeded, not
+that every current native shape has canonical semantics.
+
 This makes the optimization boundary explicit:
 
 - Batch session timestamp touches and the transaction-local pending-empty fast path
@@ -434,9 +458,12 @@ This makes the optimization boundary explicit:
 - Header-only ledger election and lower-copy framing are below the adapter boundary and
   apply to both driver families, subject to identical checksums and elected seals.
 
-The applicability is general; the current saving estimates are not. They came from a
-large Codex corpus and remain planning evidence until a frozen before/after campaign
-measures at least both driver families or a declared production-weighted agent mix.
+The applicability is general; the current saving estimates are not. The old estimates
+came from a large Codex corpus. The retained mixed corpus establishes a much larger
+canonical/ledger ceiling, but it still cannot attribute cost by adapter or operation and
+does not contain a non-empty SQLite snapshot source. Savings remain planning evidence
+until split counters and a frozen before/after pair measure the affected driver families
+or a declared production-weighted agent mix.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.

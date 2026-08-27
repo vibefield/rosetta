@@ -691,9 +691,9 @@ trait <b>AgentAdapter</b>: Send + Sync {
     <thead><tr><th>mark</th><th>meaning</th><th>how it may be used</th></tr></thead>
     <tbody>
       <tr><td class="cm">M</td><td>Measured on the developer's organic agent histories, macOS 26.5.2
-      on arm64, using the shipped <code>--profile</code> counters and <code>/usr/bin/time</code>.</td>
+      on arm64, using the shipped <code>--profile</code> counters and a declared external wall clock.</td>
       <td>Corroboration and optimization direction only; never a CI correctness dependency.</td></tr>
-      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>0143643</code>.</td>
+      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>9e9d1c6</code>.</td>
       <td>May establish present behavior and a refactoring seam.</td></tr>
       <tr><td class="cm">T</td><td>Automated fixture, replay, SQLite, or crash-protocol test.</td>
       <td>May gate implementation and CI.</td></tr>
@@ -702,27 +702,107 @@ trait <b>AgentAdapter</b>: Send + Sync {
     </tbody>
   </table>
   </div>
-  <p class="spec-note">The runs occurred sequentially while fixes were landing, and the source
-  histories continued to grow. Claude/Grok wall times therefore must not be used as agent-to-agent
-  speed comparisons. The final Codex cold run and later frozen-ledger rebuild are the phase-level
-  baselines. The volume was 98% full during the final measurements, so absolute times include a
-  documented storage-pressure penalty. Standalone meta-only wall time was not retained in this
-  baseline. The ingest workbench now captures discovery and standalone-meta process walls plus the
-  existing internal stream, canonical-finalize, and search-finalize profile counters; a new organic
-  run is still required before replacing this historical evidence gap with a measured number.
-  The earlier “frozen” rebuild only meant the ledger did not change during that command; its organic
-  artifacts were deleted and cannot support a new comparison. The later FTS campaign improved this:
-  the tool rejected write-permitted input, fingerprinted every ledger file and the query suite,
-  rechecked them before and after each run, and opened SQLite read-only. Its private artifacts were
-  still deleted after recording the structure-free summary and therefore cannot be cited as one side
-  of a future candidate comparison. Peak RSS, CPU time, and the SQLite table-versus-FTS byte split
-  were also not retained.</p>
+  <p class="spec-note">The historical runs occurred sequentially while fixes were landing, and the
+  source histories continued to grow. Claude/Grok wall times therefore must not be used as
+  agent-to-agent speed comparisons. Their APFS volume was 97–98% full, so absolute times include a
+  documented storage-pressure penalty. The earlier “frozen” rebuild only meant the ledger did not
+  change during that command, and the later Codex FTS campaign's private artifacts were deleted after
+  its structure-free summary was recorded; neither can support a new candidate comparison. The
+  retained six-adapter campaign below closes the discovery/standalone-meta timing gap and establishes
+  a permission-read-only, checksummed before-side on an external SSD with 58% free space. Its organic
+  sources still changed while the sequential cold run was in progress, so it is a deterministic
+  optimization input, not a globally atomic snapshot or an exact comparison with a historical run.
+  Cold-ingest peak RSS, CPU time, and the SQLite table-versus-FTS byte split remain unmeasured.</p>
   <div class="callout"><b>Hard merge gate.</b> Every performance optimization commit must cite a
     frozen before/after pair captured before either private artifact is deleted: same campaign ID,
     permission-read-only checksummed ledger, checksummed query suite, machine label, warmup/cycle counts,
     schema version, and logical row counts, with equal hit counts and ranked-result digests. Estimates,
     an unpaired baseline, or an organic one-off are planning evidence only. If one side was deleted,
     rerun it.</div>
+
+  <h3 class="spec">Retained six-adapter campaign <span class="badge b-bench">M</span><span class="badge b-pure">T</span></h3>
+  <p>At <code>9e9d1c6</code>, one current release build exercised every locally installed adapter:
+  Antigravity, Claude Code, Codex, Grok, Hermes, and Kimi Code. Discovery covered 38,439 files without
+  truncation in <b>4.95 s</b>. The isolated metadata process covered 38,439 matched files, 6,406
+  sessions, and 5,918 bounded skims in <b>9.95 s</b>, with zero unidentified or vanished files. The
+  subsequent fresh cold process framed 2,218,438 records, emitted 1,778,553 canonical operations,
+  and published 768,280 messages in <b>709 s</b> (second-resolution process-lock creation through
+  database publication). The output is a 5.55 GB SQLite projection backed by 8.45 GB across 66 raw
+  ledger segments. The volume was 42% used after the run.</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>non-overlapping cold phase</th><th>time</th><th>wall share</th><th>evidence-backed interpretation</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">canonical apply</td><td class="metric">395.843 s</td><td class="metric">55.8%</td><td>Dominant mixed-corpus cost; aggregate instrumentation cannot yet assign it by adapter or statement family.</td></tr>
+      <tr><td class="cm">ledger write</td><td class="metric">95.782 s</td><td class="metric">13.5%</td><td>Still combines frame/checksum/copy, buffered write, flush, and durable sync.</td></tr>
+      <tr><td class="cm">bulk FTS5</td><td class="metric">86.996 s</td><td class="metric">12.3%</td><td>Largest detachable publication phase, but no longer the largest cold cost.</td></tr>
+      <tr><td class="cm">usage buckets</td><td class="metric">27.072 s</td><td class="metric">3.8%</td><td>Set-based rebuild over the completed canonical table.</td></tr>
+      <tr><td class="cm">bulk validation</td><td class="metric">21.399 s</td><td class="metric">3.0%</td><td>Correctness gate; not a deletion candidate.</td></tr>
+      <tr><td class="cm">normalize</td><td class="metric">18.986 s</td><td class="metric">2.7%</td><td>116,848 framed records/s; still below the writer costs.</td></tr>
+      <tr><td class="cm">secondary indexes</td><td class="metric">17.564 s</td><td class="metric">2.5%</td><td>Deferred correctly, but material at this projection size.</td></tr>
+      <tr><td class="cm">source read</td><td class="metric">16.013 s</td><td class="metric">2.3%</td><td>522.9 MiB/s for the measured read windows.</td></tr>
+      <tr><td class="cm">SQLite commits</td><td class="metric">14.656 s</td><td class="metric">2.1%</td><td>Low ceiling for batch-size-only work.</td></tr>
+      <tr><td class="cm">walk + skim</td><td class="metric">7.093 s</td><td class="metric">1.0%</td><td>Discovery and metadata are not headline bottlenecks.</td></tr>
+      <tr><td class="cm">unassigned process overhead</td><td class="metric">7.597 s</td><td class="metric">1.1%</td><td>Wall residual after the non-overlapping counters above.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="spec-note">The parent <code>apply time</code> counter is intentionally excluded from the
+  table because it overlaps canonical apply, commits, buckets, FTS, indexes, and validation.
+  Canonical application plus ledger writing consumed 491.625 s, or 69.3% of wall time. Detaching
+  FTS5 alone would move the arithmetic canonical-ready point to about 622 s on this run; it improves
+  availability but does not solve cold ingestion. Split ledger timers and per-adapter/per-operation
+  canonical counters are therefore the next measurement work, before accepting any saving estimate.</p>
+
+  <p>A second current-HEAD projection replayed the exact frozen ledger in <b>511.24 s</b> with
+  184 MB maximum RSS. Its non-overlapping profile was 291.261 s canonical apply, 78.847 s FTS5,
+  34.460 s across the generation-election and replay ledger passes, 22.865 s buckets, 18.015 s
+  normalization, 17.075 s validation, 13.014 s commits, 9.329 s indexes, and 0.214 s publication.
+  Canonical application remained 57.0% of rebuild wall. Physical page accounting on the 5.55 GB
+  projection attributed about 727 MB to the FTS structures and 4.45 GB to the message table plus its
+  automatic identity/ordinal indexes; the search artifact is expensive to build but is not most of
+  the stored projection.</p>
+
+  <p>The published projection passed <code>quick_check</code> and foreign-key validation. Message,
+  FTS, and usage-bucket message counts are all exactly 768,280; tool-call counts and all five token
+  component sums also agree exactly. There are zero staged source operations, generation gaps,
+  ordinal collisions, missing parents, or missing roots. The six runtimes contributed 3 Antigravity,
+  5,353 Claude Code, 370 Codex, 126 Grok, and 4 Kimi Indexed sessions; Hermes had no streamable
+  session. A further 550 Claude metadata-only sessions correctly remain Pending. Semantic closure is
+  not complete: 79 source result records remain unmatched (77 Claude, 2 Grok). Seven of the Claude
+  targets exist only as calls in the parent/root session, proving a cross-session correlation gap;
+  the other 72 targets do not exist anywhere in the captured projection. Exact before/after
+  optimization comparisons may retain this backlog, but no release claim may call it resolved. The
+  stream reports also retained 195,484 unknown-type/no-op outcomes (35 Antigravity, 153,875 Claude,
+  and 41,574 Codex; zero Grok/Kimi) plus parsed-record unknown-field drift. Much of this is a
+  deliberately noncanonical progress/event view, but it remains drift evidence to triage, not proof
+  of complete native-schema coverage.</p>
+
+  <p>The ledger tree, database, and diagnostic suite were made permission-read-only and fingerprinted
+  before the search run; the harness re-verified them before and after 5 warmups plus 100 measured
+  cycles per case in both connection lanes. The private artifacts are retained outside the
+  repository for candidate pairs. Only structure-free results are recorded here:</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>fresh-connection diagnostic class</th><th>p50</th><th>p95</th><th>p99</th><th>verdict</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">equal-weight diagnostic mix</td><td class="metric">42.19 ms</td><td class="metric">203.52 ms</td><td class="metric">231.32 ms</td><td>Not a product-mix percentile.</td></tr>
+      <tr><td class="cm">broad ranked</td><td class="metric">189.54 ms</td><td class="metric">227.97 ms</td><td class="metric">268.54 ms</td><td>Misses the 50 ms objective decisively.</td></tr>
+      <tr><td class="cm">filtered tool</td><td class="metric">109.57 ms</td><td class="metric">129.78 ms</td><td class="metric">163.43 ms</td><td>Filtering does not rescue a broad rank.</td></tr>
+      <tr><td class="cm">medium ranked</td><td class="metric">41.95 ms</td><td class="metric">48.62 ms</td><td class="metric">52.02 ms</td><td>At the objective boundary.</td></tr>
+      <tr><td class="cm">phrase</td><td class="metric">32.44 ms</td><td class="metric">39.87 ms</td><td class="metric">45.93 ms</td><td>Within the warm target.</td></tr>
+      <tr><td class="cm">selective ranked</td><td class="metric">10.44 ms</td><td class="metric">14.43 ms</td><td class="metric">18.73 ms</td><td>Comfortably within target.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="spec-note">The shared-connection aggregate p50/p95/p99 was 36.21/196.75/204.37 ms;
+  fresh connection open widened the diagnostic aggregate to 42.19/203.52/231.32 ms. This retained
+  campaign strengthens the broad-query Tantivy case but does not open it by itself: the actual or
+  declared product query-class mix remains the gate-zero input. The rebuilt projection passed the
+  harness's exact schema/count/filter/hit/ranked-digest comparison against the cold projection.
+  Despite identical semantics, fresh-connection broad p99 moved from 268.54 to 218.39 ms and the
+  aggregate p99 from 231.32 to 199.28 ms. Cache and physical-layout noise are therefore material;
+  candidate latency claims require replicated paired runs, not a single before/after sample.</p>
 
   <h3 class="spec">Organic corpus baseline <span class="badge b-bench">M</span></h3>
   <div class="tbl-scroll">
@@ -746,9 +826,10 @@ trait <b>AgentAdapter</b>: Send + Sync {
     </tbody>
   </table>
   </div>
-  <p class="spec-note">One all-agent discovery pass took 1.25 s. Discovery is therefore not a
-  headline bottleneck. Meta correctness was exercised inside every full ingest; the absent standalone
-  meta timing is an evidence gap to close, not permission to infer zero cost.</p>
+  <p class="spec-note">This table is the historical pre-workbench lane. Its one all-agent discovery
+  pass took 1.25 s, while standalone meta wall was not retained. The current retained campaign above
+  supersedes that measurement gap with separate 4.95 s discovery and 9.95 s meta processes; it does
+  not turn the growing corpora into an exact historical comparison.</p>
 
   <h3 class="spec">Final Codex cold-ingest phase accounting <span class="badge b-bench">M</span></h3>
   <div class="tbl-scroll">
@@ -1091,11 +1172,11 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   <table>
     <thead><tr><th>ledger candidate</th><th>evidence</th><th>estimate <span class="badge b-bench">E</span></th><th>priority</th></tr></thead>
     <tbody>
-      <tr><td class="cm">split ledger profiling</td><td>16.362 s aggregate currently combines framing, checksum, copy, buffer flush, write, and sync</td><td class="metric">measurement only</td><td>first</td></tr>
-      <tr><td class="cm">stage cold runs; one publication barrier</td><td>sync per batch in current code; actual sync share not yet isolated</td><td class="metric">save 5–10 s if sync dominates</td><td>after profiling</td></tr>
-      <tr><td class="cm">header-only election pass</td><td>rebuild scans the ledger once for seals and again for replay; 11.759 s aggregate</td><td class="metric">save 4–6 s rebuild</td><td>second</td></tr>
-      <tr><td class="cm">zero-copy raw framing + larger buffer</td><td><code>append_raw</code> allocates and copies every payload into a frame body</td><td class="metric">save 1–3 s write</td><td>benchmark after sync change</td></tr>
-      <tr><td class="cm">compression / retention GC</td><td>4.6 GB Codex ledger; keep-forever policy</td><td class="metric">storage benefit; time unknown</td><td>separate RLG2 experiment</td></tr>
+      <tr><td class="cm">split ledger profiling</td><td>95.782 s on the retained mixed cold run still combines framing, checksum, copy, buffer flush, write, and sync</td><td class="metric">measurement only</td><td>first</td></tr>
+      <tr><td class="cm">stage cold runs; one publication barrier</td><td>sync per batch in current code; actual sync share not yet isolated</td><td class="metric">TBD; historical 5–10 s estimate is not transferable</td><td>after profiling</td></tr>
+      <tr><td class="cm">header-only election pass</td><td>two-pass read was 34.460 s on the frozen 8.45 GB ledger</td><td class="metric">hard ceiling below 17.23 s; actual TBD</td><td>second</td></tr>
+      <tr><td class="cm">zero-copy raw framing + larger buffer</td><td><code>append_raw</code> allocates and copies every payload into a frame body</td><td class="metric">historical 1–3 s; current TBD</td><td>benchmark after sync change</td></tr>
+      <tr><td class="cm">compression / retention GC</td><td>8.45 GB retained mixed ledger; keep-forever policy</td><td class="metric">storage benefit; time unknown</td><td>separate RLG2 experiment</td></tr>
     </tbody>
   </table>
   </div>
@@ -1107,24 +1188,27 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   <h3 class="spec">Canonical-apply cost: reduce statements before redesigning storage</h3>
   <p><span class="badge b-io">C</span> Every message currently performs an identity lookup, insert or
   update, session touch, and pending-merge query. Tool-result and usage merges perform another
-  lookup, update, and touch. The measured Codex projection contains 311,858 messages and 128,890
-  completed tool results, so cheap individual statements become material in aggregate.</p>
+  lookup, update, and touch. The historical Codex projection contains 311,858 messages and 128,890
+  completed tool results; the retained mixed projection contains 768,280 messages and required
+  395.843 s of canonical application cold / 291.261 s on replay. Aggregate timers cannot yet assign
+  that increase to an adapter, operation family, source batching, or cache/IO interaction.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>canonical candidate</th><th>required semantics</th><th>estimate <span class="badge b-bench">E</span></th><th>gate</th></tr></thead>
     <tbody>
-      <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">save 2–4 s</td><td>Replacement/replay timestamp tests unchanged.</td></tr>
-      <tr><td class="cm">pending-empty fast path</td><td>Check once per transaction; query per message only after a pending merge is known to exist.</td><td class="metric">save 2–4 s</td><td>Cross-file result-before-call tests unchanged.</td></tr>
-      <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">save 2–5 s</td><td>One-shot, split-resume, replay, and pending goldens byte-equal.</td></tr>
-      <tr><td class="cm">larger cold batches</td><td>Raise 1,024-record / 32 MiB limits only in bounded cold mode.</td><td class="metric">under 2 s likely</td><td>Peak memory and partial-tail bounds retained.</td></tr>
+      <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">historical 2–4 s; current TBD</td><td>Replacement/replay timestamp tests unchanged.</td></tr>
+      <tr><td class="cm">pending-empty fast path</td><td>Check once per transaction; query per message only after a pending merge is known to exist.</td><td class="metric">historical 2–4 s; current TBD</td><td>Cross-file result-before-call tests unchanged.</td></tr>
+      <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">historical 2–5 s; current TBD</td><td>One-shot, split-resume, replay, and pending goldens byte-equal.</td></tr>
+      <tr><td class="cm">larger cold batches</td><td>Raise 1,024-record / 32 MiB limits only in bounded cold mode.</td><td class="metric">historically under 2 s; current TBD</td><td>Peak memory and partial-tail bounds retained.</td></tr>
     </tbody>
   </table>
   </div>
   <p>Add per-op timers/counts before combining changes so each saving is attributable. Do not repeat
   the rejected broad bulk fast path without new evidence: its exact frozen-ledger comparison improved
   canonical apply only from 20.609 s to 19.714 s, while the full ingest regressed from 101.23 s to
-  108.23 s. Normalize parallelism is also deferred: normalization was only 6.797 s, while the single
-  writer and IO phases dominate. Each candidate is one commit and one frozen before/after pair;
+  108.23 s. The retained run does not revive that experiment: its attribution counters must come
+  first. Normalize parallelism is also deferred: normalization was only 18.015 s of the 511.24 s
+  rebuild, while the single writer and IO phases dominate. Each candidate is one commit and one frozen before/after pair;
   correctness goldens, logical projection counts, and ranked search results must remain equal.</p>
 
   <h3 class="spec">Expected bounds and implementation order</h3>
@@ -1134,17 +1218,20 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <tbody>
       <tr><td class="cm">decoupled canonical-ready, cold</td><td class="metric">101.23 − 33.85 = 67.38 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
       <tr><td class="cm">decoupled canonical-ready, rebuild</td><td class="metric">79.53 − 24.83 = 54.70 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
-      <tr><td class="cm">decoupled + ledger/apply candidates, cold</td><td class="metric">about 50–60 s</td><td>Estimate only if isolated sync cost supports staging; overlapping savings must be measured sequentially.</td></tr>
-      <tr><td class="cm">decoupled + ledger/apply candidates, rebuild</td><td class="metric">about 40–48 s</td><td>Estimate; excludes search-ready time.</td></tr>
+      <tr><td class="cm">retained mixed canonical-ready, cold</td><td class="metric">709.00 − 87.00 ≈ 622 s</td><td>Current six-adapter arithmetic forecast; canonical application and ledger IO dominate the remaining wall.</td></tr>
+      <tr><td class="cm">retained mixed canonical-ready, rebuild</td><td class="metric">511.24 − 78.85 = 432.39 s</td><td>Current frozen-ledger arithmetic forecast; not yet an observed asynchronous publication.</td></tr>
+      <tr><td class="cm">decoupled + ledger/apply candidates, cold</td><td class="metric">historical Codex: about 50–60 s</td><td>Do not extrapolate to the retained mixed corpus; replace after split counters and sequential pairs.</td></tr>
+      <tr><td class="cm">decoupled + ledger/apply candidates, rebuild</td><td class="metric">historical Codex: about 40–48 s</td><td>Do not extrapolate to the 511.24 s retained replay; excludes search-ready time.</td></tr>
       <tr><td class="cm">search-ready</td><td class="metric">synchronous FTS5 today</td><td>Async-sidecar time remains TBD; no alternate-backend claim until a gate-zero decision opens the bake-off.</td></tr>
     </tbody>
   </table>
   </div>
   <ol class="order">
-    <li><b>Freeze inputs and capture the baseline before changing code.</b> Use one permission-read-only
-    checksummed ledger and checksummed query suite; retain the private artifacts until every intended
-    before/after pair exists. Record machine/storage state, standalone meta, index bytes, RSS, phase
-    gaps, and FTS5 p50/p95/p99 with at least 100 measured cycles. Never add organic content to CI.</li>
+    <li><b>Freeze inputs and capture the baseline before changing code — retained before-side complete.</b>
+    The six-adapter ledger, cold projection, rebuild projection, checksummed suite, 100-cycle search
+    reports, physical index bytes, rebuild RSS, storage state, and phase counters remain private and
+    retained. A candidate still needs its paired after-side and replicated latency runs. Never add
+    organic content to CI.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>
