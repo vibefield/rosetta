@@ -163,6 +163,114 @@ fn ledger_root(flags: &Flags, db: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| db.with_extension("ledger"))
 }
 
+/// A fresh cold ingest writes its ledger into a same-filesystem private
+/// directory. The tree is promoted only after every segment and directory
+/// entry is durable and immediately before the validated SQLite projection
+/// is installed. A crash before promotion leaves an unscanned staging tree;
+/// a crash after promotion leaves a complete ledger that `rebuild` can use.
+#[derive(Debug)]
+pub(crate) struct ColdLedgerStage {
+    temp: tempfile::TempDir,
+    destination: PathBuf,
+    publication_barriers: Vec<PathBuf>,
+}
+
+impl ColdLedgerStage {
+    pub(crate) fn new(destination: &std::path::Path) -> Result<Self, String> {
+        match std::fs::symlink_metadata(destination) {
+            Ok(_) => {
+                return Err(format!(
+                    "projection is missing but ledger {} already exists; use `rosettad rebuild` so generations cannot collide",
+                    destination.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "stating ledger destination {}: {error}",
+                    destination.display()
+                ));
+            }
+        }
+
+        let parent = projection_parent(destination);
+        let publication_barriers = directory_publication_barriers(parent);
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+        let temp = tempfile::Builder::new()
+            .prefix(".rosetta-ledger-")
+            .tempdir_in(parent)
+            .map_err(|error| {
+                format!(
+                    "creating private ledger beside {}: {error}",
+                    destination.display()
+                )
+            })?;
+        Ok(Self {
+            temp,
+            destination: destination.to_path_buf(),
+            publication_barriers,
+        })
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        self.temp.path()
+    }
+
+    pub(crate) fn publish(self) -> Result<(), String> {
+        // The projection lock excludes Rosetta writers. Recheck anyway so an
+        // unrelated process cannot silently replace a ledger destination.
+        match std::fs::symlink_metadata(&self.destination) {
+            Ok(_) => {
+                return Err(format!(
+                    "ledger destination {} appeared during cold ingest",
+                    self.destination.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "restating ledger destination {}: {error}",
+                    self.destination.display()
+                ));
+            }
+        }
+        std::fs::rename(self.temp.path(), &self.destination).map_err(|error| {
+            format!(
+                "atomically publishing ledger {}: {error}",
+                self.destination.display()
+            )
+        })?;
+        for path in &self.publication_barriers {
+            std::fs::File::open(path)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| format!("syncing ledger directory {}: {error}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+
+/// Child-first barriers for publishing a new entry in `parent`. If the
+/// parent itself must be created, include every new directory plus the first
+/// existing ancestor whose child entry changes.
+fn directory_publication_barriers(parent: &std::path::Path) -> Vec<PathBuf> {
+    let mut barriers = Vec::new();
+    let mut cursor = parent;
+    while !cursor.exists() {
+        barriers.push(cursor.to_path_buf());
+        let Some(next) = cursor.parent() else {
+            return barriers;
+        };
+        cursor = next;
+    }
+    if barriers.is_empty() {
+        barriers.push(parent.to_path_buf());
+    } else {
+        barriers.push(cursor.to_path_buf());
+    }
+    barriers
+}
+
 /// Cross-process writer/rebuild lock. SQLite owns the lock lifetime, so a
 /// crash releases it automatically instead of leaving a stale pid file.
 struct ProjectionLock {
@@ -226,6 +334,50 @@ fn selected(flags: &Flags) -> Result<Vec<&'static dyn AgentAdapter>, String> {
         .collect()
 }
 
+pub(crate) fn record_backfill_failures(
+    kind: &str,
+    discovery_truncated: bool,
+    meta: &rosetta_pipeline::MetaReport,
+    stream: &rosetta_pipeline::StreamReport,
+    failures: &mut Vec<String>,
+) {
+    if discovery_truncated {
+        failures.push(format!("{kind} discovery walk was truncated"));
+    }
+    if meta.walk_truncated {
+        failures.push(format!("{kind} meta walk was truncated"));
+    }
+    if meta.files_unidentified > 0 {
+        failures.push(format!(
+            "{kind} left {} streamable files unidentified",
+            meta.files_unidentified
+        ));
+    }
+    if meta.files_vanished > 0 {
+        failures.push(format!(
+            "{kind} lost {} files during meta ingest",
+            meta.files_vanished
+        ));
+    }
+    if stream.hard_errors > 0
+        || stream.oversized > 0
+        || stream.files_missing > 0
+        || stream.retries_exhausted > 0
+        || stream.conflicts > 0
+        || stream.files_incomplete > 0
+    {
+        failures.push(format!(
+            "{kind} ingest incomplete: {} hard, {} oversized, {} missing, {} retry-exhausted, {} conflicts, {} incomplete files",
+            stream.hard_errors,
+            stream.oversized,
+            stream.files_missing,
+            stream.retries_exhausted,
+            stream.conflicts,
+            stream.files_incomplete,
+        ));
+    }
+}
+
 fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("ingest needs --db PATH")?;
@@ -235,10 +387,16 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let _projection_lock = projection_lock(&db)?;
 
     let (mut store, private_projection) = open_for_backfill(&db)?;
-    let ledgers = ledger_root(&flags, &db);
+    let public_ledgers = ledger_root(&flags, &db);
     // Only a brand-new private projection may defer per-batch ledger sync.
     // Existing projections are public and retain the live durability order.
     let defer_ledger_sync = private_projection.is_some();
+    let ledger_stage = defer_ledger_sync
+        .then(|| ColdLedgerStage::new(&public_ledgers))
+        .transpose()?;
+    let ledgers = ledger_stage
+        .as_ref()
+        .map_or(public_ledgers.as_path(), ColdLedgerStage::path);
     let mut ingest_ledgers = Vec::new();
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
@@ -263,7 +421,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         if discovery.walk_truncated {
             failures.push(format!("{} discovery walk was truncated", adapter.kind()));
         }
-        let ledger = open_ledger(&ledgers, adapter.kind())?;
+        let ledger = open_ledger(ledgers, adapter.kind())?;
         ingest_ledgers.push(if defer_ledger_sync {
             ledger.defer_sync_until_flush()
         } else {
@@ -397,8 +555,10 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         }
         return Err(failures.join("; "));
     }
+    drop(ingest_ledgers);
     if let Some(temp) = private_projection {
-        publish_private_projection(store, temp, &db, &instrument)?;
+        let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
+        publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
     }
     if flags.json {
         bench::emit_profile("ingest", &instrument);
@@ -421,11 +581,19 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let _projection_lock = projection_lock(&db)?;
 
     let (mut store, private_projection) = open_for_backfill(&db)?;
-    let ledgers = ledger_root(&flags, &db);
+    let public_ledgers = ledger_root(&flags, &db);
+    let defer_ledger_sync = private_projection.is_some();
+    let ledger_stage = defer_ledger_sync
+        .then(|| ColdLedgerStage::new(&public_ledgers))
+        .transpose()?;
+    let backfill_ledgers = ledger_stage
+        .as_ref()
+        .map_or(public_ledgers.as_path(), ColdLedgerStage::path);
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
 
-    let mut runners = Vec::new();
+    let mut pending_runners = Vec::new();
+    let mut failures = Vec::new();
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
         if !discovery.installed {
             println!("{}: not installed, skipping", adapter.kind());
@@ -437,7 +605,12 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         // Watch BEFORE the backfill scan: a write landing mid-backfill still
         // produces a hint for the first live tick.
         let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
-        let mut ledger = open_ledger(&ledgers, adapter.kind())?;
+        let ledger = open_ledger(backfill_ledgers, adapter.kind())?;
+        let mut ledger = if defer_ledger_sync {
+            ledger.defer_sync_until_flush()
+        } else {
+            ledger
+        };
 
         let (meta, files) = meta_ingest_into(
             *adapter,
@@ -467,11 +640,53 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             stream.stats.messages_inserted,
             discovery.root.display(),
         );
+        record_backfill_failures(
+            adapter.kind(),
+            discovery.walk_truncated,
+            &meta,
+            &stream,
+            &mut failures,
+        );
 
-        let runner = LiveRunner::start_with_ledger(
+        pending_runners.push((
             *adapter,
             runtime,
             discovery.root.clone(),
+            events,
+            Some(ledger),
+        ));
+    }
+    if pending_runners.is_empty() {
+        return Err("nothing to watch: no installed runtimes".to_string());
+    }
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    if defer_ledger_sync {
+        for (_, _, _, _, ledger) in &mut pending_runners {
+            let mut ledger = ledger.take().expect("a cold runner owns its staged ledger");
+            instrument
+                .ledger_write(&mut ledger, |ledger| ledger.flush())
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if let Some(temp) = private_projection {
+        let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
+        publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
+        store = Store::open(&db)
+            .map_err(|error| format!("opening published {}: {error:?}", db.display()))?;
+    }
+
+    let mut runners = Vec::new();
+    for (adapter, runtime, root, events, ledger) in pending_runners {
+        let ledger = match ledger {
+            Some(ledger) => ledger,
+            None => open_ledger(&public_ledgers, adapter.kind())?,
+        };
+        let runner = LiveRunner::start_with_ledger(
+            adapter,
+            runtime,
+            root,
             Box::new(events),
             &mut store,
             opts.clone(),
@@ -481,14 +696,6 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
         runners.push((adapter.kind(), runner, 0_u64));
-    }
-    if runners.is_empty() {
-        return Err("nothing to watch: no installed runtimes".to_string());
-    }
-    if let Some(temp) = private_projection {
-        publish_private_projection(store, temp, &db, &instrument)?;
-        store = Store::open(&db)
-            .map_err(|error| format!("opening published {}: {error:?}", db.display()))?;
     }
 
     let mut remaining = flags.ticks;
@@ -638,6 +845,7 @@ fn publish_private_projection(
     temp: tempfile::TempPath,
     db: &std::path::Path,
     instrument: &Instrument,
+    before_install: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     instrument
         .finish_bulk_load(&mut store)
@@ -655,6 +863,7 @@ fn publish_private_projection(
         std::fs::File::open(&*temp)
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("syncing private projection: {error}"))?;
+        before_install()?;
         install_rebuilt_projection(db, temp.as_ref())?;
         let _installed = temp.keep();
         Ok(())
@@ -773,7 +982,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         reports.push((adapter.kind(), report, profile));
     }
 
-    publish_private_projection(store, temp, &db, &instrument)?;
+    publish_private_projection(store, temp, &db, &instrument, || Ok(()))?;
 
     for (kind, report, profile) in reports {
         println!(
@@ -846,6 +1055,38 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("needs new paths"));
         assert_eq!(std::fs::read(db).unwrap(), b"sentinel");
+    }
+
+    #[test]
+    fn cold_ledger_stage_is_private_until_atomic_promotion() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("projection.ledger");
+        let stage = ColdLedgerStage::new(&destination).unwrap();
+        let staged_path = stage.path().to_path_buf();
+        let mut ledger = Ledger::open(&staged_path.join("codex"))
+            .unwrap()
+            .defer_sync_until_flush();
+        ledger
+            .append_meta(rosetta_pipeline::LEDGER_META_SCHEMA_VERSION, "[]")
+            .unwrap();
+        ledger.checkpoint().unwrap();
+        assert!(!destination.exists());
+        ledger.flush().unwrap();
+        drop(ledger);
+
+        stage.publish().unwrap();
+        assert!(!staged_path.exists());
+        assert!(destination.join("codex/00000000.rledger").is_file());
+        assert!(ColdLedgerStage::new(&destination).is_err());
+    }
+
+    #[test]
+    fn cold_ledger_stage_refuses_a_preexisting_empty_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("projection.ledger");
+        std::fs::create_dir(&destination).unwrap();
+        let error = ColdLedgerStage::new(&destination).unwrap_err();
+        assert!(error.contains("use `rosettad rebuild`"));
     }
 
     fn args(db: &std::path::Path, ledger: &std::path::Path, agent: &str) -> Vec<String> {
@@ -941,7 +1182,7 @@ mod tests {
         let private = private.expect("a missing projection takes the cold path");
         assert!(private.exists());
 
-        publish_private_projection(store, private, &db, &Instrument::new()).unwrap();
+        publish_private_projection(store, private, &db, &Instrument::new(), || Ok(())).unwrap();
         assert!(db.exists());
         assert!(!sidecar(&db, "-wal").exists());
         Store::open(&db).unwrap();
