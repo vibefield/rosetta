@@ -34,6 +34,7 @@ pub enum Metric {
     LedgerFrameBytes,
     LedgerFlushes,
     LedgerSyncs,
+    LedgerDirectorySyncs,
     LedgerSegmentsOpened,
     LedgerElectionReadNanos,
     LedgerReplayReadNanos,
@@ -41,6 +42,7 @@ pub enum Metric {
     LedgerBufferWriteNanos,
     LedgerFlushNanos,
     LedgerSyncNanos,
+    LedgerDirectorySyncNanos,
     LedgerSegmentOpenNanos,
     SourceStageNanos,
     CanonicalApplyNanos,
@@ -84,7 +86,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 72;
+const METRIC_COUNT: usize = 74;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -111,6 +113,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::LedgerFrameBytes, "ledger frame bytes"),
     (Metric::LedgerFlushes, "ledger flushes"),
     (Metric::LedgerSyncs, "ledger syncs"),
+    (Metric::LedgerDirectorySyncs, "ledger directory syncs"),
     (Metric::LedgerSegmentsOpened, "ledger segments opened"),
     (Metric::LedgerElectionReadNanos, "ledger election read time"),
     (Metric::LedgerReplayReadNanos, "ledger replay read time"),
@@ -118,6 +121,10 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::LedgerBufferWriteNanos, "ledger buffered write time"),
     (Metric::LedgerFlushNanos, "ledger flush time"),
     (Metric::LedgerSyncNanos, "ledger sync time"),
+    (
+        Metric::LedgerDirectorySyncNanos,
+        "ledger directory sync time",
+    ),
     (Metric::LedgerSegmentOpenNanos, "ledger segment open time"),
     (Metric::SourceStageNanos, "source staging time"),
     (Metric::CanonicalApplyNanos, "canonical apply time"),
@@ -228,11 +235,13 @@ impl Instrument {
         self.add(Metric::LedgerFrameBytes, stats.frame_bytes);
         self.add(Metric::LedgerFlushes, stats.flushes);
         self.add(Metric::LedgerSyncs, stats.syncs);
+        self.add(Metric::LedgerDirectorySyncs, stats.directory_syncs);
         self.add(Metric::LedgerSegmentsOpened, stats.segments_opened);
         self.add(Metric::LedgerFrameNanos, stats.frame_nanos);
         self.add(Metric::LedgerBufferWriteNanos, stats.buffer_write_nanos);
         self.add(Metric::LedgerFlushNanos, stats.flush_nanos);
         self.add(Metric::LedgerSyncNanos, stats.sync_nanos);
+        self.add(Metric::LedgerDirectorySyncNanos, stats.directory_sync_nanos);
         self.add(Metric::LedgerSegmentOpenNanos, stats.segment_open_nanos);
     }
 
@@ -394,6 +403,7 @@ mod tests {
         assert!(report.contains("pending batch checks"));
         assert!(report.contains("pending lookup time"));
         assert!(report.contains("ledger sync time"));
+        assert!(report.contains("ledger directory sync time"));
         assert!(report.contains("bulk renumber time"));
         assert!(report.contains("bulk FTS time"));
         assert!(report.contains("publication time"));

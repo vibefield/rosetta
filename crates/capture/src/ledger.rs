@@ -81,6 +81,8 @@ pub struct LedgerWriteStats {
     pub frame_bytes: u64,
     pub flushes: u64,
     pub syncs: u64,
+    /// Directory durability barriers, kept separate from segment-file syncs.
+    pub directory_syncs: u64,
     pub segments_opened: u64,
     /// Body construction/copy plus frame-header and checksum work.
     pub frame_nanos: u64,
@@ -88,6 +90,7 @@ pub struct LedgerWriteStats {
     pub buffer_write_nanos: u64,
     pub flush_nanos: u64,
     pub sync_nanos: u64,
+    pub directory_sync_nanos: u64,
     /// Segment create plus the magic-header write.
     pub segment_open_nanos: u64,
 }
@@ -112,6 +115,10 @@ pub struct Ledger {
     /// Rotated segments that were buffer-flushed but not yet synced. Paths
     /// keep the writer lightweight; the final barrier reopens each file.
     unsynced_segments: Vec<PathBuf>,
+    /// Directories whose entries changed since the last durable barrier.
+    /// Ordered child-first so newly created directory trees become durable
+    /// from their leaves through the first pre-existing ancestor.
+    unsynced_directories: Vec<PathBuf>,
     write_stats: LedgerWriteStats,
 }
 
@@ -120,6 +127,7 @@ impl Ledger {
     /// the highest existing segment — existing segments are never reopened
     /// for writing, so a previous crash's torn tail stays untouched.
     pub fn open(dir: &Path) -> Result<Self, CaptureError> {
+        let unsynced_directories = directory_creation_barrier(dir);
         std::fs::create_dir_all(dir).map_err(|error| io_error("creating", dir, error))?;
         let next = segment_files(dir)?
             .last()
@@ -134,6 +142,7 @@ impl Ledger {
             defined: HashMap::new(),
             defer_checkpoint_sync: false,
             unsynced_segments: Vec::new(),
+            unsynced_directories,
             write_stats: LedgerWriteStats::default(),
         })
     }
@@ -256,6 +265,18 @@ impl Ledger {
             synced.map_err(|error| io_error("syncing", path, error))?;
         }
         self.unsynced_segments.clear();
+
+        for path in &self.unsynced_directories {
+            self.write_stats.directory_syncs = self.write_stats.directory_syncs.saturating_add(1);
+            let started = Instant::now();
+            let synced = sync_directory(path);
+            self.write_stats.directory_sync_nanos = self
+                .write_stats
+                .directory_sync_nanos
+                .saturating_add(elapsed_nanos(started));
+            synced.map_err(|error| io_error("syncing directory", path, error))?;
+        }
+        self.unsynced_directories.clear();
         self.rotate_if_needed(true);
         Ok(())
     }
@@ -377,11 +398,54 @@ impl Ledger {
             .segment_open_nanos
             .saturating_add(elapsed_nanos(started));
         let file = opened?;
+        self.queue_directory_sync(self.dir.clone());
         self.write_stats.segments_opened = self.write_stats.segments_opened.saturating_add(1);
         self.written = SEGMENT_MAGIC.len() as u64;
         self.writer = Some(BufWriter::new(file));
         Ok(())
     }
+
+    fn queue_directory_sync(&mut self, path: PathBuf) {
+        if !self.unsynced_directories.contains(&path) {
+            self.unsynced_directories.push(path);
+        }
+    }
+}
+
+/// Return the directory barriers needed if `dir` is about to be created.
+/// The first pre-existing ancestor is included because its child entry also
+/// changes. Existing ledger directories need no barrier until a segment is
+/// created, at which point `ensure_writer` queues the ledger directory.
+fn directory_creation_barrier(dir: &Path) -> Vec<PathBuf> {
+    let mut barriers = Vec::new();
+    let mut cursor = dir;
+    while !cursor.exists() {
+        barriers.push(cursor.to_path_buf());
+        let Some(parent) = cursor.parent() else {
+            return barriers;
+        };
+        cursor = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+    }
+    if !barriers.is_empty() {
+        barriers.push(cursor.to_path_buf());
+    }
+    barriers
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+// Windows persists directory-entry metadata through the file handle barrier;
+// opening a directory with std::fs::File is not portable there.
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Scan every entry across all segments in order. Torn or corrupt tails end
@@ -739,6 +803,7 @@ mod tests {
         assert!(stats.frame_bytes > 6);
         assert_eq!(stats.flushes, 1);
         assert_eq!(stats.syncs, 1, "default checkpoints stay live-durable");
+        assert_eq!(stats.directory_syncs, 1);
         assert_eq!(stats.segments_opened, 1);
         assert_eq!(ledger.take_write_stats(), LedgerWriteStats::default());
 
@@ -768,11 +833,13 @@ mod tests {
         let checkpoints = ledger.take_write_stats();
         assert_eq!(checkpoints.flushes, 8);
         assert_eq!(checkpoints.syncs, 0);
+        assert_eq!(checkpoints.directory_syncs, 0);
         assert_eq!(checkpoints.segments_opened, 8);
 
         ledger.flush().unwrap();
         let barrier = ledger.take_write_stats();
         assert_eq!(barrier.syncs, 8);
+        assert_eq!(barrier.directory_syncs, 1);
         assert_eq!(barrier.flushes, 0, "every segment already rotated");
 
         let scanned = scan(dir.path()).unwrap();
@@ -785,6 +852,24 @@ mod tests {
                 .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
                 .count(),
             8
+        );
+    }
+
+    #[test]
+    fn first_barrier_syncs_new_directory_tree_child_first() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("ledger").join("runtime");
+        let mut ledger = Ledger::open(&dir).unwrap();
+        ledger
+            .append_raw(&source("a.jsonl"), 1, [(0_u64, b"one".as_slice())])
+            .unwrap();
+        ledger.checkpoint().unwrap();
+
+        let stats = ledger.take_write_stats();
+        assert_eq!(stats.syncs, 1);
+        assert_eq!(
+            stats.directory_syncs, 3,
+            "runtime, ledger root, and the pre-existing parent need barriers"
         );
     }
 
