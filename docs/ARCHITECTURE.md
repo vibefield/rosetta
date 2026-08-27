@@ -453,10 +453,12 @@ This makes the optimization boundary explicit:
   88.671 s (−70.6%). Exact logical and ranked-result equivalence passed. Peak RSS
   rose from 190 MB to 502 MB, so partitioning that finalizer is a future measured
   memory/speed tradeoff, not a free follow-up.
-- Batch session timestamp touches and the transaction-local pending-empty fast path
-  are roster-wide: all nine adapters exercise both `Message` and `ToolResult` store
-  paths. The pending flag must become true when an unmatched result is queued during
-  the transaction; an initially empty table is not permission to skip later lookups.
+- Batch session timestamp touches and target-aware pending reconciliation are
+  roster-wide: all nine adapters exercise both `Message` and `ToolResult` store paths.
+  The transaction-local gate caches exact usage/result targets by canonical session,
+  loads them through the existing primary key, and updates immediately on queue/drain.
+  Persistent orphans in one session therefore remain recoverable without poisoning
+  unrelated messages, sessions, or adapters.
 - Same-batch tool-result folding is roster-wide in semantics, but separate usage
   folding applies only to Codex, Copilot, and Grok today. Inline usage remains part of
   message application. Cross-batch and cross-file pending reconciliation stays as the
@@ -468,12 +470,16 @@ This makes the optimization boundary explicit:
   apply to both driver families, subject to identical checksums and elected seals.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
-now attribute replay cost by adapter and canonical statement family. After the ordinal
-change, the retained mixed candidate measured 16.608 s in message writes, 13.939 s in
-message identity lookups, 7.905 s in pending lookups, and 1.680 s in session touches.
-Those are ceilings rather than additive promises, and the corpus still has no non-empty
-SQLite snapshot source. Savings for the remaining candidates stay planning evidence until
-a frozen before/after pair measures the affected driver families or a declared
+now attribute replay cost by adapter and canonical statement family. The target-aware gate
+at `8fc0b50` reduced pending gate-plus-drain SQL from 7.905 s to 0.424 s on the same frozen
+ledger: 785,985 of 786,004 message probes were skipped and the 19 exact matches still
+drained. Exact logical/ranked-result equivalence passed. Wall moved from 317.49 s to
+252.02 s, but that is not the attributed saving because FTS and validation varied by
+30.292 s; the defensible pending reduction is 7.481 s (94.6%). Current remaining measured
+ceilings are 13.275 s for message identity lookups, 9.327 s for message writes, 4.286 s
+for tool-result writes, and 1.034 s for session touches. The corpus still has no non-empty
+SQLite snapshot source, so savings for the remaining candidates stay planning evidence
+until a frozen before/after pair covers the affected driver families or a declared
 production-weighted agent mix.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;

@@ -693,7 +693,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">M</td><td>Measured on the developer's organic agent histories, macOS 26.5.2
       on arm64, using the shipped <code>--profile</code> counters and a declared external wall clock.</td>
       <td>Corroboration and optimization direction only; never a CI correctness dependency.</td></tr>
-      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>da7db1e</code>.</td>
+      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>8fc0b50</code>.</td>
       <td>May establish present behavior and a refactoring seam.</td></tr>
       <tr><td class="cm">T</td><td>Automated fixture, replay, SQLite, or crash-protocol test.</td>
       <td>May gate implementation and CI.</td></tr>
@@ -800,6 +800,39 @@ trait <b>AgentAdapter</b>: Send + Sync {
   supports equivalence and rebuild speed, not a search-latency claim. The ordinary store, pipeline,
   daemon, adapter-matrix, replay, and strict Clippy gates also passed. Private paths, fingerprints,
   queries, snippets, row IDs, and reports remain outside the repository.</p>
+
+  <h4 class="spec">Target-aware pending-reconciliation candidate</h4>
+  <p>At <code>da7db1e</code>, every one of the 786,004 message attempts ran a pending-merge drain
+  query, consuming 7.905 s. The first transaction-local prototype at <code>43328fe</code> checked
+  whether the entire table was empty and skipped 324,111 probes, but retained unmatched rows made
+  that global bit stay true for unrelated sessions and later runtimes; drain-query time remained
+  7.249 s. That frozen run rejected the table-wide state as the wrong abstraction rather than
+  generalizing an orphan-free Codex result to the full roster.</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>same frozen replay</th><th><code>da7db1e</code> before</th><th><code>8fc0b50</code> after</th><th>result</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">pending gate + drain SQL</td><td class="metric">7.905 s</td><td class="metric">0.423 + 0.001 = 0.424 s</td><td><b>−7.481 s / −94.6%</b> statement-attributed</td></tr>
+      <tr><td class="cm">message drain queries</td><td class="metric">786,004</td><td class="metric">19</td><td>Only the 19 messages with an exact retained target queried and drained.</td></tr>
+      <tr><td class="cm">skipped message probes</td><td class="metric">0</td><td class="metric">785,985</td><td>All non-matching messages skip SQL after one target load per transaction/session.</td></tr>
+      <tr><td class="cm">transaction/session target loads</td><td class="metric">0</td><td class="metric">8,352</td><td>Uses the existing <code>(kind, session_id, target)</code> primary key; no schema object added.</td></tr>
+      <tr><td class="cm">canonical apply</td><td class="metric">55.029 s</td><td class="metric">36.923 s</td><td>−18.106 s observed; only the 7.481 s statement delta above is attributed to this change.</td></tr>
+      <tr><td class="cm">wall / maximum RSS</td><td class="metric">317.49 s / 502 MB</td><td class="metric">252.02 s / 511 MB</td><td>−65.47 s / −20.6% observed wall; +9 MB RSS.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The landed gate caches exact usage-response and tool-result targets by canonical session for one
+  transaction. A queue updates that cache immediately, so result-before-message still drains in the
+  same commit; a drain removes the key, while cross-batch and cross-file rows are loaded on the next
+  transaction. Persistent orphans therefore remain recoverable without forcing unrelated messages,
+  sessions, or adapters down the SQL path. Regressions cover empty sessions, same-transaction queues,
+  cross-batch drains, unrelated targets, and cross-session isolation.</p>
+  <p class="spec-note">The whole-run wall delta is not attributed to the pending gate. FTS varied from
+  89.628 s to 71.058 s and validation from 22.712 s to 10.990 s across this pair, accounting for
+  30.292 s of unrelated movement. The admissibility compare nevertheless passed exact schema,
+  logical counts, filters, hit counts, and ranked-result digests. Shared aggregate search p95 changed
+  +0.10% and fresh aggregate p95 −0.67%; this establishes no search regression, not a latency win.
+  Full workspace tests and strict workspace Clippy passed.</p>
 
   <p>The published projection passed <code>quick_check</code> and foreign-key validation. Message,
   FTS, and usage-bucket message counts are all exactly 768,280; tool-call counts and all five token
@@ -1212,7 +1245,7 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <tbody>
       <tr><td class="cm">split ledger profiling</td><td>Frame/copy, buffered write, flush, sync, segment-open, election-read, and replay-read counters landed at <code>e7e64cf</code>. Rebuild exercises reads but performs no ledger writes.</td><td class="metric">implemented; cold-write sample still required</td><td>measure on the next frozen cold source campaign</td></tr>
       <tr><td class="cm">stage cold runs; one publication barrier</td><td>sync per batch in current code; the retained 95.782 s cold-write parent predates the split counters</td><td class="metric">TBD; no transferable sync saving yet</td><td>only if the split cold run shows sync dominance</td></tr>
-      <tr><td class="cm">header-only election pass</td><td>Election read measured 21.373 s before / 23.566 s after; full replay read measured 13.530 / 11.385 s</td><td class="metric">hard ceiling about 24 s; actual TBD</td><td>next independent rebuild candidate</td></tr>
+      <tr><td class="cm">header-only election pass</td><td>Election read measured 21.373 s before / 23.566 s after the ordinal change / 21.466 s currently; the full replay pass remains checksummed</td><td class="metric">hard ceiling about 21–24 s; actual TBD</td><td>next independent rebuild candidate</td></tr>
       <tr><td class="cm">zero-copy raw framing + larger buffer</td><td><code>append_raw</code> allocates and copies every payload into a frame body</td><td class="metric">historical 1–3 s; current TBD</td><td>benchmark after sync change</td></tr>
       <tr><td class="cm">compression / retention GC</td><td>8.45 GB retained mixed ledger; keep-forever policy</td><td class="metric">storage benefit; time unknown</td><td>separate RLG2 experiment</td></tr>
     </tbody>
@@ -1224,24 +1257,26 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   is optional and disposable, never trusted over the segment scan.</p>
 
   <h3 class="spec">Canonical-apply cost: reduce statements before redesigning storage</h3>
-  <p><span class="badge b-io">C</span> Every message currently performs an identity lookup, insert or
-  update, session touch, and pending-merge query. Tool-result and usage merges perform another
-  lookup, update, and touch. The frozen profiler recorded 786,004 message attempts, 360,052 tool-result
-  attempts, 151,298 usage attempts, and 1,279,642 session-touch attempts. After global cold ordinal
-  finalization removed the dominant repeated rank, canonical apply is 55.029 s. Its largest directly
-  attributed families are message writes (16.608 s), message identity lookups (13.939 s), pending
-  lookups (7.905 s), tool-result writes (4.380 s), drift apply (3.467 s), and session touches
-  (1.680 s). These are mixed-corpus measured ceilings, not additive saving promises.</p>
+  <p><span class="badge b-io">C</span> Every message still performs an identity lookup, insert or
+  update, and session touch. Pending reconciliation now loads exact targets once per transaction and
+  canonical session, then queries only a matching message. Tool-result and usage merges perform
+  another lookup, update, and touch. The frozen profiler recorded 786,004 message attempts, 360,052
+  tool-result attempts, 151,298 usage attempts, and 1,279,642 session-touch attempts. After global
+  ordinal finalization and the target-aware pending gate, canonical apply measured 36.923 s. Its
+  largest directly attributed current families are message identity lookups (13.275 s), message
+  writes (9.327 s), tool-result writes (4.286 s), drift apply (2.831 s), and session touches
+  (1.034 s); pending target load plus drain is now 0.424 s. These are mixed-corpus measured ceilings,
+  not additive saving promises.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>canonical candidate</th><th>required semantics</th><th>current evidence</th><th>gate</th></tr></thead>
     <tbody>
       <tr><td class="cm">global cold ordinal finalization</td><td>Private first generations use provisional unique ordinals; one pre-publication pass establishes canonical order. Live/replacement swaps remain transactional.</td><td class="metric"><b>landed: −196.09 s wall / −38.2%</b></td><td>Frozen exact-result pair and multi-source ordering regression passed; 502 MB peak RSS retained as a tradeoff.</td></tr>
-      <tr><td class="cm">pending-empty fast path</td><td>Check once per transaction; query per message only after a pending merge is known to exist, including a queue created earlier in that transaction.</td><td class="metric">7.905 s measured statement ceiling</td><td>Cross-file and same-transaction result-before-call tests unchanged.</td></tr>
-      <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">1.680 s measured statement ceiling</td><td>Replacement/replay timestamp tests unchanged; now below pending work.</td></tr>
-      <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">May reduce parts of 16.608 s message writes plus 4.380 s result writes; saving unmeasured</td><td>One-shot, split-resume, replay, and pending goldens byte-equal.</td></tr>
-      <tr><td class="cm">message identity/write specialization</td><td>Exploit private first-generation insert-only knowledge without weakening deterministic replay or live update semantics.</td><td class="metric">30.547 s combined lookup/write ceiling</td><td>No broad writer rewrite: one isolated path, frozen pair, equal projection/search digests.</td></tr>
-      <tr><td class="cm">larger cold batches</td><td>Raise 1,024-record / 32 MiB limits only in bounded cold mode.</td><td class="metric">9.685 s total commit ceiling; actual saving likely much smaller</td><td>Peak memory and partial-tail bounds retained.</td></tr>
+      <tr><td class="cm">target-aware pending fast path</td><td>Load exact keys per transaction/session; update the cache on queue/drain; query only a matching message.</td><td class="metric"><b>landed: 7.905 s → 0.424 s / −94.6%</b></td><td>Frozen exact-result pair plus cross-file, same-transaction, unrelated-target, and cross-session tests passed.</td></tr>
+      <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">1.034 s current statement ceiling</td><td>Replacement/replay timestamp tests unchanged; now a low-priority candidate.</td></tr>
+      <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">May reduce parts of 9.327 s message writes plus 4.286 s result writes; saving unmeasured</td><td>One-shot, split-resume, replay, and pending goldens byte-equal.</td></tr>
+      <tr><td class="cm">message identity/write specialization</td><td>Exploit private first-generation insert-only knowledge without weakening deterministic replay or live update semantics.</td><td class="metric">22.601 s current combined lookup/write ceiling</td><td>No broad writer rewrite: one isolated path, frozen pair, equal projection/search digests.</td></tr>
+      <tr><td class="cm">larger cold batches</td><td>Raise 1,024-record / 32 MiB limits only in bounded cold mode.</td><td class="metric">8.5–11.4 s observed commit range; actual saving likely much smaller</td><td>Peak memory and partial-tail bounds retained.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1264,6 +1299,8 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td class="cm">retained mixed canonical-ready, rebuild baseline</td><td class="metric">511.24 − 78.85 = 432.39 s</td><td>Pre-candidate frozen-ledger arithmetic forecast; not an observed asynchronous publication.</td></tr>
       <tr><td class="cm">global-ordinal candidate, search-ready</td><td class="metric">317.49 s observed</td><td>Same frozen ledger; exact logical and ranked-result equivalence passed.</td></tr>
       <tr><td class="cm">global-ordinal candidate, canonical-ready arithmetic</td><td class="metric">317.49 − 89.63 = 227.86 s</td><td>Search-detached forecast only; current code still publishes synchronously after FTS.</td></tr>
+      <tr><td class="cm">pending-target candidate, search-ready</td><td class="metric">252.02 s observed</td><td>Same frozen ledger; the whole-wall delta includes material FTS/validation variance and is not the pending saving.</td></tr>
+      <tr><td class="cm">pending-target candidate, canonical-ready arithmetic</td><td class="metric">252.02 − 71.06 = 180.96 s</td><td>Search-detached forecast only; current code still publishes synchronously after FTS.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, cold</td><td class="metric">historical Codex: about 50–60 s</td><td>Do not extrapolate to the retained mixed corpus; replace after split counters and sequential pairs.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, rebuild</td><td class="metric">historical Codex: about 40–48 s</td><td>Do not extrapolate to the 511.24 s retained replay; excludes search-ready time.</td></tr>
       <tr><td class="cm">search-ready</td><td class="metric">synchronous FTS5 today</td><td>Async-sidecar time remains TBD; no alternate-backend claim until a gate-zero decision opens the bake-off.</td></tr>
@@ -1271,12 +1308,15 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   </table>
   </div>
   <ol class="order">
-    <li><b>Freeze inputs, capture the baseline, and land the dominant ordinal fix — complete.</b>
+    <li><b>Freeze inputs and land the ordinal and pending-query fixes — complete.</b>
     The six-adapter ledger, cold projection, rebuild projection, checksummed suite, 100-cycle search
     reports, physical index bytes, rebuild RSS, storage state, and phase counters remain private and
-    retained. The global-ordinal candidate has its paired after-side, exact-result compare, phase profile,
-    tests, and RSS measurement. Search-latency claims still require replicated paired runs. Never add
-    organic content to CI.</li>
+    retained. Both candidates have paired after-sides, exact-result compares, phase profiles, tests,
+    and RSS measurements. Search-latency claims still require replicated paired runs. Never add organic
+    content to CI.</li>
+    <li><b>Make generation election payload-light.</b> This is the next independent frozen-replay
+    candidate. Compare pass fingerprints and elected seals, and retain the full checksummed replay
+    pass; its measured first-pass ceiling is about 21–24 s.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>
@@ -1286,11 +1326,9 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <li><b>Stage the private-build durability barrier if sync dominates.</b> Kill-test before/after
     staged segment sync, during atomic run-directory promotion, and before SQLite publication;
     rerun cold ingest on the frozen source.</li>
-    <li><b>Reduce the measured remaining canonical statements.</b> Try the transaction-correct
-    pending-empty fast path first (7.905 s ceiling); batch touches are now a lower 1.680 s ceiling.
-    Consider local merge folding or a narrow insert-only identity path one change at a time.</li>
-    <li><b>Make generation election payload-light.</b> Compare pass fingerprints and retain a full
-    checksummed replay pass.</li>
+    <li><b>Reduce the measured remaining canonical statements.</b> Consider local merge folding or a
+    narrow insert-only identity/write path one change at a time. Batch touches are now only a 1.034 s
+    ceiling and should not precede those larger measured families.</li>
     <li><b>Introduce SearchBackend/readiness with FTS5 as reference only if the track opens.</b>
     Preserve query semantics and make not-ready explicit; land the durable repair tables, their
     worker/acknowledger, and crash tests together.</li>
@@ -1310,7 +1348,7 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td>Flush is durable</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> calls <code>sync_data</code>.</td></tr>
       <tr><td>Rebuild reads twice</td><td><a href="../crates/pipeline/src/replay.rs"><code>pipeline/src/replay.rs::rebuild_runtime</code></a> elects survivors, then replays in a second visit.</td></tr>
       <tr><td>Private cold ordinals finalize once; live ordinals remain transactional</td><td><a href="../crates/store/src/apply.rs"><code>store/src/apply.rs::renumber_all_sessions</code></a>, <a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a>, and the multi-source finalization regression in <a href="../crates/store/tests/sqlite_maintenance.rs"><code>sqlite_maintenance.rs</code></a>.</td></tr>
-      <tr><td>Message path has per-row lookups/touches/pending checks</td><td><a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs::apply_message</code></a>.</td></tr>
+      <tr><td>Pending reconciliation is transaction-local and target-aware</td><td><a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs::PendingGate</code></a> loads primary-key-backed targets by session and updates them on queue/drain; isolation and ordering regressions live in <a href="../crates/store/tests/roundtrip.rs"><code>roundtrip.rs</code></a>.</td></tr>
       <tr><td>Effects are advisory only</td><td><a href="../crates/store/src/hot.rs"><code>store/src/hot.rs::Effects</code></a> is in-memory and explicitly overflow-capped.</td></tr>
       <tr><td>Rebuild equivalence/readiness is tested</td><td><a href="../crates/pipeline/tests/rebuild.rs"><code>pipeline/tests/rebuild.rs</code></a>, including unclean latest generations.</td></tr>
       <tr><td>SQLite derived-state and generation invariants are tested</td><td><a href="../crates/store/tests/sqlite_maintenance.rs"><code>store/tests/sqlite_maintenance.rs</code></a> and <a href="../crates/pipeline/tests/regressions.rs"><code>pipeline/tests/regressions.rs</code></a>.</td></tr>
