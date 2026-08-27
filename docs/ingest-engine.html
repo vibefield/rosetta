@@ -693,7 +693,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">M</td><td>Measured on the developer's organic agent histories, macOS 26.5.2
       on arm64, using the shipped <code>--profile</code> counters and a declared external wall clock.</td>
       <td>Corroboration and optimization direction only; never a CI correctness dependency.</td></tr>
-      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>28bceee</code>.</td>
+      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>c6319e6</code>.</td>
       <td>May establish present behavior and a refactoring seam.</td></tr>
       <tr><td class="cm">T</td><td>Automated fixture, replay, SQLite, or crash-protocol test.</td>
       <td>May gate implementation and CI.</td></tr>
@@ -1278,11 +1278,22 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td class="cm">target-aware pending fast path</td><td>Load exact keys per transaction/session; update the cache on queue/drain; query only a matching message.</td><td class="metric"><b>landed: 7.905 s → 0.424 s / −94.6%</b></td><td>Frozen exact-result pair plus cross-file, same-transaction, unrelated-target, and cross-session tests passed.</td></tr>
       <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">1.034 s current statement ceiling</td><td>Replacement/replay timestamp tests unchanged; now a low-priority candidate.</td></tr>
       <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">May reduce parts of 9.327 s message writes plus 4.286 s result writes; saving unmeasured</td><td>One-shot, split-resume, replay, and pending goldens byte-equal.</td></tr>
-      <tr><td class="cm">message identity/write specialization</td><td>Exploit private first-generation insert-only knowledge without weakening deterministic replay or live update semantics.</td><td class="metric">22.601 s current combined lookup/write ceiling</td><td>No broad writer rewrite: one isolated path, frozen pair, equal projection/search digests.</td></tr>
+      <tr><td class="cm">message identity/write specialization</td><td>The private first-generation path attempted an insert first, fell back only on a timeline-identity conflict, and left live/replacement SQL unchanged.</td><td class="metric">rejected: 22.601 s → 20.859 s combined (−1.742 s / −7.7%); canonical 36.923 s → 38.065 s</td><td>The five campaign cardinalities matched, but the performance gate failed before ranked-search comparison; reverted at <code>c6319e6</code>.</td></tr>
       <tr><td class="cm">larger cold batches</td><td>Raise 1,024-record / 32 MiB limits only in bounded cold mode.</td><td class="metric">8.5–11.4 s observed commit range; actual saving likely much smaller</td><td>Peak memory and partial-tail bounds retained.</td></tr>
     </tbody>
   </table>
   </div>
+  <p>The insert-first candidate at <code>207bc37</code> exercised all 786,004 message attempts and
+  reconciled 17,724 legitimate repeated timeline identities through its fallback. It reduced lookup
+  time from 13.275 s to 0.024 s, but message-write time rose from 9.327 s to 20.834 s: SQLite still
+  had to probe the unique timeline index inside the insert. The combined family saved only 1.742 s,
+  while total canonical apply regressed by 1.142 s. The candidate projection exactly retained
+  768,280 message/FTS rows, 5,856 indexed sessions, zero staged source ops, and 79 pending merges.
+  Since the statement-level performance gate failed, the ranked-search campaign was intentionally
+  not run. Observed whole wall moved from 252.02 s to 279.02 s while unrelated ledger read, FTS,
+  index, and validation phases varied by +2.294 s, +12.368 s, +6.340 s, and +9.552 s respectively;
+  that wall regression is not attributed to this change. Maximum RSS moved from 511 MB to 505 MB.
+  The 22.601 s baseline was a cost ceiling, not an independently removable lookup cost.</p>
   <p>Per-op timers/counts are now always-on and expose per-adapter deltas during rebuild. Do not repeat
   the rejected broad bulk fast path without new evidence: its exact frozen-ledger comparison improved
   canonical apply only from 20.609 s to 19.714 s, while the full ingest regressed from 101.23 s to
@@ -1321,10 +1332,14 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     0.19–0.34 s of wall time despite removing nearly all measured user CPU; seek-heavy variants were
     slower. The implementation was reverted. Reopen only around writer-produced authenticated
     metadata, not another scanner-only payload skip.</li>
-    <li><b>Reduce the measured remaining canonical statements.</b> Try a narrow private-first-
-    generation insert path for message identity and writes, one change at a time. Their combined
-    measured ceiling is 22.601 s. Preserve the ordinary lookup/update path for live and replacement
-    generations; do not repeat the broad bulk-writer rewrite.</li>
+    <li><b>Reject private-generation insert-first — complete.</b> Unique-index work moved from the
+    explicit lookup into the insert, leaving only a 1.742 s combined-family saving while canonical
+    apply regressed by 1.142 s. The five campaign cardinalities matched; the implementation was
+    reverted. Do not treat statement-family timings as additive savings.</li>
+    <li><b>Measure chunk-local merge folding next.</b> Count tool-result and usage ops whose owning
+    message is present in the same ordered batch, fold only those into the row before SQLite, and
+    preserve the existing pending/reconciliation path for cross-batch and cross-file arrivals. Gate
+    the implementation on a frozen pair and byte-equal one-shot, split-resume, and replay results.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>

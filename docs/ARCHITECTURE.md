@@ -479,12 +479,21 @@ at `8fc0b50` reduced pending gate-plus-drain SQL from 7.905 s to 0.424 s on the 
 ledger: 785,985 of 786,004 message probes were skipped and the 19 exact matches still
 drained. Exact logical/ranked-result equivalence passed. Wall moved from 317.49 s to
 252.02 s, but that is not the attributed saving because FTS and validation varied by
-30.292 s; the defensible pending reduction is 7.481 s (94.6%). Current remaining measured
-ceilings are 13.275 s for message identity lookups, 9.327 s for message writes, 4.286 s
-for tool-result writes, and 1.034 s for session touches. The corpus still has no non-empty
-SQLite snapshot source, so savings for the remaining candidates stay planning evidence
-until a frozen before/after pair covers the affected driver families or a declared
-production-weighted agent mix.
+30.292 s; the defensible pending reduction is 7.481 s (94.6%).
+
+The private-generation insert-first candidate at `207bc37` exercised all 786,004 message
+attempts and fell back on 17,724 legitimate repeated timeline identities. Message identity
+lookup plus write moved from 22.601 s to 20.859 s (−1.742 s / −7.7%), but total canonical
+apply regressed from 36.923 s to 38.065 s. SQLite still probes the unique timeline index
+inside an insert, so the explicit 13.275 s lookup timer was not an independently removable
+cost. The five campaign cardinalities matched exactly; the performance gate failed before
+ranked-search comparison, and `c6319e6` reverted the candidate. The current path therefore
+retains measured ceilings of 13.275 s for message identity lookups, 9.327 s for message
+writes, 4.286 s for tool-result writes, and 1.034 s for session touches. These are costs,
+not additive saving
+promises. The corpus still has no non-empty SQLite snapshot source, so savings for the
+remaining candidates stay planning evidence until a frozen before/after pair covers the
+affected driver families or a declared production-weighted agent mix.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
