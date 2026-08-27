@@ -52,6 +52,8 @@ pub enum Metric {
     OtherApplyAttempts,
     SessionTouchAttempts,
     SessionTouchRows,
+    PendingGateChecks,
+    PendingLookupSkips,
     PendingLookups,
     PendingRows,
     PendingQueues,
@@ -65,6 +67,7 @@ pub enum Metric {
     UsageLookupNanos,
     UsageWriteNanos,
     SessionTouchNanos,
+    PendingGateNanos,
     PendingLookupNanos,
     PendingQueueNanos,
     DriftApplyNanos,
@@ -81,7 +84,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 69;
+const METRIC_COUNT: usize = 72;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -129,6 +132,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::OtherApplyAttempts, "other apply attempts"),
     (Metric::SessionTouchAttempts, "session touch attempts"),
     (Metric::SessionTouchRows, "session touch rows"),
+    (Metric::PendingGateChecks, "pending batch checks"),
+    (Metric::PendingLookupSkips, "pending lookups skipped"),
     (Metric::PendingLookups, "pending lookups"),
     (Metric::PendingRows, "pending rows drained"),
     (Metric::PendingQueues, "pending rows queued"),
@@ -142,6 +147,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::UsageLookupNanos, "usage lookup time"),
     (Metric::UsageWriteNanos, "usage write time"),
     (Metric::SessionTouchNanos, "session touch time"),
+    (Metric::PendingGateNanos, "pending gate time"),
     (Metric::PendingLookupNanos, "pending lookup time"),
     (Metric::PendingQueueNanos, "pending queue time"),
     (Metric::DriftApplyNanos, "drift apply time"),
@@ -249,6 +255,8 @@ impl Instrument {
             self.add(Metric::OtherApplyAttempts, profile.other_attempts);
             self.add(Metric::SessionTouchAttempts, profile.session_touch_attempts);
             self.add(Metric::SessionTouchRows, profile.session_touch_rows);
+            self.add(Metric::PendingGateChecks, profile.pending_gate_checks);
+            self.add(Metric::PendingLookupSkips, profile.pending_lookup_skips);
             self.add(Metric::PendingLookups, profile.pending_lookups);
             self.add(Metric::PendingRows, profile.pending_rows);
             self.add(Metric::PendingQueues, profile.pending_queues);
@@ -268,6 +276,7 @@ impl Instrument {
             self.add(Metric::UsageLookupNanos, profile.usage_lookup_nanos);
             self.add(Metric::UsageWriteNanos, profile.usage_write_nanos);
             self.add(Metric::SessionTouchNanos, profile.session_touch_nanos);
+            self.add(Metric::PendingGateNanos, profile.pending_gate_nanos);
             self.add(Metric::PendingLookupNanos, profile.pending_lookup_nanos);
             self.add(Metric::PendingQueueNanos, profile.pending_queue_nanos);
             self.add(Metric::DriftApplyNanos, profile.drift_apply_nanos);
@@ -382,6 +391,7 @@ mod tests {
         assert!(report.contains("source staging time"));
         assert!(report.contains("canonical apply time"));
         assert!(report.contains("message lookup time"));
+        assert!(report.contains("pending batch checks"));
         assert!(report.contains("pending lookup time"));
         assert!(report.contains("ledger sync time"));
         assert!(report.contains("bulk renumber time"));

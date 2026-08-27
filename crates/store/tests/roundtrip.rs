@@ -105,7 +105,9 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         .unwrap();
     assert_eq!(stats.messages_inserted, 1);
     assert_eq!(stats.profile.message_attempts, 1);
-    assert_eq!(stats.profile.pending_lookups, 1);
+    assert_eq!(stats.profile.pending_gate_checks, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 1);
+    assert_eq!(stats.profile.pending_lookups, 0);
     assert_eq!(stats.profile.session_touch_attempts, 1);
 
     let stats = store
@@ -182,6 +184,8 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         .unwrap();
     assert_eq!(stats.tool_results_merged, 1);
     assert_eq!(stats.profile.message_attempts, 1);
+    assert_eq!(stats.profile.pending_gate_checks, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 0);
     assert_eq!(stats.profile.pending_lookups, 1);
     assert_eq!(stats.profile.pending_rows, 1);
     assert_eq!(stats.profile.tool_result_attempts, 1);
@@ -201,6 +205,87 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
     assert_eq!(
         late.tool.as_ref().unwrap().result.as_deref(),
         Some("orphan")
+    );
+}
+
+#[test]
+fn empty_pending_table_is_checked_once_for_the_whole_batch() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let ops = (0..16)
+        .map(|ordinal| {
+            IngestOp::Message(Box::new(message(
+                &format!("empty-gate-{ordinal}"),
+                ordinal,
+                MessageKind::User,
+            )))
+        })
+        .collect();
+
+    let stats = store
+        .apply(&Batch {
+            ops,
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    assert_eq!(stats.profile.pending_gate_checks, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 16);
+    assert_eq!(stats.profile.pending_lookups, 0);
+}
+
+#[test]
+fn queued_result_reopens_the_pending_gate_inside_the_same_batch() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let mut call = message("same-batch-call", 0, MessageKind::ToolUse);
+    call.tool = Some(ToolCall {
+        tool_id: Some("same-batch-tool".into()),
+        name: "Read".into(),
+        input: serde_json::json!({"path": "fixture.txt"}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+
+    let stats = store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::ToolResult {
+                    session_id: "s1".into(),
+                    tool_id: "same-batch-tool".into(),
+                    result: Some("same transaction".into()),
+                    payload: None,
+                    is_error: Some(false),
+                    at: Some(3_700_000),
+                },
+                IngestOp::Message(Box::new(call)),
+            ],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    assert_eq!(stats.tool_results_unmatched, 1);
+    assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(stats.profile.pending_queues, 1);
+    assert_eq!(stats.profile.pending_gate_checks, 0);
+    assert_eq!(stats.profile.pending_lookups, 1);
+    assert_eq!(stats.profile.pending_rows, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(
+        page[0].tool.as_ref().unwrap().result.as_deref(),
+        Some("same transaction")
     );
 }
 

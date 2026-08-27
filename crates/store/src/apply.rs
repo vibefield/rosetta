@@ -106,6 +106,8 @@ pub struct ApplyProfile {
     pub other_attempts: u64,
     pub session_touch_attempts: u64,
     pub session_touch_rows: u64,
+    pub pending_gate_checks: u64,
+    pub pending_lookup_skips: u64,
     pub pending_lookups: u64,
     pub pending_rows: u64,
     pub pending_queues: u64,
@@ -119,6 +121,7 @@ pub struct ApplyProfile {
     pub usage_lookup_nanos: u64,
     pub usage_write_nanos: u64,
     pub session_touch_nanos: u64,
+    pub pending_gate_nanos: u64,
     pub pending_lookup_nanos: u64,
     pub pending_queue_nanos: u64,
     pub drift_apply_nanos: u64,
@@ -154,6 +157,8 @@ impl ApplyProfile {
         self.other_attempts += batch.other_attempts;
         self.session_touch_attempts += batch.session_touch_attempts;
         self.session_touch_rows += batch.session_touch_rows;
+        self.pending_gate_checks += batch.pending_gate_checks;
+        self.pending_lookup_skips += batch.pending_lookup_skips;
         self.pending_lookups += batch.pending_lookups;
         self.pending_rows += batch.pending_rows;
         self.pending_queues += batch.pending_queues;
@@ -167,6 +172,7 @@ impl ApplyProfile {
         self.usage_lookup_nanos += batch.usage_lookup_nanos;
         self.usage_write_nanos += batch.usage_write_nanos;
         self.session_touch_nanos += batch.session_touch_nanos;
+        self.pending_gate_nanos += batch.pending_gate_nanos;
         self.pending_lookup_nanos += batch.pending_lookup_nanos;
         self.pending_queue_nanos += batch.pending_queue_nanos;
         self.drift_apply_nanos += batch.drift_apply_nanos;
@@ -212,7 +218,7 @@ mod rows;
 
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, OldRow, apply_message, apply_project, apply_runtime, apply_session,
+    BucketKey, OldRow, PendingGate, apply_message, apply_project, apply_runtime, apply_session,
     apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending, rebuild_bucket,
 };
 
@@ -496,6 +502,7 @@ struct DirectProjection<'a> {
     effects: Option<&'a mut Effects>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_source_ops(
     tx: &Transaction,
     source: &SourceWrite,
@@ -503,6 +510,7 @@ fn project_source_ops(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
     mut projection: DirectProjection<'_>,
 ) -> Result<(), StoreError> {
     let mut next_ordinals: BTreeMap<String, i64> = BTreeMap::new();
@@ -560,6 +568,7 @@ fn project_source_ops(
                 stats,
                 maintenance,
                 dirty_buckets,
+                pending_gate,
                 projection.effects.as_deref_mut(),
             )?;
         } else {
@@ -570,6 +579,7 @@ fn project_source_ops(
                 stats,
                 maintenance,
                 dirty_buckets,
+                pending_gate,
                 projection.effects.as_deref_mut(),
             )?;
         }
@@ -818,6 +828,7 @@ fn activate_cursor(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
     effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
@@ -853,7 +864,15 @@ fn activate_cursor(
                 // Effects are suppressed for every per-row apply in this
                 // block: rows carry temporary ordinals until the renumber
                 // below, and none of that may leak into the mutation log.
-                apply_message(tx, &row, stats, maintenance, dirty_buckets, None)?;
+                apply_message(
+                    tx,
+                    &row,
+                    stats,
+                    maintenance,
+                    dirty_buckets,
+                    pending_gate,
+                    None,
+                )?;
             }
             IngestOp::FileEdit(_) => edits.push(op),
             IngestOp::ToolResult { .. } | IngestOp::Usage { .. } => merges.push(op),
@@ -864,6 +883,7 @@ fn activate_cursor(
                 stats,
                 maintenance,
                 dirty_buckets,
+                pending_gate,
                 None,
             )?,
         }
@@ -876,6 +896,7 @@ fn activate_cursor(
             stats,
             maintenance,
             dirty_buckets,
+            pending_gate,
             None,
         )?;
     }
@@ -995,6 +1016,7 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_op(
     tx: &Transaction,
     op: &IngestOp,
@@ -1002,6 +1024,7 @@ fn apply_op(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     if let Some(fx) = effects.as_deref_mut() {
@@ -1011,9 +1034,15 @@ fn apply_op(
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
         IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,
-        IngestOp::Message(row) => {
-            apply_message(tx, row, stats, maintenance, dirty_buckets, effects)?
-        }
+        IngestOp::Message(row) => apply_message(
+            tx,
+            row,
+            stats,
+            maintenance,
+            dirty_buckets,
+            pending_gate,
+            effects,
+        )?,
         IngestOp::ToolResult {
             session_id,
             tool_id,
@@ -1034,7 +1063,7 @@ fn apply_op(
                 maintenance,
                 effects,
             )? {
-                queue_pending(tx, op, src_cursor, stats)?;
+                queue_pending(tx, op, src_cursor, stats, pending_gate)?;
             }
         }
         IngestOp::Usage {
@@ -1056,7 +1085,7 @@ fn apply_op(
                 dirty_buckets,
                 effects,
             )? {
-                queue_pending(tx, op, src_cursor, stats)?;
+                queue_pending(tx, op, src_cursor, stats, pending_gate)?;
             }
         }
         IngestOp::WorkspaceObs(row) => {
@@ -1080,6 +1109,7 @@ pub(crate) fn apply_batch(
 ) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
     let mut dirty_buckets = BTreeSet::new();
+    let mut pending_gate = PendingGate::default();
     match &batch.source {
         None => {
             let started = Instant::now();
@@ -1091,6 +1121,7 @@ pub(crate) fn apply_batch(
                     &mut stats,
                     maintenance,
                     &mut dirty_buckets,
+                    &mut pending_gate,
                     effects.as_deref_mut(),
                 )?;
             }
@@ -1184,6 +1215,7 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
+                            &mut pending_gate,
                             DirectProjection {
                                 preserve_message_ordinals: false,
                                 effects: None,
@@ -1242,6 +1274,7 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
+                            &mut pending_gate,
                             DirectProjection {
                                 preserve_message_ordinals: true,
                                 effects: effects.as_deref_mut(),
@@ -1261,6 +1294,7 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
+                            &mut pending_gate,
                             effects,
                         )?;
                         stats.canonical_apply_nanos += elapsed_nanos(started);

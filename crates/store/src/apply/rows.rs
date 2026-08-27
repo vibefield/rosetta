@@ -34,6 +34,54 @@ pub(crate) const BULK_MAINTENANCE: Maintenance = Maintenance {
     buckets: false,
 };
 
+#[derive(Debug, Default)]
+pub(super) struct PendingGate {
+    state: PendingGateState,
+}
+
+#[derive(Debug, Default)]
+enum PendingGateState {
+    #[default]
+    Unknown,
+    Empty,
+    Present,
+}
+
+impl PendingGate {
+    fn should_lookup(
+        &mut self,
+        tx: &Transaction,
+        stats: &mut ApplyStats,
+    ) -> Result<bool, StoreError> {
+        match self.state {
+            PendingGateState::Empty => Ok(false),
+            PendingGateState::Present => Ok(true),
+            PendingGateState::Unknown => {
+                stats.profile.pending_gate_checks += 1;
+                let started = Instant::now();
+                let checked = (|| -> Result<bool, StoreError> {
+                    let present: i64 = tx
+                        .prepare_cached("SELECT EXISTS(SELECT 1 FROM pending_merge LIMIT 1)")?
+                        .query_row([], |row| row.get(0))?;
+                    Ok(present != 0)
+                })();
+                stats.profile.pending_gate_nanos += elapsed_nanos(started);
+                let present = checked?;
+                self.state = if present {
+                    PendingGateState::Present
+                } else {
+                    PendingGateState::Empty
+                };
+                Ok(present)
+            }
+        }
+    }
+
+    fn note_queued(&mut self) {
+        self.state = PendingGateState::Present;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct BucketKey {
     pub(super) session_id: String,
@@ -342,12 +390,14 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_message(
     tx: &Transaction,
     row: &MessageRow,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     stats.profile.message_attempts += 1;
@@ -495,7 +545,19 @@ pub(super) fn apply_message(
     if let Some(fx) = effects.as_deref_mut() {
         fx.push(Mutation::Message(Box::new(row.clone())));
     }
-    apply_pending_for_message(tx, row, stats, maintenance, dirty_buckets, effects)?;
+    if pending_gate.should_lookup(tx, stats)? {
+        apply_pending_for_message(
+            tx,
+            row,
+            stats,
+            maintenance,
+            dirty_buckets,
+            pending_gate,
+            effects,
+        )?;
+    } else {
+        stats.profile.pending_lookup_skips += 1;
+    }
     Ok(())
 }
 
@@ -654,6 +716,7 @@ pub(super) fn queue_pending(
     op: &IngestOp,
     src_cursor: Option<i64>,
     stats: &mut ApplyStats,
+    pending_gate: &mut PendingGate,
 ) -> Result<(), StoreError> {
     let Some((kind, session_id, target)) = pending_key(op) else {
         return Ok(());
@@ -678,6 +741,9 @@ pub(super) fn queue_pending(
     })();
     stats.profile.pending_queue_nanos += elapsed_nanos(started);
     queued?;
+    // A result queued after this batch proved the table empty must make a
+    // later target message in the same transaction probe immediately.
+    pending_gate.note_queued();
     Ok(())
 }
 
@@ -690,6 +756,7 @@ fn apply_pending_for_message(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     let tool_id = row.tool.as_ref().and_then(|tool| tool.tool_id.as_deref());
@@ -737,6 +804,7 @@ fn apply_pending_for_message(
             stats,
             maintenance,
             dirty_buckets,
+            pending_gate,
             effects.as_deref_mut(),
         )?;
     }
