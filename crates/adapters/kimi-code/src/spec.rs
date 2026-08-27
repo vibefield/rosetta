@@ -41,7 +41,32 @@ pub fn declared_loop_event_types() -> &'static BTreeSet<String> {
     })
 }
 
+/// Writer-declared `ContentPart.type` values shared by messages, streamed
+/// assistant parts, and array-valued tool results.
+pub fn declared_content_part_types() -> &'static BTreeSet<String> {
+    static TYPES: OnceLock<BTreeSet<String>> = OnceLock::new();
+    TYPES.get_or_init(|| {
+        wire_facet_record_types("content-parts")
+            .and_then(Value::as_object)
+            .map(|records| records.keys().cloned().collect())
+            .unwrap_or_default()
+    })
+}
+
 fn wire_record_types() -> Option<&'static Value> {
+    wire_stream()?.get("record_types")
+}
+
+fn wire_facet_record_types(facet_id: &str) -> Option<&'static Value> {
+    wire_stream()?
+        .get("facets")?
+        .as_array()?
+        .iter()
+        .find(|facet| facet["id"] == facet_id)?
+        .get("record_types")
+}
+
+fn wire_stream() -> Option<&'static Value> {
     static VALUE: OnceLock<Value> = OnceLock::new();
     let canonical = VALUE.get_or_init(|| {
         serde_json::from_str(CANONICAL).expect("embedded kimi-code groundtruth.json is valid")
@@ -50,12 +75,13 @@ fn wire_record_types() -> Option<&'static Value> {
         .as_array()?
         .iter()
         .find(|stream| stream["id"] == WIRE)
-        .and_then(|stream| stream.get("record_types"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WIRE, declared_loop_event_types, declared_wire_types, doc};
+    use super::{
+        WIRE, declared_content_part_types, declared_loop_event_types, declared_wire_types, doc,
+    };
 
     #[test]
     fn embedded_canonical_describes_kimi_code() {
@@ -90,5 +116,11 @@ mod tests {
             assert!(events.contains(name), "{name} missing from canonical");
         }
         assert!(!events.contains("wormhole.opened"));
+
+        let content_parts = declared_content_part_types();
+        assert_eq!(
+            content_parts.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["audio_url", "image_url", "text", "think", "video_url"]
+        );
     }
 }

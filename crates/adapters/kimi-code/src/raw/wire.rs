@@ -1,9 +1,9 @@
 //! Raw types for the `wire` stream
 //! (`sessions/<workDirKey>/<sessionId>/agents/<agentId>/wire.jsonl`).
 //!
-//! Evidence: THE CANONICAL `groundtruth.json` (iron rule #6) — fixtures at
-//! 0.38.0 (basic-chat, tool-use, resume, subagent, error) merged with an
-//! organic census. Census-only Event2 types (prompt.accepted, tools.update_store,
+//! Evidence: THE CANONICAL `groundtruth.json` (iron rule #6) — pinned 0.38.0
+//! writer types and fixtures (basic-chat, tool-use, resume, subagent, error)
+//! merged with an organic census. Census-only Event2 types (prompt.accepted, tools.update_store,
 //! interaction.*, full_compaction.*, context.apply_compaction, config.update,
 //! permission.record_approval_result) stay UnknownType until a fixture writes
 //! them.
@@ -193,7 +193,7 @@ impl Drift for TurnPromptLine {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
         for (i, block) in self.input.iter().enumerate() {
-            note_unknown(&block.unknown, &format!("{prefix}.input[{i}]"), out);
+            block.drift(&format!("{prefix}.input[{i}]"), out);
         }
         note_unknown(&self.origin.unknown, &format!("{prefix}.origin"), out);
     }
@@ -235,18 +235,53 @@ impl Drift for WireMessage {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
         for (i, block) in self.content.iter().enumerate() {
-            note_unknown(&block.unknown, &format!("{prefix}.content[{i}]"), out);
+            block.drift(&format!("{prefix}.content[{i}]"), out);
         }
         note_unknown(&self.origin.unknown, &format!("{prefix}.origin"), out);
     }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub think: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<MediaUrl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_url: Option<MediaUrl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_url: Option<MediaUrl>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for ContentBlock {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        for (name, media) in [
+            ("imageUrl", self.image_url.as_ref()),
+            ("audioUrl", self.audio_url.as_ref()),
+            ("videoUrl", self.video_url.as_ref()),
+        ] {
+            if let Some(media) = media {
+                note_unknown(&media.unknown, &format!("{prefix}.{name}"), out);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MediaUrl {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -318,6 +353,10 @@ pub struct LoopEvent {
     /// Tool-dependent arguments; kept raw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Value>,
+    /// Provider/tool-specific call metadata; retained on the raw ledger but
+    /// deliberately not folded into canonical function input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_uuid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,7 +391,7 @@ impl Drift for LoopEvent {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
         if let Some(part) = &self.part {
-            note_unknown(&part.unknown, &format!("{prefix}.part"), out);
+            part.drift(&format!("{prefix}.part"), out);
         }
         if let Some(result) = &self.result {
             note_unknown(&result.unknown, &format!("{prefix}.result"), out);
@@ -363,17 +402,7 @@ impl Drift for LoopEvent {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct LoopPart {
-    #[serde(rename = "type")]
-    pub part_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub think: Option<String>,
-    #[serde(flatten)]
-    pub unknown: Unknown,
-}
+pub type LoopPart = ContentBlock;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -31,6 +31,13 @@ const NO_TYPE: &str = "<none>";
 const INVALID_JSON_KIND: &str = "<invalid-json>";
 const BINARY_KIND: &str = "<binary>";
 
+#[derive(Debug, PartialEq, Eq)]
+enum ContentPartError {
+    Undeclared(String),
+    UnsupportedDeclared(String),
+    Malformed(&'static str),
+}
+
 /// Per-wire state. Each agent wire gets its own `NormalizeCtx`, so model,
 /// pending usage, workspace dedupe, and ordinals never cross agent sessions.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -202,12 +209,12 @@ fn context_message(
     }
     let content = match content_text(&line.message.content) {
         Ok(content) => content,
-        Err(code) => {
-            return hard_into(
+        Err(error) => {
+            return content_part_failure(
                 ctx,
                 stream_id,
-                "context.append_message",
-                code,
+                "context.append_message/content",
+                error,
                 Some(ts),
                 ops,
             );
@@ -309,16 +316,6 @@ fn content_part(
             ops,
         );
     };
-    let Some(uuid) = line.event.uuid.as_deref() else {
-        return hard_into(
-            ctx,
-            stream_id,
-            "context.append_loop_event/content.part",
-            "missing_uuid",
-            Some(ts),
-            ops,
-        );
-    };
     let Some(part) = line.event.part.as_ref() else {
         return hard_into(
             ctx,
@@ -329,36 +326,40 @@ fn content_part(
             ops,
         );
     };
-    let (kind, content) = match part.part_type.as_str() {
-        "text" => (MessageKind::Agent, part.text.clone()),
-        "think" => (MessageKind::Thinking, part.think.clone()),
-        other => {
-            ops.push(drift(
-                ctx,
-                stream_id,
-                &format!("context.append_loop_event/content.part/{other}"),
-                UNKNOWN_SUBTYPE,
-                &[],
-                Some(ts),
-            ));
-            return LineStatus::UnknownType;
-        }
-    };
-    let Some(content) = content else {
-        return hard_into(
+    if let Err(error) = validate_content_part(part) {
+        return content_part_failure(
             ctx,
             stream_id,
             "context.append_loop_event/content.part",
-            "missing_content",
+            error,
             Some(ts),
             ops,
         );
+    }
+    let (kind, content) = match part.block_type.as_str() {
+        "text" => (MessageKind::Agent, part.text.clone()),
+        "think" => (MessageKind::Thinking, part.think.clone()),
+        "image_url" | "audio_url" | "video_url" => (MessageKind::Agent, None),
+        other => {
+            return content_part_failure(
+                ctx,
+                stream_id,
+                "context.append_loop_event/content.part",
+                ContentPartError::UnsupportedDeclared(other.to_owned()),
+                Some(ts),
+                ops,
+            );
+        }
     };
 
-    let mut row = row(ctx, &format!("loop:{uuid}"), kind, Some(ts));
-    row.uuid = Some(uuid.to_owned());
+    let discriminator = line.event.uuid.as_deref().map_or_else(
+        || source_discriminator(ctx, "content.part"),
+        |uuid| format!("loop:{uuid}"),
+    );
+    let mut row = row(ctx, &discriminator, kind, Some(ts));
+    row.uuid.clone_from(&line.event.uuid);
     row.parent_uuid.clone_from(&line.event.parent_uuid);
-    row.content = Some(content);
+    row.content = content;
     stamp_response(&mut row, state);
     ops.push(IngestOp::Message(Box::new(row)));
     LineStatus::Parsed
@@ -378,16 +379,6 @@ fn tool_call(
             "context.append_loop_event/tool.call",
             "timestamp_out_of_range",
             None,
-            ops,
-        );
-    };
-    let Some(uuid) = line.event.uuid.as_deref() else {
-        return hard_into(
-            ctx,
-            stream_id,
-            "context.append_loop_event/tool.call",
-            "missing_uuid",
-            Some(ts),
             ops,
         );
     };
@@ -411,19 +402,15 @@ fn tool_call(
             ops,
         );
     };
-    let Some(input) = line.event.args.clone() else {
-        return hard_into(
-            ctx,
-            stream_id,
-            "context.append_loop_event/tool.call",
-            "missing_args",
-            Some(ts),
-            ops,
-        );
-    };
+    let input = line.event.args.clone().unwrap_or(Value::Null);
 
-    let mut row = row(ctx, &format!("loop:{uuid}"), MessageKind::ToolUse, Some(ts));
-    row.uuid = Some(uuid.to_owned());
+    let discriminator = line
+        .event
+        .uuid
+        .as_deref()
+        .map_or_else(|| format!("tool:{tool_id}"), |uuid| format!("loop:{uuid}"));
+    let mut row = row(ctx, &discriminator, MessageKind::ToolUse, Some(ts));
+    row.uuid.clone_from(&line.event.uuid);
     row.parent_uuid.clone_from(&line.event.parent_uuid);
     row.tool = Some(ToolCall {
         tool_id: Some(tool_id.to_owned()),
@@ -479,12 +466,12 @@ fn tool_result(
     };
     let text = match result_text(result) {
         Ok(text) => text,
-        Err(code) => {
-            return hard_into(
+        Err(error) => {
+            return content_part_failure(
                 ctx,
                 stream_id,
                 "context.append_loop_event/tool.result",
-                code,
+                error,
                 Some(ts),
                 ops,
             );
@@ -499,6 +486,38 @@ fn tool_result(
         at: Some(ts),
     });
     LineStatus::Parsed
+}
+
+fn content_part_failure(
+    ctx: &NormalizeCtx,
+    stream_id: &str,
+    record_kind: &str,
+    error: ContentPartError,
+    at: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) -> LineStatus {
+    match error {
+        ContentPartError::Undeclared(kind) => {
+            ops.push(drift(
+                ctx,
+                stream_id,
+                &format!("{record_kind}/{kind}"),
+                UNKNOWN_SUBTYPE,
+                &[],
+                at,
+            ));
+            LineStatus::UnknownType
+        }
+        ContentPartError::UnsupportedDeclared(kind) => hard_into(
+            ctx,
+            stream_id,
+            &format!("{record_kind}/{kind}"),
+            "unsupported_declared_content_part",
+            at,
+            ops,
+        ),
+        ContentPartError::Malformed(code) => hard_into(ctx, stream_id, record_kind, code, at, ops),
+    }
 }
 
 fn usage_record(
@@ -574,16 +593,44 @@ fn row(
     }
 }
 
-fn content_text(blocks: &[ContentBlock]) -> Result<Option<String>, &'static str> {
+fn source_discriminator(ctx: &NormalizeCtx, kind: &str) -> String {
+    if let Some(offset) = ctx.src_offset {
+        format!("wire@{offset}:{kind}")
+    } else if let Some(cursor) = ctx.src_cursor {
+        format!("wire#{cursor}:{kind}")
+    } else {
+        format!("ordinal@{}:{kind}", ctx.next_ordinal)
+    }
+}
+
+fn validate_content_part(block: &ContentBlock) -> Result<(), ContentPartError> {
+    if !spec::declared_content_part_types().contains(&block.block_type) {
+        return Err(ContentPartError::Undeclared(block.block_type.clone()));
+    }
+    match block.block_type.as_str() {
+        "text" if block.text.is_none() => Err(ContentPartError::Malformed("missing_text")),
+        "think" if block.think.is_none() => Err(ContentPartError::Malformed("missing_think")),
+        "image_url" if block.image_url.is_none() => {
+            Err(ContentPartError::Malformed("missing_image_url"))
+        }
+        "audio_url" if block.audio_url.is_none() => {
+            Err(ContentPartError::Malformed("missing_audio_url"))
+        }
+        "video_url" if block.video_url.is_none() => {
+            Err(ContentPartError::Malformed("missing_video_url"))
+        }
+        "text" | "think" | "image_url" | "audio_url" | "video_url" => Ok(()),
+        other => Err(ContentPartError::UnsupportedDeclared(other.to_owned())),
+    }
+}
+
+fn content_text(blocks: &[ContentBlock]) -> Result<Option<String>, ContentPartError> {
     let mut text = Vec::with_capacity(blocks.len());
     for block in blocks {
-        if block.block_type != "text" {
-            return Err("unsupported_content_block");
+        validate_content_part(block)?;
+        if block.block_type == "text" {
+            text.push(block.text.as_deref().expect("validated text part"));
         }
-        let Some(part) = block.text.as_deref() else {
-            return Err("missing_content");
-        };
-        text.push(part);
     }
     let joined = text.join("\n");
     Ok((!joined.is_empty()).then_some(joined))
@@ -600,23 +647,15 @@ fn usage_snapshot(usage: &RecordedUsage) -> Option<TokenSnapshot> {
     })
 }
 
-fn result_text(result: &ToolResultBody) -> Result<Option<String>, &'static str> {
+fn result_text(result: &ToolResultBody) -> Result<Option<String>, ContentPartError> {
     match &result.output {
         Value::String(text) => Ok(Some(text.clone())),
         Value::Array(blocks) => {
-            let mut text = Vec::with_capacity(blocks.len());
-            for block in blocks {
-                if block["type"].as_str() != Some("text") {
-                    return Err("unsupported_result_block");
-                }
-                let Some(part) = block["text"].as_str() else {
-                    return Err("missing_result_text");
-                };
-                text.push(part);
-            }
-            Ok(Some(text.join("\n")))
+            let blocks = serde_json::from_value::<Vec<ContentBlock>>(Value::Array(blocks.clone()))
+                .map_err(|_| ContentPartError::Malformed("invalid_result_blocks"))?;
+            content_text(&blocks)
         }
-        _ => Err("unsupported_result_output"),
+        _ => Err(ContentPartError::Malformed("unsupported_result_output")),
     }
 }
 

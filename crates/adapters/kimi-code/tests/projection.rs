@@ -296,6 +296,106 @@ fn tool_results_are_merge_ops_not_timeline_rows() {
     assert_eq!(results.len(), 1);
 }
 
+#[test]
+fn writer_declared_media_parts_parse_without_indexing_media_references() {
+    let mut ctx = synthetic_context();
+    let message = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"before"},{"type":"image_url","imageUrl":{"url":"blobref:image","id":"image-1"}},{"type":"text","text":"after"}],"toolCalls":[],"origin":{"kind":"user"},"id":"message-media"},"time":1}"#,
+    );
+    assert_eq!(message.status, LineStatus::Parsed);
+    let [IngestOp::Message(row)] = message.ops.as_slice() else {
+        panic!("expected one message row, got {:?}", message.ops);
+    };
+    assert_eq!(row.content.as_deref(), Some("before\nafter"));
+
+    let media_only = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"image_url","imageUrl":{"url":"blobref:image-only"}}],"toolCalls":[],"origin":{"kind":"user"},"id":"message-media-only"},"time":2}"#,
+    );
+    assert_eq!(media_only.status, LineStatus::Parsed);
+    let [IngestOp::Message(row)] = media_only.ops.as_slice() else {
+        panic!(
+            "expected one media-only message row, got {:?}",
+            media_only.ops
+        );
+    };
+    assert_eq!(row.content, None);
+
+    ctx.src_offset = Some(99);
+    let assistant_media = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","event":{"type":"content.part","stepUuid":"step-media","part":{"type":"video_url","videoUrl":{"url":"blobref:video"}}},"time":3}"#,
+    );
+    assert_eq!(assistant_media.status, LineStatus::Parsed);
+    let [IngestOp::Message(row)] = assistant_media.ops.as_slice() else {
+        panic!(
+            "expected one assistant media row, got {:?}",
+            assistant_media.ops
+        );
+    };
+    assert_eq!(row.kind, MessageKind::Agent);
+    assert_eq!(row.uuid, None);
+    assert_eq!(row.content, None);
+}
+
+#[test]
+fn writer_optional_tool_fields_and_multimodal_results_are_lossless() {
+    let mut ctx = synthetic_context();
+    let call = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","event":{"type":"tool.call","stepUuid":"step-1","toolCallId":"call-media","name":"ReadMediaFile","extras":{"provider":"mock"}},"time":1}"#,
+    );
+    assert_eq!(call.status, LineStatus::Parsed);
+    let [IngestOp::Message(row)] = call.ops.as_slice() else {
+        panic!("expected one tool call row, got {:?}", call.ops);
+    };
+    let tool = row.tool.as_ref().expect("tool call");
+    assert_eq!(row.uuid, None);
+    assert_eq!(tool.input, serde_json::Value::Null);
+
+    let result = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-media","result":{"output":[{"type":"text","text":"caption"},{"type":"think","think":"not searchable","encrypted":"ciphertext"},{"type":"image_url","imageUrl":{"url":"blobref:image"}},{"type":"audio_url","audioUrl":{"url":"blobref:audio"}},{"type":"video_url","videoUrl":{"url":"blobref:video"}}]}},"time":2}"#,
+    );
+    assert_eq!(result.status, LineStatus::Parsed);
+    let [
+        IngestOp::ToolResult {
+            result, payload, ..
+        },
+    ] = result.ops.as_slice()
+    else {
+        panic!("expected one tool result merge, got {:?}", result.ops);
+    };
+    assert_eq!(result.as_deref(), Some("caption"));
+    assert_eq!(
+        payload
+            .as_ref()
+            .and_then(|value| value.pointer("/output/2/imageUrl/url"))
+            .and_then(serde_json::Value::as_str),
+        Some("blobref:image")
+    );
+
+    let media_only = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-media","result":{"output":[{"type":"image_url","imageUrl":{"url":"blobref:image-only"}}]}},"time":3}"#,
+    );
+    assert_eq!(media_only.status, LineStatus::Parsed);
+    let [IngestOp::ToolResult { result, .. }] = media_only.ops.as_slice() else {
+        panic!(
+            "expected one media-only result merge, got {:?}",
+            media_only.ops
+        );
+    };
+    assert_eq!(result, &None);
+}
+
 fn synthetic_context() -> NormalizeCtx {
     let runtime_id = ids::runtime_id("kimi-code", DATA_ROOT);
     let mut ctx = NormalizeCtx::new(
@@ -353,4 +453,35 @@ fn malformed_known_types_are_hard_errors_with_drift() {
         }
     );
     assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+
+    let outcome = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"image_url"}],"toolCalls":[],"origin":{"kind":"user"}},"time":1}"#,
+    );
+    assert_eq!(
+        outcome.status,
+        LineStatus::HardError {
+            code: "missing_image_url".to_owned()
+        }
+    );
+    assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+}
+
+#[test]
+fn undeclared_content_parts_are_soft_drift() {
+    let mut ctx = synthetic_context();
+    let outcome = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"document_url","documentUrl":{"url":"blobref:document"}}],"toolCalls":[],"origin":{"kind":"user"}},"time":1}"#,
+    );
+    assert_eq!(outcome.status, LineStatus::UnknownType);
+    assert!(
+        !outcome.ops.is_empty()
+            && outcome
+                .ops
+                .iter()
+                .all(|op| matches!(op, IngestOp::Drift(_)))
+    );
 }
