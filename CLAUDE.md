@@ -55,8 +55,9 @@ rollups, and read indexes until publication. Live batches retain same-transactio
 derived-state maintenance with indexed provenance and coalesced bucket repairs;
 ordinary schema-version mismatches still fail closed so rebuild is always explicit.
 The store hot tier, in-process subscription hub, localhost HTTP/WebSocket transport,
-backend-neutral protocol, and generated TypeScript bindings are implemented. Consumer
-migrations and the two uncaptured roster agents remain Phase 4/Phase 1 work.
+backend-neutral protocol, generated TypeScript bindings, and the `SearchBackend` seam
+with synchronous FTS5 as its reference implementation are implemented. Consumer migrations
+and the two uncaptured roster agents remain Phase 4/Phase 1 work.
 
 ## Repo map
 
@@ -75,6 +76,7 @@ crates/                    all Rust crates
   core/ capture/           LAYER 2 model, discovery, JSONL/SQLite capture, ledger, watch
   pipeline/ store/         LAYER 2 backfill/live/rebuild orchestration + projection/hot tier
   protocol/ server/        LAYER 3 wire contract + axum REST/WS runtime
+  search/                  backend-neutral query/readiness seam + FTS5 reference
   rosettad/                discover, ingest, watch, serve, and atomic rebuild CLI
   search-bench/            frozen-input FTS percentile campaign harness
 clients/                   generated TypeScript protocol package      [Phase 4]

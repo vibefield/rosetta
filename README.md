@@ -26,9 +26,10 @@ that tree, and only then publishes the validated SQLite projection; a missing pr
 beside an existing ledger fails closed to `rebuild`. `rebuild` validates and replays the
 whole ledger into a private database before atomically replacing the projection. Ordinary
 opens still fail closed on a schema mismatch so replacement is never implicit. The
-in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, and generated
-TypeScript protocol package are implemented. Consumer migrations and the dedicated
-metrics stream remain.
+in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, generated
+TypeScript protocol package, and a backend-neutral search seam with synchronous FTS5 as
+the reference backend are implemented. Consumer migrations, a detached search worker,
+and the dedicated metrics stream remain.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
 

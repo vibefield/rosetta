@@ -24,8 +24,9 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > projection-internal rewrite staging, not a third durable representation. A source's first
 > generation projects directly inside the unpublished cold database; only replacements of an
 > already-active generation need staging. The store hot tier, in-process subscription
-> hub, axum REST/WebSocket transport, backend-neutral wire types, and generated TypeScript
-> package are implemented. Consumer migrations and the dedicated metrics stream remain.
+> hub, axum REST/WebSocket transport, backend-neutral wire types, generated TypeScript
+> package, and `SearchBackend` seam with synchronous FTS5 as its reference are implemented.
+> Consumer migrations, a detached search worker, and the dedicated metrics stream remain.
 > Unknown projection schemas fail closed on ordinary open and are replaced only through
 > the explicit ledger rebuild command.
 >
@@ -385,8 +386,8 @@ ingestion.
   FTS maintenance, rollup corrections, and checkpoint/reconciliation state. The target
   search split moves only disposable search maintenance behind a durable repair set;
   canonical rows, rollups, and source-generation correctness remain atomic in SQLite.
-- **FTS5 external-content today**, with a backend-neutral search/readiness seam specified
-  before the L3 wire contract freezes. Organic broad-term ranking averaged roughly
+- **FTS5 external-content today**, behind an implemented backend-neutral
+  search/readiness seam. Organic broad-term ranking averaged roughly
   119–143 ms on the large Codex/Claude projections, while selective retrieval remained
   sub-millisecond. Decouple canonical-ready from search-ready, retain FTS5 as the offline
   correctness reference, and run Tantivy only as a disposable sidecar candidate against

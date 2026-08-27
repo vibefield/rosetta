@@ -191,9 +191,10 @@
       SQLite/FTS and rollups, watch-before-scan live scheduling, polling plus rotating audits, the
       checksummed raw segment ledger, crash-safe staged cold-ledger publication, atomic
       whole-projection rebuild, the store hot tier, the
-      in-process subscription hub, axum HTTP/WebSocket transport, backend-neutral protocol, and
-      generated TypeScript package are implemented. Consumer migrations, the dedicated metrics
-      stream, and unimplemented performance promises below remain design targets. Organic Claude
+      in-process subscription hub, axum HTTP/WebSocket transport, backend-neutral protocol,
+      generated TypeScript package, and the <code>SearchBackend</code> seam with synchronous FTS5
+      as its reference are implemented. Consumer migrations, a detached search worker, the
+      dedicated metrics stream, and unimplemented performance promises below remain design targets. Organic Claude
       Code, Codex, and Grok validation established the first measured cold-load baseline; a later
       checksummed, permission-read-only Codex campaign established FTS5 p50/p95/p99. A newer frozen
       six-adapter source snapshot established cold-write attribution, non-empty Hermes coverage,
@@ -1065,7 +1066,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
     <thead><tr><th>investment</th><th>ROI now</th><th>reason</th></tr></thead>
     <tbody>
       <tr><td class="cm">FTS5 p50/p95/p99 baseline</td><td class="metric">highest information ROI · complete</td><td>One small harness answered the cheap decisive question: selective tails are fast, broad tails miss, and the actual product mix is now the missing evidence.</td></tr>
-      <tr><td class="cm">readiness vocabulary + backend-neutral contract</td><td class="metric">architectural ROI realized</td><td>The shipped L3 protocol now distinguishes readiness and carries structured filters, preventing a future lagging index from masquerading as complete empty search.</td></tr>
+      <tr><td class="cm">readiness vocabulary + SearchBackend boundary</td><td class="metric">architectural ROI realized · complete</td><td>The shipped L3 protocol distinguishes readiness and carries structured filters; <code>0c3f98c</code> routes status and queries through an atomic state-plus-results backend answer, with synchronous FTS5 as the reference and an injected building-backend contract test.</td></tr>
       <tr><td class="cm">frozen-snapshot Tantivy prototype</td><td class="metric">conditional information ROI</td><td>Defer its 2–3 days until an observed query-class mix, relevance need, or availability requirement shows that FTS5's fast selective path is insufficient. If opened, it must report build, p95/p99, relevance, RSS, and bytes on the same campaign.</td></tr>
       <tr><td class="cm">production asynchronous sidecar</td><td class="metric">conditional</td><td>The shipped persistent <code>rosettad serve</code> and HTTP search endpoint provide a real availability consumer: canonical endpoints could publish while search builds. A finite CLI that waits for search still sees no total-wall benefit.</td></tr>
       <tr><td class="cm">Tantivy for cold-build time alone</td><td class="metric">negative</td><td>A roughly 30-second build saving cannot repay 9–15 engineering days at this corpus scale; query latency, relevance, or service availability must justify adoption.</td></tr>
@@ -1116,7 +1117,7 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   <p>The physical search directory is part of the canonical projection's <em>derived index set</em>,
   not a third truth surface: it contains no facts unavailable from SQLite, cannot rebuild SQLite,
   is never migrated, carries the owning projection epoch, and may be deleted at any time. The
-  proposed dependency seam is a small <code>search</code> crate depending on <code>core/store</code>;
+  implemented dependency seam is a small <code>search</code> crate depending on <code>core/store</code>;
   <code>server</code> and <code>rosettad</code> depend on it, while <code>store</code> does not depend on
   Tantivy. L3 accepts one backend-neutral query contract so FTS5/Tantivy syntax never leaks onto the wire.</p>
 
@@ -1235,7 +1236,7 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   <table>
     <thead><tr><th>deliverable</th><th>engineering estimate <span class="badge b-bench">E</span></th><th>exit evidence</th></tr></thead>
     <tbody>
-      <tr><td class="cm">SearchBackend + readiness split</td><td class="metric">2–3 days</td><td>FTS5 behavior remains the reference; canonical publishes with search unavailable, never falsely empty.</td></tr>
+      <tr><td class="cm">SearchBackend + readiness boundary</td><td class="metric">complete · <code>0c3f98c</code></td><td>FTS5 behavior remains the reference; status and every query answer come from the selected backend, and a non-ready backend is explicit rather than falsely empty. Actual independent publication waits for a detached backend.</td></tr>
       <tr><td class="cm">Tantivy prototype</td><td class="metric">2–3 days</td><td>Build/query the same frozen SQLite snapshot with no live dual-write.</td></tr>
       <tr><td class="cm">production coherence</td><td class="metric">5–9 days</td><td>Dirty repair, epoch generation, filters, snippets, lifecycle, and crash injection.</td></tr>
       <tr><td class="cm">total if adopted</td><td class="metric">9–15 days</td><td>Every gate below passes.</td></tr>
@@ -1468,9 +1469,10 @@ seal all sources → fsync every staged file + child/parent directory entries
     failure is enough to justify a bounded bake-off because broad search is a supported product
     operation. A privacy-preserving observed histogram or explicit intended mix is still required
     before production adoption; the diagnostic equal weighting is not traffic evidence.</li>
-    <li><b>Introduce SearchBackend/readiness with FTS5 as reference.</b> Preserve backend-neutral
-    query semantics and make not-ready explicit. Land synchronization tables only in the same commit
-    as their named worker/acknowledger and crash tests.</li>
+    <li><b>Introduce SearchBackend/readiness with FTS5 as reference — complete.</b>
+    <code>0c3f98c</code> moved readiness into the search boundary, routes server status and queries
+    through it, preserves FTS5 filters/results, and proves an injected building backend cannot
+    masquerade as ready-empty. No synchronization table landed without a consumer.</li>
     <li><b>Run the 2–3 day Tantivy prototype on the retained frozen projection.</b> Compare ranked
     correctness, filters, p50/p95/p99 by class and declared mix, build wall/CPU/RSS/bytes, then reject
     or proceed. Productionize only after live-overhead, incremental-lag, lifecycle, and all crash
