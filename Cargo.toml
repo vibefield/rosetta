@@ -17,6 +17,7 @@ members = [
     "crates/pipeline",
     "crates/protocol",
     "crates/rosettad",
+    "crates/search",
     "crates/search-bench",
     "crates/server",
     "crates/store",

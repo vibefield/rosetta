@@ -2,7 +2,7 @@
 //! exact-watermark timeline pagination (expiry on rewrite, never a silent
 //! rebase), filtered search, and readiness on the status route.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Body;
@@ -15,6 +15,9 @@ use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
 use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
+use rosetta_search::{
+    SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness, SearchState,
+};
 use rosetta_server::{AppState, Hub, HubConfig, router};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
 use tempfile::TempDir;
@@ -62,6 +65,8 @@ struct Harness {
     _dir: TempDir,
     store: Store,
     cursor: i64,
+    hub: Arc<Hub>,
+    db: std::path::PathBuf,
     app: Router,
 }
 
@@ -113,14 +118,13 @@ fn harness() -> Harness {
     let hub = Arc::new(Hub::new(HubConfig::default(), 1));
     hub.warm(store.conn()).unwrap();
     store.drain_effects();
-    let app = router(AppState {
-        hub,
-        db: Arc::new(db),
-    });
+    let app = router(AppState::new(hub.clone(), db.clone()));
     Harness {
         _dir: dir,
         store,
         cursor,
+        hub,
+        db,
         app,
     }
 }
@@ -171,6 +175,60 @@ async fn status_reports_versions_and_synchronous_search() {
         serde_json::to_value(parsed.search.readiness).unwrap(),
         "ready"
     );
+}
+
+#[derive(Clone)]
+struct BuildingSearch {
+    state: SearchState,
+    seen: Arc<Mutex<Vec<SearchQuery>>>,
+}
+
+impl SearchBackend for BuildingSearch {
+    fn state(&self) -> SearchState {
+        self.state.clone()
+    }
+
+    fn search(&self, query: SearchQuery) -> Result<SearchOutput, SearchError> {
+        self.seen.lock().unwrap().push(query);
+        Ok(SearchOutput::unavailable(self.state.clone()))
+    }
+}
+
+#[tokio::test]
+async fn detached_backend_never_masquerades_as_ready_empty_search() {
+    let mut h = harness();
+    let state = SearchState {
+        readiness: SearchReadiness::Building,
+        projection_epoch: Some("projection-7".into()),
+        revision: Some(12),
+    };
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let backend = Arc::new(BuildingSearch {
+        state: state.clone(),
+        seen: seen.clone(),
+    });
+    h.app = router(AppState::with_search(h.hub.clone(), h.db.clone(), backend));
+
+    let (status, body) = h.get("/api/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let status: StatusResponse = serde_json::from_value(body).unwrap();
+    assert!(status.canonical_ready);
+    assert_eq!(status.search, state);
+
+    let (status, body) = h
+        .get("/api/search?q=ionosphere&kind=tool_use&session=s1&limit=7")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let response: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(response.state, state);
+    assert!(response.hits.is_empty());
+
+    let queries = seen.lock().unwrap();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].text, "ionosphere");
+    assert_eq!(queries[0].kind.as_deref(), Some("tool_use"));
+    assert_eq!(queries[0].session.as_deref(), Some("s1"));
+    assert_eq!(queries[0].limit, 7);
 }
 
 #[tokio::test]

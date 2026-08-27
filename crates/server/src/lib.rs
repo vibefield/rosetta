@@ -1,6 +1,6 @@
 //! rosetta-server — the L3 service runtime (docs/ARCHITECTURE.md §8):
 //! [`hub`] (the pub/sub fan-out), [`http`] (the axum REST surface over
-//! `store::queries` + the hub's mirror), and [`ws`] (WebSocket
+//! canonical queries, the search backend, and the hub's mirror), and [`ws`] (WebSocket
 //! subscriptions speaking `rosetta-protocol` frames). Async lives only in
 //! this layer; the ingest engine below stays synchronous.
 

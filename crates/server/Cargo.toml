@@ -11,6 +11,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 rosetta-core = { path = "../core" }
 rosetta-protocol = { path = "../protocol" }
+rosetta-search = { path = "../search" }
 rosetta-store = { path = "../store" }
 
 [dev-dependencies]

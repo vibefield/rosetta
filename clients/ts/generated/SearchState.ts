@@ -2,16 +2,16 @@
 import type { SearchReadiness } from "./SearchReadiness";
 
 /**
- * Search identity + readiness, stamped on every search response.
+ * Identity and readiness of the search projection that answered a request.
  */
 export type SearchState = { readiness: SearchReadiness, 
 /**
- * Random per-build projection identifier once the detached search seam
- * lands; `None` while FTS5 is synchronous in the canonical file.
+ * Owning canonical projection identifier for a detached search index.
+ * Synchronous FTS5 has no independent projection identity.
  */
 projection_epoch: string | null, 
 /**
- * SQLite search revision the serving index has committed; `None` while
- * search is synchronous (index and rows commit together).
+ * Canonical search revision committed by a detached index. Synchronous
+ * FTS5 commits with the canonical rows and therefore has no revision.
  */
 revision: number | null, };

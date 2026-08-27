@@ -1,5 +1,6 @@
-//! The REST surface: axum over `store::queries` for row reads and the hub's
-//! resident mirror for list/browse (which therefore never touch the DB).
+//! The REST surface: axum over `store::queries` for canonical row reads, the
+//! search backend boundary for ranked retrieval, and the hub's resident
+//! mirror for list/browse (which therefore never touch the DB).
 //! Every SQLite read opens its own read-only connection against the
 //! published projection file inside `spawn_blocking` — the single writer
 //! owns its connection exclusively, and WAL keeps readers unblocked.
@@ -21,10 +22,11 @@ use serde_json::json;
 
 use rosetta_protocol::{
     ApiError, ContributionResponse, ErrorCode, HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse,
-    RuntimesResponse, SearchReadiness, SearchRequest, SearchResponse, SearchState, SessionResponse,
-    SessionsResponse, StatusResponse, TimelineCursor, TimelinePage,
+    RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
+    StatusResponse, TimelineCursor, TimelinePage,
 };
-use rosetta_store::queries::{self, SearchFilter};
+use rosetta_search::{Fts5Search, SearchBackend, SearchError, SearchQuery, SearchState};
+use rosetta_store::queries;
 use rosetta_store::{StoreError, schema};
 
 use crate::hub::Hub;
@@ -38,6 +40,32 @@ pub struct AppState {
     pub hub: Arc<Hub>,
     /// The published projection file; readers open their own connections.
     pub db: Arc<PathBuf>,
+    /// Search is deliberately independent from canonical row reads. The
+    /// shipped backend points at `db`; a detached backend can report its own
+    /// readiness and answer without changing this transport contract.
+    pub search: Arc<dyn SearchBackend>,
+}
+
+impl AppState {
+    /// Build the shipped synchronous-FTS5 service state.
+    pub fn new(hub: Arc<Hub>, db: PathBuf) -> Self {
+        let search = Arc::new(Fts5Search::new(db.clone()));
+        Self {
+            hub,
+            db: Arc::new(db),
+            search,
+        }
+    }
+
+    /// Inject a backend while retaining the same canonical projection. Used
+    /// by sidecars and by readiness/coherence contract tests.
+    pub fn with_search(hub: Arc<Hub>, db: PathBuf, search: Arc<dyn SearchBackend>) -> Self {
+        Self {
+            hub,
+            db: Arc::new(db),
+            search,
+        }
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -135,6 +163,7 @@ fn clamp_limit(limit: Option<i64>, default: i64) -> i64 {
 }
 
 async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, Failure> {
+    let search_state = state.search.state();
     let response = with_read(state.db.clone(), |conn| {
         let schema_version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -147,13 +176,9 @@ async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, F
             // Synchronous FTS5 commits with canonical rows; a foreign schema
             // means neither surface is serveable.
             search: if canonical_ready {
-                SearchState::synchronous()
+                search_state
             } else {
-                SearchState {
-                    readiness: SearchReadiness::Failed,
-                    projection_epoch: None,
-                    revision: None,
-                }
+                SearchState::failed()
             },
         })
     })
@@ -261,26 +286,30 @@ async fn search(
         return Err(Failure::bad_request("q must not be empty"));
     }
     let limit = clamp_limit(request.limit, DEFAULT_SEARCH_LIMIT);
-    let response = with_read(state.db.clone(), move |conn| {
-        let filter = SearchFilter {
-            session: request.session.clone(),
-            runtime: request.runtime.clone(),
-            project: request.project.clone(),
-            kind: request.kind.clone(),
-            after_ts: request.after_ts,
-            before_ts: request.before_ts,
-        };
-        // FTS5 rejects malformed MATCH expressions; the query text is user
-        // input, so surface those as bad requests, not server faults.
-        let hits = queries::search_filtered(conn, &request.q, limit, &filter)
-            .map_err(|error| Failure::bad_request(format!("search failed: {error}")))?;
-        Ok(SearchResponse {
-            state: SearchState::synchronous(),
-            hits,
-        })
-    })
-    .await?;
-    Ok(Json(response))
+    let query = SearchQuery {
+        text: request.q,
+        limit,
+        session: request.session,
+        runtime: request.runtime,
+        project: request.project,
+        kind: request.kind,
+        after_ts: request.after_ts,
+        before_ts: request.before_ts,
+    };
+    let backend = state.search.clone();
+    let output = tokio::task::spawn_blocking(move || backend.search(query))
+        .await
+        .map_err(|error| Failure::internal(format!("search task failed: {error}")))?
+        .map_err(|error| match error {
+            SearchError::InvalidQuery(message) => {
+                Failure::bad_request(format!("search failed: {message}"))
+            }
+            SearchError::Backend(message) => Failure::internal(format!("search failed: {message}")),
+        })?;
+    Ok(Json(SearchResponse {
+        state: output.state,
+        hits: output.hits,
+    }))
 }
 
 #[derive(serde::Deserialize)]

@@ -7,6 +7,7 @@ edition.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 rosetta-core = { path = "../core" }
+rosetta-search = { path = "../search" }
 rosetta-store = { path = "../store" }
 ts-rs = { workspace = true, optional = true }
 
@@ -14,4 +15,4 @@ ts-rs = { workspace = true, optional = true }
 # TypeScript binding generation: `TS_RS_EXPORT_DIR=<abs path to clients/ts/generated>
 # cargo test -p rosetta-protocol --features ts` regenerates the committed
 # client types.
-ts = ["dep:ts-rs", "rosetta-core/ts", "rosetta-store/ts"]
+ts = ["dep:ts-rs", "rosetta-core/ts", "rosetta-search/ts", "rosetta-store/ts"]

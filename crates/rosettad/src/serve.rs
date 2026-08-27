@@ -193,10 +193,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         });
     }
-    let state = AppState {
-        hub: hub.clone(),
-        db: Arc::new(db.clone()),
-    };
+    let state = AppState::new(hub.clone(), db.clone());
     let server = tokio_runtime.spawn(async move {
         let mut shutdown_rx = shutdown_rx;
         axum::serve(listener, router(state))

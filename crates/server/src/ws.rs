@@ -380,10 +380,7 @@ mod tests {
         let hub = Arc::new(Hub::new(HubConfig::default(), 1));
         hub.warm(store.conn()).unwrap();
         store.drain_effects();
-        let state = AppState {
-            hub,
-            db: Arc::new(db),
-        };
+        let state = AppState::new(hub, db);
         Harness {
             _dir: dir,
             store,

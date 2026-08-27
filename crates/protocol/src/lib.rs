@@ -20,52 +20,12 @@ pub use rosetta_core::rows::{
     MessageKind, MessageRow, Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
     TokenSnapshot, ToolCall,
 };
+pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
-pub use rosetta_store::queries::{ContributionRow, HeatmapDay, SearchHit};
+pub use rosetta_store::queries::{ContributionRow, HeatmapDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
 pub const PROTOCOL_VERSION: u32 = 1;
-
-/// Search-readiness vocabulary, exactly as specified — "ingest complete" is
-/// otherwise ambiguous. With synchronous FTS5 inside the canonical
-/// projection (the shipped default), a published projection is `Ready` by
-/// construction; the other states exist so the contract does not change
-/// when a detached search backend arrives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub enum SearchReadiness {
-    Ready,
-    Building,
-    CatchingUp,
-    Stale,
-    Failed,
-}
-
-/// Search identity + readiness, stamped on every search response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct SearchState {
-    pub readiness: SearchReadiness,
-    /// Random per-build projection identifier once the detached search seam
-    /// lands; `None` while FTS5 is synchronous in the canonical file.
-    pub projection_epoch: Option<String>,
-    /// SQLite search revision the serving index has committed; `None` while
-    /// search is synchronous (index and rows commit together).
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub revision: Option<u64>,
-}
-
-impl SearchState {
-    /// The synchronous-FTS5 state: search commits with canonical rows.
-    pub fn synchronous() -> Self {
-        Self {
-            readiness: SearchReadiness::Ready,
-            projection_epoch: None,
-            revision: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

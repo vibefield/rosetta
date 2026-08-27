@@ -802,9 +802,23 @@ name = "rosetta-protocol"
 version = "0.1.0"
 dependencies = [
  "rosetta-core",
+ "rosetta-search",
  "rosetta-store",
  "serde",
  "serde_json",
+ "ts-rs",
+]
+
+[[package]]
+name = "rosetta-search"
+version = "0.1.0"
+dependencies = [
+ "rosetta-core",
+ "rosetta-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
  "ts-rs",
 ]
 
@@ -828,6 +842,7 @@ dependencies = [
  "http-body-util",
  "rosetta-core",
  "rosetta-protocol",
+ "rosetta-search",
  "rosetta-store",
  "rusqlite",
  "serde",
