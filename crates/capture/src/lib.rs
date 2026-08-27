@@ -14,8 +14,8 @@ pub use discovery::{
     HeadTail, ScannedFile, WalkReport, first_record, head_tail, walk, walk_filtered,
 };
 pub use ledger::{
-    Ledger, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef, scan as scan_ledger,
-    visit as visit_ledger,
+    Ledger, LedgerElectionEntry, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef,
+    scan as scan_ledger, visit as visit_ledger, visit_election as visit_ledger_election,
 };
 pub use sqlite::{
     DbSnapshot, DbStamp, SnapshotOutcome, db_stamp, is_db_sidecar, snapshot as snapshot_db,

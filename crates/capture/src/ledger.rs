@@ -13,13 +13,18 @@
 //! deleting old segments (future GC) cannot dangle references.
 //!
 //! Frames: `tag ∙ u32 body-len ∙ body ∙ 8-byte blake3 checksum`. A torn or
-//! corrupt frame ends that segment's scan — everything before it is intact.
+//! corrupt frame ends the ordinary/full segment scan — everything before it
+//! is intact. The rebuild election scan may skip raw/meta payload checksums,
+//! but publication requires its report to match a subsequent full scan.
 
-use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::collections::{HashMap, HashSet};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 use crate::{CaptureError, io_error};
 
@@ -33,6 +38,7 @@ const TAG_META: u8 = 3;
 const TAG_GENERATION_COMPLETE: u8 = 4;
 const TAG_META_VERSIONED: u8 = 5;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const ELECTION_BUFFER_BYTES: usize = 1024 * 1024;
 
 /// Everything replay needs to rebuild a normalization context for a source
 /// file. Written into each segment the first time the source appears there.
@@ -68,6 +74,22 @@ pub enum LedgerEntry {
     Meta {
         schema_version: u32,
         payload: String,
+    },
+}
+
+/// The subset of a frame that generation election is allowed to observe.
+/// Raw and meta payloads are deliberately absent: the first rebuild pass can
+/// seek over them, while the ordinary second pass remains the authority that
+/// reads, checksums, decodes, and replays every complete frame.
+#[derive(Debug, Clone, Copy)]
+pub enum LedgerElectionEntry<'a> {
+    /// Emitted once for each relative path that owns at least one raw frame.
+    RawSource { source: &'a SourceDef },
+    GenerationComplete {
+        source: &'a SourceDef,
+        generation: u64,
+        normalizer_version: u32,
+        normalized_clean: bool,
     },
 }
 
@@ -361,6 +383,10 @@ pub struct LedgerVisit {
     pub segments: usize,
     pub torn_segments: usize,
     pub entries: u64,
+    /// Hash of the exact segment names and file identities/lengths observed
+    /// by this pass. Private so callers compare complete reports rather than
+    /// treating it as a durable or portable content fingerprint.
+    segment_snapshot: [u8; 32],
 }
 
 /// Visit every ledger entry in segment order without retaining payloads.
@@ -371,28 +397,85 @@ where
     F: FnMut(LedgerEntry) -> Result<(), E>,
 {
     let mut report = LedgerVisit::default();
-    for (_, path) in segment_files(dir).map_err(E::from)? {
+    let mut snapshot = blake3::Hasher::new();
+    for (sequence, path) in segment_files(dir).map_err(E::from)? {
         report.segments += 1;
+        let file = File::open(&path)
+            .map_err(|error| E::from(io_error("opening segment", &path, error)))?;
+        let before = file
+            .metadata()
+            .map_err(|error| E::from(io_error("stating segment", &path, error)))?;
+        let identity = segment_identity(sequence, &path, &before);
+        snapshot.update(&identity);
         let mut counted = |entry| {
             report.entries += 1;
             visitor(entry)
         };
-        if !scan_segment(&path, &mut counted)? {
+        let intact = scan_segment(&path, &file, before.len(), &mut counted)?;
+        let after = file
+            .metadata()
+            .map_err(|error| E::from(io_error("restating segment", &path, error)))?;
+        if !intact || identity != segment_identity(sequence, &path, &after) {
             report.torn_segments += 1;
         }
     }
+    report.segment_snapshot = *snapshot.finalize().as_bytes();
+    Ok(report)
+}
+
+/// Visit only the control information needed to elect source generations.
+/// Define and completion frames are fully checksummed. Raw record prefixes
+/// are decoded, but raw payloads/checksums and meta payloads/checksums are
+/// skipped by seek; a subsequent ordinary [`visit`] must match this report
+/// and independently reproduce the election before any rebuild is published.
+pub fn visit_election<E, F>(dir: &Path, mut visitor: F) -> Result<LedgerVisit, E>
+where
+    E: From<CaptureError>,
+    F: for<'a> FnMut(LedgerElectionEntry<'a>) -> Result<(), E>,
+{
+    let mut report = LedgerVisit::default();
+    let mut snapshot = blake3::Hasher::new();
+    let mut raw_paths = HashSet::new();
+    for (sequence, path) in segment_files(dir).map_err(E::from)? {
+        report.segments += 1;
+        let file = File::open(&path)
+            .map_err(|error| E::from(io_error("opening segment", &path, error)))?;
+        let before = file
+            .metadata()
+            .map_err(|error| E::from(io_error("stating segment", &path, error)))?;
+        let identity = segment_identity(sequence, &path, &before);
+        snapshot.update(&identity);
+        let intact = scan_election_segment(
+            &path,
+            &file,
+            before.len(),
+            &mut report.entries,
+            &mut raw_paths,
+            &mut visitor,
+        )?;
+        let after = file
+            .metadata()
+            .map_err(|error| E::from(io_error("restating segment", &path, error)))?;
+        if !intact || identity != segment_identity(sequence, &path, &after) {
+            report.torn_segments += 1;
+        }
+    }
+    report.segment_snapshot = *snapshot.finalize().as_bytes();
     Ok(report)
 }
 
 /// Returns false if the segment ended in a torn/corrupt frame.
-fn scan_segment<E, F>(path: &Path, visitor: &mut F) -> Result<bool, E>
+fn scan_segment<E, F>(
+    path: &Path,
+    file: &File,
+    segment_len: u64,
+    visitor: &mut F,
+) -> Result<bool, E>
 where
     E: From<CaptureError>,
     F: FnMut(LedgerEntry) -> Result<(), E>,
 {
-    let file =
-        File::open(path).map_err(|error| E::from(io_error("opening segment", path, error)))?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(file.take(segment_len));
     let mut magic = vec![0_u8; SEGMENT_MAGIC.len()];
     if !read_frame_part(&mut reader, &mut magic, path)? || magic != SEGMENT_MAGIC {
         return Ok(false);
@@ -416,20 +499,9 @@ where
         if body_len > MAX_FRAME_BYTES {
             return Ok(false);
         }
-        let mut body = vec![0_u8; body_len];
-        if !read_frame_part(&mut reader, &mut body, path)? {
+        let Some(body) = read_verified_body(&mut reader, &head, body_len, path)? else {
             return Ok(false);
-        }
-        let mut checksum = [0_u8; CHECKSUM_BYTES];
-        if !read_frame_part(&mut reader, &mut checksum, path)? {
-            return Ok(false);
-        }
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&head);
-        hasher.update(&body);
-        if hasher.finalize().as_bytes()[..CHECKSUM_BYTES] != checksum {
-            return Ok(false);
-        }
+        };
         match tag {
             TAG_DEFINE => {
                 let Some((id, source)) = decode_define(&body) else {
@@ -503,6 +575,192 @@ where
             _ => return Ok(false),
         }
     }
+}
+
+/// Returns false if the segment ended in a torn/corrupt control frame. Raw
+/// and meta payload checksums are intentionally deferred to the full pass.
+fn scan_election_segment<E, F>(
+    path: &Path,
+    file: &File,
+    segment_len: u64,
+    entries: &mut u64,
+    raw_paths: &mut HashSet<String>,
+    visitor: &mut F,
+) -> Result<bool, E>
+where
+    E: From<CaptureError>,
+    F: for<'a> FnMut(LedgerElectionEntry<'a>) -> Result<(), E>,
+{
+    let mut reader = BufReader::with_capacity(ELECTION_BUFFER_BYTES, file);
+    let mut magic = vec![0_u8; SEGMENT_MAGIC.len()];
+    if !read_frame_part(&mut reader, &mut magic, path)? || magic != SEGMENT_MAGIC {
+        return Ok(false);
+    }
+    let mut position = SEGMENT_MAGIC.len() as u64;
+    let mut defined: HashMap<u32, SourceDef> = HashMap::new();
+    loop {
+        if position == segment_len {
+            return Ok(true);
+        }
+        if position > segment_len {
+            return Ok(false);
+        }
+
+        let mut head = [0_u8; 5];
+        if !read_frame_part(&mut reader, &mut head, path)? {
+            return Ok(false);
+        }
+        position += head.len() as u64;
+        let tag = head[0];
+        let body_len = u32::from_be_bytes(head[1..5].try_into().expect("4 bytes")) as usize;
+        if body_len > MAX_FRAME_BYTES {
+            return Ok(false);
+        }
+        let frame_end = position
+            .checked_add(body_len as u64)
+            .and_then(|end| end.checked_add(CHECKSUM_BYTES as u64));
+        let Some(frame_end) = frame_end.filter(|end| *end <= segment_len) else {
+            return Ok(false);
+        };
+
+        match tag {
+            TAG_DEFINE => {
+                let Some(body) = read_verified_body(&mut reader, &head, body_len, path)? else {
+                    return Ok(false);
+                };
+                let Some((id, source)) = decode_define(&body) else {
+                    return Ok(false);
+                };
+                defined.insert(id, source);
+            }
+            TAG_RAW => {
+                if body_len < 20 {
+                    return Ok(false);
+                }
+                let mut prefix = [0_u8; 20];
+                if !read_frame_part(&mut reader, &mut prefix, path)? {
+                    return Ok(false);
+                }
+                let file_id = u32::from_be_bytes(prefix[0..4].try_into().expect("4 bytes"));
+                let Some(source) = defined.get(&file_id) else {
+                    return Ok(false);
+                };
+                skip_relative(&mut reader, body_len - prefix.len() + CHECKSUM_BYTES, path)?;
+                *entries = entries.saturating_add(1);
+                if raw_paths.insert(source.relative_path.clone()) {
+                    visitor(LedgerElectionEntry::RawSource { source })?;
+                }
+            }
+            TAG_GENERATION_COMPLETE => {
+                if body_len != 17 {
+                    return Ok(false);
+                }
+                let Some(body) = read_verified_body(&mut reader, &head, body_len, path)? else {
+                    return Ok(false);
+                };
+                let file_id = u32::from_be_bytes(body[0..4].try_into().expect("4 bytes"));
+                let generation = u64::from_be_bytes(body[4..12].try_into().expect("8 bytes"));
+                let normalizer_version =
+                    u32::from_be_bytes(body[12..16].try_into().expect("4 bytes"));
+                let normalized_clean = match body[16] {
+                    0 => false,
+                    1 => true,
+                    _ => return Ok(false),
+                };
+                let Some(source) = defined.get(&file_id) else {
+                    return Ok(false);
+                };
+                *entries = entries.saturating_add(1);
+                visitor(LedgerElectionEntry::GenerationComplete {
+                    source,
+                    generation,
+                    normalizer_version,
+                    normalized_clean,
+                })?;
+            }
+            TAG_META => {
+                skip_relative(&mut reader, body_len + CHECKSUM_BYTES, path)?;
+                *entries = entries.saturating_add(1);
+            }
+            TAG_META_VERSIONED => {
+                if body_len < 4 {
+                    return Ok(false);
+                }
+                skip_relative(&mut reader, body_len + CHECKSUM_BYTES, path)?;
+                *entries = entries.saturating_add(1);
+            }
+            _ => return Ok(false),
+        }
+        position = frame_end;
+    }
+}
+
+fn read_verified_body<E: From<CaptureError>>(
+    reader: &mut impl Read,
+    head: &[u8; 5],
+    body_len: usize,
+    path: &Path,
+) -> Result<Option<Vec<u8>>, E> {
+    let mut body = vec![0_u8; body_len];
+    if !read_frame_part(reader, &mut body, path)? {
+        return Ok(None);
+    }
+    let mut checksum = [0_u8; CHECKSUM_BYTES];
+    if !read_frame_part(reader, &mut checksum, path)? {
+        return Ok(None);
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(head);
+    hasher.update(&body);
+    if hasher.finalize().as_bytes()[..CHECKSUM_BYTES] != checksum {
+        return Ok(None);
+    }
+    Ok(Some(body))
+}
+
+fn skip_relative<E: From<CaptureError>>(
+    reader: &mut BufReader<&File>,
+    bytes: usize,
+    path: &Path,
+) -> Result<(), E> {
+    reader
+        .seek_relative(bytes as i64)
+        .map_err(|error| E::from(io_error("seeking through segment", path, error)))
+}
+
+fn segment_identity(sequence: u64, path: &Path, metadata: &Metadata) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&sequence.to_be_bytes());
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    hasher.update(&(name.len() as u64).to_be_bytes());
+    hasher.update(name.as_bytes());
+    hasher.update(&metadata.len().to_be_bytes());
+    match metadata.modified() {
+        Ok(modified) => match modified.duration_since(UNIX_EPOCH) {
+            Ok(stamp) => {
+                hasher.update(&[0]);
+                hasher.update(&stamp.as_secs().to_be_bytes());
+                hasher.update(&stamp.subsec_nanos().to_be_bytes());
+            }
+            Err(error) => {
+                hasher.update(&[1]);
+                hasher.update(&error.duration().as_secs().to_be_bytes());
+                hasher.update(&error.duration().subsec_nanos().to_be_bytes());
+            }
+        },
+        Err(_) => {
+            hasher.update(&[2]);
+        }
+    }
+    #[cfg(unix)]
+    {
+        hasher.update(&metadata.dev().to_be_bytes());
+        hasher.update(&metadata.ino().to_be_bytes());
+    }
+    *hasher.finalize().as_bytes()
 }
 
 fn read_frame_part<E: From<CaptureError>>(
@@ -714,6 +972,135 @@ mod tests {
                 normalized_clean: false,
             } if sealed == &source
         ));
+    }
+
+    #[test]
+    fn payload_light_election_matches_the_full_structural_scan() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let source = source("a.jsonl");
+        ledger.append_meta(1, &"m".repeat(64 * 1024)).unwrap();
+        ledger
+            .append_raw(
+                &source,
+                7,
+                [
+                    (0_u64, vec![b'a'; 128 * 1024]),
+                    (128 * 1024, vec![b'b'; 128 * 1024]),
+                ],
+            )
+            .unwrap();
+        ledger.complete_generation(&source, 7, 4, true).unwrap();
+        ledger.flush().unwrap();
+
+        let mut facts = Vec::new();
+        let election = visit_election::<CaptureError, _>(dir.path(), |entry| {
+            match entry {
+                LedgerElectionEntry::RawSource { source } => {
+                    facts.push(("raw", source.relative_path.clone(), 0, 0))
+                }
+                LedgerElectionEntry::GenerationComplete {
+                    source, generation, ..
+                } => facts.push(("seal", source.relative_path.clone(), generation, 0)),
+            }
+            Ok(())
+        })
+        .unwrap();
+        let full = visit::<CaptureError, _>(dir.path(), |_| Ok(())).unwrap();
+
+        assert_eq!(election, full);
+        assert_eq!(election.entries, 4);
+        assert_eq!(
+            facts,
+            [
+                ("raw", "a.jsonl".to_string(), 0, 0),
+                ("seal", "a.jsonl".to_string(), 7, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn full_replay_exposes_a_raw_checksum_the_election_pass_skips() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let source = source("a.jsonl");
+        ledger
+            .append_raw(&source, 1, [(0_u64, b"checksum-marker".as_slice())])
+            .unwrap();
+        ledger.complete_generation(&source, 1, 1, true).unwrap();
+        ledger.flush().unwrap();
+        drop(ledger);
+
+        let segment = dir.path().join(segment_name(0));
+        let mut bytes = std::fs::read(&segment).unwrap();
+        let marker = b"checksum-marker";
+        let payload_at = bytes
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .unwrap();
+        bytes[payload_at] ^= 0x01;
+        std::fs::write(&segment, bytes).unwrap();
+
+        let mut saw_seal = false;
+        let election = visit_election::<CaptureError, _>(dir.path(), |entry| {
+            saw_seal |= matches!(entry, LedgerElectionEntry::GenerationComplete { .. });
+            Ok(())
+        })
+        .unwrap();
+        let full = visit::<CaptureError, _>(dir.path(), |_| Ok(())).unwrap();
+
+        assert!(
+            saw_seal,
+            "the control pass intentionally skipped raw checksum work"
+        );
+        assert_eq!(election.torn_segments, 0);
+        assert_eq!(full.torn_segments, 1);
+        assert_ne!(election, full, "rebuild must reject the two-pass mismatch");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_size_valid_segment_replacement_changes_the_pass_snapshot() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let source = source("a.jsonl");
+        ledger
+            .append_raw(&source, 1, [(0_u64, b"mutable-marker".as_slice())])
+            .unwrap();
+        ledger.complete_generation(&source, 1, 1, true).unwrap();
+        ledger.flush().unwrap();
+        drop(ledger);
+
+        let before = visit_election::<CaptureError, _>(dir.path(), |_| Ok(())).unwrap();
+        let segment = dir.path().join(segment_name(0));
+        let mut bytes = std::fs::read(&segment).unwrap();
+        let marker = b"mutable-marker";
+        let payload_at = bytes
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .unwrap();
+        let head_at = payload_at - 20 - 5;
+        assert_eq!(bytes[head_at], TAG_RAW);
+        let body_len = u32::from_be_bytes(
+            bytes[head_at + 1..head_at + 5]
+                .try_into()
+                .expect("frame body length"),
+        ) as usize;
+        bytes[payload_at] ^= 0x01;
+        let checksum_at = head_at + 5 + body_len;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&bytes[head_at..checksum_at]);
+        bytes[checksum_at..checksum_at + CHECKSUM_BYTES]
+            .copy_from_slice(&hasher.finalize().as_bytes()[..CHECKSUM_BYTES]);
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, &bytes).unwrap();
+        std::fs::rename(&replacement, &segment).unwrap();
+
+        let after = visit::<CaptureError, _>(dir.path(), |_| Ok(())).unwrap();
+        assert_eq!(before.segments, after.segments);
+        assert_eq!(before.entries, after.entries);
+        assert_eq!(before.torn_segments, after.torn_segments);
+        assert_ne!(before, after, "file identity must bind the two passes");
     }
 
     #[test]
