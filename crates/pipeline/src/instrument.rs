@@ -48,9 +48,6 @@ pub enum Metric {
     MessageApplyAttempts,
     ToolResultApplyAttempts,
     UsageApplyAttempts,
-    ChunkToolResultFolds,
-    ChunkUsageFolds,
-    ChunkMergeProbes,
     DriftApplyAttempts,
     OtherApplyAttempts,
     SessionTouchAttempts,
@@ -69,7 +66,6 @@ pub enum Metric {
     ToolResultWriteNanos,
     UsageLookupNanos,
     UsageWriteNanos,
-    ChunkMergeProbeNanos,
     SessionTouchNanos,
     PendingGateNanos,
     PendingLookupNanos,
@@ -88,7 +84,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 76;
+const METRIC_COUNT: usize = 72;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -132,9 +128,6 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
         "tool-result apply attempts",
     ),
     (Metric::UsageApplyAttempts, "usage apply attempts"),
-    (Metric::ChunkToolResultFolds, "chunk tool-result folds"),
-    (Metric::ChunkUsageFolds, "chunk usage folds"),
-    (Metric::ChunkMergeProbes, "chunk merge probes"),
     (Metric::DriftApplyAttempts, "drift apply attempts"),
     (Metric::OtherApplyAttempts, "other apply attempts"),
     (Metric::SessionTouchAttempts, "session touch attempts"),
@@ -153,7 +146,6 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::ToolResultWriteNanos, "tool-result write time"),
     (Metric::UsageLookupNanos, "usage lookup time"),
     (Metric::UsageWriteNanos, "usage write time"),
-    (Metric::ChunkMergeProbeNanos, "chunk merge probe time"),
     (Metric::SessionTouchNanos, "session touch time"),
     (Metric::PendingGateNanos, "pending gate time"),
     (Metric::PendingLookupNanos, "pending lookup time"),
@@ -259,12 +251,6 @@ impl Instrument {
                 profile.tool_result_attempts,
             );
             self.add(Metric::UsageApplyAttempts, profile.usage_attempts);
-            self.add(
-                Metric::ChunkToolResultFolds,
-                profile.chunk_tool_result_folds,
-            );
-            self.add(Metric::ChunkUsageFolds, profile.chunk_usage_folds);
-            self.add(Metric::ChunkMergeProbes, profile.chunk_merge_probes);
             self.add(Metric::DriftApplyAttempts, profile.drift_attempts);
             self.add(Metric::OtherApplyAttempts, profile.other_attempts);
             self.add(Metric::SessionTouchAttempts, profile.session_touch_attempts);
@@ -289,10 +275,6 @@ impl Instrument {
             );
             self.add(Metric::UsageLookupNanos, profile.usage_lookup_nanos);
             self.add(Metric::UsageWriteNanos, profile.usage_write_nanos);
-            self.add(
-                Metric::ChunkMergeProbeNanos,
-                profile.chunk_merge_probe_nanos,
-            );
             self.add(Metric::SessionTouchNanos, profile.session_touch_nanos);
             self.add(Metric::PendingGateNanos, profile.pending_gate_nanos);
             self.add(Metric::PendingLookupNanos, profile.pending_lookup_nanos);

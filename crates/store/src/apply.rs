@@ -16,8 +16,7 @@ use std::time::Instant;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::rows::{
-    DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, TaskRow,
-    WorkspaceObsRow,
+    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, ProjectRow, TaskRow, WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 
@@ -103,14 +102,6 @@ pub struct ApplyProfile {
     pub message_attempts: u64,
     pub tool_result_attempts: u64,
     pub usage_attempts: u64,
-    /// Cold first-generation merge ops folded into their owning message in
-    /// the same ordered source chunk instead of issuing a second row update.
-    pub chunk_tool_result_folds: u64,
-    pub chunk_usage_folds: u64,
-    /// Indexed probes that reject a tool fold when an older row owns the same
-    /// native correlation id. Usage targets need no probe: timeline_id is
-    /// globally unique.
-    pub chunk_merge_probes: u64,
     pub drift_attempts: u64,
     pub other_attempts: u64,
     pub session_touch_attempts: u64,
@@ -129,7 +120,6 @@ pub struct ApplyProfile {
     pub tool_result_write_nanos: u64,
     pub usage_lookup_nanos: u64,
     pub usage_write_nanos: u64,
-    pub chunk_merge_probe_nanos: u64,
     pub session_touch_nanos: u64,
     pub pending_gate_nanos: u64,
     pub pending_lookup_nanos: u64,
@@ -163,9 +153,6 @@ impl ApplyProfile {
         self.message_attempts += batch.message_attempts;
         self.tool_result_attempts += batch.tool_result_attempts;
         self.usage_attempts += batch.usage_attempts;
-        self.chunk_tool_result_folds += batch.chunk_tool_result_folds;
-        self.chunk_usage_folds += batch.chunk_usage_folds;
-        self.chunk_merge_probes += batch.chunk_merge_probes;
         self.drift_attempts += batch.drift_attempts;
         self.other_attempts += batch.other_attempts;
         self.session_touch_attempts += batch.session_touch_attempts;
@@ -184,7 +171,6 @@ impl ApplyProfile {
         self.tool_result_write_nanos += batch.tool_result_write_nanos;
         self.usage_lookup_nanos += batch.usage_lookup_nanos;
         self.usage_write_nanos += batch.usage_write_nanos;
-        self.chunk_merge_probe_nanos += batch.chunk_merge_probe_nanos;
         self.session_touch_nanos += batch.session_touch_nanos;
         self.pending_gate_nanos += batch.pending_gate_nanos;
         self.pending_lookup_nanos += batch.pending_lookup_nanos;
@@ -234,7 +220,6 @@ pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
     BucketKey, OldRow, PendingGate, apply_message, apply_project, apply_runtime, apply_session,
     apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending, rebuild_bucket,
-    touch_session,
 };
 
 fn apply_workspace_obs(
@@ -514,245 +499,7 @@ fn persist_source_ops(
 /// arrive and are canonicalized once the generation activates.
 struct DirectProjection<'a> {
     preserve_message_ordinals: bool,
-    fold_chunk_merges: bool,
     effects: Option<&'a mut Effects>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FoldedMerge {
-    ToolResult,
-    Usage,
-}
-
-struct MessageFold {
-    row: MessageRow,
-    merges: Vec<(usize, FoldedMerge)>,
-    max_touch: Option<Ms>,
-}
-
-#[derive(Default)]
-struct ChunkMergeFolds {
-    messages: BTreeMap<usize, MessageRow>,
-    skipped: BTreeMap<usize, FoldedMerge>,
-    session_touches: BTreeMap<String, Ms>,
-}
-
-struct ToolMessageTarget<'a> {
-    index: usize,
-    timeline_id: &'a str,
-    ambiguous: bool,
-}
-
-fn note_max_touch(max_touch: &mut Option<Ms>, at: Option<Ms>) {
-    if let Some(at) = at {
-        *max_touch = Some(max_touch.map_or(at, |current| current.max(at)));
-    }
-}
-
-fn probe_tool_fold_target(
-    tx: &Transaction,
-    session_id: &str,
-    tool_id: &str,
-    timeline_id: &str,
-    stats: &mut ApplyStats,
-) -> Result<bool, StoreError> {
-    stats.profile.chunk_merge_probes += 1;
-    let started = Instant::now();
-    let existing = tx
-        .prepare_cached(
-            "SELECT timeline_id FROM message
-             WHERE session_id = ?1 AND tool_id = ?2",
-        )?
-        .query_row(params![session_id, tool_id], |row| row.get::<_, String>(0))
-        .optional();
-    stats.profile.chunk_merge_probe_nanos = stats
-        .profile
-        .chunk_merge_probe_nanos
-        .saturating_add(elapsed_nanos(started));
-    let existing = existing?;
-    Ok(existing.as_deref().is_none_or(|owner| owner == timeline_id))
-}
-
-/// Fold only the order-equivalent subset of cold first-generation merges:
-/// every merge for a target follows that target's final message in this
-/// source chunk, no older row owns the same tool correlation id, and no
-/// pending merge can be drained after the folded message write. Everything
-/// else retains the ordinary ordered SQLite reconciliation path.
-fn plan_chunk_merge_folds(
-    tx: &Transaction,
-    ops: &[IngestOp],
-    stats: &mut ApplyStats,
-    pending_gate: &mut PendingGate,
-) -> Result<ChunkMergeFolds, StoreError> {
-    let mut usage_messages: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut tool_messages: BTreeMap<(&str, &str), ToolMessageTarget<'_>> = BTreeMap::new();
-    for (index, op) in ops.iter().enumerate() {
-        let IngestOp::Message(row) = op else {
-            continue;
-        };
-        usage_messages.insert(&row.timeline_id, index);
-        let Some(tool_id) = row.tool.as_ref().and_then(|tool| tool.tool_id.as_deref()) else {
-            continue;
-        };
-        let key = (row.session_id.as_str(), tool_id);
-        match tool_messages.get_mut(&key) {
-            Some(target) => {
-                target.ambiguous |= target.timeline_id != row.timeline_id;
-                target.index = index;
-                target.timeline_id = &row.timeline_id;
-            }
-            None => {
-                tool_messages.insert(
-                    key,
-                    ToolMessageTarget {
-                        index,
-                        timeline_id: &row.timeline_id,
-                        ambiguous: false,
-                    },
-                );
-            }
-        }
-    }
-
-    let mut first_usage_merge: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut first_tool_merge: BTreeMap<(&str, &str), usize> = BTreeMap::new();
-    for (index, op) in ops.iter().enumerate() {
-        match op {
-            IngestOp::ToolResult {
-                session_id,
-                tool_id,
-                ..
-            } => {
-                first_tool_merge
-                    .entry((session_id, tool_id))
-                    .or_insert(index);
-            }
-            IngestOp::Usage { response, .. } => {
-                first_usage_merge.entry(response).or_insert(index);
-            }
-            _ => {}
-        }
-    }
-
-    let mut candidates: BTreeMap<usize, MessageFold> = BTreeMap::new();
-    let mut probed_tools: BTreeMap<(&str, &str), bool> = BTreeMap::new();
-    for (index, op) in ops.iter().enumerate() {
-        match op {
-            IngestOp::ToolResult {
-                session_id,
-                tool_id,
-                result,
-                payload,
-                is_error,
-                at,
-            } => {
-                let key = (session_id.as_str(), tool_id.as_str());
-                let Some(target) = tool_messages.get(&key) else {
-                    continue;
-                };
-                if target.ambiguous
-                    || target.index >= index
-                    || first_tool_merge
-                        .get(&key)
-                        .is_some_and(|first| *first <= target.index)
-                {
-                    continue;
-                }
-                let target_safe = if let Some(safe) = probed_tools.get(&key) {
-                    *safe
-                } else {
-                    let safe =
-                        probe_tool_fold_target(tx, session_id, tool_id, target.timeline_id, stats)?;
-                    probed_tools.insert(key, safe);
-                    safe
-                };
-                if !target_safe {
-                    continue;
-                }
-                let IngestOp::Message(message) = &ops[target.index] else {
-                    unreachable!("tool target index was collected from a message")
-                };
-                let patch = candidates
-                    .entry(target.index)
-                    .or_insert_with(|| MessageFold {
-                        row: (**message).clone(),
-                        merges: Vec::new(),
-                        max_touch: None,
-                    });
-                let tool = patch
-                    .row
-                    .tool
-                    .as_mut()
-                    .expect("tool target message retained its tool call");
-                tool.result.clone_from(result);
-                tool.payload.clone_from(payload);
-                tool.is_error = *is_error;
-                patch.merges.push((index, FoldedMerge::ToolResult));
-                note_max_touch(&mut patch.max_touch, *at);
-            }
-            IngestOp::Usage {
-                session_id,
-                response,
-                ts,
-                model,
-                tokens,
-            } => {
-                let Some(target_index) = usage_messages.get(response.as_str()).copied() else {
-                    continue;
-                };
-                if target_index >= index
-                    || first_usage_merge
-                        .get(response.as_str())
-                        .is_some_and(|first| *first <= target_index)
-                {
-                    continue;
-                }
-                let IngestOp::Message(message) = &ops[target_index] else {
-                    unreachable!("usage target index was collected from a message")
-                };
-                if message.session_id != *session_id {
-                    continue;
-                }
-                let patch = candidates
-                    .entry(target_index)
-                    .or_insert_with(|| MessageFold {
-                        row: (**message).clone(),
-                        merges: Vec::new(),
-                        max_touch: None,
-                    });
-                patch.row.usage = Some(*tokens);
-                if let Some(model) = model {
-                    patch.row.model = Some(model.clone());
-                }
-                patch.row.ts = patch.row.ts.or(Some(*ts));
-                patch.merges.push((index, FoldedMerge::Usage));
-                note_max_touch(&mut patch.max_touch, Some(*ts));
-            }
-            _ => {}
-        }
-    }
-
-    let mut folds = ChunkMergeFolds::default();
-    for (message_index, patch) in candidates {
-        // A queued merge is normally drained after apply_message. Folding a
-        // newer value into that write would let the older pending value win,
-        // so leave the entire target on the established reconciliation path.
-        if pending_gate.should_lookup(tx, &patch.row, stats)? {
-            continue;
-        }
-        for (merge_index, kind) in patch.merges {
-            folds.skipped.insert(merge_index, kind);
-        }
-        if let Some(at) = patch.max_touch {
-            folds
-                .session_touches
-                .entry(patch.row.session_id.clone())
-                .and_modify(|current| *current = (*current).max(at))
-                .or_insert(at);
-        }
-        folds.messages.insert(message_index, patch.row);
-    }
-    Ok(folds)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -767,33 +514,9 @@ fn project_source_ops(
     mut projection: DirectProjection<'_>,
 ) -> Result<(), StoreError> {
     let mut next_ordinals: BTreeMap<String, i64> = BTreeMap::new();
-    let folds = if projection.fold_chunk_merges {
-        plan_chunk_merge_folds(tx, ops, stats, pending_gate)?
-    } else {
-        ChunkMergeFolds::default()
-    };
-    for (index, op) in ops.iter().enumerate() {
-        if let Some(kind) = folds.skipped.get(&index) {
-            match kind {
-                FoldedMerge::ToolResult => {
-                    stats.profile.tool_result_attempts += 1;
-                    stats.profile.chunk_tool_result_folds += 1;
-                    stats.tool_results_merged += 1;
-                }
-                FoldedMerge::Usage => {
-                    stats.profile.usage_attempts += 1;
-                    stats.profile.chunk_usage_folds += 1;
-                    stats.usage_applied += 1;
-                }
-            }
-            continue;
-        }
+    for op in ops {
         if let IngestOp::Message(row) = op {
-            let mut row = folds
-                .messages
-                .get(&index)
-                .cloned()
-                .unwrap_or_else(|| (**row).clone());
+            let mut row = (**row).clone();
             let existing = if projection.preserve_message_ordinals {
                 profile_ordinal_lookup(stats, || {
                     Ok(tx
@@ -860,9 +583,6 @@ fn project_source_ops(
                 projection.effects.as_deref_mut(),
             )?;
         }
-    }
-    for (session_id, at) in &folds.session_touches {
-        touch_session(tx, session_id, Some(*at), stats)?;
     }
     Ok(())
 }
@@ -1498,7 +1218,6 @@ pub(crate) fn apply_batch(
                             &mut pending_gate,
                             DirectProjection {
                                 preserve_message_ordinals: false,
-                                fold_chunk_merges: true,
                                 effects: None,
                             },
                         )?;
@@ -1558,7 +1277,6 @@ pub(crate) fn apply_batch(
                             &mut pending_gate,
                             DirectProjection {
                                 preserve_message_ordinals: true,
-                                fold_chunk_merges: false,
                                 effects: effects.as_deref_mut(),
                             },
                         )?;
