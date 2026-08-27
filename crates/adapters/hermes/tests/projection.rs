@@ -250,3 +250,72 @@ fn known_malformed_rows_are_hard_errors_and_new_tables_are_soft_drift() {
             .any(|op| matches!(op, IngestOp::Drift(_)))
     );
 }
+
+#[test]
+fn tool_specific_and_plain_results_are_lossless_soft_drift() {
+    fn project(content: &str) -> (LineStatus, Vec<IngestOp>) {
+        let adapter = HermesAdapter;
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        let record = serde_json::json!({
+            "query": "messages",
+            "row": {
+                "id": 7,
+                "session_id": "session",
+                "role": "tool",
+                "content": content,
+                "tool_call_id": "call-7",
+                "tool_name": "terminal",
+                "timestamp": 1.0,
+                "active": 1,
+                "compacted": 0
+            }
+        });
+        let outcome = adapter.ingest_line(&mut ctx, spec::STATE_DB, record.to_string().as_bytes());
+        (outcome.status, outcome.ops)
+    }
+
+    let (status, ops) = project(r#"{"content":"synthetic file body","file_size":19}"#);
+    assert_eq!(status, LineStatus::UnknownType);
+    assert!(ops.iter().any(|op| matches!(op, IngestOp::Drift(_))));
+    let structured = ops.iter().find_map(|op| match op {
+        IngestOp::ToolResult {
+            result,
+            payload,
+            is_error,
+            ..
+        } => Some((result, payload, is_error)),
+        _ => None,
+    });
+    let (result, payload, is_error) = structured.expect("structured result");
+    assert_eq!(result.as_deref(), Some("synthetic file body"));
+    assert_eq!(payload.as_ref().unwrap()["file_size"], 19);
+    assert_eq!(*is_error, None);
+
+    let (status, ops) = project("plain synthetic output");
+    assert_eq!(status, LineStatus::UnknownType);
+    let plain = ops.iter().find_map(|op| match op {
+        IngestOp::ToolResult {
+            result,
+            payload,
+            is_error,
+            ..
+        } => Some((result, payload, is_error)),
+        _ => None,
+    });
+    let (result, payload, is_error) = plain.expect("plain result");
+    assert_eq!(result.as_deref(), Some("plain synthetic output"));
+    assert_eq!(*payload, None);
+    assert_eq!(*is_error, None);
+
+    let (status, ops) = project(r#"{"error":"synthetic failure"}"#);
+    assert_eq!(status, LineStatus::UnknownType);
+    let error = ops.iter().find_map(|op| match op {
+        IngestOp::ToolResult {
+            result, is_error, ..
+        } => Some((result, is_error)),
+        _ => None,
+    });
+    let (result, is_error) = error.expect("error result");
+    assert_eq!(result.as_deref(), Some("synthetic failure"));
+    assert_eq!(*is_error, Some(true));
+}

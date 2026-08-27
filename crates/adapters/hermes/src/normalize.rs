@@ -398,47 +398,45 @@ fn project_tool_result(
             ops,
         );
     };
-    let value: Value = match serde_json::from_str(content) {
-        Ok(value) => value,
-        Err(_) => {
-            return hard_into(
-                ctx,
-                stream_id,
-                "messages/tool_result",
-                PARSE_FAILED,
-                &[],
-                at,
-                ops,
-            );
+    let mut status = LineStatus::Parsed;
+    // `content` is TEXT, not a single terminal-result schema. Hermes stores
+    // both plain output and tool-specific JSON objects here. The fixture's
+    // `{output, exit_code, error}` shape gets its precise typed treatment;
+    // every other representation remains lossless and becomes soft drift
+    // rather than making the whole snapshot generation unpublishable.
+    let value = serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_owned()));
+    let (result_text, is_error) = match serde_json::from_value::<ToolResultRow>(value.clone()) {
+        Ok(result) => {
+            let paths = result.drift_paths();
+            if !paths.is_empty() {
+                ops.push(drift(
+                    ctx,
+                    stream_id,
+                    "messages/tool_result",
+                    UNKNOWN_FIELDS,
+                    &paths,
+                    at,
+                ));
+            }
+            (
+                Some(result.output),
+                Some(result.exit_code != 0 || result.error.is_some()),
+            )
         }
-    };
-    let result: ToolResultRow = match serde_json::from_value(value.clone()) {
-        Ok(result) => result,
         Err(_) => {
-            return hard_into(
+            ops.push(drift(
                 ctx,
                 stream_id,
                 "messages/tool_result",
-                PARSE_FAILED,
+                UNKNOWN_SUBTYPE,
                 &keys(&value),
                 at,
-                ops,
-            );
+            ));
+            status = LineStatus::UnknownType;
+            (tool_result_text(&value), tool_result_error(&value))
         }
     };
-    let paths = result.drift_paths();
-    if !paths.is_empty() {
-        ops.push(drift(
-            ctx,
-            stream_id,
-            "messages/tool_result",
-            UNKNOWN_FIELDS,
-            &paths,
-            at,
-        ));
-    }
 
-    let mut status = LineStatus::Parsed;
     if native
         .tool_name
         .as_deref()
@@ -455,16 +453,72 @@ fn project_tool_result(
         ));
         status = LineStatus::UnknownType;
     }
-    let is_error = result.exit_code != 0 || result.error.is_some();
+    let payload = matches!(&value, Value::Object(_) | Value::Array(_)).then_some(value);
     ops.push(IngestOp::ToolResult {
         session_id: ctx.session_id.clone(),
         tool_id,
-        result: Some(result.output),
-        payload: Some(value),
-        is_error: Some(is_error),
+        result: result_text,
+        payload,
+        is_error,
         at,
     });
     status
+}
+
+fn tool_result_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Object(object) => object
+            .get("output")
+            .or_else(|| object.get("content"))
+            .or_else(|| object.get("message"))
+            .or_else(|| object.get("matches_text"))
+            .or_else(|| object.get("error"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| serde_json::to_string(value).ok()),
+        Value::Array(_) => serde_json::to_string(value).ok(),
+        Value::Number(_) | Value::Bool(_) => Some(value.to_string()),
+        Value::Null => None,
+    }
+}
+
+fn tool_result_error(value: &Value) -> Option<bool> {
+    let object = value.as_object()?;
+    let mut observed = false;
+    let mut is_error = false;
+
+    if let Some(exit_code) = object.get("exit_code").and_then(Value::as_i64) {
+        observed = true;
+        is_error |= exit_code != 0;
+    }
+    if let Some(error) = object.get("error") {
+        observed = true;
+        is_error |= match error {
+            Value::Null => false,
+            Value::Bool(value) => *value,
+            Value::String(text) => !text.is_empty(),
+            Value::Array(values) => !values.is_empty(),
+            Value::Object(values) => !values.is_empty(),
+            Value::Number(_) => true,
+        };
+    }
+    if let Some(success) = object.get("success").and_then(Value::as_bool) {
+        observed = true;
+        is_error |= !success;
+    }
+    if let Some(status) = object.get("status").and_then(Value::as_str) {
+        match status.to_ascii_lowercase().as_str() {
+            "error" | "failed" | "failure" | "cancelled" | "canceled" => {
+                observed = true;
+                is_error = true;
+            }
+            "ok" | "success" | "complete" | "completed" => observed = true,
+            _ => {}
+        }
+    }
+
+    observed.then_some(is_error)
 }
 
 fn message_row(
