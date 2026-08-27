@@ -210,7 +210,7 @@ pub(crate) fn stream_snapshot_sources(
                                 .map(|(index, record)| (index as u64, record.as_bytes())),
                         )?;
                     }
-                    ledger.flush()?;
+                    ledger.checkpoint()?;
                     Ok(())
                 })?;
             }
@@ -351,7 +351,7 @@ fn seal_generation(
             adapter.normalizer_version(),
             generation_clean,
         )?;
-        ledger.flush()?;
+        ledger.checkpoint()?;
         Ok(())
     })
 }

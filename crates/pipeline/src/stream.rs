@@ -539,7 +539,7 @@ fn ingest_file(
                     wrote = true;
                 }
                 if wrote {
-                    ledger.flush()?;
+                    ledger.checkpoint()?;
                 }
                 Ok(())
             })?;

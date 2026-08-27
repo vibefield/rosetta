@@ -1,11 +1,13 @@
 //! The append-only raw ledger — the FIRST of the two data representations
 //! (iron rule 4). The projection is disposable because this is not: raw
-//! records land here, durably flushed, BEFORE the SQLite transaction that
-//! projects them (docs/ingest-engine.html, crash protocol). Recovery may
-//! find an orphan ledger tail (harmless — the projection never referenced
-//! it); it must never find a projection row whose raw bytes were not
-//! flushed first. That ordering is the caller's contract: `append*` then
-//! `flush()` then the store tx.
+//! records land here before the SQLite transaction that projects them
+//! (docs/ingest-engine.html, crash protocol). A live/public projection uses
+//! a durable checkpoint before every store transaction. A brand-new private
+//! projection may defer those syncs only while it is unpublished, then must
+//! cross one durable [`Ledger::flush`] barrier before publication. Recovery
+//! may find an orphan ledger tail (harmless — no published projection
+//! referenced it); it must never find a published projection row whose raw
+//! bytes were not made durable first.
 //!
 //! Layout: one directory per runtime, numbered segment files, rotated by
 //! size. Segments are self-contained: every source a segment references is
@@ -103,6 +105,13 @@ pub struct Ledger {
     written: u64,
     /// Sources already defined in the CURRENT segment → their local id.
     defined: HashMap<SourceDef, u32>,
+    /// Private cold builds may flush each projection batch to the kernel and
+    /// defer physical sync until their pre-publication barrier. Live writers
+    /// leave this false and retain the per-batch durability contract.
+    defer_checkpoint_sync: bool,
+    /// Rotated segments that were buffer-flushed but not yet synced. Paths
+    /// keep the writer lightweight; the final barrier reopens each file.
+    unsynced_segments: Vec<PathBuf>,
     write_stats: LedgerWriteStats,
 }
 
@@ -123,12 +132,23 @@ impl Ledger {
             writer: None,
             written: 0,
             defined: HashMap::new(),
+            defer_checkpoint_sync: false,
+            unsynced_segments: Vec::new(),
             write_stats: LedgerWriteStats::default(),
         })
     }
 
     pub fn with_max_segment_bytes(mut self, max: u64) -> Self {
         self.max_segment_bytes = max.max(1);
+        self
+    }
+
+    /// Defer physical sync at projection checkpoints. This is safe only for
+    /// a new private projection that cannot be observed or published until a
+    /// final [`Ledger::flush`] succeeds. The ordinary/live default remains
+    /// durable per checkpoint.
+    pub fn defer_sync_until_flush(mut self) -> Self {
+        self.defer_checkpoint_sync = true;
         self
     }
 
@@ -201,9 +221,46 @@ impl Ledger {
         self.frame(TAG_META_VERSIONED, &body)
     }
 
-    /// Durably flush everything appended so far. MUST complete before the
-    /// store transaction that projects those records commits.
+    /// Cross one projection checkpoint. Live/default ledgers make it durable
+    /// immediately. A deliberately deferred private ledger only drains its
+    /// userspace buffer and rotates at the same boundaries; its caller must
+    /// invoke [`Ledger::flush`] before publication.
+    pub fn checkpoint(&mut self) -> Result<(), CaptureError> {
+        if !self.defer_checkpoint_sync {
+            return self.flush();
+        }
+        self.flush_buffer()?;
+        self.rotate_if_needed(false);
+        Ok(())
+    }
+
+    /// Durably flush every segment appended so far. This is always a physical
+    /// sync barrier, including for private ledgers with deferred checkpoints.
     pub fn flush(&mut self) -> Result<(), CaptureError> {
+        self.flush_buffer()?;
+
+        let current = self
+            .writer
+            .as_ref()
+            .map(|_| self.dir.join(segment_name(self.segment_seq)));
+        for path in self.unsynced_segments.iter().chain(current.iter()) {
+            let file =
+                File::open(path).map_err(|error| io_error("opening for sync", path, error))?;
+            self.write_stats.syncs = self.write_stats.syncs.saturating_add(1);
+            let started = Instant::now();
+            let synced = file.sync_data();
+            self.write_stats.sync_nanos = self
+                .write_stats
+                .sync_nanos
+                .saturating_add(elapsed_nanos(started));
+            synced.map_err(|error| io_error("syncing", path, error))?;
+        }
+        self.unsynced_segments.clear();
+        self.rotate_if_needed(true);
+        Ok(())
+    }
+
+    fn flush_buffer(&mut self) -> Result<(), CaptureError> {
         let Some(writer) = &mut self.writer else {
             return Ok(());
         };
@@ -216,23 +273,20 @@ impl Ledger {
             .flush_nanos
             .saturating_add(elapsed_nanos(started));
         flushed.map_err(|error| io_error("flushing", &path, error))?;
+        Ok(())
+    }
 
-        self.write_stats.syncs = self.write_stats.syncs.saturating_add(1);
-        let started = Instant::now();
-        let synced = writer.get_ref().sync_data();
-        self.write_stats.sync_nanos = self
-            .write_stats
-            .sync_nanos
-            .saturating_add(elapsed_nanos(started));
-        synced.map_err(|error| io_error("syncing", &path, error))?;
-        // Rotate AFTER the durable point so a segment never splits a batch.
+    fn rotate_if_needed(&mut self, current_is_synced: bool) {
         if self.written >= self.max_segment_bytes {
+            let path = self.dir.join(segment_name(self.segment_seq));
             self.writer = None;
+            if !current_is_synced {
+                self.unsynced_segments.push(path);
+            }
             self.defined.clear();
             self.segment_seq += 1;
             self.written = 0;
         }
-        Ok(())
     }
 
     fn define(&mut self, source: &SourceDef) -> Result<u32, CaptureError> {
@@ -640,7 +694,7 @@ mod tests {
         ledger
             .append_raw(&source("b.jsonl"), 3, [(10_u64, b"three".as_slice())])
             .unwrap();
-        ledger.flush().unwrap();
+        ledger.checkpoint().unwrap();
 
         let scanned = scan(dir.path()).unwrap();
         assert_eq!(scanned.segments, 1);
@@ -678,19 +732,60 @@ mod tests {
                 [(0_u64, b"one".as_slice()), (4, b"two")],
             )
             .unwrap();
-        ledger.flush().unwrap();
+        ledger.checkpoint().unwrap();
 
         let stats = ledger.take_write_stats();
         assert_eq!(stats.frames, 3, "one define plus two raw frames");
         assert!(stats.frame_bytes > 6);
         assert_eq!(stats.flushes, 1);
-        assert_eq!(stats.syncs, 1);
+        assert_eq!(stats.syncs, 1, "default checkpoints stay live-durable");
         assert_eq!(stats.segments_opened, 1);
         assert_eq!(ledger.take_write_stats(), LedgerWriteStats::default());
 
         let scanned = scan(dir.path()).unwrap();
         assert_eq!(scanned.entries.len(), 2);
         assert_eq!(scanned.torn_segments, 0);
+    }
+
+    #[test]
+    fn deferred_checkpoints_sync_every_rotated_segment_at_the_final_barrier() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path())
+            .unwrap()
+            .with_max_segment_bytes(64)
+            .defer_sync_until_flush();
+        for index in 0..8_u64 {
+            ledger
+                .append_raw(
+                    &source("a.jsonl"),
+                    1,
+                    [(index * 8, format!("record-{index}").into_bytes())],
+                )
+                .unwrap();
+            ledger.checkpoint().unwrap();
+        }
+
+        let checkpoints = ledger.take_write_stats();
+        assert_eq!(checkpoints.flushes, 8);
+        assert_eq!(checkpoints.syncs, 0);
+        assert_eq!(checkpoints.segments_opened, 8);
+
+        ledger.flush().unwrap();
+        let barrier = ledger.take_write_stats();
+        assert_eq!(barrier.syncs, 8);
+        assert_eq!(barrier.flushes, 0, "every segment already rotated");
+
+        let scanned = scan(dir.path()).unwrap();
+        assert_eq!(scanned.segments, 8);
+        assert_eq!(scanned.torn_segments, 0);
+        assert_eq!(
+            scanned
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
+                .count(),
+            8
+        );
     }
 
     #[test]

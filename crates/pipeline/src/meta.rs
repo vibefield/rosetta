@@ -248,7 +248,7 @@ pub fn meta_ingest_into(
                 PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
             })?;
             ledger.append_meta(crate::LEDGER_META_SCHEMA_VERSION, &json)?;
-            ledger.flush()?;
+            ledger.checkpoint()?;
             Ok(())
         })?;
     }

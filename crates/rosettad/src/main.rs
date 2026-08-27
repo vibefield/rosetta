@@ -236,6 +236,10 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
 
     let (mut store, private_projection) = open_for_backfill(&db)?;
     let ledgers = ledger_root(&flags, &db);
+    // Only a brand-new private projection may defer per-batch ledger sync.
+    // Existing projections are public and retain the live durability order.
+    let defer_ledger_sync = private_projection.is_some();
+    let mut ingest_ledgers = Vec::new();
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
     let mut failures = Vec::new();
@@ -259,7 +263,15 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         if discovery.walk_truncated {
             failures.push(format!("{} discovery walk was truncated", adapter.kind()));
         }
-        let mut ledger = open_ledger(&ledgers, adapter.kind())?;
+        let ledger = open_ledger(&ledgers, adapter.kind())?;
+        ingest_ledgers.push(if defer_ledger_sync {
+            ledger.defer_sync_until_flush()
+        } else {
+            ledger
+        });
+        let ledger = ingest_ledgers
+            .last_mut()
+            .expect("the runtime ledger was just pushed");
 
         let (meta, files) = meta_ingest_into(
             *adapter,
@@ -268,7 +280,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             &mut store,
             &opts,
             &instrument,
-            Some(&mut ledger),
+            Some(&mut *ledger),
         )
         .map_err(|error| error.to_string())?;
         if flags.json {
@@ -310,7 +322,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             &files,
             &opts,
             &instrument,
-            Some(&mut ledger),
+            Some(&mut *ledger),
         )
         .map_err(|error| error.to_string())?;
         if flags.json {
@@ -363,6 +375,18 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
                 stream.files_incomplete,
             ));
         }
+    }
+
+    // A private projection has no externally visible commits yet. Make every
+    // runtime ledger durable in one pre-publication barrier. Reported source
+    // failures still cross the barrier before publication is refused; an IO
+    // error may return earlier, but no private projection can be published.
+    if defer_ledger_sync {
+        ingest_ledgers.iter_mut().try_for_each(|ledger| {
+            instrument
+                .ledger_write(ledger, |ledger| ledger.flush())
+                .map_err(|error| error.to_string())
+        })?;
     }
 
     if !failures.is_empty() {
