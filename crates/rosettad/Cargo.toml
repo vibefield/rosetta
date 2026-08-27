@@ -21,5 +21,6 @@ rosetta-server = { path = "../server" }
 rosetta-store = { path = "../store" }
 axum.workspace = true
 rusqlite.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

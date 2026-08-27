@@ -395,6 +395,49 @@ ingestion.
 > (rendered design doc, 2026-08-26). Where it and this section disagree, the HTML
 > is newer.
 
+### 7.1 Cross-adapter applicability checkpoint (2026-08-26)
+
+The store hot path is shared, but the evidence used to optimize it must not be. The
+committed canonical-op goldens and restart tests currently establish this matrix:
+
+| adapter | driven source | tool-result merge | usage representation in fixtures | restart proof |
+|---|---|---:|---|---|
+| Antigravity | 1 JSONL | yes | none observed | split at every fixture line |
+| Claude Code | 2 JSONL streams | yes | inline on messages | split at every fixture line |
+| Codex | 1 JSONL | yes | separate `Usage` merge | pipeline split/resume projection equality |
+| Copilot | 1 JSONL | yes | inline + separate `Usage` merge | split/resume state test |
+| Grok | 1 JSONL | yes | separate `Usage` merge | checkpoint/one-shot equality |
+| Hermes | 1 SQLite snapshot | yes | none observed | stateless snapshot replay equality |
+| Kimi Code | 1 JSONL | yes | inline on messages | split/resume state test |
+| OpenCode | 1 SQLite snapshot | yes | inline on messages | split at every snapshot record |
+| Pi | 1 JSONL | yes | inline on messages | split/resume state test |
+
+“None observed” is fixture evidence, not a claim that a future release cannot report
+usage. [`adapter_optimization_matrix.rs`](../crates/rosettad/tests/adapter_optimization_matrix.rs)
+fails if the roster, stream-driver contract, checkpoint round trip, or canonical op
+classification changes. Every adapter has full canonical-op goldens; Hermes' snapshot
+projection is frozen alongside the eight existing golden corpora.
+
+This makes the optimization boundary explicit:
+
+- Batch session timestamp touches and the transaction-local pending-empty fast path
+  are roster-wide: all nine adapters exercise both `Message` and `ToolResult` store
+  paths. The pending flag must become true when an unmatched result is queued during
+  the transaction; an initially empty table is not permission to skip later lookups.
+- Same-batch tool-result folding is roster-wide in semantics, but separate usage
+  folding applies only to Codex, Copilot, and Grok today. Inline usage remains part of
+  message application. Cross-batch and cross-file pending reconciliation stays as the
+  ordered fallback for every adapter.
+- Larger JSONL tail batches apply to seven adapters. Hermes and OpenCode require a
+  separate SQLite snapshot-query batch/memory experiment; a JSONL win cannot be
+  projected onto them.
+- Header-only ledger election and lower-copy framing are below the adapter boundary and
+  apply to both driver families, subject to identical checksums and elected seals.
+
+The applicability is general; the current saving estimates are not. They came from a
+large Codex corpus and remain planning evidence until a frozen before/after campaign
+measures at least both driver families or a declared production-weighted agent mix.
+
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.

@@ -870,6 +870,7 @@ dependencies = [
  "rosetta-server",
  "rosetta-store",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

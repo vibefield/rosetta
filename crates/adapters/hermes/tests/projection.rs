@@ -1,4 +1,7 @@
 //! Fixture-backed canonical projection for Hermes snapshot rows.
+//!
+//! Regenerate the full canonical-op snapshots with:
+//! `UPDATE_GOLDEN=1 cargo test -p rosetta-adapter-hermes --test projection`.
 
 use std::path::{Path, PathBuf};
 
@@ -8,10 +11,17 @@ use rosetta_capture::{SnapshotOutcome, snapshot_db};
 use rosetta_core::rows::MessageKind;
 use rosetta_core::{IngestOp, ids};
 
+const VERSION: &str = "0.20.5";
+const SCENARIOS: [&str; 3] = ["basic-chat", "resume", "tool-use"];
+
 fn fixture_db(scenario: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../../groundtruth/hermes/fixtures/0.20.5/{scenario}/hermes-home/state.db"
+        "../../../groundtruth/hermes/fixtures/{VERSION}/{scenario}/hermes-home/state.db"
     ))
+}
+
+fn golden_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
 fn normalize_scenario(scenario: &str) -> Vec<IngestOp> {
@@ -153,10 +163,61 @@ fn resume_keeps_native_message_id_order() {
 
 #[test]
 fn replay_is_deterministic() {
-    assert_eq!(
-        normalize_scenario("tool-use"),
-        normalize_scenario("tool-use")
-    );
+    for scenario in SCENARIOS {
+        assert_eq!(
+            normalize_scenario(scenario),
+            normalize_scenario(scenario),
+            "{scenario} replayed differently"
+        );
+    }
+}
+
+#[test]
+fn canonical_ops_match_goldens() {
+    let update = std::env::var_os("UPDATE_GOLDEN").is_some();
+    for scenario in SCENARIOS {
+        let ops = normalize_scenario(scenario);
+        assert!(!ops.is_empty(), "{scenario} produced no canonical ops");
+        assert!(
+            !ops.iter().any(|op| matches!(op, IngestOp::Drift(_))),
+            "{scenario} produced drift: {ops:#?}"
+        );
+
+        let rendered = format!("{}\n", serde_json::to_string_pretty(&ops).unwrap());
+        let golden = golden_dir().join(VERSION).join(format!("{scenario}.json"));
+        if update {
+            std::fs::create_dir_all(golden.parent().unwrap()).unwrap();
+            std::fs::write(&golden, rendered).unwrap();
+            continue;
+        }
+        let expected = std::fs::read_to_string(&golden).unwrap_or_else(|error| {
+            panic!(
+                "{}: {error} — regenerate with UPDATE_GOLDEN=1 cargo test \
+                 -p rosetta-adapter-hermes --test projection",
+                golden.display()
+            )
+        });
+        assert_eq!(rendered, expected, "changed {VERSION}/{scenario}");
+    }
+}
+
+#[test]
+fn goldens_carry_no_personal_paths() {
+    for entry in walkdir::WalkDir::new(golden_dir())
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let text = std::fs::read_to_string(entry.path()).unwrap();
+        for needle in [concat!("/", "Users/"), "/home/", concat!("C:\\\\", "Users")] {
+            assert!(
+                !text.contains(needle),
+                "{} contains a local path ({needle})",
+                entry.path().display()
+            );
+        }
+    }
 }
 
 #[test]

@@ -70,9 +70,7 @@ fn transcripts() -> Vec<Transcript> {
     found
 }
 
-/// Replay one transcript exactly as the pipeline would: a fresh context per
-/// file, adapter-owned state, and provenance stamped on every record.
-fn replay(transcript: &Transcript) -> (String, Vec<IngestOp>, Vec<String>) {
+fn context(transcript: &Transcript) -> (String, NormalizeCtx) {
     let adapter = ClaudeCodeAdapter;
     let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
     let native = transcript
@@ -84,24 +82,48 @@ fn replay(transcript: &Transcript) -> (String, Vec<IngestOp>, Vec<String>) {
         .to_owned();
     let mut ctx = NormalizeCtx::new(&runtime_id, ids::session_id(&runtime_id, &native));
     ctx.state = adapter.init_state();
+    (native, ctx)
+}
 
-    let text = std::fs::read_to_string(&transcript.path).unwrap();
+fn ingest_range(
+    transcript: &Transcript,
+    ctx: &mut NormalizeCtx,
+    text: &str,
+    range: std::ops::Range<usize>,
+) -> (Vec<IngestOp>, Vec<String>) {
+    let adapter = ClaudeCodeAdapter;
+    let lines: Vec<_> = text.lines().collect();
+    let mut offsets = Vec::with_capacity(lines.len());
+    let mut offset = 0i64;
+    for line in &lines {
+        offsets.push(offset);
+        offset += line.len() as i64 + 1;
+    }
+
     let mut ops = Vec::new();
     let mut hard_errors = Vec::new();
-    let mut offset = 0i64;
-    for (index, line) in text.lines().enumerate() {
+    for index in range {
+        let line = lines[index];
         // Stand-ins for the ledger rowid and byte offset the pipeline stamps;
         // deterministic, so they can be frozen.
         ctx.src_cursor = Some(index as i64 + 1);
-        ctx.src_offset = Some(offset);
-        offset += line.len() as i64 + 1;
+        ctx.src_offset = Some(offsets[index]);
 
-        let outcome = adapter.ingest_line(&mut ctx, "transcript", line.as_bytes());
+        let outcome = adapter.ingest_line(ctx, "transcript", line.as_bytes());
         if let LineStatus::HardError { code } = &outcome.status {
             hard_errors.push(format!("{}:{}: {code}", transcript.relative, index + 1));
         }
         ops.extend(outcome.ops);
     }
+    (ops, hard_errors)
+}
+
+/// Replay one transcript exactly as the pipeline would: a fresh context per
+/// file, adapter-owned state, and provenance stamped on every record.
+fn replay(transcript: &Transcript) -> (String, Vec<IngestOp>, Vec<String>) {
+    let (native, mut ctx) = context(transcript);
+    let text = std::fs::read_to_string(&transcript.path).unwrap();
+    let (ops, hard_errors) = ingest_range(transcript, &mut ctx, &text, 0..text.lines().count());
     (native, ops, hard_errors)
 }
 
@@ -178,6 +200,42 @@ fn no_fixture_line_is_a_hard_error() {
         "hard parse failures in the committed corpus:\n{}",
         failures.join("\n")
     );
+}
+
+#[test]
+fn split_resume_matches_one_shot() {
+    let adapter = ClaudeCodeAdapter;
+    for transcript in transcripts() {
+        let (_, one_shot, hard_errors) = replay(&transcript);
+        assert!(hard_errors.is_empty());
+        let text = std::fs::read_to_string(&transcript.path).unwrap();
+        let count = text.lines().count();
+
+        for split in 0..=count {
+            let (_, mut before) = context(&transcript);
+            let (mut split_ops, hard_errors) =
+                ingest_range(&transcript, &mut before, &text, 0..split);
+            assert!(hard_errors.is_empty());
+
+            let checkpoint = adapter
+                .checkpoint_state(before.state.as_deref())
+                .unwrap()
+                .expect("claude-code adapter state");
+            let (_, mut after) = context(&transcript);
+            after.next_ordinal = before.next_ordinal;
+            after.state = adapter.restore_state(Some(&checkpoint)).unwrap();
+            let (tail_ops, hard_errors) =
+                ingest_range(&transcript, &mut after, &text, split..count);
+            assert!(hard_errors.is_empty());
+            split_ops.extend(tail_ops);
+
+            assert_eq!(
+                split_ops, one_shot,
+                "{} differed at split {split}",
+                transcript.relative
+            );
+        }
+    }
 }
 
 #[test]
