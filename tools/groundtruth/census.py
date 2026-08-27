@@ -181,6 +181,7 @@ def capture(
     accumulators: dict[str, ShapeAccumulator] = defaultdict(ShapeAccumulator)
     facets: dict[tuple[str, str], tuple[str, str, ShapeAccumulator]] = {}
     merge_counts: dict[tuple[str, str], int] = defaultdict(int)
+    facet_merge_counts: dict[tuple[str, str, str], int] = defaultdict(int)
     records = 0
     walk_roots = [data_root / "sessions"] if agent == "grok" else [data_root]
     for walk_root in walk_roots:
@@ -265,10 +266,7 @@ def capture(
                     )
                 elif discriminant in accumulators[stream["id"]].types:
                     accumulators[stream["id"]].types[discriminant]["observed"] += 1
-                if (
-                    isinstance(value, dict)
-                    and merge_counts[cap_key] <= FACET_MERGE_CAP
-                ):
+                if isinstance(value, dict):
                     for hit in extract_facets(agent, stream["id"], value, context):
                         key = (stream["id"], hit["facet_id"])
                         if key not in facets:
@@ -277,9 +275,13 @@ def capture(
                                 hit["discriminator"],
                                 ShapeAccumulator(),
                             )
-                        facets[key][2].absorb(
-                            hit["key"], _shape_sample(hit["value"])
-                        )
+                        facet_key = (stream["id"], hit["facet_id"], hit["key"])
+                        facet_merge_counts[facet_key] += 1
+                        accumulator = facets[key][2]
+                        if facet_merge_counts[facet_key] <= FACET_MERGE_CAP:
+                            accumulator.absorb(hit["key"], _shape_sample(hit["value"]))
+                        elif hit["key"] in accumulator.types:
+                            accumulator.types[hit["key"]]["observed"] += 1
 
     streams: list[dict[str, Any]] = []
     for spec in layout["streams"]:
@@ -295,7 +297,8 @@ def capture(
             "notes": (
                 "Structure-only census of a live organic dataset. "
                 f"Shapes sampled from the first {SHAPE_MERGE_CAP} records per type; "
-                "observed counts cover the full tree."
+                f"nested facet shapes from the first {FACET_MERGE_CAP} records per "
+                "nested discriminator; observed counts cover the full tree."
             ),
             "record_types": accumulator.into_types(),
         }

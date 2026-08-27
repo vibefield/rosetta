@@ -1,0 +1,162 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "kimi-code",
+  "agent_version": "0.38.0",
+  "evidence": "writer",
+  "generator": "writer-source MoonshotAI/kimi-code@0999454bdcb5ddd98f39bffee434dcf0a810f394 packages/agent-core-v2/src/kosong/contract/message.ts ContentPart; packages/agent-core-v2/src/tool/toolContract.ts ExecutableToolOutput; packages/agent-core-v2/src/agent/contextMemory/loopEventFold.ts LoopRecordedEvent",
+  "data_root": "~/.kimi-code",
+  "writer_version": "@moonshot-ai/kimi-code@0.38.0",
+  "streams": [
+    {
+      "id": "wire",
+      "glob": "sessions/*/*/agents/*/wire.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "The pinned writer's ContentPart union is text | think | image_url | audio_url | video_url. The same union is persisted in turn prompts, appended context messages, assistant content.part events, and array-valued tool-result output; ExecutableToolOutput is string | ContentPart[].",
+      "discriminator": "type",
+      "record_types": {},
+      "facets": [
+        {
+          "id": "loop-events",
+          "path": "context.append_loop_event.event (by event.type)",
+          "discriminator": "type",
+          "record_types": {
+            "content.part": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "content.part": 0 } },
+                    "required": true
+                  },
+                  "stepUuid": { "shape": { "kind": "string" }, "required": true },
+                  "part": {
+                    "shape": { "kind": "object", "fields": {} },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "tool.call": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "tool.call": 0 } },
+                    "required": true
+                  },
+                  "stepUuid": { "shape": { "kind": "string" }, "required": true },
+                  "toolCallId": { "shape": { "kind": "string" }, "required": true },
+                  "name": { "shape": { "kind": "string" }, "required": true }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "content-parts",
+          "path": "ContentPart in turn.prompt.input[], context.append_message.message.content[], content.part.part, or tool.result.result.output[]",
+          "discriminator": "type",
+          "record_types": {
+            "audio_url": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "audio_url": 0 } },
+                    "required": true
+                  },
+                  "audioUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "url": { "shape": { "kind": "string" }, "required": true },
+                        "id": { "shape": { "kind": "string" }, "required": false }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "image_url": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "image_url": 0 } },
+                    "required": true
+                  },
+                  "imageUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "url": { "shape": { "kind": "string" }, "required": true },
+                        "id": { "shape": { "kind": "string" }, "required": false }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "text": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "text": 0 } },
+                    "required": true
+                  },
+                  "text": { "shape": { "kind": "string" }, "required": true }
+                }
+              }
+            },
+            "think": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "think": 0 } },
+                    "required": true
+                  },
+                  "think": { "shape": { "kind": "string" }, "required": true },
+                  "encrypted": { "shape": { "kind": "string" }, "required": false }
+                }
+              }
+            },
+            "video_url": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": { "kind": "string", "values": { "video_url": 0 } },
+                    "required": true
+                  },
+                  "videoUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "url": { "shape": { "kind": "string" }, "required": true },
+                        "id": { "shape": { "kind": "string" }, "required": false }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

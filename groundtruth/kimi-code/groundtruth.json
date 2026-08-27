@@ -2,24 +2,32 @@
   "format": "rosetta-groundtruth/1",
   "agent": "kimi-code",
   "agent_version": "0.38.0",
-  "evidence": "fixture",
+  "evidence": "writer",
   "generator": "tools.groundtruth canonical 2",
   "data_root": "~/.kimi-code",
   "sources": [
+    {
+      "generator": "writer-source MoonshotAI/kimi-code@0999454bdcb5ddd98f39bffee434dcf0a810f394 packages/agent-core-v2/src/kosong/contract/message.ts ContentPart; packages/agent-core-v2/src/tool/toolContract.ts ExecutableToolOutput; packages/agent-core-v2/src/agent/contextMemory/loopEventFold.ts LoopRecordedEvent",
+      "agent_version": "0.38.0",
+      "evidence": "writer",
+      "path": "sources/0.38.0.writer.json",
+      "sha256": "c2cebc5f09db78df0f0d3bd453e8d0d6582629a4c12e38201c68973dcace17ef",
+      "writer_version": "@moonshot-ai/kimi-code@0.38.0"
+    },
     {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "0.38.0",
       "evidence": "fixture",
       "path": "sources/0.38.0.fixtures.json",
-      "sha256": "e05e080401c3265f8ac31e7f7654a8cdc0c7926acb15123603b1e75d131583f9"
+      "sha256": "045b19e062c4fb44de69711fca10a46e9dcfedcda4afa976c31f4b739651472d"
     },
     {
       "generator": "tools.groundtruth census 2",
-      "agent_version": "observed-2026-08-24",
+      "agent_version": "observed-2026-08-26",
       "evidence": "observed",
-      "path": "sources/observed-2026-08-24.json",
-      "sha256": "4ed17711ed469d613bf684fc78f033884473c1c4e4eab7462c6084dd399c4eec",
-      "captured_at": "2026-08-24"
+      "path": "sources/observed-2026-08-26.json",
+      "sha256": "f6555ff33905dd0265b3a9fb822e4c12f5f025e9eef6c047a332cf7244fda116",
+      "captured_at": "2026-08-26"
     }
   ],
   "streams": [
@@ -28,8 +36,8 @@
       "glob": "sessions/*/*/agents/*/wire.jsonl",
       "file_format": "jsonl",
       "discipline": "append_only",
-      "evidence": "fixture",
-      "notes": "Main + sub-agent complete wire event records. Main lives at agents/main/wire.jsonl; sub-agents at agents/agent-N/wire.jsonl (Agent tool, profiles coder/explore/plan — 0.38.0 subagent fixture writes agents/agent-0 with profileName=explore; origin.kind=system_trigger origin.name=subagent). Cold rebuild source of truth (packages/transcript). 0.38.0 hermetic types: metadata, runtime.set_binding, profile.bind, permission.set_mode, turn.prompt, context.append_message, plugin.session_start, context.append_loop_event (step.begin/end, content.part, tool.call, tool.result), llm.tools_snapshot, llm.request, usage.record, token_counting.measured, turn.ended (reason completed|failed; error payload on failed), token_counting.turn_recorded. Organic protocol-1.5 extras: prompt.accepted, tools.update_store, interaction.request/resolved, permission.record_approval_result, full_compaction.begin/complete, context.apply_compaction, config.update. Large media offloaded to blobs (blobref:<mime>;<sha256>). Tool results may spill to tool-results/.",
+      "evidence": "writer",
+      "notes": "The pinned writer's ContentPart union is text | think | image_url | audio_url | video_url. The same union is persisted in turn prompts, appended context messages, assistant content.part events, and array-valued tool-result output; ExecutableToolOutput is string | ContentPart[].",
       "discriminator": "type",
       "record_types": {
         "config.update": {
@@ -2974,7 +2982,7 @@
           "discriminator": "type",
           "record_types": {
             "content.part": {
-              "observed": 18,
+              "observed": 353,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2987,75 +2995,72 @@
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 12
+                          "observed": 20
                         },
                         "think": {
                           "shape": {
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 6
+                          "observed": 20
                         },
                         "type": {
                           "shape": {
                             "kind": "string",
                             "values": {
-                              "text": 12,
-                              "think": 6
+                              "text": 20,
+                              "think": 20
                             }
                           },
-                          "required": true,
-                          "observed": 18
+                          "required": false,
+                          "observed": 40
                         }
                       }
                     },
-                    "required": true,
-                    "observed": 18
+                    "required": true
                   },
                   "step": {
                     "shape": {
                       "kind": "number"
                     },
-                    "required": true,
-                    "observed": 18
+                    "required": false,
+                    "observed": 40
                   },
                   "stepUuid": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 18
+                    "required": true
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 18
+                    "required": false,
+                    "observed": 40
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "content.part": 18
+                        "content.part": 40
                       }
                     },
-                    "required": true,
-                    "observed": 18
+                    "required": true
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 18
+                    "required": false,
+                    "observed": 40
                   }
                 }
               },
-              "evidence": "fixture"
+              "evidence": "writer"
             },
             "step.begin": {
-              "observed": 16,
+              "observed": 258,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3064,38 +3069,38 @@
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 16
+                    "observed": 42
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 16
+                    "observed": 42
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "step.begin": 16
+                        "step.begin": 42
                       }
                     },
                     "required": true,
-                    "observed": 16
+                    "observed": 42
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 16
+                    "observed": 42
                   }
                 }
               },
               "evidence": "fixture"
             },
             "step.end": {
-              "observed": 15,
+              "observed": 258,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3103,110 +3108,110 @@
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "end_turn": 9,
+                        "end_turn": 11,
                         "filtered": 1,
-                        "tool_use": 5
+                        "tool_use": 30
                       }
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "llmClientConsumeMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "llmFirstTokenLatencyMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "llmRequestBuildMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "llmServerDecodeMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "llmServerFirstTokenMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "llmStreamDurationMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "messageId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "providerFinishReason": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "completed": 9,
+                        "completed": 11,
                         "filtered": 1,
-                        "tool_calls": 5
+                        "tool_calls": 30
                       }
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "rawFinishReason": {
                     "shape": {
                       "kind": "string",
                       "values": {
                         "content_filter": 1,
-                        "stop": 9,
-                        "tool_calls": 5
+                        "stop": 11,
+                        "tool_calls": 30
                       }
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "step": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "step.end": 15
+                        "step.end": 42
                       }
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "usage": {
                     "shape": {
@@ -3217,47 +3222,47 @@
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 15
+                          "observed": 42
                         },
                         "inputCacheRead": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 15
+                          "observed": 42
                         },
                         "inputOther": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 15
+                          "observed": 42
                         },
                         "output": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 15
+                          "observed": 42
                         }
                       }
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 15
+                    "observed": 42
                   }
                 }
               },
               "evidence": "fixture"
             },
             "tool.call": {
-              "observed": 8,
+              "observed": 286,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3281,7 +3286,7 @@
                               {
                                 "kind": "string",
                                 "values": {
-                                  "content": 1,
+                                  "content": 2,
                                   "count_matches": 1
                                 }
                               },
@@ -3290,75 +3295,96 @@
                                 "values": {
                                   "explore": 1
                                 }
+                              },
+                              {
+                                "kind": "array",
+                                "items": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "status": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "done": 1
+                                        }
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    },
+                                    "title": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    }
+                                  }
+                                }
                               }
                             ]
                           },
                           "required": true,
-                          "observed": 20
+                          "observed": 58
                         }
                       }
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": false,
+                    "observed": 34
                   },
                   "name": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": true
                   },
                   "step": {
                     "shape": {
                       "kind": "number"
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": false,
+                    "observed": 34
                   },
                   "stepUuid": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": true
                   },
                   "toolCallId": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": true
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": false,
+                    "observed": 34
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "tool.call": 8
+                        "tool.call": 34
                       }
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": true
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 8
+                    "required": false,
+                    "observed": 34
                   }
                 }
               },
-              "evidence": "fixture"
+              "evidence": "writer"
             },
             "tool.result": {
-              "observed": 7,
+              "observed": 286,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3367,44 +3393,263 @@
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 7
+                    "observed": 34
                   },
                   "result": {
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "output": {
+                        "isError": {
+                          "shape": {
+                            "kind": "boolean"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "note": {
                           "shape": {
                             "kind": "string"
                           },
+                          "required": false,
+                          "observed": 4
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "any_of",
+                            "variants": [
+                              {
+                                "kind": "string"
+                              },
+                              {
+                                "kind": "array",
+                                "items": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "text": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    },
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "text": 1
+                                        }
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
                           "required": true,
-                          "observed": 7
+                          "observed": 34
                         }
                       }
                     },
                     "required": true,
-                    "observed": 7
+                    "observed": 34
                   },
                   "toolCallId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 7
+                    "observed": 34
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "tool.result": 7
+                        "tool.result": 34
                       }
                     },
                     "required": true,
-                    "observed": 7
+                    "observed": 34
                   }
                 }
               },
               "evidence": "fixture"
+            }
+          }
+        },
+        {
+          "id": "content-parts",
+          "path": "ContentPart in turn.prompt.input[], context.append_message.message.content[], content.part.part, or tool.result.result.output[]",
+          "discriminator": "type",
+          "record_types": {
+            "audio_url": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "audio_url": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "audioUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "url": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false
+                        }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "image_url": {
+              "observed": 60,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "imageUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false
+                        },
+                        "url": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        }
+                      }
+                    },
+                    "required": true
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "image_url": 32
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "text": {
+              "observed": 286,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 63
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "think": {
+              "observed": 248,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "encrypted": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "think": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "think": 32
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "video_url": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "video_url": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "videoUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "url": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false
+                        }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
             }
           }
         },
@@ -3447,7 +3692,7 @@
               "evidence": "fixture"
             },
             "Bash": {
-              "observed": 3,
+              "observed": 57,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3456,11 +3701,55 @@
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 3
+                    "observed": 33
+                  },
+                  "description": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "timeout": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": false,
+                    "observed": 12
                   }
                 }
               },
               "evidence": "fixture"
+            },
+            "Edit": {
+              "observed": 81,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "new_string": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "old_string": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              },
+              "evidence": "observed"
             },
             "FetchURL": {
               "observed": 1,
@@ -3479,7 +3768,7 @@
               "evidence": "observed"
             },
             "Grep": {
-              "observed": 2,
+              "observed": 14,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3496,46 +3785,53 @@
                       ]
                     },
                     "required": false,
-                    "observed": 3
+                    "observed": 19
+                  },
+                  "glob": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
                   },
                   "head_limit": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": false,
-                    "observed": 1
+                    "observed": 8
                   },
                   "output_mode": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "content": 1,
+                        "content": 12,
                         "count_matches": 1
                       }
                     },
-                    "required": true,
-                    "observed": 2
+                    "required": false,
+                    "observed": 13
                   },
                   "path": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 14
                   },
                   "pattern": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 14
                   }
                 }
               },
               "evidence": "observed"
             },
             "Read": {
-              "observed": 1,
+              "observed": 25,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3543,22 +3839,110 @@
                     "shape": {
                       "kind": "number"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": false,
+                    "observed": 13
                   },
                   "n_lines": {
                     "shape": {
                       "kind": "number"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": false,
+                    "observed": 13
                   },
                   "path": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 1
+                    "observed": 25
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "ReadMediaFile": {
+              "observed": 56,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "path": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "TodoList": {
+              "observed": 28,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "todos": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "status": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "done": 24,
+                                "in_progress": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 28
+                          },
+                          "title": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 28
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 28
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "Write": {
+              "observed": 23,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
+                  },
+                  "mode": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "append": 11
+                      }
+                    },
+                    "required": false,
+                    "observed": 11
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
                   }
                 }
               },
@@ -3588,20 +3972,50 @@
               "evidence": "fixture"
             },
             "Bash": {
-              "observed": 3,
+              "observed": 57,
               "shape": {
                 "kind": "object",
                 "fields": {
+                  "isError": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": false,
+                    "observed": 2
+                  },
                   "output": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 3
+                    "observed": 33
                   }
                 }
               },
               "evidence": "fixture"
+            },
+            "Edit": {
+              "observed": 81,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "isError": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              },
+              "evidence": "observed"
             },
             "FetchURL": {
               "observed": 1,
@@ -3620,7 +4034,7 @@
               "evidence": "observed"
             },
             "Grep": {
-              "observed": 2,
+              "observed": 14,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -3629,7 +4043,107 @@
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 14
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "Read": {
+              "observed": 25,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "note": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 25
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 25
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "ReadMediaFile": {
+              "observed": 56,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "note": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 32
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "text": 32
+                              }
+                            },
+                            "required": true,
+                            "observed": 32
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "TodoList": {
+              "observed": 28,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 28
+                  }
+                }
+              },
+              "evidence": "observed"
+            },
+            "Write": {
+              "observed": 23,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
                   }
                 }
               },

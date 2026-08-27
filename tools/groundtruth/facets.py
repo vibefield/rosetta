@@ -559,7 +559,34 @@ def _kimi_code(
     if stream_id != "wire":
         return []
     hits: list[Facet] = []
-    if record.get("type") != "context.append_loop_event":
+
+    def content_parts(value: Any) -> None:
+        parts = value if isinstance(value, list) else [value]
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("type") if isinstance(part.get("type"), str) else "<untyped>"
+            hits.append(
+                _hit(
+                    "content-parts",
+                    "ContentPart in turn.prompt.input[], context.append_message.message.content[], "
+                    "content.part.part, or tool.result.result.output[]",
+                    "type",
+                    kind,
+                    part,
+                )
+            )
+
+    record_type = record.get("type")
+    if record_type == "turn.prompt":
+        content_parts(record.get("input"))
+        return hits
+    if record_type == "context.append_message":
+        message = record.get("message")
+        if isinstance(message, dict):
+            content_parts(message.get("content"))
+        return hits
+    if record_type != "context.append_loop_event":
         return hits
     event = record.get("event")
     if not isinstance(event, dict):
@@ -575,7 +602,9 @@ def _kimi_code(
         )
     )
     call_id = event.get("toolCallId")
-    if kind == "tool.call" and isinstance(event.get("name"), str):
+    if kind == "content.part":
+        content_parts(event.get("part"))
+    elif kind == "tool.call" and isinstance(event.get("name"), str):
         if isinstance(call_id, str):
             context[call_id] = event["name"]
         hits.append(
@@ -589,6 +618,9 @@ def _kimi_code(
         )
     elif kind == "tool.result":
         tool = context.get(call_id, "<unmatched>") if isinstance(call_id, str) else "<unmatched>"
+        result = event.get("result")
+        if isinstance(result, dict) and isinstance(result.get("output"), list):
+            content_parts(result["output"])
         hits.append(
             _hit(
                 "tool-result",

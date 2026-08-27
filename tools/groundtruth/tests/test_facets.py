@@ -96,6 +96,55 @@ class FacetTests(unittest.TestCase):
         self.assertEqual(result["key"], "Bash")
         self.assertEqual(result["value"], {"output": "rosetta-mock\n"})
 
+    def test_kimi_content_parts_cover_every_wire_location(self) -> None:
+        records = [
+            {
+                "type": "turn.prompt",
+                "input": [{"type": "audio_url", "audioUrl": {"url": "blobref:audio"}}],
+            },
+            {
+                "type": "context.append_message",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "caption"},
+                        {"type": "image_url", "imageUrl": {"url": "blobref:image"}},
+                    ]
+                },
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "content.part",
+                    "part": {"type": "think", "think": "hidden"},
+                },
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "tool.result",
+                    "result": {
+                        "output": [
+                            {
+                                "type": "video_url",
+                                "videoUrl": {"url": "blobref:video"},
+                            }
+                        ]
+                    },
+                },
+            },
+        ]
+        kinds = []
+        for record in records:
+            kinds.extend(
+                hit["key"]
+                for hit in extract("kimi-code", "wire", record, {})
+                if hit["facet_id"] == "content-parts"
+            )
+        self.assertEqual(
+            kinds,
+            ["audio_url", "text", "image_url", "think", "video_url"],
+        )
+
     def test_antigravity_planner_tool_calls(self) -> None:
         hits = extract(
             "antigravity",

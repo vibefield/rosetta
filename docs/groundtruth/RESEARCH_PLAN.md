@@ -303,6 +303,10 @@ wound down; `kimi migrate` imports old data). MIT, OSS
   `packages/agent-core-v2/src/app/event/event2.ts` (`durable` Event2 registry —
   58 durable types at 0.38.0; `agentId` is required in zod but organic
   protocol-1.5 sessions usually omit it; hermetic 0.38.0 fixtures include it),
+  `packages/agent-core-v2/src/kosong/contract/message.ts` (`ContentPart` is
+  `text | think | image_url | audio_url | video_url`) and
+  `packages/agent-core-v2/src/tool/toolContract.ts` (`ExecutableToolOutput` is
+  `string | ContentPart[]`),
   `packages/agent-core-v2/src/agent/tools/agent/` (Agent tool, profiles
   coder/explore/plan), official data-locations doc
   `docs/en/configuration/data-locations.md` (diff it per release — it lags the

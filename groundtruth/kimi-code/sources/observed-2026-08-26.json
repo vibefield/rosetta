@@ -1,7 +1,7 @@
 {
   "format": "rosetta-groundtruth/1",
   "agent": "kimi-code",
-  "agent_version": "observed-2026-08-24",
+  "agent_version": "observed-2026-08-26",
   "evidence": "observed",
   "generator": "tools.groundtruth census 2",
   "data_root": "~/.kimi-code",
@@ -12,7 +12,7 @@
       "file_format": "jsonl",
       "discipline": "append_only",
       "evidence": "observed",
-      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; observed counts cover the full tree.",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
       "record_types": {
         "config.update": {
           "observed": 1,
@@ -2100,12 +2100,103 @@
       "discriminator": "type",
       "facets": [
         {
+          "id": "content-parts",
+          "path": "ContentPart in turn.prompt.input[], context.append_message.message.content[], content.part.part, or tool.result.result.output[]",
+          "discriminator": "type",
+          "record_types": {
+            "image_url": {
+              "observed": 60,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "imageUrl": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "url": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true,
+                          "observed": 32
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "image_url": 32
+                      }
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              }
+            },
+            "text": {
+              "observed": 255,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 32
+                      }
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              }
+            },
+            "think": {
+              "observed": 248,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "think": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "think": 32
+                      }
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
           "id": "loop-events",
           "path": "context.append_loop_event.event (by event.type)",
           "discriminator": "type",
           "record_types": {
             "content.part": {
-              "observed": 10,
+              "observed": 345,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2118,74 +2209,74 @@
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 4
+                          "observed": 12
                         },
                         "think": {
                           "shape": {
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 6
+                          "observed": 20
                         },
                         "type": {
                           "shape": {
                             "kind": "string",
                             "values": {
-                              "text": 4,
-                              "think": 6
+                              "text": 12,
+                              "think": 20
                             }
                           },
                           "required": true,
-                          "observed": 10
+                          "observed": 32
                         }
                       }
                     },
                     "required": true,
-                    "observed": 10
+                    "observed": 32
                   },
                   "step": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 10
+                    "observed": 32
                   },
                   "stepUuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 10
+                    "observed": 32
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 10
+                    "observed": 32
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "content.part": 10
+                        "content.part": 32
                       }
                     },
                     "required": true,
-                    "observed": 10
+                    "observed": 32
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 10
+                    "observed": 32
                   }
                 }
               }
             },
             "step.begin": {
-              "observed": 6,
+              "observed": 248,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2194,37 +2285,37 @@
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "step.begin": 6
+                        "step.begin": 32
                       }
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   }
                 }
               }
             },
             "step.end": {
-              "observed": 5,
+              "observed": 248,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2232,107 +2323,107 @@
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "end_turn": 2,
-                        "tool_use": 3
+                        "end_turn": 4,
+                        "tool_use": 28
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "llmClientConsumeMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "llmFirstTokenLatencyMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "llmRequestBuildMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "llmServerDecodeMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "llmServerFirstTokenMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "llmStreamDurationMs": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "messageId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "providerFinishReason": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "completed": 2,
-                        "tool_calls": 3
+                        "completed": 4,
+                        "tool_calls": 28
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "rawFinishReason": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "stop": 2,
-                        "tool_calls": 3
+                        "stop": 4,
+                        "tool_calls": 28
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "step": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "step.end": 5
+                        "step.end": 32
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "usage": {
                     "shape": {
@@ -2343,46 +2434,46 @@
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 5
+                          "observed": 32
                         },
                         "inputCacheRead": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 5
+                          "observed": 32
                         },
                         "inputOther": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 5
+                          "observed": 32
                         },
                         "output": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": true,
-                          "observed": 5
+                          "observed": 32
                         }
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   }
                 }
               }
             },
             "tool.call": {
-              "observed": 6,
+              "observed": 284,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2403,21 +2494,35 @@
                             ]
                           },
                           "required": false,
-                          "observed": 3
+                          "observed": 4
                         },
                         "command": {
                           "shape": {
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 2
+                          "observed": 17
+                        },
+                        "content": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 6
+                        },
+                        "description": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false,
+                          "observed": 1
                         },
                         "head_limit": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false,
-                          "observed": 1
+                          "observed": 2
                         },
                         "line_offset": {
                           "shape": {
@@ -2437,26 +2542,62 @@
                           "shape": {
                             "kind": "string",
                             "values": {
-                              "content": 1,
+                              "content": 2,
                               "count_matches": 1
                             }
                           },
                           "required": false,
-                          "observed": 2
+                          "observed": 3
                         },
                         "path": {
                           "shape": {
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 3
+                          "observed": 13
                         },
                         "pattern": {
                           "shape": {
                             "kind": "string"
                           },
                           "required": false,
-                          "observed": 2
+                          "observed": 3
+                        },
+                        "timeout": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "todos": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "status": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "done": 1
+                                    }
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                },
+                                "title": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true,
+                                  "observed": 1
+                                }
+                              }
+                            }
+                          },
+                          "required": false,
+                          "observed": 1
                         },
                         "url": {
                           "shape": {
@@ -2468,65 +2609,65 @@
                       }
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "name": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "step": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "stepUuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "toolCallId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "turnId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "tool.call": 6
+                        "tool.call": 32
                       }
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   },
                   "uuid": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 6
+                    "observed": 32
                   }
                 }
               }
             },
             "tool.result": {
-              "observed": 5,
+              "observed": 284,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2535,40 +2676,84 @@
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "result": {
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "output": {
+                        "isError": {
+                          "shape": {
+                            "kind": "boolean"
+                          },
+                          "required": false,
+                          "observed": 1
+                        },
+                        "note": {
                           "shape": {
                             "kind": "string"
                           },
+                          "required": false,
+                          "observed": 4
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "any_of",
+                            "variants": [
+                              {
+                                "kind": "string"
+                              },
+                              {
+                                "kind": "array",
+                                "items": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "text": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    },
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "text": 1
+                                        }
+                                      },
+                                      "required": true,
+                                      "observed": 1
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
                           "required": true,
-                          "observed": 5
+                          "observed": 32
                         }
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "toolCallId": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   },
                   "type": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "tool.result": 5
+                        "tool.result": 32
                       }
                     },
                     "required": true,
-                    "observed": 5
+                    "observed": 32
                   }
                 }
               }
@@ -2581,7 +2766,7 @@
           "discriminator": "name",
           "record_types": {
             "Bash": {
-              "observed": 2,
+              "observed": 56,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2590,7 +2775,50 @@
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 32
+                  },
+                  "description": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "timeout": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": false,
+                    "observed": 12
+                  }
+                }
+              }
+            },
+            "Edit": {
+              "observed": 81,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "new_string": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "old_string": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
                   }
                 }
               }
@@ -2611,7 +2839,7 @@
               }
             },
             "Grep": {
-              "observed": 2,
+              "observed": 14,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2628,45 +2856,52 @@
                       ]
                     },
                     "required": false,
-                    "observed": 3
+                    "observed": 19
+                  },
+                  "glob": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false,
+                    "observed": 1
                   },
                   "head_limit": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": false,
-                    "observed": 1
+                    "observed": 8
                   },
                   "output_mode": {
                     "shape": {
                       "kind": "string",
                       "values": {
-                        "content": 1,
+                        "content": 12,
                         "count_matches": 1
                       }
                     },
-                    "required": true,
-                    "observed": 2
+                    "required": false,
+                    "observed": 13
                   },
                   "path": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 14
                   },
                   "pattern": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 14
                   }
                 }
               }
             },
             "Read": {
-              "observed": 1,
+              "observed": 25,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2674,22 +2909,107 @@
                     "shape": {
                       "kind": "number"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": false,
+                    "observed": 13
                   },
                   "n_lines": {
                     "shape": {
                       "kind": "number"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": false,
+                    "observed": 13
                   },
                   "path": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 1
+                    "observed": 25
+                  }
+                }
+              }
+            },
+            "ReadMediaFile": {
+              "observed": 56,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "path": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              }
+            },
+            "TodoList": {
+              "observed": 28,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "todos": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "status": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "done": 24,
+                                "in_progress": 4
+                              }
+                            },
+                            "required": true,
+                            "observed": 28
+                          },
+                          "title": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 28
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 28
+                  }
+                }
+              }
+            },
+            "Write": {
+              "observed": 23,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "content": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
+                  },
+                  "mode": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "append": 11
+                      }
+                    },
+                    "required": false,
+                    "observed": 11
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
                   }
                 }
               }
@@ -2702,16 +3022,45 @@
           "discriminator": "name",
           "record_types": {
             "Bash": {
-              "observed": 2,
+              "observed": 56,
               "shape": {
                 "kind": "object",
                 "fields": {
+                  "isError": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": false,
+                    "observed": 2
+                  },
                   "output": {
                     "shape": {
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 32
+                  }
+                }
+              }
+            },
+            "Edit": {
+              "observed": 81,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "isError": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": false,
+                    "observed": 1
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
                   }
                 }
               }
@@ -2732,7 +3081,7 @@
               }
             },
             "Grep": {
-              "observed": 2,
+              "observed": 14,
               "shape": {
                 "kind": "object",
                 "fields": {
@@ -2741,7 +3090,103 @@
                       "kind": "string"
                     },
                     "required": true,
-                    "observed": 2
+                    "observed": 14
+                  }
+                }
+              }
+            },
+            "Read": {
+              "observed": 25,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "note": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 25
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 25
+                  }
+                }
+              }
+            },
+            "ReadMediaFile": {
+              "observed": 56,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "note": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 32
+                  },
+                  "output": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true,
+                            "observed": 32
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "text": 32
+                              }
+                            },
+                            "required": true,
+                            "observed": 32
+                          }
+                        }
+                      }
+                    },
+                    "required": true,
+                    "observed": 32
+                  }
+                }
+              }
+            },
+            "TodoList": {
+              "observed": 28,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 28
+                  }
+                }
+              }
+            },
+            "Write": {
+              "observed": 23,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "output": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 23
                   }
                 }
               }
@@ -2756,7 +3201,7 @@
       "file_format": "json",
       "discipline": "rewrite_in_place",
       "evidence": "observed",
-      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; observed counts cover the full tree.",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
       "record_types": {
         "": {
           "observed": 4,
@@ -2900,7 +3345,7 @@
       "file_format": "jsonl",
       "discipline": "append_only",
       "evidence": "observed",
-      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; observed counts cover the full tree.",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
       "record_types": {
         "": {
           "observed": 4,
@@ -2939,7 +3384,7 @@
       "file_format": "json",
       "discipline": "rewrite_in_place",
       "evidence": "observed",
-      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; observed counts cover the full tree.",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
       "record_types": {
         "": {
           "observed": 1,
@@ -3017,7 +3462,7 @@
       "file_format": "json",
       "discipline": "rewrite_in_place",
       "evidence": "observed",
-      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; observed counts cover the full tree.",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
       "record_types": {
         "": {
           "observed": 1,
@@ -3042,7 +3487,7 @@
       "file_format": "json",
       "discipline": "rewrite_in_place",
       "evidence": "observed",
-      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; observed counts cover the full tree.",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 256 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
       "record_types": {
         "": {
           "observed": 4,
@@ -3069,5 +3514,5 @@
       }
     }
   ],
-  "captured_at": "2026-08-24"
+  "captured_at": "2026-08-26"
 }

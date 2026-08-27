@@ -2225,6 +2225,38 @@
       },
       "facets": [
         {
+          "id": "content-parts",
+          "path": "ContentPart in turn.prompt.input[], context.append_message.message.content[], content.part.part, or tool.result.result.output[]",
+          "discriminator": "type",
+          "record_types": {
+            "text": {
+              "observed": 31,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true,
+                    "observed": 31
+                  },
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "text": 31
+                      }
+                    },
+                    "required": true,
+                    "observed": 31
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
           "id": "loop-events",
           "path": "context.append_loop_event.event (by event.type)",
           "discriminator": "type",
