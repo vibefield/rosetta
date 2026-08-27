@@ -2,7 +2,7 @@
 //! message mutations. Kept behind `apply` so the public write surface remains
 //! one transactional batch operation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -36,49 +36,102 @@ pub(crate) const BULK_MAINTENANCE: Maintenance = Maintenance {
 
 #[derive(Debug, Default)]
 pub(super) struct PendingGate {
-    state: PendingGateState,
+    sessions: BTreeMap<String, PendingSession>,
 }
 
 #[derive(Debug, Default)]
-enum PendingGateState {
-    #[default]
-    Unknown,
-    Empty,
-    Present,
+struct PendingSession {
+    loaded: bool,
+    usage: BTreeSet<String>,
+    tool_results: BTreeSet<String>,
+}
+
+impl PendingSession {
+    fn matches(&self, row: &MessageRow) -> bool {
+        self.usage.contains(&row.timeline_id)
+            || row
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.tool_id.as_deref())
+                .is_some_and(|tool_id| self.tool_results.contains(tool_id))
+    }
+
+    fn insert(&mut self, kind: &str, target: &str) {
+        match kind {
+            "usage" => {
+                self.usage.insert(target.to_string());
+            }
+            "tool_result" => {
+                self.tool_results.insert(target.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    fn remove(&mut self, kind: &str, target: &str) {
+        match kind {
+            "usage" => {
+                self.usage.remove(target);
+            }
+            "tool_result" => {
+                self.tool_results.remove(target);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl PendingGate {
     fn should_lookup(
         &mut self,
         tx: &Transaction,
+        row: &MessageRow,
         stats: &mut ApplyStats,
     ) -> Result<bool, StoreError> {
-        match self.state {
-            PendingGateState::Empty => Ok(false),
-            PendingGateState::Present => Ok(true),
-            PendingGateState::Unknown => {
-                stats.profile.pending_gate_checks += 1;
-                let started = Instant::now();
-                let checked = (|| -> Result<bool, StoreError> {
-                    let present: i64 = tx
-                        .prepare_cached("SELECT EXISTS(SELECT 1 FROM pending_merge LIMIT 1)")?
-                        .query_row([], |row| row.get(0))?;
-                    Ok(present != 0)
-                })();
-                stats.profile.pending_gate_nanos += elapsed_nanos(started);
-                let present = checked?;
-                self.state = if present {
-                    PendingGateState::Present
-                } else {
-                    PendingGateState::Empty
-                };
-                Ok(present)
+        if let Some(session) = self.sessions.get(&row.session_id) {
+            if session.matches(row) {
+                return Ok(true);
+            }
+            if session.loaded {
+                return Ok(false);
             }
         }
+
+        stats.profile.pending_gate_checks += 1;
+        let started = Instant::now();
+        let loaded = (|| -> Result<Vec<(String, String)>, StoreError> {
+            let mut stmt = tx.prepare_cached(
+                "SELECT kind, target
+                 FROM pending_merge
+                 WHERE kind IN ('tool_result', 'usage') AND session_id = ?1",
+            )?;
+            Ok(stmt
+                .query_map([&row.session_id], |record| {
+                    Ok((record.get(0)?, record.get(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?)
+        })();
+        stats.profile.pending_gate_nanos += elapsed_nanos(started);
+        let loaded = loaded?;
+        let session = self.sessions.entry(row.session_id.clone()).or_default();
+        for (kind, target) in loaded {
+            session.insert(&kind, &target);
+        }
+        session.loaded = true;
+        Ok(session.matches(row))
     }
 
-    fn note_queued(&mut self) {
-        self.state = PendingGateState::Present;
+    fn note_queued(&mut self, kind: &str, session_id: &str, target: &str) {
+        self.sessions
+            .entry(session_id.to_string())
+            .or_default()
+            .insert(kind, target);
+    }
+
+    fn note_drained(&mut self, kind: &str, session_id: &str, target: &str) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.remove(kind, target);
+        }
     }
 }
 
@@ -545,7 +598,7 @@ pub(super) fn apply_message(
     if let Some(fx) = effects.as_deref_mut() {
         fx.push(Mutation::Message(Box::new(row.clone())));
     }
-    if pending_gate.should_lookup(tx, stats)? {
+    if pending_gate.should_lookup(tx, row, stats)? {
         apply_pending_for_message(
             tx,
             row,
@@ -741,9 +794,9 @@ pub(super) fn queue_pending(
     })();
     stats.profile.pending_queue_nanos += elapsed_nanos(started);
     queued?;
-    // A result queued after this batch proved the table empty must make a
-    // later target message in the same transaction probe immediately.
-    pending_gate.note_queued();
+    // A result queued after this batch loaded the session's pending keys must
+    // make its target message probe immediately in the same transaction.
+    pending_gate.note_queued(kind, session_id, target);
     Ok(())
 }
 
@@ -796,6 +849,7 @@ fn apply_pending_for_message(
              WHERE kind = ?1 AND session_id = ?2 AND target = ?3",
         )?
         .execute(params![kind, row.session_id, target])?;
+        pending_gate.note_drained(&kind, &row.session_id, &target);
         let op: IngestOp = serde_json::from_str(&json)?;
         apply_op(
             tx,

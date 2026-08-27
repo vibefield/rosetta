@@ -290,6 +290,99 @@ fn queued_result_reopens_the_pending_gate_inside_the_same_batch() {
 }
 
 #[test]
+fn unrelated_pending_target_does_not_force_message_lookups() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::ToolResult {
+                session_id: "s1".into(),
+                tool_id: "still-missing".into(),
+                result: Some("orphan".into()),
+                payload: None,
+                is_error: None,
+                at: None,
+            }],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let ops = (0..16)
+        .map(|ordinal| {
+            IngestOp::Message(Box::new(message(
+                &format!("unrelated-{ordinal}"),
+                ordinal,
+                MessageKind::User,
+            )))
+        })
+        .collect();
+
+    let stats = store
+        .apply(&Batch {
+            ops,
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    assert_eq!(stats.profile.pending_gate_checks, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 16);
+    assert_eq!(stats.profile.pending_lookups, 0);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn pending_target_in_one_session_does_not_poison_another() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut setup = base_batch();
+    setup.ops.push(IngestOp::SessionMeta(session("s2")));
+    store.apply(&setup).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Usage {
+                session_id: "s1".into(),
+                response: "missing-response".into(),
+                ts: 0,
+                model: None,
+                tokens: TokenSnapshot::default(),
+            }],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let ops = (0..8)
+        .map(|ordinal| {
+            let mut row = message(
+                &format!("other-session-{ordinal}"),
+                ordinal,
+                MessageKind::User,
+            );
+            row.session_id = "s2".into();
+            IngestOp::Message(Box::new(row))
+        })
+        .collect();
+
+    let stats = store
+        .apply(&Batch {
+            ops,
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    assert_eq!(stats.profile.pending_gate_checks, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 8);
+    assert_eq!(stats.profile.pending_lookups, 0);
+}
+
+#[test]
 fn usage_replacement_never_double_counts_and_preserves_unknownness() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
