@@ -28,8 +28,10 @@ whole ledger into a private database before atomically replacing the projection.
 opens still fail closed on a schema mismatch so replacement is never implicit. The
 in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, generated
 TypeScript protocol package, and a backend-neutral search seam with synchronous FTS5 as
-the reference backend are implemented. Consumer migrations, a detached search worker,
-and the dedicated metrics stream remain.
+the reference backend are implemented. A benchmark-only Tantivy prototype meets the frozen
+build/latency/filter/determinism gates, but it is not a production backend: relevance judgments,
+product query weighting, storage acceptance, live repair, and crash recovery remain. Consumer
+migrations, a detached search worker, and the dedicated metrics stream remain.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
 

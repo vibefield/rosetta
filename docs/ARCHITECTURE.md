@@ -36,8 +36,8 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > frozen-ledger rebuild took 79.53 s, led by FTS5 at 24.83 s. The evidence, readiness
 > split, crash-safe sidecar protocol, and ledger/writer optimization gates are specified
 > in [`docs/ingest-engine.html`](ingest-engine.html) under “Measured performance and
-> search-finalization specification.” Tantivy remains a benchmark candidate, not a
-> selected canonical store or committed dependency.
+> search-finalization specification.” Tantivy 0.26.1 is now an optional benchmark-only
+> dependency, not a selected production backend or canonical store.
 >
 > A newer frozen-source campaign covers the six locally installed adapters from one
 > checksummed, permission-read-only snapshot: 181,526 source files, 38,998 matched files,
@@ -51,7 +51,12 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > finalization (36.75 s), source read (22.10 s), normalization (16.52 s), and usage
 > buckets (15.06 s); these phases vary materially between otherwise equal runs.
 > Diagnostic broad-ranked FTS p95 is 193.99–196.59 ms while selective-ranked p95 is
-> 10.11–10.91 ms, so a bounded Tantivy sidecar bake-off has high information ROI.
+> 10.11–10.91 ms. The bounded Tantivy bake-off on the retained 768,280-message frozen
+> projection built in 11.285–11.330 s and returned aggregate p95/p99 in
+> 9.669–9.688/10.102–10.344 ms with zero filter violations and stable ordered results across
+> independent builds. Its 1.529–1.531 GiB index is 2.26× the 0.677 GiB SQLite FTS structures,
+> and top-100 overlap with FTS ranges from 7% to 80%; without judged relevance or product
+> weighting, production adoption is deliberately deferred.
 > SQLite remains the canonical transactional projection.
 
 ---
@@ -389,11 +394,10 @@ ingestion.
 - **FTS5 external-content today**, behind an implemented backend-neutral
   search/readiness seam. Organic broad-term ranking averaged roughly
   119–143 ms on the large Codex/Claude projections, while selective retrieval remained
-  sub-millisecond. Decouple canonical-ready from search-ready, retain FTS5 as the offline
-  correctness reference, and run Tantivy only as a disposable sidecar candidate against
-  the same campaign-frozen corpus. Adoption requires the latency, relevance, build,
-  live-overhead, and crash gates in `ingest-engine.html`; SQLite remains canonical either
-  way.
+  sub-millisecond. The disposable Tantivy prototype clears the frozen latency, build,
+  filter, and deterministic-order gates but not relevance, product-mix, storage-margin,
+  live-overhead, or crash gates. Retain FTS5 as the shipped reference and defer production
+  sidecar work until those inputs justify it; SQLite remains canonical either way.
 - **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite
   projection; `--ledger` can relocate the segment root. An adopted search backend owns an
   optional disposable `<projection>.search/`. Ledger is precious; DB and search indexes
@@ -630,7 +634,7 @@ layer's design is frozen.
 
 | Decision | Default | Revisit when |
 |---|---|---|
-| FTS5 vs Tantivy | synchronous FTS5 today; offline FTS5 reference + bounded Tantivy bake-off specified | adopt only if the campaign-frozen latency, relevance, build, live-overhead, and crash gates pass |
+| FTS5 vs Tantivy | synchronous FTS5 today; prototype is fast but production adoption is deferred | revisit with judged relevance + declared/observed query mix + accepted storage margin; then require live-overhead and crash gates |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |

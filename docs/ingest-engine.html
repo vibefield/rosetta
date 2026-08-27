@@ -193,7 +193,8 @@
       whole-projection rebuild, the store hot tier, the
       in-process subscription hub, axum HTTP/WebSocket transport, backend-neutral protocol,
       generated TypeScript package, and the <code>SearchBackend</code> seam with synchronous FTS5
-      as its reference are implemented. Consumer migrations, a detached search worker, the
+      as its reference are implemented. A feature-gated Tantivy prototype has frozen build/query
+      evidence but is deliberately not a production backend. Consumer migrations, a detached search worker, the
       dedicated metrics stream, and unimplemented performance promises below remain design targets. Organic Claude
       Code, Codex, and Grok validation established the first measured cold-load baseline; a later
       checksummed, permission-read-only Codex campaign established FTS5 p50/p95/p99. A newer frozen
@@ -674,8 +675,9 @@ trait <b>AgentAdapter</b>: Send + Sync {
   <!-- ================================================================ -->
   <h2>Measured performance and search-finalization specification</h2>
   <p class="h2-note">Status: <b>partly implemented and evidence-backed.</b> The frozen FTS campaign
-  harness and L3 search/readiness contract exist; asynchronous search publication and an alternate
-  backend remain gated proposals. Crash-safe staged cold-ledger publication is implemented and
+  harness, L3 search/readiness contract, backend seam, and benchmark-only Tantivy candidate exist;
+  asynchronous search publication and a production alternate backend remain gated proposals.
+  Crash-safe staged cold-ledger publication is implemented and
   frozen-pair validated. This section records both the 2026-08-26 organic validation lane and the
   2026-08-27 frozen-source campaign, identifies measurements versus estimates, and specifies the
   seams required before search can be detached from canonical publication. It updates the earlier
@@ -1067,8 +1069,8 @@ trait <b>AgentAdapter</b>: Send + Sync {
     <tbody>
       <tr><td class="cm">FTS5 p50/p95/p99 baseline</td><td class="metric">highest information ROI · complete</td><td>One small harness answered the cheap decisive question: selective tails are fast, broad tails miss, and the actual product mix is now the missing evidence.</td></tr>
       <tr><td class="cm">readiness vocabulary + SearchBackend boundary</td><td class="metric">architectural ROI realized · complete</td><td>The shipped L3 protocol distinguishes readiness and carries structured filters; <code>0c3f98c</code> routes status and queries through an atomic state-plus-results backend answer, with synchronous FTS5 as the reference and an injected building-backend contract test.</td></tr>
-      <tr><td class="cm">frozen-snapshot Tantivy prototype</td><td class="metric">conditional information ROI</td><td>Defer its 2–3 days until an observed query-class mix, relevance need, or availability requirement shows that FTS5's fast selective path is insufficient. If opened, it must report build, p95/p99, relevance, RSS, and bytes on the same campaign.</td></tr>
-      <tr><td class="cm">production asynchronous sidecar</td><td class="metric">conditional</td><td>The shipped persistent <code>rosettad serve</code> and HTTP search endpoint provide a real availability consumer: canonical endpoints could publish while search builds. A finite CLI that waits for search still sees no total-wall benefit.</td></tr>
+      <tr><td class="cm">frozen-snapshot Tantivy prototype</td><td class="metric">information ROI realized · complete</td><td><code>ecfb884</code>/<code>d5646c4</code> measured build, p50/p95/p99, filters, deterministic ordering, CPU/RSS, bytes, and rank overlap on the retained campaign. Latency/build are compelling; relevance, product mix, and storage acceptance remain open.</td></tr>
+      <tr><td class="cm">production asynchronous sidecar</td><td class="metric">defer at current evidence</td><td>The shipped persistent <code>rosettad serve</code> is a real availability consumer, but production coherence does not start until judged relevance, intended/observed query weighting, and a 2.26× FTS storage margin are accepted. A finite CLI that waits for search still sees no total-wall benefit.</td></tr>
       <tr><td class="cm">Tantivy for cold-build time alone</td><td class="metric">negative</td><td>A roughly 30-second build saving cannot repay 9–15 engineering days at this corpus scale; query latency, relevance, or service availability must justify adoption.</td></tr>
     </tbody>
   </table>
@@ -1237,9 +1239,9 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
     <thead><tr><th>deliverable</th><th>engineering estimate <span class="badge b-bench">E</span></th><th>exit evidence</th></tr></thead>
     <tbody>
       <tr><td class="cm">SearchBackend + readiness boundary</td><td class="metric">complete · <code>0c3f98c</code></td><td>FTS5 behavior remains the reference; status and every query answer come from the selected backend, and a non-ready backend is explicit rather than falsely empty. Actual independent publication waits for a detached backend.</td></tr>
-      <tr><td class="cm">Tantivy prototype</td><td class="metric">2–3 days</td><td>Build/query the same frozen SQLite snapshot with no live dual-write.</td></tr>
-      <tr><td class="cm">production coherence</td><td class="metric">5–9 days</td><td>Dirty repair, epoch generation, filters, snippets, lifecycle, and crash injection.</td></tr>
-      <tr><td class="cm">total if adopted</td><td class="metric">9–15 days</td><td>Every gate below passes.</td></tr>
+      <tr><td class="cm">Tantivy prototype</td><td class="metric">complete · <code>ecfb884</code>/<code>d5646c4</code></td><td>Built and queried the same frozen SQLite snapshot with no live dual-write; independent builds now return identical ordered digests.</td></tr>
+      <tr><td class="cm">production coherence</td><td class="metric">deferred · 5–9 days if reopened</td><td>Do not land dirty repair or epoch tables until relevance, product weighting, and storage gates justify their named worker; then require lifecycle and crash injection.</td></tr>
+      <tr><td class="cm">remaining if production gates reopen</td><td class="metric">5–9 days</td><td>Live synchronization, lifecycle, and crash gates still need implementation and evidence.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1256,10 +1258,50 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
     <li><b>Recovery:</b> kill tests at every crash seam above; corrupt/missing search state rebuilds
     without ledger or SQLite mutation.</li>
   </ul>
-  <p class="spec-note">Cold-build savings alone do not repay a 9–15 day integration: at 30 seconds
-  saved, the mechanical break-even is roughly 8,600–14,400 rebuilds, assuming eight-hour engineering
-  days. Adoption therefore requires a user-facing latency/relevance win or a service-availability
-  requirement. The 2–3 day prototype has high information ROI even if Tantivy is rejected.</p>
+  <h4 class="spec">Frozen Tantivy result and stop decision</h4>
+  <p>The feature-gated harness at <code>ecfb884</code> built Tantivy 0.26.1 directly from the retained
+  six-adapter, 768,280-message SQLite projection. It first re-verified the permission-read-only
+  ledger, database, query suite, and every FTS hit-count/ordered-result digest; indexed session,
+  runtime, project, kind, timestamp, content, tool input, and tool result; stored the three text
+  fields so snippet and disk costs were not hidden; applied filters inside the ranked query; and
+  left SQLite and the ledger untouched. Organic content, paths, identifiers, fingerprints, and raw
+  reports remain outside the repository.</p>
+  <p>The first three score-only builds completed in 10.021–10.847 s and appeared to answer at
+  5.174–5.290 ms aggregate p95, but every ordered digest changed across independently built segment
+  layouts. Those numbers fail the stable <code>timeline_id</code> tie-break contract and are rejected
+  as an adoption result. <code>d5646c4</code> added a fast identity field and collects by BM25
+  descending then timeline identity ascending <em>inside</em> top-K, including a tie at the limit
+  boundary. A fixture intentionally reverses insertion and identity order; two fresh frozen builds
+  then produced identical ordered digests for all eight cases.</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>same retained campaign</th><th>FTS5 reference</th><th>stable Tantivy · two builds</th><th>verdict</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">search build wall</td><td class="metric">78.847–89.628 s observed replay range</td><td class="metric">11.285–11.330 s</td><td>About 7.0–7.9× faster.</td></tr>
+      <tr><td class="cm">aggregate p50 / p95 / p99</td><td class="metric">36.214 / 196.754 / 204.370 ms</td><td class="metric">7.066–7.119 / 9.669–9.688 / 10.102–10.344 ms</td><td>p95 about 20× lower; clears 50 ms.</td></tr>
+      <tr><td class="cm">broad-ranked p95 / p99</td><td class="metric">203.221 / 222.239 ms</td><td class="metric">8.487–8.754 / 8.954–9.161 ms</td><td>Clears the broad-tail objective.</td></tr>
+      <tr><td class="cm">selective-ranked p95 / p99</td><td class="metric">11.543 / 13.142 ms</td><td class="metric">7.499–7.523 / 8.033–8.098 ms</td><td>Smaller but repeatable improvement.</td></tr>
+      <tr><td class="cm">filter violations / documents</td><td class="metric">0 / 768,280</td><td class="metric">0 / 768,280</td><td>Declared kind filter and cardinality pass; the harness supports every structured filter.</td></tr>
+      <tr><td class="cm">index bytes</td><td class="metric">0.677 GiB FTS pages</td><td class="metric">1.529–1.531 GiB</td><td>2.26× FTS; acceptance gate remains open.</td></tr>
+      <tr><td class="cm">end-to-end prototype process</td><td class="metric">—</td><td class="metric">64.06–65.89 s real; 69.25–70.20 s user; 8.84–8.85 s system; 1.35–1.37 GB peak RSS</td><td>Includes repeated artifact hashing, page accounting, build, queries, and final verification; build wall above is isolated.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The candidate and FTS both returned 100 hits per case with zero filter violations, but their
+  top-100 intersection was only 7–40% for broad/medium/phrase/filtered cases and 75–80% for the two
+  selective cases; broad top-10 intersection was zero. This is <em>not</em> proof that either ranking
+  is better. It proves the algorithms rank materially different documents and therefore blocks an
+  “equal or better relevance” claim without reviewed judgments. The suite is diagnostic rather than
+  observed traffic, and the sidecar is 2.26× the FTS page footprint. Decision: keep synchronous FTS5
+  shipped, retain the benchmark-only candidate, and defer the 5–9 day production-coherence track.
+  Reopen only with judged relevance plus a declared or privacy-preserving observed query mix and an
+  accepted storage margin; live-lag, under-5% write overhead, and crash gates still apply afterward.</p>
+  <p class="spec-note">The measured search-build delta is now roughly 67.5–78.3 seconds rather than
+  the earlier 30-second estimate. Even so, five to nine remaining eight-hour engineering days imply
+  a mechanical cold-rebuild break-even of about 1,840–3,840 full builds, before maintenance cost.
+  Adoption therefore still requires a user-facing relevance/latency win or a service-availability
+  requirement. The completed prototype had high information ROI precisely because it stopped the
+  larger production investment at the relevance/product/storage gate.</p>
 
   <h3 class="spec">Ledger cost: preserve live ordering, stage private-build durability</h3>
   <p><span class="badge b-io">C</span> The live stream path calls <code>Ledger::checkpoint</code> after every
@@ -1465,7 +1507,7 @@ seal all sources → fsync every staged file + child/parent directory entries
     whole-tree protocol reduced ledger time by 78.624 s and cold wall by 99.02 s. File and directory
     barriers, atomic promotion, existing-ledger fail-closed behavior, watch/serve handoff, full tests,
     source checks, SQLite integrity, aggregates, and ranked results all passed.</li>
-    <li><b>Declare the product query weighting while the prototype starts.</b> The repeated broad
+    <li><b>Declare the product query weighting before production adoption — still open.</b> The repeated broad
     failure is enough to justify a bounded bake-off because broad search is a supported product
     operation. A privacy-preserving observed histogram or explicit intended mix is still required
     before production adoption; the diagnostic equal weighting is not traffic evidence.</li>
@@ -1473,10 +1515,12 @@ seal all sources → fsync every staged file + child/parent directory entries
     <code>0c3f98c</code> moved readiness into the search boundary, routes server status and queries
     through it, preserves FTS5 filters/results, and proves an injected building backend cannot
     masquerade as ready-empty. No synchronization table landed without a consumer.</li>
-    <li><b>Run the 2–3 day Tantivy prototype on the retained frozen projection.</b> Compare ranked
-    correctness, filters, p50/p95/p99 by class and declared mix, build wall/CPU/RSS/bytes, then reject
-    or proceed. Productionize only after live-overhead, incremental-lag, lifecycle, and all crash
-    gates pass.</li>
+    <li><b>Run the bounded Tantivy prototype — complete; production track deferred.</b>
+    <code>ecfb884</code>/<code>d5646c4</code> clear build, p50/p95/p99, filter, cardinality, and
+    cross-build deterministic-order gates on the retained projection. Material rank divergence,
+    missing relevance judgments/product weighting, and 2.26× FTS storage stop production work before
+    synchronization tables. If those gates later pass, live-overhead, incremental-lag, lifecycle,
+    and crash gates remain mandatory.</li>
   </ol>
 
   <h3 class="spec">Code and test evidence index</h3>
@@ -1486,7 +1530,9 @@ seal all sources → fsync every staged file + child/parent directory entries
     <tbody>
       <tr><td>FTS is a finalization gate</td><td><a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a> rebuilds FTS and runs integrity-check before publication.</td></tr>
       <tr><td>Search read coupling is narrow; write coupling is not</td><td><a href="../crates/store/src/queries.rs"><code>store/src/queries.rs::search_filtered</code></a> is the typed ranked read entry point and <a href="../crates/server/src/http.rs"><code>server/src/http.rs</code></a> exposes it at <code>/api/search</code>; <a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs</code></a> still maintains FTS inside live row transactions.</td></tr>
+      <tr><td>Search readiness and execution are backend-neutral</td><td><a href="../crates/search/src/lib.rs"><code>search/src/lib.rs</code></a> owns the atomic state-plus-results contract and the synchronous FTS5 reference backend; <a href="../crates/server/src/http.rs"><code>server/src/http.rs</code></a> delegates both status and query execution through it.</td></tr>
       <tr><td>Frozen FTS p50/p95/p99 is executable and fail-closed</td><td><a href="../crates/search-bench/README.md"><code>search-bench</code></a> fingerprints permission-read-only ledgers and databases, checks projection/result equivalence, runs shared/fresh lanes, and rejects incompatible before/after reports.</td></tr>
+      <tr><td>Tantivy evidence is frozen, disposable, and deterministic</td><td><a href="../crates/search-bench/src/tantivy_proto/index.rs"><code>tantivy_proto/index.rs</code></a> builds and seals the candidate from canonical rows; <a href="../crates/search-bench/src/tantivy_proto/runner.rs"><code>tantivy_proto/runner.rs</code></a> enforces structured filters, BM25-plus-identity ordering, artifact verification, and the insertion-order-independent tie regression.</td></tr>
       <tr><td>Live ledger sync is per stream batch</td><td><a href="../crates/pipeline/src/stream.rs"><code>pipeline/src/stream.rs::ingest_file</code></a> calls <code>ledger.checkpoint()</code> before store apply; the default/live ledger makes that checkpoint durable.</td></tr>
       <tr><td>Cold barrier is durable and atomically published</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> syncs every touched segment and changed directory entry; <a href="../crates/rosettad/src/main.rs"><code>rosettad::ColdLedgerStage</code></a> promotes the whole tree and syncs its parent inside SQLite publication.</td></tr>
       <tr><td>Rebuild reads twice</td><td><a href="../crates/pipeline/src/replay.rs"><code>pipeline/src/replay.rs::rebuild_runtime</code></a> elects survivors, then replays in a second visit.</td></tr>

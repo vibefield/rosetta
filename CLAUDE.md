@@ -56,7 +56,10 @@ derived-state maintenance with indexed provenance and coalesced bucket repairs;
 ordinary schema-version mismatches still fail closed so rebuild is always explicit.
 The store hot tier, in-process subscription hub, localhost HTTP/WebSocket transport,
 backend-neutral protocol, generated TypeScript bindings, and the `SearchBackend` seam
-with synchronous FTS5 as its reference implementation are implemented. Consumer migrations
+with synchronous FTS5 as its reference implementation are implemented. A feature-gated,
+benchmark-only Tantivy prototype clears the frozen build, latency, filter, and deterministic
+tie-break gates, but production adoption is deferred pending judged relevance, product query
+weighting, an accepted 2.26× FTS storage margin, and the live/recovery gates. Consumer migrations
 and the two uncaptured roster agents remain Phase 4/Phase 1 work.
 
 ## Repo map
