@@ -116,6 +116,7 @@ fn filter(spec: &QueryFilterSpec) -> SearchFilter {
     SearchFilter {
         session: spec.session.clone(),
         runtime: spec.runtime.clone(),
+        agent: spec.agent.clone(),
         project: spec.project.clone(),
         kind: spec.kind.clone(),
         is_error: spec.is_error,

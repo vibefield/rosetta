@@ -348,6 +348,14 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
     assert_eq!(parsed.hits.len(), 2);
 
+    let (_, body) = h.get("/api/search?q=ionosphere&agent=claude-code").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 2);
+
+    let (_, body) = h.get("/api/search?q=ionosphere&agent=codex").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert!(parsed.hits.is_empty());
+
     let (_, body) = h.get("/api/search?q=ionosphere&kind=tool_use").await;
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
     assert_eq!(parsed.hits.len(), 1);

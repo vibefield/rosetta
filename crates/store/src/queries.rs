@@ -48,6 +48,9 @@ pub struct SearchHit {
 pub struct SearchFilter {
     pub session: Option<String>,
     pub runtime: Option<String>,
+    /// Runtime family (`claude-code`, `codex`, …), distinct from one concrete
+    /// runtime id.
+    pub agent: Option<String>,
     pub project: Option<String>,
     /// Message kind, in wire form (`user`, `agent`, `tool_use`, …).
     pub kind: Option<String>,
@@ -461,9 +464,12 @@ pub fn search_filtered(
                 snippet(message_fts, -1, '[', ']', '…', 12), rank
          FROM message_fts
          JOIN message m ON m.id = message_fts.rowid
-         JOIN session s ON s.id = m.session_id
-         WHERE message_fts MATCH ?1",
+         JOIN session s ON s.id = m.session_id",
     );
+    if filter.agent.is_some() {
+        sql.push_str(" JOIN agent_runtime r ON r.id = s.runtime_id");
+    }
+    sql.push_str(" WHERE message_fts MATCH ?1");
     let mut binds: Vec<Value> = vec![Value::from(query.to_string())];
     let clause = |sql: &mut String, predicate: &str, value: Value, binds: &mut Vec<Value>| {
         binds.push(value);
@@ -484,6 +490,9 @@ pub fn search_filtered(
             Value::from(runtime.clone()),
             &mut binds,
         );
+    }
+    if let Some(agent) = &filter.agent {
+        clause(&mut sql, "r.kind =", Value::from(agent.clone()), &mut binds);
     }
     if let Some(project) = &filter.project {
         clause(

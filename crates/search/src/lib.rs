@@ -209,6 +209,7 @@ pub struct SearchQuery {
     pub limit: i64,
     pub session: Option<String>,
     pub runtime: Option<String>,
+    pub agent: Option<String>,
     pub project: Option<String>,
     pub kind: Option<String>,
     pub is_error: Option<bool>,
@@ -292,6 +293,7 @@ impl SearchBackend for Fts5Search {
         let filter = SearchFilter {
             session: query.session,
             runtime: query.runtime,
+            agent: query.agent,
             project: query.project,
             kind: query.kind,
             is_error: query.is_error,
@@ -334,6 +336,7 @@ mod tests {
                 limit: 10,
                 session: None,
                 runtime: None,
+                agent: None,
                 project: None,
                 kind: None,
                 is_error: None,

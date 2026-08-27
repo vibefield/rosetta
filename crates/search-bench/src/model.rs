@@ -18,6 +18,7 @@ fn default_limit() -> i64 {
 pub struct QueryFilterSpec {
     pub session: Option<String>,
     pub runtime: Option<String>,
+    pub agent: Option<String>,
     pub project: Option<String>,
     pub kind: Option<String>,
     pub is_error: Option<bool>,

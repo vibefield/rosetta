@@ -4,9 +4,8 @@
  * Search request: structured text plus filters. No backend query syntax.
  * `is_error` omitted includes true, false, and unreported; explicit false
  * never matches unreported tool state.
+ * `agent` selects a runtime family (`claude-code`, `codex`, …), while
+ * `runtime` selects one concrete runtime id.
+ * `kind` uses the canonical wire vocabulary (`user`, `agent`, `tool_use`, …).
  */
-export type SearchRequest = { q: string, limit: number | null, session: string | null, runtime: string | null, project: string | null, 
-/**
- * Message kind in wire form (`user`, `agent`, `tool_use`, …).
- */
-kind: string | null, is_error: boolean | null, after_ts: number | null, before_ts: number | null, };
+export type SearchRequest = { q: string, limit: number | null, session: string | null, runtime: string | null, agent: string | null, project: string | null, kind: string | null, is_error: boolean | null, after_ts: number | null, before_ts: number | null, };

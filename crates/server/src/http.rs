@@ -290,6 +290,7 @@ async fn search(
         limit,
         session: request.session,
         runtime: request.runtime,
+        agent: request.agent,
         project: request.project,
         kind: request.kind,
         is_error: request.is_error,

@@ -64,6 +64,7 @@ fn filter(spec: &QueryFilterSpec) -> SearchFilter {
     SearchFilter {
         session: spec.session.clone(),
         runtime: spec.runtime.clone(),
+        agent: spec.agent.clone(),
         project: spec.project.clone(),
         kind: spec.kind.clone(),
         is_error: spec.is_error,
@@ -157,6 +158,7 @@ fn compile_query(
     for (value, field) in [
         (case.filter.session.as_deref(), fields.session_id),
         (case.filter.runtime.as_deref(), fields.runtime),
+        (case.filter.agent.as_deref(), fields.agent),
         (case.filter.project.as_deref(), fields.project),
         (case.filter.kind.as_deref(), fields.kind),
         (
@@ -205,6 +207,11 @@ fn matches_filter(doc: &TantivyDocument, fields: Fields, filter: &QueryFilterSpe
     }
     if let Some(value) = &filter.runtime
         && text_value(doc, fields.runtime) != value
+    {
+        return false;
+    }
+    if let Some(value) = &filter.agent
+        && text_value(doc, fields.agent) != value
     {
         return false;
     }
@@ -720,6 +727,17 @@ mod tests {
                     ..QueryFilterSpec::default()
                 },
             },
+            QueryCase {
+                label: "agent".into(),
+                class: "filtered".into(),
+                query: "ionosphere".into(),
+                weight: 1,
+                limit: 10,
+                filter: QueryFilterSpec {
+                    agent: Some("test".into()),
+                    ..QueryFilterSpec::default()
+                },
+            },
         ];
         let conn = open_read(&db).unwrap();
         let reference = cases
@@ -754,6 +772,9 @@ mod tests {
         assert_eq!(report.cases[4].tantivy_hits, 1);
         assert_eq!(report.cases[4].filter_violations, 0);
         assert_eq!(report.cases[4].overlap, 1);
+        assert_eq!(report.cases[5].tantivy_hits, 3);
+        assert_eq!(report.cases[5].filter_violations, 0);
+        assert_eq!(report.cases[5].overlap, 3);
 
         drop(index);
         unseal_for_test(&index_path);

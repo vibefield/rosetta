@@ -53,6 +53,14 @@
       "filter": {
         "is_error": true
       }
+    },
+    {
+      "label": "agent-codex-1",
+      "class": "filtered-agent",
+      "query": "error",
+      "filter": {
+        "agent": "codex"
+      }
     }
   ]
 }

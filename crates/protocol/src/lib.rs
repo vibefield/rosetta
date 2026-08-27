@@ -98,6 +98,9 @@ impl TimelineCursor {
 /// Search request: structured text plus filters. No backend query syntax.
 /// `is_error` omitted includes true, false, and unreported; explicit false
 /// never matches unreported tool state.
+/// `agent` selects a runtime family (`claude-code`, `codex`, …), while
+/// `runtime` selects one concrete runtime id.
+/// `kind` uses the canonical wire vocabulary (`user`, `agent`, `tool_use`, …).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SearchRequest {
@@ -106,8 +109,8 @@ pub struct SearchRequest {
     pub limit: Option<i64>,
     pub session: Option<String>,
     pub runtime: Option<String>,
+    pub agent: Option<String>,
     pub project: Option<String>,
-    /// Message kind in wire form (`user`, `agent`, `tool_use`, …).
     pub kind: Option<String>,
     pub is_error: Option<bool>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]

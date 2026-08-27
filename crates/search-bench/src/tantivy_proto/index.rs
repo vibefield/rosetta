@@ -16,6 +16,7 @@ pub(crate) struct Fields {
     pub timeline_id: Field,
     pub session_id: Field,
     pub runtime: Field,
+    pub agent: Field,
     pub project: Field,
     pub kind: Field,
     pub is_error: Field,
@@ -33,6 +34,7 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
     let timeline_id = builder.add_text_field("timeline_id", STRING | STORED | FAST);
     let session_id = builder.add_text_field("session_id", STRING | STORED);
     let runtime = builder.add_text_field("runtime", STRING | STORED);
+    let agent = builder.add_text_field("agent", STRING | STORED);
     let project = builder.add_text_field("project", STRING | STORED);
     let kind = builder.add_text_field("kind", STRING | STORED);
     let is_error = builder.add_text_field("is_error", STRING | STORED);
@@ -50,6 +52,7 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
             timeline_id,
             session_id,
             runtime,
+            agent,
             project,
             kind,
             is_error,
@@ -87,6 +90,7 @@ fn add_row(
     timeline_id: String,
     session_id: String,
     runtime: String,
+    agent: String,
     project: Option<String>,
     kind: String,
     is_error: Option<bool>,
@@ -99,6 +103,7 @@ fn add_row(
     doc.add_text(fields.timeline_id, timeline_id);
     doc.add_text(fields.session_id, session_id);
     doc.add_text(fields.runtime, runtime);
+    doc.add_text(fields.agent, agent);
     doc.add_text(fields.project, project.unwrap_or_default());
     doc.add_text(fields.kind, kind);
     doc.add_text(
@@ -156,10 +161,11 @@ pub(crate) fn build_index(
         .map_err(|error| format!("opening Tantivy writer: {error}"))?;
     let mut stmt = conn
         .prepare(
-            "SELECT m.timeline_id, m.session_id, s.runtime_id, s.project_id,
+            "SELECT m.timeline_id, m.session_id, s.runtime_id, r.kind, s.project_id,
                     m.type, m.tool_is_error, m.ts, m.content, m.tool_input, m.tool_result
              FROM message m
              JOIN session s ON s.id = m.session_id
+             JOIN agent_runtime r ON r.id = s.runtime_id
              ORDER BY m.id",
         )
         .map_err(|error| format!("preparing canonical document scan: {error}"))?;
@@ -186,6 +192,7 @@ pub(crate) fn build_index(
                 row.get(7).map_err(|error| error.to_string())?,
                 row.get(8).map_err(|error| error.to_string())?,
                 row.get(9).map_err(|error| error.to_string())?,
+                row.get(10).map_err(|error| error.to_string())?,
             )?)
             .ok_or("source text byte count overflow")?;
         documents += 1;

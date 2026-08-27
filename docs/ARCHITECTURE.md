@@ -351,7 +351,7 @@ tools (sqlite-viewer style), explicitly documented as *unstable internal format*
 ### 5.2 The three services
 
 **Search (job 1):**
-`GET /api/search?q=&runtime=&project=&session=&after_ts=&before_ts=&kind=&is_error=` → FTS5 match
+`GET /api/search?q=&agent=&runtime=&project=&session=&after_ts=&before_ts=&kind=&is_error=` → FTS5 match
 with snippets and rank, with structured filters applied inside the ranked query. `q` uses the
 backend-neutral product grammar: whitespace-separated required terms plus double-quoted required
 phrases (4,096 bytes and 64 clauses maximum). Engine operators and field selectors are ordinary
