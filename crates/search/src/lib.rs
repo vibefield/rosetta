@@ -15,6 +15,146 @@ use serde::{Deserialize, Serialize};
 
 pub use rosetta_store::queries::SearchHit;
 
+pub const MAX_SEARCH_TEXT_BYTES: usize = 4_096;
+pub const MAX_SEARCH_CLAUSES: usize = 64;
+
+/// One backend-neutral text clause. Every clause is required; adjacent terms
+/// are an implicit AND and quoted phrases require adjacency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextClause {
+    Term(String),
+    Phrase(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextQueryError(String);
+
+impl fmt::Display for TextQueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TextQueryError {}
+
+/// Parsed product query language shared by every search backend.
+///
+/// The grammar intentionally has no engine operators: Unicode whitespace
+/// separates required terms, double quotes delimit a required phrase, and
+/// `\"`/`\\` escape those two characters inside a phrase. Words such as
+/// `OR`, `NEAR`, and field selectors are ordinary text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextQuery {
+    clauses: Vec<TextClause>,
+}
+
+impl TextQuery {
+    pub fn parse(input: &str) -> Result<Self, TextQueryError> {
+        if input.len() > MAX_SEARCH_TEXT_BYTES {
+            return Err(TextQueryError(format!(
+                "q exceeds {MAX_SEARCH_TEXT_BYTES} bytes"
+            )));
+        }
+        if input
+            .chars()
+            .any(|ch| ch.is_control() && !ch.is_whitespace())
+        {
+            return Err(TextQueryError(
+                "q contains an unsupported control character".into(),
+            ));
+        }
+
+        let mut chars = input.chars().peekable();
+        let mut clauses = Vec::new();
+        while chars.peek().is_some() {
+            while chars.next_if(|ch| ch.is_whitespace()).is_some() {}
+            let Some(first) = chars.next() else {
+                break;
+            };
+
+            let clause = if first == '"' {
+                let mut phrase = String::new();
+                let mut closed = false;
+                while let Some(ch) = chars.next() {
+                    match ch {
+                        '"' => {
+                            closed = true;
+                            break;
+                        }
+                        '\\' => match chars.next() {
+                            Some('"') => phrase.push('"'),
+                            Some('\\') => phrase.push('\\'),
+                            Some(other) => {
+                                return Err(TextQueryError(format!(
+                                    "unsupported phrase escape `\\{other}`"
+                                )));
+                            }
+                            None => {
+                                return Err(TextQueryError("unterminated phrase escape".into()));
+                            }
+                        },
+                        other => phrase.push(other),
+                    }
+                }
+                if !closed {
+                    return Err(TextQueryError("unterminated phrase".into()));
+                }
+                if chars.peek().is_some_and(|ch| !ch.is_whitespace()) {
+                    return Err(TextQueryError(
+                        "quoted phrases must be separated by whitespace".into(),
+                    ));
+                }
+                if phrase.trim().is_empty() {
+                    return Err(TextQueryError("quoted phrases must not be empty".into()));
+                }
+                TextClause::Phrase(phrase)
+            } else {
+                let mut term = String::from(first);
+                while let Some(ch) = chars.next_if(|ch| !ch.is_whitespace()) {
+                    if ch == '"' {
+                        return Err(TextQueryError(
+                            "quotes must begin a whitespace-delimited clause".into(),
+                        ));
+                    }
+                    term.push(ch);
+                }
+                TextClause::Term(term)
+            };
+
+            clauses.push(clause);
+            if clauses.len() > MAX_SEARCH_CLAUSES {
+                return Err(TextQueryError(format!(
+                    "q exceeds {MAX_SEARCH_CLAUSES} clauses"
+                )));
+            }
+        }
+
+        if clauses.is_empty() {
+            return Err(TextQueryError("q must not be empty".into()));
+        }
+        Ok(Self { clauses })
+    }
+
+    pub fn clauses(&self) -> &[TextClause] {
+        &self.clauses
+    }
+
+    /// Compile the common grammar to a trusted FTS5 MATCH expression. This
+    /// method lives at the backend boundary so engine syntax never crosses
+    /// the transport contract.
+    pub fn fts5_expression(&self) -> String {
+        self.clauses
+            .iter()
+            .map(|clause| match clause {
+                TextClause::Term(text) | TextClause::Phrase(text) => {
+                    format!("\"{}\"", text.replace('"', "\"\""))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
+}
+
 /// Search readiness is separate from canonical projection readiness. A
 /// non-ready state must be returned explicitly; it must never masquerade as a
 /// successful empty search.
@@ -63,9 +203,9 @@ impl SearchState {
 
 /// Backend-neutral structured query. Engine-specific handles and connection
 /// types are deliberately absent from this boundary.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SearchQuery {
-    pub text: String,
+    pub text: TextQuery,
     pub limit: i64,
     pub session: Option<String>,
     pub runtime: Option<String>,
@@ -156,11 +296,9 @@ impl SearchBackend for Fts5Search {
             after_ts: query.after_ts,
             before_ts: query.before_ts,
         };
-        // Preserve the reference endpoint's existing contract: MATCH parser
-        // failures are invalid user queries. Opening/dispatch failures remain
-        // backend errors above rather than being mislabeled as HTTP 400.
-        let hits = queries::search_filtered(&conn, &query.text, query.limit, &filter)
-            .map_err(|error| SearchError::InvalidQuery(error.to_string()))?;
+        let expression = query.text.fts5_expression();
+        let hits = queries::search_filtered(&conn, &expression, query.limit, &filter)
+            .map_err(|error| SearchError::Backend(error.to_string()))?;
         Ok(SearchOutput {
             state: SearchState::synchronous(),
             hits,
@@ -190,9 +328,14 @@ mod tests {
         let backend = Fts5Search::new(dir.path().join("missing.sqlite"));
         let error = backend
             .search(SearchQuery {
-                text: "hello".into(),
+                text: TextQuery::parse("hello").unwrap(),
                 limit: 10,
-                ..SearchQuery::default()
+                session: None,
+                runtime: None,
+                project: None,
+                kind: None,
+                after_ts: None,
+                before_ts: None,
             })
             .unwrap_err();
         assert!(matches!(error, SearchError::Backend(_)));
@@ -207,5 +350,43 @@ mod tests {
         });
         assert_eq!(output.state.readiness, SearchReadiness::Building);
         assert!(output.hits.is_empty());
+    }
+
+    #[test]
+    fn common_text_grammar_quotes_engine_operators_and_preserves_phrases() {
+        let query = TextQuery::parse(r#"error OR "cargo test" near:content"#).unwrap();
+        assert_eq!(
+            query.clauses(),
+            [
+                TextClause::Term("error".into()),
+                TextClause::Term("OR".into()),
+                TextClause::Phrase("cargo test".into()),
+                TextClause::Term("near:content".into()),
+            ]
+        );
+        assert_eq!(
+            query.fts5_expression(),
+            r#""error" AND "OR" AND "cargo test" AND "near:content""#
+        );
+
+        let escaped = TextQuery::parse(r#""say \"hello\" in C:\\tmp""#).unwrap();
+        assert_eq!(
+            escaped.clauses(),
+            [TextClause::Phrase("say \"hello\" in C:\\tmp".into())]
+        );
+        assert_eq!(escaped.fts5_expression(), r#""say ""hello"" in C:\tmp""#);
+    }
+
+    #[test]
+    fn common_text_grammar_rejects_ambiguous_or_unbounded_input() {
+        for input in [r#""unterminated"#, r#"word"phrase"#, r#"""#, r#""\q""#] {
+            assert!(TextQuery::parse(input).is_err());
+        }
+        let too_many = std::iter::repeat_n("word", MAX_SEARCH_CLAUSES + 1)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(TextQuery::parse(&too_many).is_err());
+        assert!(TextQuery::parse(&"x".repeat(MAX_SEARCH_TEXT_BYTES + 1)).is_err());
+        assert!(TextQuery::parse("word\0word").is_err());
     }
 }

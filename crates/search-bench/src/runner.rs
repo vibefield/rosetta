@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
+use rosetta_search::TextQuery;
 use rosetta_store::queries::{self, SearchFilter, SearchHit};
 use rusqlite::{Connection, OpenFlags};
 
@@ -150,16 +151,19 @@ fn run_one(
     case: &QueryCase,
 ) -> Result<(u64, u64, String), String> {
     let started = Instant::now();
+    let expression = TextQuery::parse(&case.query)
+        .map_err(|error| format!("query case `{}` failed: {error}", case.label))?
+        .fts5_expression();
     let hits = match lane {
         Lane::SharedConnection => queries::search_filtered(
             shared.expect("shared lane has a connection"),
-            &case.query,
+            &expression,
             case.limit,
             &filter(&case.filter),
         ),
         Lane::FreshConnection => {
             let connection = open_read(db)?;
-            queries::search_filtered(&connection, &case.query, case.limit, &filter(&case.filter))
+            queries::search_filtered(&connection, &expression, case.limit, &filter(&case.filter))
         }
     }
     .map_err(|error| format!("query case `{}` failed: {error}", case.label))?;

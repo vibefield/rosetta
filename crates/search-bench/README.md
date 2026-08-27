@@ -12,11 +12,19 @@ The tool measures two paths:
 
 Each case, declared query class, and full declared mix reports p50, p95, and
 p99 using nearest-rank percentiles. At least 100 measured cycles are mandatory.
-The committed `workloads/fts5-diagnostic-v1.json` is deliberately a diagnostic
+The committed `workloads/product-diagnostic-v2.json` is deliberately a diagnostic
 mix. Its aggregate percentile is not evidence about the product's actual query
 mix. An `observed` suite needs a separately reviewed, privacy-preserving source
 such as a histogram of query classes; per-class tails must remain visible so a
 selective-heavy mix cannot hide broad-query latency.
+
+Suite queries use the product grammar, not FTS5 or Tantivy syntax: whitespace
+separates required terms and double quotes delimit required phrases. The
+harness validates the same 4,096-byte/64-clause bounds as the HTTP boundary and
+compiles the common query independently for each engine. Suite/run format 2
+binds new evidence to this grammar and deterministic FTS tie ordering; format 1
+reports and `fts5-diagnostic-v1.json` remain historical evidence and cannot be
+mixed into a new comparison.
 
 ## Frozen protocol
 
@@ -29,7 +37,7 @@ selective-heavy mix cannot hide broad-query latency.
    ```text
    search-bench freeze \
      --ledger CAMPAIGN/projection.ledger \
-     --queries crates/search-bench/workloads/fts5-diagnostic-v1.json \
+     --queries crates/search-bench/workloads/product-diagnostic-v2.json \
      --out CAMPAIGN/campaign.json
    ```
 
@@ -39,7 +47,7 @@ selective-heavy mix cannot hide broad-query latency.
    search-bench run \
      --campaign CAMPAIGN/campaign.json \
      --ledger CAMPAIGN/projection.ledger \
-     --queries crates/search-bench/workloads/fts5-diagnostic-v1.json \
+     --queries crates/search-bench/workloads/product-diagnostic-v2.json \
      --db CAMPAIGN/before.sqlite \
      --implementation BEFORE_REV \
      --machine STABLE_MACHINE_LABEL \
@@ -79,7 +87,7 @@ cargo run --release -p rosetta-search-bench \
   --features tantivy-prototype --bin tantivy-bench -- run \
   --campaign CAMPAIGN/campaign.json \
   --ledger CAMPAIGN/projection.ledger \
-  --queries CAMPAIGN/fts5-diagnostic-v1.json \
+  --queries CAMPAIGN/product-diagnostic-v2.json \
   --db CAMPAIGN/projection.sqlite \
   --baseline CAMPAIGN/fts5-run.json \
   --index CAMPAIGN/tantivy-candidate \

@@ -1129,8 +1129,10 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   backend returns timeline ids, scores, and matched-field information; SQLite remains responsible
   for authorization/filter validation and canonical row hydration. Text need not be stored twice:
   hydrate the top rows from SQLite and generate snippets against that text.</p>
-  <p>The L3 contract accepts structured text plus agent/runtime, project, session, time-range, kind,
-  and error filters; it does not accept backend query syntax. Ordering is score then a stable
+  <p>The L3 contract accepts whitespace-separated required terms and double-quoted required phrases,
+  bounded to 4,096 bytes and 64 clauses, plus agent/runtime, project, session, time-range, kind,
+  and error filters. FTS/Tantivy operators and field selectors are ordinary text, not backend syntax.
+  Ordering is score then a stable
   <code>timeline_id</code> tie-breaker. Numerical scores are diagnostic and have no cross-backend
   meaning. Responses expose readiness, projection epoch, index revision, and hits so a lagging index
   can never masquerade as a complete empty result.</p>

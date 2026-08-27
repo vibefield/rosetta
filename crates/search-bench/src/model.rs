@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use rosetta_search::TextQuery;
 use serde::{Deserialize, Serialize};
 
 use crate::{CAMPAIGN_FORMAT, SUITE_FORMAT};
@@ -76,9 +77,8 @@ impl QuerySuite {
             if !labels.insert(&case.label) {
                 return Err(format!("duplicate query label `{}`", case.label));
             }
-            if case.query.trim().is_empty() {
-                return Err(format!("case `{}` has an empty query", case.label));
-            }
+            TextQuery::parse(&case.query)
+                .map_err(|error| format!("case `{}` has an invalid query: {error}", case.label))?;
             if case.weight == 0 {
                 return Err(format!("case `{}` has zero weight", case.label));
             }
@@ -270,10 +270,11 @@ pub struct ComparisonReport {
 #[cfg(test)]
 mod tests {
     use super::{QueryCase, QueryFilterSpec, QuerySuite};
+    use crate::SUITE_FORMAT;
 
     fn suite() -> QuerySuite {
         QuerySuite {
-            format: 1,
+            format: SUITE_FORMAT,
             name: "safe".into(),
             basis: "diagnostic".into(),
             cases: vec![QueryCase {
@@ -299,10 +300,14 @@ mod tests {
     }
 
     #[test]
-    fn committed_diagnostic_suite_is_valid() {
+    fn current_product_suite_is_valid_and_legacy_engine_suite_fails_closed() {
         let suite: QuerySuite =
-            serde_json::from_str(include_str!("../workloads/fts5-diagnostic-v1.json")).unwrap();
+            serde_json::from_str(include_str!("../workloads/product-diagnostic-v2.json")).unwrap();
         suite.validate().unwrap();
         assert_eq!(suite.basis, "diagnostic");
+
+        let legacy: QuerySuite =
+            serde_json::from_str(include_str!("../workloads/fts5-diagnostic-v1.json")).unwrap();
+        assert!(legacy.validate().is_err());
     }
 }

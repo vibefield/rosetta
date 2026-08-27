@@ -25,7 +25,7 @@ use rosetta_protocol::{
     RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
     StatusResponse, TimelineCursor, TimelinePage,
 };
-use rosetta_search::{Fts5Search, SearchBackend, SearchError, SearchQuery, SearchState};
+use rosetta_search::{Fts5Search, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery};
 use rosetta_store::queries;
 use rosetta_store::{StoreError, schema};
 
@@ -282,12 +282,11 @@ async fn search(
     State(state): State<AppState>,
     Query(request): Query<SearchRequest>,
 ) -> Result<Json<SearchResponse>, Failure> {
-    if request.q.trim().is_empty() {
-        return Err(Failure::bad_request("q must not be empty"));
-    }
     let limit = clamp_limit(request.limit, DEFAULT_SEARCH_LIMIT);
+    let text =
+        TextQuery::parse(&request.q).map_err(|error| Failure::bad_request(error.to_string()))?;
     let query = SearchQuery {
-        text: request.q,
+        text,
         limit,
         session: request.session,
         runtime: request.runtime,

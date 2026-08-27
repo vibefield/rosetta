@@ -27,5 +27,7 @@ pub use runner::summary_line;
 pub use tantivy_proto::{TantivyRunOptions, TantivyRunReport, run_tantivy_prototype};
 
 pub const CAMPAIGN_FORMAT: u32 = 1;
-pub const RUN_FORMAT: u32 = 1;
-pub const SUITE_FORMAT: u32 = 1;
+/// Version 2 binds reports to the backend-neutral product query grammar and
+/// deterministic FTS tie order.
+pub const RUN_FORMAT: u32 = 2;
+pub const SUITE_FORMAT: u32 = 2;

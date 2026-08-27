@@ -4,6 +4,7 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use rosetta_search::{TextClause, TextQuery};
 use rosetta_store::queries::{self, SearchFilter, SearchHit};
 use rusqlite::{Connection, OpenFlags};
 use tantivy::Order;
@@ -16,6 +17,7 @@ use tantivy::schema::{IndexRecordOption, TantivyDocument, Value};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, ReloadPolicy, Term};
 
+use crate::RUN_FORMAT;
 use crate::fingerprint::{fingerprint_file, read_json, verify_campaign};
 use crate::model::{
     CampaignManifest, CaseReport, QueryCase, QueryFilterSpec, RunConfig, RunReport,
@@ -25,7 +27,7 @@ use crate::stats::summarize;
 use super::index::{Fields, build_index, fingerprint_directory};
 use super::model::{TantivyCaseReport, TantivyClassReport, TantivyLaneReport, TantivyRunReport};
 
-pub const TANTIVY_RUN_FORMAT: u32 = 1;
+pub const TANTIVY_RUN_FORMAT: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct TantivyRunOptions {
@@ -70,7 +72,10 @@ fn filter(spec: &QueryFilterSpec) -> SearchFilter {
 }
 
 fn fts_hits(conn: &Connection, case: &QueryCase) -> Result<Vec<RankedHit>, String> {
-    queries::search_filtered(conn, &case.query, case.limit, &filter(&case.filter))
+    let expression = TextQuery::parse(&case.query)
+        .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))?
+        .fts5_expression();
+    queries::search_filtered(conn, &expression, case.limit, &filter(&case.filter))
         .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))
         .map(|hits| {
             hits.into_iter()
@@ -131,8 +136,21 @@ fn compile_query(
     fields: Fields,
     case: &QueryCase,
 ) -> Result<Box<dyn Query>, String> {
+    let common = TextQuery::parse(&case.query)
+        .map_err(|error| format!("Tantivy query case `{}` failed: {error}", case.label))?;
+    let expression = common
+        .clauses()
+        .iter()
+        .map(|clause| match clause {
+            TextClause::Term(text) | TextClause::Phrase(text) => {
+                let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("\"{escaped}\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
     let text = parser
-        .parse_query(&case.query)
+        .parse_query(&expression)
         .map_err(|error| format!("Tantivy query case `{}` failed: {error}", case.label))?;
     let mut clauses = vec![(Occur::Must, text)];
     for (value, field) in [
@@ -432,6 +450,12 @@ pub fn run_tantivy_prototype(options: &TantivyRunOptions) -> Result<TantivyRunRe
     let manifest: CampaignManifest = read_json(&options.campaign)?;
     let suite = verify_campaign(&manifest, &options.ledger, &options.queries)?;
     let baseline: RunReport = read_json(&options.baseline)?;
+    if baseline.format != RUN_FORMAT {
+        return Err(format!(
+            "baseline report format {} is not supported (expected {RUN_FORMAT})",
+            baseline.format
+        ));
+    }
     if baseline.campaign_id != manifest.campaign_id
         || baseline.ledger != manifest.ledger
         || baseline.query_suite != manifest.query_suite

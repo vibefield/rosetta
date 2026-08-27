@@ -225,7 +225,10 @@ async fn detached_backend_never_masquerades_as_ready_empty_search() {
 
     let queries = seen.lock().unwrap();
     assert_eq!(queries.len(), 1);
-    assert_eq!(queries[0].text, "ionosphere");
+    assert_eq!(
+        queries[0].text,
+        rosetta_search::TextQuery::parse("ionosphere").unwrap()
+    );
     assert_eq!(queries[0].kind.as_deref(), Some("tool_use"));
     assert_eq!(queries[0].session.as_deref(), Some("s1"));
     assert_eq!(queries[0].limit, 7);
@@ -354,6 +357,32 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     assert_eq!(body["error"]["code"], "bad_request");
     let (status, _) = h.get("/api/search?q=%22unbalanced").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    h.append(vec![
+        message("m-left", MessageKind::Agent, "contractalpha only"),
+        message("m-right", MessageKind::Agent, "contractbeta only"),
+        message("m-phrase", MessageKind::Agent, "granite copper adjacent"),
+        message(
+            "m-separated",
+            MessageKind::Agent,
+            "granite durable copper separated",
+        ),
+    ]);
+    let (status, body) = h
+        .get("/api/search?q=contractalpha%20OR%20contractbeta")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert!(
+        parsed.hits.is_empty(),
+        "OR is ordinary text, not an FTS5 operator"
+    );
+
+    let (status, body) = h.get("/api/search?q=%22granite%20copper%22").await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 1);
+    assert_eq!(parsed.hits[0].timeline_id, "m-phrase");
 }
 
 fn urlencode(text: &str) -> String {

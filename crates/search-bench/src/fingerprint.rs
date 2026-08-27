@@ -254,6 +254,8 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use crate::SUITE_FORMAT;
+
     use super::{freeze_campaign, verify_campaign};
 
     #[cfg(unix)]
@@ -279,7 +281,9 @@ mod tests {
         let suite = temp.path().join("suite.json");
         fs::write(
             &suite,
-            r#"{"format":1,"name":"safe","basis":"diagnostic","cases":[{"label":"broad","class":"broad","query":"one"}]}"#,
+            format!(
+                r#"{{"format":{SUITE_FORMAT},"name":"safe","basis":"diagnostic","cases":[{{"label":"broad","class":"broad","query":"one"}}]}}"#
+            ),
         )
         .unwrap();
 
