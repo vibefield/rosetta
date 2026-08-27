@@ -1,11 +1,10 @@
 //! Rebuild-not-migrate, as code: drop the projection, replay the ledger.
 //!
-//! Two bounded passes over one runtime's ledger. Pass one reads control frames
-//! and raw prefixes while seeking over payloads to find each source file's
-//! highest SEALED generation; an orphan partial rewrite has no seal and can
-//! never displace the last complete generation. Pass two fully reads and
-//! checksums every frame, deduplicates raw source positions, normalizes them in
-//! ledger order, activates at the seal, and applies later records as appends.
+//! Two streaming passes over one runtime's ledger. Pass one finds each source
+//! file's highest SEALED generation; an orphan partial rewrite has no seal and
+//! can never displace the last complete generation. Pass two deduplicates raw
+//! source positions, normalizes them in ledger order, activates at the seal,
+//! and applies later records as append operations.
 //!
 //! Deterministic ids make all of this idempotent — a rebuild interrupted
 //! halfway and rerun converges on the same projection.
@@ -15,7 +14,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
-use rosetta_capture::{CaptureError, LedgerElectionEntry, LedgerEntry, LedgerVisit, SourceDef};
+use rosetta_capture::{CaptureError, LedgerEntry, LedgerVisit, SourceDef};
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_store::{ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
@@ -59,30 +58,21 @@ where
     result
 }
 
-fn visit_election_profiled<E, F>(
+fn visit_election<E, F>(
     ledger_dir: &Path,
     instrument: &Instrument,
-    mut visitor: F,
+    visitor: F,
 ) -> Result<LedgerVisit, E>
 where
     E: From<CaptureError>,
-    F: for<'a> FnMut(LedgerElectionEntry<'a>) -> Result<(), E>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
 {
-    let started = Instant::now();
-    let mut visitor_nanos = 0_u64;
-    let result = rosetta_capture::visit_ledger_election::<E, _>(ledger_dir, |entry| {
-        let visitor_started = Instant::now();
-        let result = visitor(entry);
-        visitor_nanos = visitor_nanos.saturating_add(
-            u64::try_from(visitor_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
-        );
-        result
-    });
-    let total_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-    let ledger_nanos = total_nanos.saturating_sub(visitor_nanos);
-    instrument.add(Metric::LedgerReadNanos, ledger_nanos);
-    instrument.add(Metric::LedgerElectionReadNanos, ledger_nanos);
-    result
+    visit_ledger_profiled(
+        ledger_dir,
+        instrument,
+        Metric::LedgerElectionReadNanos,
+        visitor,
+    )
 }
 
 fn visit_replay<E, F>(
@@ -137,51 +127,6 @@ struct FileReplay {
     activated: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-struct ElectionState {
-    surviving: BTreeMap<String, (u64, SourceDef)>,
-    latest_seals: BTreeMap<String, (u64, SourceDef, bool)>,
-    raw_paths: HashSet<String>,
-    sealed_paths: HashSet<String>,
-}
-
-impl ElectionState {
-    fn observe_raw(&mut self, source: &SourceDef) {
-        if !self.raw_paths.contains(&source.relative_path) {
-            self.raw_paths.insert(source.relative_path.clone());
-        }
-    }
-
-    fn observe_complete(
-        &mut self,
-        adapter_normalizer_version: u32,
-        source: &SourceDef,
-        generation: u64,
-        normalizer_version: u32,
-        normalized_clean: bool,
-    ) {
-        self.sealed_paths.insert(source.relative_path.clone());
-        let known_unclean = normalizer_version == adapter_normalizer_version && !normalized_clean;
-        let latest = self
-            .latest_seals
-            .entry(source.relative_path.clone())
-            .or_insert_with(|| (generation, source.clone(), known_unclean));
-        if generation >= latest.0 {
-            *latest = (generation, source.clone(), known_unclean);
-        }
-        if known_unclean {
-            return;
-        }
-        let survivor = self
-            .surviving
-            .entry(source.relative_path.clone())
-            .or_insert_with(|| (generation, source.clone()));
-        if generation >= survivor.0 {
-            *survivor = (generation, source.clone());
-        }
-    }
-}
-
 pub fn rebuild_runtime(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
@@ -194,39 +139,50 @@ pub fn rebuild_runtime(
     // Pass one: only a raw-complete marker can elect a replacement generation.
     // Raw-only paths are legacy/unsafe rather than guesses: fail closed instead
     // of silently promoting a crash-truncated generation.
+    let mut surviving: BTreeMap<String, (u64, SourceDef)> = BTreeMap::new();
     // The latest seal also owns readiness. A current normalizer may retain an
     // older clean projection after a failed rewrite, but the session must stay
     // Streaming until that latest source generation is clean.
-    let mut election = ElectionState::default();
-    let first = visit_election_profiled::<PipelineError, _>(ledger_dir, instrument, |entry| {
+    let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
+    let mut raw_paths: HashSet<String> = HashSet::new();
+    let mut sealed_paths: HashSet<String> = HashSet::new();
+    let first = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
         match entry {
-            LedgerElectionEntry::RawSource { source } => {
-                election.observe_raw(source);
+            LedgerEntry::Raw { source, .. } => {
+                raw_paths.insert(source.relative_path);
             }
-            LedgerElectionEntry::GenerationComplete {
+            LedgerEntry::GenerationComplete {
                 source,
                 generation,
                 normalizer_version,
                 normalized_clean,
             } => {
-                election.observe_complete(
-                    adapter.normalizer_version(),
-                    source,
-                    generation,
-                    normalizer_version,
-                    normalized_clean,
-                );
+                sealed_paths.insert(source.relative_path.clone());
+                let known_unclean =
+                    normalizer_version == adapter.normalizer_version() && !normalized_clean;
+                let latest = latest_seals
+                    .entry(source.relative_path.clone())
+                    .or_insert_with(|| (generation, source.clone(), known_unclean));
+                if generation >= latest.0 {
+                    *latest = (generation, source.clone(), known_unclean);
+                }
+                if known_unclean {
+                    return Ok(());
+                }
+                let slot = surviving
+                    .entry(source.relative_path.clone())
+                    .or_insert_with(|| (generation, source.clone()));
+                if generation >= slot.0 {
+                    *slot = (generation, source);
+                }
             }
+            LedgerEntry::Meta { .. } => {}
         }
         Ok(())
     })?;
     report.segments = first.segments;
     report.torn_segments = first.torn_segments;
-    let mut unsealed: Vec<_> = election
-        .raw_paths
-        .difference(&election.sealed_paths)
-        .cloned()
-        .collect();
+    let mut unsealed: Vec<_> = raw_paths.difference(&sealed_paths).cloned().collect();
     unsealed.sort();
     if !unsealed.is_empty() {
         return Err(PipelineError::Config(format!(
@@ -249,25 +205,8 @@ pub fn rebuild_runtime(
     let mut sessions_seen: HashSet<String> = HashSet::new();
     let mut already_projected: HashSet<String> = HashSet::new();
     let mut files: BTreeMap<String, FileReplay> = BTreeMap::new();
-    let mut replay_election = ElectionState::default();
 
     let second = visit_replay::<PipelineError, _>(ledger_dir, instrument, |entry| {
-        match &entry {
-            LedgerEntry::Raw { source, .. } => replay_election.observe_raw(source),
-            LedgerEntry::GenerationComplete {
-                source,
-                generation,
-                normalizer_version,
-                normalized_clean,
-            } => replay_election.observe_complete(
-                adapter.normalizer_version(),
-                source,
-                *generation,
-                *normalizer_version,
-                *normalized_clean,
-            ),
-            LedgerEntry::Meta { .. } => {}
-        }
         match entry {
             LedgerEntry::Meta {
                 schema_version,
@@ -303,8 +242,7 @@ pub fn rebuild_runtime(
                 start_offset,
                 payload,
             } => {
-                let Some((surviving_generation, _)) = election.surviving.get(&source.relative_path)
-                else {
+                let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
                     return Ok(());
                 };
                 if generation != *surviving_generation {
@@ -400,8 +338,7 @@ pub fn rebuild_runtime(
             LedgerEntry::GenerationComplete {
                 source, generation, ..
             } => {
-                let Some((surviving_generation, _)) = election.surviving.get(&source.relative_path)
-                else {
+                let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
                     return Ok(());
                 };
                 if generation != *surviving_generation
@@ -463,10 +400,9 @@ pub fn rebuild_runtime(
         }
         Ok(())
     })?;
-    if first != second || election != replay_election {
+    if first != second {
         return Err(PipelineError::Config(
-            "ledger changed between generation election and replay; stop ingestion and retry"
-                .to_string(),
+            "ledger changed while rebuild was reading it; stop ingestion and retry".to_string(),
         ));
     }
 
@@ -495,7 +431,7 @@ pub fn rebuild_runtime(
     // sessions whose every sealed source is currently clean are Indexed.
     // Meta-only sessions are absent from this map and retain Pending.
     let mut session_health: BTreeMap<String, bool> = BTreeMap::new();
-    for (path, (_, source, known_unclean)) in election.latest_seals {
+    for (path, (_, source, known_unclean)) in latest_seals {
         let clean = if known_unclean {
             false
         } else if already_projected.contains(&path) {
