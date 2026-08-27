@@ -444,6 +444,15 @@ that every current native shape has canonical semantics.
 
 This makes the optimization boundary explicit:
 
+- Presentation renumbering is below the adapter boundary. A retained frozen replay
+  showed 5,918 per-session window/sort passes consuming 220.410 s. Private first
+  generations now keep collision-free provisional ordinals and canonicalize every
+  session once at finalization; live and replacement swaps retain transactional
+  per-session ranking. On the same ledger this reduced wall from 513.58 s to
+  317.49 s (−38.2%) and comparable canonical-plus-ordinal work from 302.092 s to
+  88.671 s (−70.6%). Exact logical and ranked-result equivalence passed. Peak RSS
+  rose from 190 MB to 502 MB, so partitioning that finalizer is a future measured
+  memory/speed tradeoff, not a free follow-up.
 - Batch session timestamp touches and the transaction-local pending-empty fast path
   are roster-wide: all nine adapters exercise both `Message` and `ToolResult` store
   paths. The pending flag must become true when an unmatched result is queued during
@@ -458,19 +467,23 @@ This makes the optimization boundary explicit:
 - Header-only ledger election and lower-copy framing are below the adapter boundary and
   apply to both driver families, subject to identical checksums and elected seals.
 
-The applicability is general; the current saving estimates are not. The old estimates
-came from a large Codex corpus. The retained mixed corpus establishes a much larger
-canonical/ledger ceiling, but it still cannot attribute cost by adapter or operation and
-does not contain a non-empty SQLite snapshot source. Savings remain planning evidence
-until split counters and a frozen before/after pair measure the affected driver families
-or a declared production-weighted agent mix.
+The applicability is general; unpaired saving estimates are not. Always-on split counters
+now attribute replay cost by adapter and canonical statement family. After the ordinal
+change, the retained mixed candidate measured 16.608 s in message writes, 13.939 s in
+message identity lookups, 7.905 s in pending lookups, and 1.680 s in session touches.
+Those are ceilings rather than additive promises, and the corpus still has no non-empty
+SQLite snapshot source. Savings for the remaining candidates stay planning evidence until
+a frozen before/after pair measures the affected driver families or a declared
+production-weighted agent mix.
 
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
-- Cold loads project each source's first generation directly and defer FTS, rollups, and
-  read indexes in an unpublished sibling database; live batches rebuild each distinct
-  affected usage bucket once, never once per message.
+- Cold loads project each source's first generation directly and defer presentation
+  renumbering, FTS, rollups, and read indexes in an unpublished sibling database. One
+  set-based finalizer establishes canonical ordinals before validation/publication; live
+  batches and replacement swaps remain transactionally canonical. Live batches rebuild
+  each distinct affected usage bucket once, never once per message.
 - A private cold projection may defer repeated ledger `sync_data` calls only through a
   run-scoped staged directory: sync every staged file, atomically rename the whole run
   into the scanner's committed namespace, and sync the runtime directory before SQLite
