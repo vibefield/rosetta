@@ -468,9 +468,13 @@ This makes the optimization boundary explicit:
   duplicate-target, and pending reconciliation remain on the established ordered path.
   Inline usage remains part of message application, while separate usage ops currently
   come from Codex, Copilot, and Grok.
-- Larger JSONL tail batches apply to seven adapters. Hermes and OpenCode require a
-  separate SQLite snapshot-query batch/memory experiment; a JSONL win cannot be
-  projected onto them.
+- Larger live JSONL tail batches may apply to seven adapters, but the analogous private
+  ledger-replay experiment is rejected. Raising the replay boundary from 512 to a
+  source-byte-bounded 2,048 ops cut batches from 14,301 to 12,275 and commits to
+  3.754 s, while canonical apply regressed from 36.923 s to 48.171 s (+30.5%) and
+  peak RSS rose from 511 MB to 673 MB. It was reverted at `93a2ece`. Hermes and
+  OpenCode still require a separate SQLite snapshot-query batch/memory experiment;
+  no JSONL or ledger-replay result may be projected onto them.
 - Payload-light ledger election is below the adapter boundary and therefore roster-wide,
   but the RLG1 implementation was rejected. Paired frozen scans saved only 0.19–0.34 s
   (0.9–1.6%) of wall time even though one pair reduced user CPU from 8.66 s to 0.28 s;

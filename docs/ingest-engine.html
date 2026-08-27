@@ -1279,7 +1279,7 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">deprioritized: folding removed 502,043 attempts but only 0.300 s from this family</td><td>The remaining measured ceiling is 0.734 s; do not spend a standalone campaign on it.</td></tr>
       <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">rejected: 99.45% folded, but canonical apply 36.923 s → 42.805 s (+15.9%)</td><td>Exact logical counts passed; ranked search skipped after the performance gate failed; reverted at <code>0d5796d</code>.</td></tr>
       <tr><td class="cm">message identity/write specialization</td><td>The private first-generation path attempted an insert first, fell back only on a timeline-identity conflict, and left live/replacement SQL unchanged.</td><td class="metric">rejected: 22.601 s → 20.859 s combined (−1.742 s / −7.7%); canonical 36.923 s → 38.065 s</td><td>The five campaign cardinalities matched, but the performance gate failed before ranked-search comparison; reverted at <code>c6319e6</code>.</td></tr>
-      <tr><td class="cm">larger cold replay chunks</td><td>Raise the 512-op ledger-replay chunk only; live tail record/byte bounds remain unchanged.</td><td class="metric">8.968 s latest commit ceiling; actual saving likely much smaller</td><td>Frozen pair, peak RSS, transaction latency, and exact projection parity.</td></tr>
+      <tr><td class="cm">larger cold replay chunks</td><td>Raise the 512-op ledger-replay chunk only; live tail record/byte bounds remain unchanged.</td><td class="metric">rejected: commits fell to 3.754 s, but canonical apply rose to 48.171 s (+30.5%)</td><td>Exact projection parity passed; +162 MB RSS and slower canonical work failed the gate; reverted at <code>93a2ece</code>.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1310,6 +1310,17 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   regression is attributed. Maximum RSS moved from 511 MB to 506 MB. The performance gate failed,
   ranked search was intentionally skipped, and the implementation was reverted at
   <code>0d5796d</code>.</p>
+  <p>The bounded larger-replay candidate at <code>335766e</code> raised only private ledger chunks
+  from 512 to 2,048 ops and added a 32 MiB contributing-source-payload ceiling; live tail limits
+  did not move. It reduced replay batches from 14,301 to 12,275 and the latest commit measurement
+  from 8.968 s to 3.754 s. Larger transactions made the statements inside them materially slower,
+  however: message identity lookup rose from 13.275 s to 19.611 s, drift apply from 2.831 s to
+  5.587 s, and total canonical apply from 36.923 s to 48.171 s (+11.248 s / +30.5%). Peak RSS rose
+  from 511 MB to 673 MB. Whole wall moved from 252.02 s to 270.17 s, with FTS and validation adding
+  11.98 s of unrelated variance, so the canonical and memory regressions — not the wall delta —
+  decide the rejection. The same logical/artifact counts and all five token totals matched; ranked
+  search was skipped after the performance gate failed. The candidate was reverted at
+  <code>93a2ece</code>.</p>
   <p>Per-op timers/counts are now always-on and expose per-adapter deltas during rebuild. Do not repeat
   the rejected broad bulk fast path without new evidence: its exact frozen-ledger comparison improved
   canonical apply only from 20.609 s to 19.714 s, while the full ingest regressed from 101.23 s to
@@ -1356,9 +1367,13 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     of eligible merge ops and passed exact logical parity, but larger initial message writes drove
     canonical apply from 36.923 s to 42.805 s. It was reverted; do not retry this representation
     without a SQLite change that makes the fully populated insert independently cheaper.</li>
-    <li><b>Measure larger private replay chunks next.</b> Change only the 512-op frozen-ledger replay
-    boundary, retain the existing live tail and byte bounds, and compare commit, canonical, RSS,
-    and whole-wall costs on the same campaign. The 8.968 s commit family is only a ceiling.</li>
+    <li><b>Reject larger private replay chunks — complete.</b> A bounded 2,048-op candidate reduced
+    batches and commits but made canonical statements 30.5% slower and added 162 MB RSS. It was
+    reverted; the commit ceiling was not independently removable.</li>
+    <li><b>Remove redundant post-seal replay commits next.</b> A sealed file is checkpointed during
+    activation, yet the current replay loop applies another empty checkpoint batch when no records
+    follow the seal. Track post-seal dirtiness, skip only proven-empty final batches, and gate exact
+    cursor/checkpoint equivalence plus crash/replay behavior on the frozen pair.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>
