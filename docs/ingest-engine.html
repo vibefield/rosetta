@@ -1280,6 +1280,7 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
       <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">rejected: 99.45% folded, but canonical apply 36.923 s → 42.805 s (+15.9%)</td><td>Exact logical counts passed; ranked search skipped after the performance gate failed; reverted at <code>0d5796d</code>.</td></tr>
       <tr><td class="cm">message identity/write specialization</td><td>The private first-generation path attempted an insert first, fell back only on a timeline-identity conflict, and left live/replacement SQL unchanged.</td><td class="metric">rejected: 22.601 s → 20.859 s combined (−1.742 s / −7.7%); canonical 36.923 s → 38.065 s</td><td>The five campaign cardinalities matched, but the performance gate failed before ranked-search comparison; reverted at <code>c6319e6</code>.</td></tr>
       <tr><td class="cm">larger cold replay chunks</td><td>Raise the 512-op ledger-replay chunk only; live tail record/byte bounds remain unchanged.</td><td class="metric">rejected: commits fell to 3.754 s, but canonical apply rose to 48.171 s (+30.5%)</td><td>Exact projection parity passed; +162 MB RSS and slower canonical work failed the gate; reverted at <code>93a2ece</code>.</td></tr>
+      <tr><td class="cm">skip clean post-seal checkpoint batches</td><td>After activation/abandon checkpoints a seal, skip the final batch only when no unique raw record followed it; parsed no-ops still mark state dirty.</td><td class="metric">rejected: 5,918 batches removed; commit time 9.715 s remained inside the 8.5–11.4 s baseline range</td><td>Exact <code>ingest_cursor</code> hash and projection parity passed, but no attributable time saving; reverted at <code>52a533e</code>.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1321,6 +1322,17 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   decide the rejection. The same logical/artifact counts and all five token totals matched; ranked
   search was skipped after the performance gate failed. The candidate was reverted at
   <code>93a2ece</code>.</p>
+  <p>The post-seal checkpoint candidate at <code>97d64a2</code> then targeted transaction count
+  without changing the 512-op boundary. Activation or abandon already persists a deterministic
+  checkpoint at a generation seal; a dirty bit retained the final checkpoint whenever any unique
+  raw record — including a parsed no-op — followed that seal. The frozen replay skipped exactly
+  5,918 redundant final batches and reduced total replay batches from 14,301 to 8,383 (−41.4%).
+  SQLite commit time nevertheless measured 9.715 s, still inside the retained 8.5–11.4 s baseline
+  range, and whole wall was slower amid large canonical/FTS/index/validation variance. The full
+  <code>ingest_cursor</code> table hash, logical/artifact counts, pending state, and all five token
+  totals matched exactly. With no attributable speed gain, ranked search was skipped and the
+  implementation was reverted at <code>52a533e</code>. Empty transaction count is not a useful
+  remaining proxy for rebuild wall on this storage configuration.</p>
   <p>Per-op timers/counts are now always-on and expose per-adapter deltas during rebuild. Do not repeat
   the rejected broad bulk fast path without new evidence: its exact frozen-ledger comparison improved
   canonical apply only from 20.609 s to 19.714 s, while the full ingest regressed from 101.23 s to
@@ -1370,10 +1382,10 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <li><b>Reject larger private replay chunks — complete.</b> A bounded 2,048-op candidate reduced
     batches and commits but made canonical statements 30.5% slower and added 162 MB RSS. It was
     reverted; the commit ceiling was not independently removable.</li>
-    <li><b>Remove redundant post-seal replay commits next.</b> A sealed file is checkpointed during
-    activation, yet the current replay loop applies another empty checkpoint batch when no records
-    follow the seal. Track post-seal dirtiness, skip only proven-empty final batches, and gate exact
-    cursor/checkpoint equivalence plus crash/replay behavior on the frozen pair.</li>
+    <li><b>Reject skipping clean post-seal checkpoints — complete.</b> Exact dirty-state tracking
+    removed 5,918 redundant batches and retained a byte-identical cursor table, but commit time did
+    not improve outside its observed range. It was reverted; do not optimize replay by transaction
+    count alone.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>

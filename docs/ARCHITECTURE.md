@@ -475,6 +475,12 @@ This makes the optimization boundary explicit:
   peak RSS rose from 511 MB to 673 MB. It was reverted at `93a2ece`. Hermes and
   OpenCode still require a separate SQLite snapshot-query batch/memory experiment;
   no JSONL or ledger-replay result may be projected onto them.
+- A generation seal already durably checkpoints activation/abandon, but removing the
+  second clean final checkpoint is not a retained performance optimization. Exact
+  post-seal dirty tracking skipped 5,918 of 14,301 replay batches while preserving a
+  byte-identical `ingest_cursor` table and exact projection totals; commit time still
+  measured 9.715 s inside its retained 8.5–11.4 s range. The candidate was reverted at
+  `52a533e`. Replay batch count is not a performance proxy on this storage configuration.
 - Payload-light ledger election is below the adapter boundary and therefore roster-wide,
   but the RLG1 implementation was rejected. Paired frozen scans saved only 0.19–0.34 s
   (0.9–1.6%) of wall time even though one pair reduced user CPU from 8.66 s to 0.28 s;
