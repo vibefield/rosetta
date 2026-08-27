@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use rosetta_store::queries::{self, SearchFilter, SearchHit};
 use rusqlite::{Connection, OpenFlags};
+use tantivy::Order;
 use tantivy::collector::TopDocs;
+use tantivy::collector::sort_key::{SortBySimilarityScore, SortByString};
 use tantivy::query::{
     BooleanQuery, ConstScoreQuery, Occur, Query, QueryParser, RangeQuery, TermQuery,
 };
@@ -229,13 +231,16 @@ fn search_one(
     let top_docs = searcher
         .search(
             query.as_ref(),
-            &TopDocs::with_limit(case.limit as usize).order_by_score(),
+            &TopDocs::with_limit(case.limit as usize).order_by((
+                (SortBySimilarityScore, Order::Desc),
+                (SortByString::for_field("timeline_id"), Order::Asc),
+            )),
         )
         .map_err(|error| format!("running Tantivy case `{}`: {error}", case.label))?;
     let mut hits = Vec::with_capacity(top_docs.len());
     let mut violations = 0_u64;
     let mut snippet_checksum = 0_u64;
-    for (_score, address) in top_docs {
+    for ((_score, _timeline_id), address) in top_docs {
         let doc: TantivyDocument = searcher
             .doc(address)
             .map_err(|error| format!("loading Tantivy hit: {error}"))?;
@@ -600,14 +605,14 @@ mod tests {
                         "m-user",
                         0,
                         MessageKind::User,
-                        "ionosphere question",
+                        "ionosphere",
                         100,
                     ))),
                     IngestOp::Message(Box::new(message(
                         "m-tool",
                         1,
                         MessageKind::ToolUse,
-                        "ionosphere tool",
+                        "ionosphere",
                         200,
                     ))),
                 ],
@@ -648,6 +653,20 @@ mod tests {
             .iter()
             .map(|case| fts_hits(&conn, case).unwrap())
             .collect::<Vec<_>>();
+        let reader = index.reader().unwrap();
+        let parser = QueryParser::for_index(
+            &index,
+            vec![fields.content, fields.tool_input, fields.tool_result],
+        );
+        let (tied_hits, _, _) = search_one(&reader, &parser, fields, &cases[0]).unwrap();
+        assert_eq!(
+            tied_hits
+                .iter()
+                .map(|hit| hit.timeline_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m-tool", "m-user"],
+            "equal scores use ascending timeline identity, not document address"
+        );
         let report = execute_queries(&index, fields, &cases, &reference, 1, 2).unwrap();
         assert_eq!(report.cases[0].tantivy_hits, 2);
         assert_eq!(report.cases[1].tantivy_hits, 1);

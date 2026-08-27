@@ -26,7 +26,10 @@ pub(crate) struct Fields {
 
 pub(crate) fn prototype_schema() -> (Schema, Fields) {
     let mut builder = Schema::builder();
-    let timeline_id = builder.add_text_field("timeline_id", STRING | STORED);
+    // FAST supports the required score-then-timeline-id ordering inside the
+    // top-K collector, including ties at the LIMIT boundary. Sorting only the
+    // returned K rows would leave segment-layout-dependent membership.
+    let timeline_id = builder.add_text_field("timeline_id", STRING | STORED | FAST);
     let session_id = builder.add_text_field("session_id", STRING | STORED);
     let runtime = builder.add_text_field("runtime", STRING | STORED);
     let project = builder.add_text_field("project", STRING | STORED);
