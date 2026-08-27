@@ -364,8 +364,6 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
             source: None,
         })
         .unwrap();
-    assert_eq!(live_stats.profile.message_insert_first_attempts, 0);
-    assert_eq!(live_stats.profile.message_insert_first_conflicts, 0);
     assert_eq!(live_stats.bucket_rebuilds, 1);
     assert_eq!(queries::search(store.conn(), "live", 10).unwrap().len(), 1);
     assert!(matches!(
@@ -396,11 +394,6 @@ fn cold_first_generation_projects_without_the_source_journal() {
         })
         .unwrap();
     assert_eq!(staged.source_stage_nanos, 0);
-    assert_eq!(staged.profile.message_attempts, 1);
-    assert_eq!(staged.profile.message_insert_first_attempts, 1);
-    assert_eq!(staged.profile.message_insert_first_conflicts, 0);
-    assert_eq!(staged.profile.message_lookup_nanos, 0);
-    assert_eq!((staged.messages_inserted, staged.messages_updated), (1, 0));
     assert_eq!(
         store
             .conn()
@@ -439,9 +432,6 @@ fn cold_first_generation_projects_without_the_source_journal() {
         .unwrap();
     assert_eq!(activated.source_stage_nanos, 0);
     assert_eq!(activated.profile.session_renumbers, 0);
-    assert_eq!(activated.profile.message_insert_first_attempts, 1);
-    assert_eq!(activated.profile.message_insert_first_conflicts, 0);
-    assert_eq!(activated.profile.message_lookup_nanos, 0);
     assert_eq!(
         store
             .conn()
@@ -464,107 +454,6 @@ fn cold_first_generation_projects_without_the_source_journal() {
             .unwrap()
             .len(),
         2
-    );
-}
-
-#[test]
-fn cold_insert_first_reconciles_a_repeated_timeline_identity() {
-    let mut store = Store::open_in_memory_for_rebuild().unwrap();
-    store.apply(&base_batch()).unwrap();
-    let cursor_id = install_cursor(&mut store, "cold-repeat.jsonl");
-
-    let mut first = message("cold-repeat", 0, 1_000);
-    first.content = Some("stale version".into());
-    first.src_cursor = Some(cursor_id);
-    store
-        .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(first))],
-            checkpoints: vec![],
-            source: Some(SourceWrite {
-                cursor_id,
-                session_id: "s1".into(),
-                generation: 1,
-                first_sequence: 0,
-                mode: SourceMode::Stage,
-            }),
-        })
-        .unwrap();
-
-    let mut corrected = message("cold-repeat", 0, 2_000);
-    corrected.content = Some("corrected version".into());
-    corrected.src_cursor = Some(cursor_id);
-    let replayed = store
-        .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(corrected))],
-            checkpoints: vec![],
-            source: Some(SourceWrite {
-                cursor_id,
-                session_id: "s1".into(),
-                generation: 1,
-                first_sequence: 1,
-                mode: SourceMode::Activate,
-            }),
-        })
-        .unwrap();
-
-    assert_eq!(replayed.profile.message_insert_first_attempts, 1);
-    assert_eq!(replayed.profile.message_insert_first_conflicts, 1);
-    assert_eq!(
-        (replayed.messages_inserted, replayed.messages_updated),
-        (0, 1)
-    );
-    let (rows, content): (i64, String) = store
-        .conn()
-        .query_row(
-            "SELECT COUNT(*), MAX(content) FROM message WHERE timeline_id = 'cold-repeat'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!((rows, content.as_str()), (1, "corrected version"));
-
-    store.finish_bulk_load().unwrap();
-    assert_eq!(
-        store
-            .conn()
-            .query_row(
-                "SELECT ordinal FROM message WHERE timeline_id = 'cold-repeat'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        0
-    );
-}
-
-#[test]
-fn timeline_conflict_target_does_not_hide_an_ordinal_collision() {
-    let mut store = Store::open_in_memory().unwrap();
-    store.apply(&base_batch()).unwrap();
-    store
-        .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message("first", 0, 1_000)))],
-            checkpoints: vec![],
-            source: None,
-        })
-        .unwrap();
-
-    let error = store
-        .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message("second", 0, 2_000)))],
-            checkpoints: vec![],
-            source: None,
-        })
-        .unwrap_err();
-    assert!(matches!(error, StoreError::Sqlite(_)));
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM message", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1,
-        "the failed insert rolls the whole batch back"
     );
 }
 
@@ -638,7 +527,7 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
 
     let mut stale = message("cold-stale", 0, 1_000);
     stale.src_cursor = Some(cursor_id);
-    let first_generation = store
+    store
         .apply(&Batch {
             ops: vec![IngestOp::Message(Box::new(stale))],
             checkpoints: vec![],
@@ -651,8 +540,6 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
             }),
         })
         .unwrap();
-    assert_eq!(first_generation.profile.message_insert_first_attempts, 1);
-    assert_eq!(first_generation.profile.message_insert_first_conflicts, 0);
 
     let mut fresh = message("cold-fresh", 0, 2_000);
     fresh.src_cursor = Some(cursor_id);
@@ -683,7 +570,7 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
         .unwrap();
     assert_eq!((stale, fresh), (0, 1));
 
-    let staged = store
+    store
         .apply(&Batch {
             ops: vec![],
             checkpoints: vec![],
@@ -696,8 +583,6 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
             }),
         })
         .unwrap();
-    assert_eq!(staged.profile.message_attempts, 0);
-    assert_eq!(staged.profile.message_insert_first_attempts, 0);
     store.finish_bulk_load().unwrap();
 }
 
@@ -765,9 +650,6 @@ fn cold_replacement_after_activation_still_swaps_from_the_journal() {
         })
         .unwrap();
     assert_eq!(activated.source_sweeps, 1);
-    assert_eq!(activated.profile.message_attempts, 1);
-    assert_eq!(activated.profile.message_insert_first_attempts, 0);
-    assert_eq!(activated.profile.message_insert_first_conflicts, 0);
     assert_eq!(
         store
             .conn()

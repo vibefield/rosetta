@@ -46,8 +46,6 @@ pub enum Metric {
     CanonicalApplyNanos,
     SqliteCommitNanos,
     MessageApplyAttempts,
-    MessageInsertFirstAttempts,
-    MessageInsertFirstConflicts,
     ToolResultApplyAttempts,
     UsageApplyAttempts,
     DriftApplyAttempts,
@@ -86,7 +84,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 74;
+const METRIC_COUNT: usize = 72;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -125,14 +123,6 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::CanonicalApplyNanos, "canonical apply time"),
     (Metric::SqliteCommitNanos, "sqlite commit time"),
     (Metric::MessageApplyAttempts, "message apply attempts"),
-    (
-        Metric::MessageInsertFirstAttempts,
-        "message insert-first attempts",
-    ),
-    (
-        Metric::MessageInsertFirstConflicts,
-        "message insert-first conflicts",
-    ),
     (
         Metric::ToolResultApplyAttempts,
         "tool-result apply attempts",
@@ -256,14 +246,6 @@ impl Instrument {
             self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
             let profile = &stats.profile;
             self.add(Metric::MessageApplyAttempts, profile.message_attempts);
-            self.add(
-                Metric::MessageInsertFirstAttempts,
-                profile.message_insert_first_attempts,
-            );
-            self.add(
-                Metric::MessageInsertFirstConflicts,
-                profile.message_insert_first_conflicts,
-            );
             self.add(
                 Metric::ToolResultApplyAttempts,
                 profile.tool_result_attempts,
@@ -409,8 +391,6 @@ mod tests {
         assert!(report.contains("source staging time"));
         assert!(report.contains("canonical apply time"));
         assert!(report.contains("message lookup time"));
-        assert!(report.contains("message insert-first attempts"));
-        assert!(report.contains("message insert-first conflicts"));
         assert!(report.contains("pending batch checks"));
         assert!(report.contains("pending lookup time"));
         assert!(report.contains("ledger sync time"));

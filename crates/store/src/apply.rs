@@ -100,8 +100,6 @@ pub struct ApplyStats {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ApplyProfile {
     pub message_attempts: u64,
-    pub message_insert_first_attempts: u64,
-    pub message_insert_first_conflicts: u64,
     pub tool_result_attempts: u64,
     pub usage_attempts: u64,
     pub drift_attempts: u64,
@@ -153,8 +151,6 @@ impl ApplyStats {
 impl ApplyProfile {
     fn merge_from(&mut self, batch: &Self) {
         self.message_attempts += batch.message_attempts;
-        self.message_insert_first_attempts += batch.message_insert_first_attempts;
-        self.message_insert_first_conflicts += batch.message_insert_first_conflicts;
         self.tool_result_attempts += batch.tool_result_attempts;
         self.usage_attempts += batch.usage_attempts;
         self.drift_attempts += batch.drift_attempts;
@@ -222,9 +218,8 @@ mod rows;
 
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, MessageIdentity, OldRow, PendingGate, apply_message, apply_project, apply_runtime,
-    apply_session, apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending,
-    rebuild_bucket,
+    BucketKey, OldRow, PendingGate, apply_message, apply_project, apply_runtime, apply_session,
+    apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending, rebuild_bucket,
 };
 
 fn apply_workspace_obs(
@@ -504,7 +499,6 @@ fn persist_source_ops(
 /// arrive and are canonicalized once the generation activates.
 struct DirectProjection<'a> {
     preserve_message_ordinals: bool,
-    message_identity: MessageIdentity,
     effects: Option<&'a mut Effects>,
 }
 
@@ -575,7 +569,6 @@ fn project_source_ops(
                 maintenance,
                 dirty_buckets,
                 pending_gate,
-                projection.message_identity,
                 projection.effects.as_deref_mut(),
             )?;
         } else {
@@ -878,7 +871,6 @@ fn activate_cursor(
                     maintenance,
                     dirty_buckets,
                     pending_gate,
-                    MessageIdentity::LookupFirst,
                     None,
                 )?;
             }
@@ -1049,7 +1041,6 @@ fn apply_op(
             maintenance,
             dirty_buckets,
             pending_gate,
-            MessageIdentity::LookupFirst,
             effects,
         )?,
         IngestOp::ToolResult {
@@ -1227,7 +1218,6 @@ pub(crate) fn apply_batch(
                             &mut pending_gate,
                             DirectProjection {
                                 preserve_message_ordinals: false,
-                                message_identity: MessageIdentity::InsertFirst,
                                 effects: None,
                             },
                         )?;
@@ -1287,7 +1277,6 @@ pub(crate) fn apply_batch(
                             &mut pending_gate,
                             DirectProjection {
                                 preserve_message_ordinals: true,
-                                message_identity: MessageIdentity::LookupFirst,
                                 effects: effects.as_deref_mut(),
                             },
                         )?;

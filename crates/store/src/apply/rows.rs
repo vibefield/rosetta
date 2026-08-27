@@ -34,16 +34,6 @@ pub(crate) const BULK_MAINTENANCE: Maintenance = Maintenance {
     buckets: false,
 };
 
-/// How a message establishes its canonical identity. Only an unpublished,
-/// private first generation may optimistically insert. A timeline collision
-/// falls back to the ordinary load/update path; every observable/live path
-/// looks up first so it can maintain derived state from the old row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MessageIdentity {
-    LookupFirst,
-    InsertFirst,
-}
-
 #[derive(Debug, Default)]
 pub(super) struct PendingGate {
     sessions: BTreeMap<String, PendingSession>,
@@ -453,89 +443,6 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
     Ok(())
 }
 
-fn insert_message_first(
-    tx: &Transaction,
-    row: &MessageRow,
-    usage: TokenSnapshot,
-    tool_input: Option<&str>,
-    tool_payload: Option<&str>,
-) -> Result<Option<i64>, StoreError> {
-    // The conflict target is deliberately narrow. Insert-first may reconcile a
-    // repeated timeline identity, but ordinal, FK, NOT NULL, and every other
-    // constraint must still abort the transaction.
-    let changed = tx
-        .prepare_cached(
-            "INSERT INTO message
-           (timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
-            model, effort, content, tool_id, tool_name, tool_input, tool_result,
-            tool_payload, tool_is_error, branch_tool_id, in_tokens, out_tokens,
-            cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
-            src_cursor, src_offset)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
-         ON CONFLICT(timeline_id) DO NOTHING",
-        )?
-        .execute(params![
-            row.timeline_id,
-            row.session_id,
-            row.ordinal,
-            row.kind.as_str(),
-            row.subtype,
-            row.uuid,
-            row.parent_uuid,
-            row.ts,
-            row.model,
-            row.effort,
-            row.content,
-            row.tool.as_ref().and_then(|t| t.tool_id.as_deref()),
-            row.tool.as_ref().map(|t| t.name.as_str()),
-            tool_input,
-            row.tool.as_ref().and_then(|t| t.result.as_deref()),
-            tool_payload,
-            row.tool.as_ref().and_then(|t| t.is_error),
-            row.branch_tool_id,
-            usage.input,
-            usage.output,
-            usage.cache_read,
-            usage.cache_write,
-            usage.thinking,
-            row.agent_version,
-            row.src_cursor,
-            row.src_offset,
-        ])?;
-    Ok((changed == 1).then(|| tx.last_insert_rowid()))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn finish_message(
-    tx: &Transaction,
-    row: &MessageRow,
-    stats: &mut ApplyStats,
-    maintenance: Maintenance,
-    dirty_buckets: &mut BTreeSet<BucketKey>,
-    pending_gate: &mut PendingGate,
-    mut effects: Option<&mut Effects>,
-) -> Result<(), StoreError> {
-    touch_session(tx, &row.session_id, row.ts, stats)?;
-    if let Some(fx) = effects.as_deref_mut() {
-        fx.push(Mutation::Message(Box::new(row.clone())));
-    }
-    if pending_gate.should_lookup(tx, row, stats)? {
-        apply_pending_for_message(
-            tx,
-            row,
-            stats,
-            maintenance,
-            dirty_buckets,
-            pending_gate,
-            effects,
-        )?;
-    } else {
-        stats.profile.pending_lookup_skips += 1;
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_message(
     tx: &Transaction,
@@ -544,63 +451,9 @@ pub(super) fn apply_message(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     pending_gate: &mut PendingGate,
-    identity: MessageIdentity,
-    effects: Option<&mut Effects>,
+    mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     stats.profile.message_attempts += 1;
-    if identity == MessageIdentity::InsertFirst {
-        stats.profile.message_insert_first_attempts += 1;
-        let new_usage = row.usage.unwrap_or_default();
-        let tool_input = row.tool.as_ref().map(|tool| tool.input.to_string());
-        let tool_payload = row
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.payload.as_ref().map(|p| p.to_string()));
-        let started = Instant::now();
-        let inserted = (|| -> Result<Option<i64>, StoreError> {
-            let rowid = insert_message_first(
-                tx,
-                row,
-                new_usage,
-                tool_input.as_deref(),
-                tool_payload.as_deref(),
-            )?;
-            if let Some(rowid) = rowid
-                && maintenance.fts
-            {
-                fts_insert(
-                    tx,
-                    rowid,
-                    row.content.as_deref(),
-                    tool_input.as_deref(),
-                    row.tool.as_ref().and_then(|tool| tool.result.as_deref()),
-                )?;
-            }
-            Ok(rowid)
-        })();
-        stats.profile.message_write_nanos += elapsed_nanos(started);
-        if inserted?.is_some() {
-            mark_bucket(
-                dirty_buckets,
-                maintenance,
-                &row.session_id,
-                row.ts,
-                row.model.as_deref(),
-            );
-            stats.messages_inserted += 1;
-            return finish_message(
-                tx,
-                row,
-                stats,
-                maintenance,
-                dirty_buckets,
-                pending_gate,
-                effects,
-            );
-        }
-        stats.profile.message_insert_first_conflicts += 1;
-    }
-
     let started = Instant::now();
     let loaded = load_old_by_timeline(tx, &row.timeline_id);
     stats.profile.message_lookup_nanos += elapsed_nanos(started);
@@ -741,15 +594,24 @@ pub(super) fn apply_message(
     })();
     stats.profile.message_write_nanos += elapsed_nanos(started);
     written?;
-    finish_message(
-        tx,
-        row,
-        stats,
-        maintenance,
-        dirty_buckets,
-        pending_gate,
-        effects,
-    )
+    touch_session(tx, &row.session_id, row.ts, stats)?;
+    if let Some(fx) = effects.as_deref_mut() {
+        fx.push(Mutation::Message(Box::new(row.clone())));
+    }
+    if pending_gate.should_lookup(tx, row, stats)? {
+        apply_pending_for_message(
+            tx,
+            row,
+            stats,
+            maintenance,
+            dirty_buckets,
+            pending_gate,
+            effects,
+        )?;
+    } else {
+        stats.profile.pending_lookup_skips += 1;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
