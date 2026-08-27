@@ -11,8 +11,8 @@ use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
 use rosetta_capture::{Ledger, LedgerEntry, SourceDef, scan_ledger};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, Metric, discover, expand_data_root, meta_ingest_into,
-    rebuild_runtime, stream_backfill_into,
+    IngestOptions, Instrument, discover, expand_data_root, meta_ingest_into, rebuild_runtime,
+    stream_backfill_into,
 };
 use rosetta_store::{Store, queries};
 use tempfile::TempDir;
@@ -248,15 +248,6 @@ fn rebuild_from_ledger_alone_reproduces_the_projection() {
     );
     assert_eq!(report.hard_errors, 0);
     assert_eq!(report.torn_segments, 0);
-    let clean_final_skips = instrument.get(Metric::ReplayCleanFinalSkips);
-    assert!(
-        clean_final_skips > 0,
-        "sealed files skip a redundant final batch"
-    );
-    assert!(
-        clean_final_skips < report.files,
-        "the post-seal append still requires its final checkpoint batch"
-    );
     assert_eq!(
         report.sessions_stubbed, 0,
         "every session was named by a journaled meta batch"

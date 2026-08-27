@@ -21,7 +21,6 @@ pub enum Metric {
     LinesHardError,
     OpsEmitted,
     BatchesApplied,
-    ReplayCleanFinalSkips,
     BytesRead,
     CheckpointConflicts,
     WalkNanos,
@@ -85,7 +84,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 73;
+const METRIC_COUNT: usize = 72;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -99,10 +98,6 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::LinesHardError, "lines hard-error"),
     (Metric::OpsEmitted, "ops emitted"),
     (Metric::BatchesApplied, "batches applied"),
-    (
-        Metric::ReplayCleanFinalSkips,
-        "clean replay final batches skipped",
-    ),
     (Metric::BytesRead, "bytes read"),
     (Metric::CheckpointConflicts, "checkpoint conflicts"),
     (Metric::WalkNanos, "walk time"),
@@ -396,7 +391,6 @@ mod tests {
         assert!(report.contains("source staging time"));
         assert!(report.contains("canonical apply time"));
         assert!(report.contains("message lookup time"));
-        assert!(report.contains("clean replay final batches skipped"));
         assert!(report.contains("pending batch checks"));
         assert!(report.contains("pending lookup time"));
         assert!(report.contains("ledger sync time"));
