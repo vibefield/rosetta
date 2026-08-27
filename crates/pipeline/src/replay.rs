@@ -122,6 +122,10 @@ struct FileReplay {
     generation: u64,
     next_sequence: u64,
     ops: Vec<IngestOp>,
+    /// A unique raw record has been normalized since the last durable
+    /// checkpoint. This includes parsed no-ops because adapter state can move
+    /// even when the canonical op list does not.
+    checkpoint_dirty: bool,
     last_offset: Option<u64>,
     generation_clean: bool,
     activated: bool,
@@ -300,6 +304,7 @@ pub fn rebuild_runtime(
                     return Ok(());
                 }
                 file.last_offset = Some(start_offset);
+                file.checkpoint_dirty = true;
                 file.ctx.agent_version = source.agent_version.clone();
 
                 report.raw_records += 1;
@@ -410,6 +415,10 @@ pub fn rebuild_runtime(
     // Publish them exactly as live ingest did, or abandon remaining staged
     // rows if the sealed base did not normalize cleanly.
     for file in files.values_mut() {
+        if !file.checkpoint_dirty {
+            instrument.add(Metric::ReplayCleanFinalSkips, 1);
+            continue;
+        }
         let mode = if file.activated {
             SourceMode::Append
         } else {
@@ -560,6 +569,7 @@ fn open_file(
         generation,
         next_sequence: 0,
         ops: Vec::new(),
+        checkpoint_dirty: false,
         last_offset: None,
         generation_clean: true,
         activated: false,
@@ -635,6 +645,9 @@ fn flush_chunk(
         },
     )?;
     merge_stats(&mut report.stats, &stats);
+    if checkpoint {
+        file.checkpoint_dirty = false;
+    }
     instrument.add(Metric::BatchesApplied, 1);
     Ok(())
 }
