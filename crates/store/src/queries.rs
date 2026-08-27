@@ -505,20 +505,10 @@ pub fn search_filtered(
         );
     }
     if let Some(after) = filter.after_ts {
-        clause(
-            &mut sql,
-            "COALESCE(m.ts, 0) >=",
-            Value::from(after),
-            &mut binds,
-        );
+        clause(&mut sql, "m.ts >=", Value::from(after), &mut binds);
     }
     if let Some(before) = filter.before_ts {
-        clause(
-            &mut sql,
-            "COALESCE(m.ts, 0) <=",
-            Value::from(before),
-            &mut binds,
-        );
+        clause(&mut sql, "m.ts <=", Value::from(before), &mut binds);
     }
     binds.push(Value::from(limit));
     // FTS5 may assign the same BM25 score to many documents. Keep the wire

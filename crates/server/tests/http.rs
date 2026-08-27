@@ -369,6 +369,16 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     assert_eq!(parsed.hits.len(), 1);
     assert_eq!(parsed.hits[0].timeline_id, "m-user");
 
+    let mut undated = message("m-undated", MessageKind::Agent, "ionosphere undated");
+    undated.ts = None;
+    h.append(vec![undated]);
+    let (_, body) = h
+        .get("/api/search?q=ionosphere&before_ts=3700000&session=s1")
+        .await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 1, "a time bound excludes unknown time");
+    assert_eq!(parsed.hits[0].timeline_id, "m-user");
+
     let (status, body) = h.get("/api/search?q=").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "bad_request");

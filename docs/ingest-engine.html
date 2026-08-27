@@ -1133,7 +1133,8 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   <p>The L3 contract accepts whitespace-separated required terms and double-quoted required phrases,
   bounded to 4,096 bytes and 64 clauses, plus agent/runtime, project, session, time-range, kind,
   and <code>is_error</code> filters. A false error filter excludes never-reported state rather than
-  coercing unknown to false. FTS/Tantivy operators and field selectors are ordinary text, not backend syntax.
+  coercing unknown to false; any time bound likewise excludes never-reported timestamps rather than
+  coercing them to epoch zero. FTS/Tantivy operators and field selectors are ordinary text, not backend syntax.
   Ordering is score then a stable
   <code>timeline_id</code> tie-breaker. Numerical scores are diagnostic and have no cross-backend
   meaning. Responses expose readiness, projection epoch, index revision, and hits so a lagging index

@@ -223,17 +223,14 @@ fn matches_filter(doc: &TantivyDocument, fields: Fields, filter: &QueryFilterSpe
     {
         return false;
     }
-    let ts = doc
-        .get_first(fields.ts)
-        .and_then(|value| value.as_i64())
-        .unwrap_or(0);
+    let ts = doc.get_first(fields.ts).and_then(|value| value.as_i64());
     if let Some(after) = filter.after_ts
-        && ts < after
+        && ts.is_none_or(|ts| ts < after)
     {
         return false;
     }
     if let Some(before) = filter.before_ts
-        && ts > before
+        && ts.is_none_or(|ts| ts > before)
     {
         return false;
     }
@@ -613,6 +610,8 @@ mod tests {
             payload: None,
             is_error: Some(true),
         });
+        let mut undated = message("m-undated", 2, MessageKind::Agent, "ionosphere", 300);
+        undated.ts = None;
         store
             .apply(&Batch {
                 ops: vec![
@@ -655,6 +654,7 @@ mod tests {
                         100,
                     ))),
                     IngestOp::Message(Box::new(error_tool)),
+                    IngestOp::Message(Box::new(undated)),
                 ],
                 checkpoints: vec![],
                 source: None,
@@ -664,7 +664,7 @@ mod tests {
 
         let index_path = temp.path().join("tantivy");
         let (build, index, fields) = build_index(&db, &index_path, 1, 50 * 1024 * 1024).unwrap();
-        assert_eq!(build.documents, 2);
+        assert_eq!(build.documents, 3);
         assert!(build.index.bytes > 0);
 
         let cases = vec![
@@ -709,6 +709,17 @@ mod tests {
                     ..QueryFilterSpec::default()
                 },
             },
+            QueryCase {
+                label: "before".into(),
+                class: "filtered".into(),
+                query: "ionosphere".into(),
+                weight: 1,
+                limit: 10,
+                filter: QueryFilterSpec {
+                    before_ts: Some(150),
+                    ..QueryFilterSpec::default()
+                },
+            },
         ];
         let conn = open_read(&db).unwrap();
         let reference = cases
@@ -726,11 +737,11 @@ mod tests {
                 .iter()
                 .map(|hit| hit.timeline_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["m-tool", "m-user"],
+            vec!["m-tool", "m-undated", "m-user"],
             "equal scores use ascending timeline identity, not document address"
         );
         let report = execute_queries(&index, fields, &cases, &reference, 1, 2).unwrap();
-        assert_eq!(report.cases[0].tantivy_hits, 2);
+        assert_eq!(report.cases[0].tantivy_hits, 3);
         assert_eq!(report.cases[1].tantivy_hits, 1);
         assert_eq!(report.cases[1].filter_violations, 0);
         assert_eq!(report.cases[1].overlap, 1);
@@ -740,6 +751,9 @@ mod tests {
         assert_eq!(report.cases[3].tantivy_hits, 0);
         assert_eq!(report.cases[3].filter_violations, 0);
         assert_eq!(report.cases[3].overlap, 0);
+        assert_eq!(report.cases[4].tantivy_hits, 1);
+        assert_eq!(report.cases[4].filter_violations, 0);
+        assert_eq!(report.cases[4].overlap, 1);
 
         drop(index);
         unseal_for_test(&index_path);

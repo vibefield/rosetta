@@ -36,8 +36,7 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
     let project = builder.add_text_field("project", STRING | STORED);
     let kind = builder.add_text_field("kind", STRING | STORED);
     let is_error = builder.add_text_field("is_error", STRING | STORED);
-    // Index null timestamps as zero to match the reference query's
-    // COALESCE(m.ts, 0) filter semantics.
+    // Missing timestamps remain absent so any explicit range excludes them.
     let ts = builder.add_i64_field("ts", INDEXED | FAST | STORED);
     // Store all three text fields because a production-compatible candidate
     // must be able to generate snippets without reloading SQLite per hit.
@@ -106,7 +105,9 @@ fn add_row(
         fields.is_error,
         is_error.map_or("unknown", |value| if value { "true" } else { "false" }),
     );
-    doc.add_i64(fields.ts, ts.unwrap_or(0));
+    if let Some(ts) = ts {
+        doc.add_i64(fields.ts, ts);
+    }
     let mut text_bytes = 0_u64;
     for (field, value) in [
         (fields.content, content),

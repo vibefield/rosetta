@@ -355,7 +355,8 @@ tools (sqlite-viewer style), explicitly documented as *unstable internal format*
 with snippets and rank, with structured filters applied inside the ranked query. `q` uses the
 backend-neutral product grammar: whitespace-separated required terms plus double-quoted required
 phrases (4,096 bytes and 64 clauses maximum). Engine operators and field selectors are ordinary
-text and never cross the wire.
+text and never cross the wire. Any explicit time bound excludes rows whose timestamp was never
+reported; unknown is not coerced to epoch zero.
 
 **Observe (job 2)** — the flagship contract, successor to `observeSession`:
 
