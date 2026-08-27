@@ -244,6 +244,7 @@ fn initial_activation_skips_the_sweep_and_rewrite_sweeps_once() {
         .unwrap();
     assert_eq!(first_stats.source_sweeps, 0);
     assert_eq!(first_stats.bucket_rebuilds, 1);
+    assert_eq!(first_stats.profile.session_renumbers, 1);
 
     let mut second = message("second", 0, 1_000);
     second.src_cursor = Some(cursor.id);
@@ -262,6 +263,7 @@ fn initial_activation_skips_the_sweep_and_rewrite_sweeps_once() {
         .unwrap();
     assert_eq!(rewrite_stats.source_sweeps, 1);
     assert_eq!(rewrite_stats.bucket_rebuilds, 1);
+    assert_eq!(rewrite_stats.profile.session_renumbers, 1);
     assert!(
         queries::search(store.conn(), "first", 10)
             .unwrap()
@@ -429,6 +431,7 @@ fn cold_first_generation_projects_without_the_source_journal() {
         })
         .unwrap();
     assert_eq!(activated.source_stage_nanos, 0);
+    assert_eq!(activated.profile.session_renumbers, 0);
     assert_eq!(
         store
             .conn()
@@ -451,6 +454,68 @@ fn cold_first_generation_projects_without_the_source_journal() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[test]
+fn cold_finalize_renumbers_all_sources_in_one_set_pass() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let later_path = install_cursor(&mut store, "z-later.jsonl");
+    let earlier_path = install_cursor(&mut store, "a-earlier.jsonl");
+
+    for (cursor_id, timeline_id) in [(later_path, "later"), (earlier_path, "earlier")] {
+        let mut row = message(timeline_id, 0, 1_000);
+        row.src_cursor = Some(cursor_id);
+        row.src_offset = Some(0);
+        let stats = store
+            .apply(&Batch {
+                ops: vec![IngestOp::Message(Box::new(row))],
+                checkpoints: vec![],
+                source: Some(SourceWrite {
+                    cursor_id,
+                    session_id: "s1".into(),
+                    generation: 1,
+                    first_sequence: 0,
+                    mode: SourceMode::Activate,
+                }),
+            })
+            .unwrap();
+        assert_eq!(stats.profile.session_renumbers, 0);
+    }
+
+    let timeline = |store: &Store| {
+        store
+            .conn()
+            .query_row(
+                "SELECT group_concat(timeline_id, ',') FROM
+                   (SELECT timeline_id FROM message WHERE session_id = 's1' ORDER BY ordinal)",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        timeline(&store),
+        "later,earlier",
+        "provisional arrival order"
+    );
+
+    let finalized = store.finish_bulk_load().unwrap();
+    assert_eq!(finalized.renumber_rows, 2);
+    assert_eq!(
+        timeline(&store),
+        "earlier,later",
+        "canonical source-path order"
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM temp.renumber_message", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
     );
 }
 
@@ -681,7 +746,7 @@ fn incomplete_cold_generation_cannot_be_finalized() {
 }
 
 #[test]
-fn large_session_activation_materializes_the_rank_once() {
+fn large_cold_session_defers_ranking_until_finalization() {
     const MESSAGES: i64 = 10_000;
 
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
@@ -694,7 +759,7 @@ fn large_session_activation_materializes_the_rank_once() {
             IngestOp::Message(Box::new(row))
         })
         .collect();
-    store
+    let activation = store
         .apply(&Batch {
             ops,
             checkpoints: vec![],
@@ -707,6 +772,10 @@ fn large_session_activation_materializes_the_rank_once() {
             }),
         })
         .unwrap();
+    assert_eq!(activation.profile.session_renumbers, 0);
+
+    let finalized = store.finish_bulk_load().unwrap();
+    assert_eq!(finalized.renumber_rows, 0);
 
     let (count, minimum, maximum, distinct): (i64, i64, i64, i64) = store
         .conn()

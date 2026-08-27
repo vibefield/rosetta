@@ -71,6 +71,8 @@ pub enum Metric {
     OtherApplyNanos,
     OrdinalLookupNanos,
     SessionRenumberNanos,
+    BulkRenumberRows,
+    BulkRenumberNanos,
     BulkBucketNanos,
     BulkFtsNanos,
     BulkIndexNanos,
@@ -79,7 +81,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 67;
+const METRIC_COUNT: usize = 69;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -146,6 +148,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::OtherApplyNanos, "other apply time"),
     (Metric::OrdinalLookupNanos, "ordinal lookup time"),
     (Metric::SessionRenumberNanos, "session renumber time"),
+    (Metric::BulkRenumberRows, "bulk renumber rows"),
+    (Metric::BulkRenumberNanos, "bulk renumber time"),
     (Metric::BulkBucketNanos, "bulk bucket time"),
     (Metric::BulkFtsNanos, "bulk FTS time"),
     (Metric::BulkIndexNanos, "bulk index time"),
@@ -279,6 +283,8 @@ impl Instrument {
     pub fn finish_bulk_load(&self, store: &mut Store) -> Result<BulkLoadStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || store.finish_bulk_load());
         if let Ok(stats) = &result {
+            self.add(Metric::BulkRenumberRows, stats.renumber_rows);
+            self.add(Metric::BulkRenumberNanos, stats.renumber_nanos);
             self.add(Metric::BulkBucketNanos, stats.bucket_nanos);
             self.add(Metric::BulkFtsNanos, stats.fts_nanos);
             self.add(Metric::BulkIndexNanos, stats.index_nanos);
@@ -378,6 +384,7 @@ mod tests {
         assert!(report.contains("message lookup time"));
         assert!(report.contains("pending lookup time"));
         assert!(report.contains("ledger sync time"));
+        assert!(report.contains("bulk renumber time"));
         assert!(report.contains("bulk FTS time"));
         assert!(report.contains("publication time"));
     }

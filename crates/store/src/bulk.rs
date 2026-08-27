@@ -1,6 +1,7 @@
 //! Private cold-rebuild maintenance. The file this operates on is never the
-//! installed projection: replay can therefore defer derived structures and
-//! secondary indexes, validate once, and publish only the finished database.
+//! installed projection: replay can therefore defer canonical presentation
+//! ordinals, derived structures, and secondary indexes, validate once, and
+//! publish only the finished database.
 
 use std::time::Instant;
 
@@ -49,6 +50,13 @@ pub(crate) fn validate_complete(conn: &Connection) -> Result<(), StoreError> {
 
 pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<BulkLoadStats, StoreError> {
     let mut stats = BulkLoadStats::default();
+    // Bulk activation assigns collision-free provisional ordinals. Rank every
+    // session once after all sources have landed instead of running one
+    // growing window/sort for each source activation.
+    let started = Instant::now();
+    stats.renumber_rows = crate::apply::renumber_all_sessions(tx)?;
+    stats.renumber_nanos = elapsed_nanos(started);
+
     // One set-based fold replaces per-message and per-session rescans. SUM's
     // NULL behavior preserves the model's never-reported != zero invariant.
     // The CASE implements Rust's div_euclid hour floor for pre-epoch values;

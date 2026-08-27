@@ -686,10 +686,7 @@ fn remove_cursor_projection(
 /// total order the journal replay used to produce. Two phases through
 /// negative space so UNIQUE(session_id, ordinal) never sees a transient
 /// collision.
-fn renumber_session(tx: &Transaction, session_id: &str) -> Result<u64, StoreError> {
-    // Materialize the window once. Putting this ranking subquery directly in
-    // UPDATE's scalar expression lets SQLite execute the full window for each
-    // outer message, which is quadratic on long real-world sessions.
+fn prepare_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
     tx.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS renumber_message (
            message_id INTEGER PRIMARY KEY,
@@ -697,21 +694,12 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<u64, StoreErro
          ) WITHOUT ROWID;
          DELETE FROM renumber_message;",
     )?;
-    let rows = tx
-        .prepare_cached(
-            "INSERT INTO renumber_message (message_id, ordinal)
-         SELECT message_id, ranked_ordinal
-         FROM (
-           SELECT m.id AS message_id, m.ordinal AS current_ordinal,
-                  ROW_NUMBER() OVER (
-                    ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
-                  ) - 1 AS ranked_ordinal
-           FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
-           WHERE m.session_id = ?1
-         )
-         WHERE current_ordinal != ranked_ordinal",
-        )?
-        .execute(params![session_id])? as u64;
+    Ok(())
+}
+
+fn apply_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
+    // Move through negative space so the live UNIQUE(session_id, ordinal)
+    // constraint never observes a transient collision.
     tx.prepare_cached(
         "UPDATE message AS m
          SET ordinal = -1 - ranked.ordinal
@@ -728,6 +716,53 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<u64, StoreErro
     .execute([])?;
     tx.prepare_cached("DELETE FROM renumber_message")?
         .execute([])?;
+    Ok(())
+}
+
+fn renumber_session(tx: &Transaction, session_id: &str) -> Result<u64, StoreError> {
+    // Materialize the window once. Putting this ranking subquery directly in
+    // UPDATE's scalar expression lets SQLite execute the full window for each
+    // outer message, which is quadratic on long real-world sessions.
+    prepare_renumber_table(tx)?;
+    let rows = tx
+        .prepare_cached(
+            "INSERT INTO renumber_message (message_id, ordinal)
+         SELECT message_id, ranked_ordinal
+         FROM (
+           SELECT m.id AS message_id, m.ordinal AS current_ordinal,
+                  ROW_NUMBER() OVER (
+                    ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
+                  ) - 1 AS ranked_ordinal
+           FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
+           WHERE m.session_id = ?1
+         )
+         WHERE current_ordinal != ranked_ordinal",
+        )?
+        .execute(params![session_id])? as u64;
+    apply_renumber_table(tx)?;
+    Ok(rows)
+}
+
+/// Canonicalize every private cold-build session in one set pass. Per-source
+/// activation only needs collision-free provisional ordinals because no
+/// reader can observe a bulk projection before finalization.
+pub(crate) fn renumber_all_sessions(tx: &Transaction) -> Result<u64, StoreError> {
+    prepare_renumber_table(tx)?;
+    let rows = tx.execute(
+        "INSERT INTO renumber_message (message_id, ordinal)
+         SELECT message_id, ranked_ordinal
+         FROM (
+           SELECT m.id AS message_id, m.ordinal AS current_ordinal,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY m.session_id
+                    ORDER BY COALESCE(c.path, ''), COALESCE(m.src_offset, m.id), m.id
+                  ) - 1 AS ranked_ordinal
+           FROM message m LEFT JOIN ingest_cursor c ON c.id = m.src_cursor
+         )
+         WHERE current_ordinal != ranked_ordinal",
+        [],
+    )? as u64;
+    apply_renumber_table(tx)?;
     Ok(rows)
 }
 
@@ -1156,7 +1191,8 @@ pub(crate) fn apply_batch(
                         )?;
                         if source.mode == SourceMode::Activate {
                             set_active_generation(tx, source, active_generation)?;
-                            profile_renumber_session(tx, &source.session_id, &mut stats)?;
+                            // Presentation ordinals remain collision-free but
+                            // provisional until one set-based bulk-finalize pass.
                             tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
                                 .execute(params![source.cursor_id])?;
                         }

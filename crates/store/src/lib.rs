@@ -20,6 +20,8 @@ pub use hot::{Effects, HotConfig, MetaMirror, Mutation, Replay, Stamp, TailRings
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BulkLoadStats {
+    pub renumber_rows: u64,
+    pub renumber_nanos: u64,
     pub bucket_nanos: u64,
     pub fts_nanos: u64,
     pub index_nanos: u64,
@@ -154,10 +156,11 @@ impl Store {
         })
     }
 
-    /// Open a brand-new private projection for ledger rebuild. Derived FTS,
-    /// buckets, and read-only secondary indexes are deferred until
-    /// [`Store::finish_bulk_load`]. Existing schemas are rejected: this mode
-    /// must never make an installed projection temporarily inconsistent.
+    /// Open a brand-new private projection for ledger rebuild. Canonical
+    /// presentation ordinals, derived FTS/buckets, and read-only secondary
+    /// indexes are deferred until [`Store::finish_bulk_load`]. Existing
+    /// schemas are rejected: this mode must never make an installed projection
+    /// temporarily inconsistent.
     pub fn open_for_rebuild(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path)?;
         Self::from_empty_connection_for_rebuild(conn)
@@ -219,9 +222,10 @@ impl Store {
         Ok(stats)
     }
 
-    /// Materialize every derived structure for a private cold rebuild, build
-    /// deferred indexes, analyze the finished database, and validate it. Only
-    /// after this succeeds is the store switched to ordinary live semantics.
+    /// Canonicalize presentation ordinals, materialize every derived structure
+    /// for a private cold rebuild, build deferred indexes, analyze the finished
+    /// database, and validate it. Only after this succeeds is the store
+    /// switched to ordinary live semantics.
     pub fn finish_bulk_load(&mut self) -> Result<BulkLoadStats, StoreError> {
         if self.mode != StoreMode::Bulk {
             return Err(StoreError::BulkLoadState {
