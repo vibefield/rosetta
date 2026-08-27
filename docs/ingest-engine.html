@@ -693,7 +693,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">M</td><td>Measured on the developer's organic agent histories, macOS 26.5.2
       on arm64, using the shipped <code>--profile</code> counters and a declared external wall clock.</td>
       <td>Corroboration and optimization direction only; never a CI correctness dependency.</td></tr>
-      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>8fc0b50</code>.</td>
+      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>28bceee</code>.</td>
       <td>May establish present behavior and a refactoring seam.</td></tr>
       <tr><td class="cm">T</td><td>Automated fixture, replay, SQLite, or crash-protocol test.</td>
       <td>May gate implementation and CI.</td></tr>
@@ -1245,16 +1245,19 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <tbody>
       <tr><td class="cm">split ledger profiling</td><td>Frame/copy, buffered write, flush, sync, segment-open, election-read, and replay-read counters landed at <code>e7e64cf</code>. Rebuild exercises reads but performs no ledger writes.</td><td class="metric">implemented; cold-write sample still required</td><td>measure on the next frozen cold source campaign</td></tr>
       <tr><td class="cm">stage cold runs; one publication barrier</td><td>sync per batch in current code; the retained 95.782 s cold-write parent predates the split counters</td><td class="metric">TBD; no transferable sync saving yet</td><td>only if the split cold run shows sync dominance</td></tr>
-      <tr><td class="cm">header-only election pass</td><td>Election read measured 21.373 s before / 23.566 s after the ordinal change / 21.466 s currently; the full replay pass remains checksummed</td><td class="metric">hard ceiling about 21–24 s; actual TBD</td><td>next independent rebuild candidate</td></tr>
+      <tr><td class="cm">payload-light RLG1 election pass</td><td>A frozen paired scan reduced wall by only 0.19–0.34 s (0.9–1.6%) even though one pair reduced user CPU from 8.66 s to 0.28 s. Seek-heavy variants regressed. In the full candidate run election moved from 21.466 s to 23.711 s while the unchanged replay pass also slowed from 10.208 s to 13.061 s, so no rebuild-wall saving was attributable.</td><td class="metric">rejected: subsecond isolated wall benefit</td><td>do not retry on the current frame format</td></tr>
       <tr><td class="cm">zero-copy raw framing + larger buffer</td><td><code>append_raw</code> allocates and copies every payload into a frame body</td><td class="metric">historical 1–3 s; current TBD</td><td>benchmark after sync change</td></tr>
       <tr><td class="cm">compression / retention GC</td><td>8.45 GB retained mixed ledger; keep-forever policy</td><td class="metric">storage benefit; time unknown</td><td>separate RLG2 experiment</td></tr>
     </tbody>
   </table>
   </div>
-  <p>The header-only first pass may seek over raw bodies to elect generation seals, but the second
-  pass must still read and checksum every replayed frame. Segment identity/length fingerprints and
-  elected seals must match between passes; any discrepancy fails the rebuild. A persistent manifest
-  is optional and disposable, never trusted over the segment scan.</p>
+  <p>The payload-light scanner was implemented with two-pass segment identity checks and retained a
+  fully checksummed replay pass, but the external-device traversal was IO-bound: removing almost all
+  first-pass payload CPU did not remove meaningful wall time. The candidate and its safety surface
+  were reverted at <code>28bceee</code>. A materially different future experiment may add a
+  writer-produced, authenticated per-segment control index or footer, but that is an RLG format
+  change whose disposable summary must be verified by the full replay pass. Do not revive payload
+  skipping in the current RLG1 scanner or add a persistent manifest without that design.</p>
 
   <h3 class="spec">Canonical-apply cost: reduce statements before redesigning storage</h3>
   <p><span class="badge b-io">C</span> Every message still performs an identity lookup, insert or
@@ -1314,9 +1317,14 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     retained. Both candidates have paired after-sides, exact-result compares, phase profiles, tests,
     and RSS measurements. Search-latency claims still require replicated paired runs. Never add organic
     content to CI.</li>
-    <li><b>Make generation election payload-light.</b> This is the next independent frozen-replay
-    candidate. Compare pass fingerprints and elected seals, and retain the full checksummed replay
-    pass; its measured first-pass ceiling is about 21–24 s.</li>
+    <li><b>Reject payload-light RLG1 election — complete.</b> The paired frozen scan saved only
+    0.19–0.34 s of wall time despite removing nearly all measured user CPU; seek-heavy variants were
+    slower. The implementation was reverted. Reopen only around writer-produced authenticated
+    metadata, not another scanner-only payload skip.</li>
+    <li><b>Reduce the measured remaining canonical statements.</b> Try a narrow private-first-
+    generation insert path for message identity and writes, one change at a time. Their combined
+    measured ceiling is 22.601 s. Preserve the ordinary lookup/update path for live and replacement
+    generations; do not repeat the broad bulk-writer rewrite.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>
@@ -1326,9 +1334,6 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <li><b>Stage the private-build durability barrier if sync dominates.</b> Kill-test before/after
     staged segment sync, during atomic run-directory promotion, and before SQLite publication;
     rerun cold ingest on the frozen source.</li>
-    <li><b>Reduce the measured remaining canonical statements.</b> Consider local merge folding or a
-    narrow insert-only identity/write path one change at a time. Batch touches are now only a 1.034 s
-    ceiling and should not precede those larger measured families.</li>
     <li><b>Introduce SearchBackend/readiness with FTS5 as reference only if the track opens.</b>
     Preserve query semantics and make not-ready explicit; land the durable repair tables, their
     worker/acknowledger, and crash tests together.</li>

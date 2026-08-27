@@ -466,8 +466,12 @@ This makes the optimization boundary explicit:
 - Larger JSONL tail batches apply to seven adapters. Hermes and OpenCode require a
   separate SQLite snapshot-query batch/memory experiment; a JSONL win cannot be
   projected onto them.
-- Header-only ledger election and lower-copy framing are below the adapter boundary and
-  apply to both driver families, subject to identical checksums and elected seals.
+- Payload-light ledger election is below the adapter boundary and therefore roster-wide,
+  but the RLG1 implementation was rejected. Paired frozen scans saved only 0.19–0.34 s
+  (0.9–1.6%) of wall time even though one pair reduced user CPU from 8.66 s to 0.28 s;
+  seek-heavy variants regressed. Do not carry the extra two-pass safety surface. Any future
+  shortcut needs a writer-produced authenticated control index or footer that the full
+  checksummed replay verifies.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
 now attribute replay cost by adapter and canonical statement family. The target-aware gate
