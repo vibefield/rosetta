@@ -297,6 +297,10 @@ async fn search(
         after_ts: request.after_ts,
         before_ts: request.before_ts,
     };
+    query.validate().map_err(|error| match error {
+        SearchError::InvalidQuery(message) => Failure::bad_request(message),
+        SearchError::Backend(_) => unreachable!("validation cannot produce a backend error"),
+    })?;
     let backend = state.search.clone();
     let output = tokio::task::spawn_blocking(move || backend.search(query))
         .await

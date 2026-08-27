@@ -1134,7 +1134,9 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   bounded to 4,096 bytes and 64 clauses, plus agent/runtime, project, session, time-range, kind,
   and <code>is_error</code> filters. A false error filter excludes never-reported state rather than
   coercing unknown to false; any time bound likewise excludes never-reported timestamps rather than
-  coercing them to epoch zero. FTS/Tantivy operators and field selectors are ordinary text, not backend syntax.
+  coercing them to epoch zero. Unsupported kinds, blank/oversized selectors, and inverted ranges
+  fail as invalid queries rather than masquerading as complete empty results. FTS/Tantivy operators
+  and field selectors are ordinary text, not backend syntax.
   Ordering is score then a stable
   <code>timeline_id</code> tie-breaker. Numerical scores are diagnostic and have no cross-backend
   meaning. Responses expose readiness, projection epoch, index revision, and hits so a lagging index

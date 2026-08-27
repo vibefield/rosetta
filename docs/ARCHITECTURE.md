@@ -356,7 +356,8 @@ with snippets and rank, with structured filters applied inside the ranked query.
 backend-neutral product grammar: whitespace-separated required terms plus double-quoted required
 phrases (4,096 bytes and 64 clauses maximum). Engine operators and field selectors are ordinary
 text and never cross the wire. Any explicit time bound excludes rows whose timestamp was never
-reported; unknown is not coerced to epoch zero.
+reported; unknown is not coerced to epoch zero. Unsupported kinds, blank selectors, oversized
+selectors, and inverted ranges are HTTP 400 errors rather than successful empty searches.
 
 **Observe (job 2)** — the flagship contract, successor to `observeSession`:
 

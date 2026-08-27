@@ -392,6 +392,14 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     assert_eq!(body["error"]["code"], "bad_request");
     let (status, _) = h.get("/api/search?q=%22unbalanced").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = h.get("/api/search?q=ionosphere&kind=tool").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = h
+        .get("/api/search?q=ionosphere&after_ts=2&before_ts=1")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = h.get("/api/search?q=ionosphere&agent=%20").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     h.append(vec![
         message("m-left", MessageKind::Agent, "contractalpha only"),

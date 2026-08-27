@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use rosetta_search::TextQuery;
+use rosetta_search::{SearchQuery, TextQuery};
 use serde::{Deserialize, Serialize};
 
 use crate::{CAMPAIGN_FORMAT, SUITE_FORMAT};
@@ -79,25 +79,25 @@ impl QuerySuite {
             if !labels.insert(&case.label) {
                 return Err(format!("duplicate query label `{}`", case.label));
             }
-            TextQuery::parse(&case.query)
+            let text = TextQuery::parse(&case.query)
                 .map_err(|error| format!("case `{}` has an invalid query: {error}", case.label))?;
             if case.weight == 0 {
                 return Err(format!("case `{}` has zero weight", case.label));
             }
-            if !(1..=1_000).contains(&case.limit) {
-                return Err(format!(
-                    "case `{}` limit {} is outside 1..=1000",
-                    case.label, case.limit
-                ));
+            SearchQuery {
+                text,
+                limit: case.limit,
+                session: case.filter.session.clone(),
+                runtime: case.filter.runtime.clone(),
+                agent: case.filter.agent.clone(),
+                project: case.filter.project.clone(),
+                kind: case.filter.kind.clone(),
+                is_error: case.filter.is_error,
+                after_ts: case.filter.after_ts,
+                before_ts: case.filter.before_ts,
             }
-            if let (Some(after), Some(before)) = (case.filter.after_ts, case.filter.before_ts)
-                && after > before
-            {
-                return Err(format!(
-                    "case `{}` has after_ts greater than before_ts",
-                    case.label
-                ));
-            }
+            .validate()
+            .map_err(|error| format!("case `{}` has invalid filters: {error}", case.label))?;
         }
         Ok(())
     }
@@ -298,6 +298,13 @@ mod tests {
         assert!(invalid.validate().is_err());
         let mut invalid = suite();
         invalid.basis = "pretend-production".into();
+        assert!(invalid.validate().is_err());
+        let mut invalid = suite();
+        invalid.cases[0].filter.kind = Some("tool".into());
+        assert!(invalid.validate().is_err());
+        let mut invalid = suite();
+        invalid.cases[0].filter.after_ts = Some(2);
+        invalid.cases[0].filter.before_ts = Some(1);
         assert!(invalid.validate().is_err());
     }
 

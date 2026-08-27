@@ -17,6 +17,8 @@ pub use rosetta_store::queries::SearchHit;
 
 pub const MAX_SEARCH_TEXT_BYTES: usize = 4_096;
 pub const MAX_SEARCH_CLAUSES: usize = 64;
+pub const MAX_SEARCH_FILTER_BYTES: usize = 1_024;
+pub const MAX_SEARCH_RESULTS: i64 = 1_000;
 
 /// One backend-neutral text clause. Every clause is required; adjacent terms
 /// are an implicit AND and quoted phrases require adjacency.
@@ -217,6 +219,53 @@ pub struct SearchQuery {
     pub before_ts: Option<Ms>,
 }
 
+impl SearchQuery {
+    pub fn validate(&self) -> Result<(), SearchError> {
+        if !(1..=MAX_SEARCH_RESULTS).contains(&self.limit) {
+            return Err(SearchError::InvalidQuery(format!(
+                "limit must be in 1..={MAX_SEARCH_RESULTS}"
+            )));
+        }
+        for (name, value) in [
+            ("session", self.session.as_deref()),
+            ("runtime", self.runtime.as_deref()),
+            ("agent", self.agent.as_deref()),
+            ("project", self.project.as_deref()),
+        ] {
+            if let Some(value) = value {
+                if value.is_empty() || value.trim() != value {
+                    return Err(SearchError::InvalidQuery(format!(
+                        "{name} must be a non-blank canonical value"
+                    )));
+                }
+                if value.len() > MAX_SEARCH_FILTER_BYTES {
+                    return Err(SearchError::InvalidQuery(format!(
+                        "{name} exceeds {MAX_SEARCH_FILTER_BYTES} bytes"
+                    )));
+                }
+            }
+        }
+        if let Some(kind) = &self.kind
+            && !matches!(
+                kind.as_str(),
+                "user" | "agent" | "thinking" | "tool_use" | "system" | "summary"
+            )
+        {
+            return Err(SearchError::InvalidQuery(format!(
+                "unsupported message kind `{kind}`"
+            )));
+        }
+        if let (Some(after), Some(before)) = (self.after_ts, self.before_ts)
+            && after > before
+        {
+            return Err(SearchError::InvalidQuery(
+                "after_ts must not exceed before_ts".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One atomic backend answer. The state and hits must describe the same search
 /// snapshot, which avoids a readiness check racing the actual query.
 #[derive(Debug, Clone, PartialEq)]
@@ -288,6 +337,7 @@ impl SearchBackend for Fts5Search {
     }
 
     fn search(&self, query: SearchQuery) -> Result<SearchOutput, SearchError> {
+        query.validate()?;
         let conn = Connection::open_with_flags(&self.db, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| SearchError::Backend(format!("opening projection: {error}")))?;
         let filter = SearchFilter {
@@ -394,5 +444,43 @@ mod tests {
         assert!(TextQuery::parse(&too_many).is_err());
         assert!(TextQuery::parse(&"x".repeat(MAX_SEARCH_TEXT_BYTES + 1)).is_err());
         assert!(TextQuery::parse("word\0word").is_err());
+    }
+
+    fn query() -> SearchQuery {
+        SearchQuery {
+            text: TextQuery::parse("hello").unwrap(),
+            limit: 10,
+            session: None,
+            runtime: None,
+            agent: None,
+            project: None,
+            kind: None,
+            is_error: None,
+            after_ts: None,
+            before_ts: None,
+        }
+    }
+
+    #[test]
+    fn structured_query_validation_rejects_false_empty_results() {
+        let mut invalid = query();
+        invalid.kind = Some("tool".into());
+        assert!(matches!(
+            invalid.validate(),
+            Err(SearchError::InvalidQuery(_))
+        ));
+
+        let mut invalid = query();
+        invalid.after_ts = Some(2);
+        invalid.before_ts = Some(1);
+        assert!(invalid.validate().is_err());
+
+        let mut invalid = query();
+        invalid.agent = Some(" codex".into());
+        assert!(invalid.validate().is_err());
+
+        let mut invalid = query();
+        invalid.limit = 0;
+        assert!(invalid.validate().is_err());
     }
 }
