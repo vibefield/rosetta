@@ -68,6 +68,39 @@ result drift. Fingerprinting warms the filesystem cache, so these are warm
 search distributions. Cold process/startup cost needs a separately declared
 lane.
 
+## Benchmark-only Tantivy prototype
+
+The optional `tantivy-prototype` feature builds a disposable Tantivy 0.26.1
+index from the canonical `message` + `session` rows and runs the same frozen
+query schedule:
+
+```text
+cargo run --release -p rosetta-search-bench \
+  --features tantivy-prototype --bin tantivy-bench -- run \
+  --campaign CAMPAIGN/campaign.json \
+  --ledger CAMPAIGN/projection.ledger \
+  --queries CAMPAIGN/fts5-diagnostic-v1.json \
+  --db CAMPAIGN/projection.sqlite \
+  --baseline CAMPAIGN/fts5-run.json \
+  --index CAMPAIGN/tantivy-candidate \
+  --implementation REV --machine STABLE_MACHINE_LABEL \
+  --threads 4 --memory-mb 1024 --warmup 5 --cycles 100 \
+  --out CAMPAIGN/tantivy-run.json
+```
+
+This is deliberately not a production backend. It performs no live writes and
+adds no synchronization tables. Before building, it replays the FTS queries and
+requires their counts and ordered-result digests to match the supplied baseline.
+The candidate indexes every filter key and stores all three searchable fields so
+snippet cost and disk usage are not hidden. It validates filters on returned
+documents and reports FTS/candidate overlap, but overlap is not a relevance
+judgment; adoption still requires reviewed judgments or product evidence.
+
+The completed generation directory and data files are permission-read-only.
+Tantivy's mmap reader requires one persistent, empty `.tantivy-meta.lock` file to
+remain writable for OS-level coordination; the harness fingerprints it before and
+after the query run and rejects non-empty or changed index state.
+
 ## Merge and privacy gate
 
 Every performance optimization commit must cite a passing frozen before/after

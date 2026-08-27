@@ -13,6 +13,9 @@ mod model;
 mod runner;
 mod stats;
 
+#[cfg(feature = "tantivy-prototype")]
+mod tantivy_proto;
+
 pub use compare::{compare_reports, comparison_line};
 pub use fingerprint::{freeze_campaign, read_json, verify_campaign, write_json_new};
 pub use model::{
@@ -20,6 +23,8 @@ pub use model::{
 };
 pub use runner::run_campaign;
 pub use runner::summary_line;
+#[cfg(feature = "tantivy-prototype")]
+pub use tantivy_proto::{TantivyRunOptions, TantivyRunReport, run_tantivy_prototype};
 
 pub const CAMPAIGN_FORMAT: u32 = 1;
 pub const RUN_FORMAT: u32 = 1;
