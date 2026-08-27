@@ -1276,10 +1276,10 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     <tbody>
       <tr><td class="cm">global cold ordinal finalization</td><td>Private first generations use provisional unique ordinals; one pre-publication pass establishes canonical order. Live/replacement swaps remain transactional.</td><td class="metric"><b>landed: −196.09 s wall / −38.2%</b></td><td>Frozen exact-result pair and multi-source ordering regression passed; 502 MB peak RSS retained as a tradeoff.</td></tr>
       <tr><td class="cm">target-aware pending fast path</td><td>Load exact keys per transaction/session; update the cache on queue/drain; query only a matching message.</td><td class="metric"><b>landed: 7.905 s → 0.424 s / −94.6%</b></td><td>Frozen exact-result pair plus cross-file, same-transaction, unrelated-target, and cross-session tests passed.</td></tr>
-      <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">1.034 s current statement ceiling</td><td>Replacement/replay timestamp tests unchanged; now a low-priority candidate.</td></tr>
-      <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">May reduce parts of 9.327 s message writes plus 4.286 s result writes; saving unmeasured</td><td>One-shot, split-resume, replay, and pending goldens byte-equal.</td></tr>
+      <tr><td class="cm">batch session touches</td><td>Collect max timestamp by session and update once at transaction end.</td><td class="metric">deprioritized: folding removed 502,043 attempts but only 0.300 s from this family</td><td>The remaining measured ceiling is 0.734 s; do not spend a standalone campaign on it.</td></tr>
+      <tr><td class="cm">chunk-local merge fold</td><td>Fold same-batch result/usage into the owning MessageRow; preserve ordered fallback for cross-batch/sibling merges.</td><td class="metric">rejected: 99.45% folded, but canonical apply 36.923 s → 42.805 s (+15.9%)</td><td>Exact logical counts passed; ranked search skipped after the performance gate failed; reverted at <code>0d5796d</code>.</td></tr>
       <tr><td class="cm">message identity/write specialization</td><td>The private first-generation path attempted an insert first, fell back only on a timeline-identity conflict, and left live/replacement SQL unchanged.</td><td class="metric">rejected: 22.601 s → 20.859 s combined (−1.742 s / −7.7%); canonical 36.923 s → 38.065 s</td><td>The five campaign cardinalities matched, but the performance gate failed before ranked-search comparison; reverted at <code>c6319e6</code>.</td></tr>
-      <tr><td class="cm">larger cold batches</td><td>Raise 1,024-record / 32 MiB limits only in bounded cold mode.</td><td class="metric">8.5–11.4 s observed commit range; actual saving likely much smaller</td><td>Peak memory and partial-tail bounds retained.</td></tr>
+      <tr><td class="cm">larger cold replay chunks</td><td>Raise the 512-op ledger-replay chunk only; live tail record/byte bounds remain unchanged.</td><td class="metric">8.968 s latest commit ceiling; actual saving likely much smaller</td><td>Frozen pair, peak RSS, transaction latency, and exact projection parity.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1294,6 +1294,22 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
   index, and validation phases varied by +2.294 s, +12.368 s, +6.340 s, and +9.552 s respectively;
   that wall regression is not attributed to this change. Maximum RSS moved from 511 MB to 505 MB.
   The 22.601 s baseline was a cost ceiling, not an independently removable lookup cost.</p>
+  <p>The chunk-local merge candidate at <code>990f801</code> then exercised the next stated
+  hypothesis on the same frozen ledger. Its conservative ordered plan still folded 358,790 of
+  360,052 tool results and 149,755 of 151,298 usage snapshots — 508,545 of 511,350 merge ops
+  overall (99.45%). Duplicate tool ids, an older indexed owner, merge-before-final-message order,
+  and pre-existing pending rows retained the normal reconciliation path. Removing the second
+  updates did not make the first write cheaper: message-write time rose from 9.327 s to 17.113 s
+  as the inserts carried the full result payload and usage columns, while 358,755 correlation-id
+  safety probes added 0.873 s. Canonical apply therefore regressed by 5.882 s to 42.805 s. The
+  candidate also coalesced timestamps for folded merges, reducing session-touch attempts from
+  1,279,642 to 777,599, but that family improved only from 1.034 s to 0.734 s; this lowers the ROI
+  of a standalone global touch pass. Message/FTS/indexed-session/source-op/pending counts, artifact
+  counts, and all five message-to-bucket token totals matched exactly. Whole wall moved from
+  252.02 s to 273.49 s, but FTS and validation alone varied upward by 12.05 s, so only the canonical
+  regression is attributed. Maximum RSS moved from 511 MB to 506 MB. The performance gate failed,
+  ranked search was intentionally skipped, and the implementation was reverted at
+  <code>0d5796d</code>.</p>
   <p>Per-op timers/counts are now always-on and expose per-adapter deltas during rebuild. Do not repeat
   the rejected broad bulk fast path without new evidence: its exact frozen-ledger comparison improved
   canonical apply only from 20.609 s to 19.714 s, while the full ingest regressed from 101.23 s to
@@ -1336,10 +1352,13 @@ seal all sources → finalize/validate SQLite → fsync staged files + directory
     explicit lookup into the insert, leaving only a 1.742 s combined-family saving while canonical
     apply regressed by 1.142 s. The five campaign cardinalities matched; the implementation was
     reverted. Do not treat statement-family timings as additive savings.</li>
-    <li><b>Measure chunk-local merge folding next.</b> Count tool-result and usage ops whose owning
-    message is present in the same ordered batch, fold only those into the row before SQLite, and
-    preserve the existing pending/reconciliation path for cross-batch and cross-file arrivals. Gate
-    the implementation on a frozen pair and byte-equal one-shot, split-resume, and replay results.</li>
+    <li><b>Reject chunk-local merge folding — complete.</b> The safe implementation folded 99.45%
+    of eligible merge ops and passed exact logical parity, but larger initial message writes drove
+    canonical apply from 36.923 s to 42.805 s. It was reverted; do not retry this representation
+    without a SQLite change that makes the fully populated insert independently cheaper.</li>
+    <li><b>Measure larger private replay chunks next.</b> Change only the 512-op frozen-ledger replay
+    boundary, retain the existing live tail and byte bounds, and compare commit, canonical, RSS,
+    and whole-wall costs on the same campaign. The 8.968 s commit family is only a ceiling.</li>
     <li><b>Close the product-mix gap before opening Tantivy work.</b> Derive a privacy-preserving
     observed class histogram or declare the intended mix, then apply the gate-zero rule above. The
     diagnostic broad failure is real; its equal-weight aggregate is not product-traffic evidence.</li>

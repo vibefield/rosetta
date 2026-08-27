@@ -459,10 +459,15 @@ This makes the optimization boundary explicit:
   loads them through the existing primary key, and updates immediately on queue/drain.
   Persistent orphans in one session therefore remain recoverable without poisoning
   unrelated messages, sessions, or adapters.
-- Same-batch tool-result folding is roster-wide in semantics, but separate usage
-  folding applies only to Codex, Copilot, and Grok today. Inline usage remains part of
-  message application. Cross-batch and cross-file pending reconciliation stays as the
-  ordered fallback for every adapter.
+- Same-batch tool-result folding is roster-wide in semantics, but the measured SQLite
+  implementation is rejected. On the frozen mixed ledger it safely folded 358,790 of
+  360,052 tool results plus 149,755 of 151,298 separate usage snapshots (99.45% overall)
+  and retained exact logical counts. Fully populated message inserts nevertheless raised
+  message-write time from 9.327 s to 17.113 s and canonical apply from 36.923 s to
+  42.805 s (+15.9%). The candidate was reverted at `0d5796d`; cross-batch, cross-file,
+  duplicate-target, and pending reconciliation remain on the established ordered path.
+  Inline usage remains part of message application, while separate usage ops currently
+  come from Codex, Copilot, and Grok.
 - Larger JSONL tail batches apply to seven adapters. Hermes and OpenCode require a
   separate SQLite snapshot-query batch/memory experiment; a JSONL win cannot be
   projected onto them.
