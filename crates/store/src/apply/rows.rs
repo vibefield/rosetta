@@ -82,7 +82,7 @@ impl PendingSession {
 }
 
 impl PendingGate {
-    fn should_lookup(
+    pub(super) fn should_lookup(
         &mut self,
         tx: &Transaction,
         row: &MessageRow,
@@ -314,7 +314,7 @@ pub(super) fn rebuild_bucket(
     Ok(())
 }
 
-fn touch_session(
+pub(super) fn touch_session(
     tx: &Transaction,
     session_id: &str,
     ts: Option<Ms>,

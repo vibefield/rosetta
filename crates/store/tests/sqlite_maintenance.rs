@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
-    TokenSnapshot,
+    TokenSnapshot, ToolCall,
 };
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
 
@@ -454,6 +454,471 @@ fn cold_first_generation_projects_without_the_source_journal() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[test]
+fn cold_chunk_folds_following_merges_and_matches_split_projection() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct FoldSnapshot {
+        ts: Option<i64>,
+        model: Option<String>,
+        result: Option<String>,
+        payload: Option<String>,
+        is_error: Option<i64>,
+        input: Option<i64>,
+        cache_read: Option<i64>,
+        session_updated_at: i64,
+    }
+
+    fn setup(path: &str) -> (Store, i64) {
+        let mut store = Store::open_in_memory_for_rebuild().unwrap();
+        store.apply(&base_batch()).unwrap();
+        let cursor_id = install_cursor(&mut store, path);
+        (store, cursor_id)
+    }
+
+    fn ops(cursor_id: i64) -> Vec<IngestOp> {
+        let mut call = message("folded-call", 0, 1_000);
+        call.kind = MessageKind::ToolUse;
+        call.ts = None;
+        call.model = None;
+        call.src_cursor = Some(cursor_id);
+        call.tool = Some(ToolCall {
+            tool_id: Some("fold-tool".into()),
+            name: "Read".into(),
+            input: serde_json::json!({"path": "fixture.txt"}),
+            result: None,
+            payload: None,
+            is_error: None,
+        });
+        vec![
+            IngestOp::Message(Box::new(call)),
+            IngestOp::ToolResult {
+                session_id: "s1".into(),
+                tool_id: "fold-tool".into(),
+                result: Some("older folded result".into()),
+                payload: Some(serde_json::json!({"revision": 1})),
+                is_error: Some(true),
+                at: Some(4_000),
+            },
+            IngestOp::Usage {
+                session_id: "s1".into(),
+                response: "folded-call".into(),
+                ts: 3_000,
+                model: Some("model-b".into()),
+                tokens: TokenSnapshot {
+                    input: Some(10),
+                    output: Some(2),
+                    ..Default::default()
+                },
+            },
+            IngestOp::ToolResult {
+                session_id: "s1".into(),
+                tool_id: "fold-tool".into(),
+                result: Some("newest folded result".into()),
+                payload: Some(serde_json::json!({"revision": 2})),
+                is_error: Some(false),
+                at: Some(5_000),
+            },
+            IngestOp::Usage {
+                session_id: "s1".into(),
+                response: "folded-call".into(),
+                ts: 4_500,
+                model: None,
+                tokens: TokenSnapshot {
+                    input: Some(12),
+                    output: Some(3),
+                    cache_read: Some(4),
+                    ..Default::default()
+                },
+            },
+        ]
+    }
+
+    fn snapshot(store: &Store) -> FoldSnapshot {
+        store
+            .conn()
+            .query_row(
+                "SELECT m.ts, m.model, m.tool_result, m.tool_payload, m.tool_is_error,
+                        m.in_tokens, m.cache_r_tokens, s.updated_at
+                 FROM message m JOIN session s ON s.id = m.session_id
+                WHERE m.timeline_id = 'folded-call'",
+                [],
+                |row| {
+                    Ok(FoldSnapshot {
+                        ts: row.get(0)?,
+                        model: row.get(1)?,
+                        result: row.get(2)?,
+                        payload: row.get(3)?,
+                        is_error: row.get(4)?,
+                        input: row.get(5)?,
+                        cache_read: row.get(6)?,
+                        session_updated_at: row.get(7)?,
+                    })
+                },
+            )
+            .unwrap()
+    }
+
+    let (mut folded, folded_cursor) = setup("folded.jsonl");
+    let folded_stats = folded
+        .apply(&Batch {
+            ops: ops(folded_cursor),
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: folded_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    assert_eq!(folded_stats.profile.chunk_tool_result_folds, 2);
+    assert_eq!(folded_stats.profile.chunk_usage_folds, 2);
+    assert_eq!(folded_stats.profile.chunk_merge_probes, 1);
+    assert_eq!(folded_stats.profile.tool_result_attempts, 2);
+    assert_eq!(folded_stats.profile.usage_attempts, 2);
+    assert_eq!(folded_stats.tool_results_merged, 2);
+    assert_eq!(folded_stats.usage_applied, 2);
+
+    let (mut split, split_cursor) = setup("folded.jsonl");
+    let mut split_ops = ops(split_cursor);
+    let merges = split_ops.split_off(1);
+    let message_stats = split
+        .apply(&Batch {
+            ops: split_ops,
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: split_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+    assert_eq!(message_stats.profile.chunk_tool_result_folds, 0);
+    let merge_stats = split
+        .apply(&Batch {
+            ops: merges,
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: split_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+    assert_eq!(merge_stats.profile.chunk_tool_result_folds, 0);
+    assert_eq!(merge_stats.profile.chunk_usage_folds, 0);
+
+    assert_eq!(snapshot(&folded), snapshot(&split));
+    assert_eq!(
+        snapshot(&folded),
+        FoldSnapshot {
+            ts: Some(3_000),
+            model: Some("model-b".into()),
+            result: Some("newest folded result".into()),
+            payload: Some("{\"revision\":2}".into()),
+            is_error: Some(0),
+            input: Some(12),
+            cache_read: Some(4),
+            session_updated_at: 5_000,
+        }
+    );
+    assert_eq!(
+        folded
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+
+    folded.finish_bulk_load().unwrap();
+    split.finish_bulk_load().unwrap();
+    assert_eq!(
+        queries::search(folded.conn(), "newest", 10).unwrap(),
+        queries::search(split.conn(), "newest", 10).unwrap()
+    );
+}
+
+#[test]
+fn cold_chunk_keeps_ordered_fallback_when_a_later_message_overwrites_a_merge() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "ordered-fold.jsonl");
+    let mut first = message("ordered-call", 0, 1_000);
+    first.kind = MessageKind::ToolUse;
+    first.src_cursor = Some(cursor_id);
+    first.tool = Some(ToolCall {
+        tool_id: Some("ordered-tool".into()),
+        name: "Read".into(),
+        input: serde_json::json!({}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    let mut refinement = first.clone();
+    refinement.content = Some("later canonical refinement".into());
+    refinement.src_offset = Some(2);
+
+    let stats = store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(first)),
+                IngestOp::ToolResult {
+                    session_id: "s1".into(),
+                    tool_id: "ordered-tool".into(),
+                    result: Some("must be overwritten".into()),
+                    payload: None,
+                    is_error: Some(false),
+                    at: Some(2_000),
+                },
+                IngestOp::Message(Box::new(refinement)),
+            ],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    assert_eq!(stats.profile.chunk_tool_result_folds, 0);
+    let result: Option<String> = store
+        .conn()
+        .query_row(
+            "SELECT tool_result FROM message WHERE timeline_id = 'ordered-call'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(result, None);
+}
+
+#[test]
+fn cold_chunk_does_not_fold_over_an_older_pending_merge() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "pending-fold.jsonl");
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::ToolResult {
+                session_id: "s1".into(),
+                tool_id: "pending-tool".into(),
+                result: Some("older pending result".into()),
+                payload: None,
+                is_error: Some(true),
+                at: Some(2_000),
+            }],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        })
+        .unwrap();
+
+    let mut call = message("pending-call", 0, 1_000);
+    call.kind = MessageKind::ToolUse;
+    call.src_cursor = Some(cursor_id);
+    call.tool = Some(ToolCall {
+        tool_id: Some("pending-tool".into()),
+        name: "Read".into(),
+        input: serde_json::json!({}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    let stats = store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(call)),
+                IngestOp::ToolResult {
+                    session_id: "s1".into(),
+                    tool_id: "pending-tool".into(),
+                    result: Some("newer direct result".into()),
+                    payload: None,
+                    is_error: Some(false),
+                    at: Some(3_000),
+                },
+            ],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    assert_eq!(stats.profile.chunk_tool_result_folds, 0);
+    assert_eq!(stats.profile.pending_rows, 1);
+    assert_eq!(stats.tool_results_merged, 2);
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT tool_result FROM message WHERE timeline_id = 'pending-call'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "newer direct result"
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cold_chunk_keeps_duplicate_tool_targets_on_the_indexed_fallback() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "duplicate-tool-fold.jsonl");
+    let calls = ["duplicate-call-a", "duplicate-call-b"]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, timeline_id)| {
+            let mut call = message(timeline_id, ordinal as i64, 1_000 + ordinal as i64);
+            call.kind = MessageKind::ToolUse;
+            call.src_cursor = Some(cursor_id);
+            call.tool = Some(ToolCall {
+                tool_id: Some("duplicate-tool".into()),
+                name: "Read".into(),
+                input: serde_json::json!({}),
+                result: None,
+                payload: None,
+                is_error: None,
+            });
+            IngestOp::Message(Box::new(call))
+        });
+    let stats = store
+        .apply(&Batch {
+            ops: calls
+                .chain([IngestOp::ToolResult {
+                    session_id: "s1".into(),
+                    tool_id: "duplicate-tool".into(),
+                    result: Some("one indexed owner only".into()),
+                    payload: None,
+                    is_error: Some(false),
+                    at: Some(3_000),
+                }])
+                .collect(),
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    assert_eq!(stats.profile.chunk_tool_result_folds, 0);
+    assert_eq!(stats.profile.chunk_merge_probes, 0);
+    assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE tool_result IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn cold_replacement_keeps_merge_application_after_the_staged_swap() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "replacement-fold.jsonl");
+    let mut original = message("replacement-call", 0, 1_000);
+    original.kind = MessageKind::ToolUse;
+    original.src_cursor = Some(cursor_id);
+    original.tool = Some(ToolCall {
+        tool_id: Some("replacement-tool".into()),
+        name: "Read".into(),
+        input: serde_json::json!({"revision": 1}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(original.clone()))],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    original.tool.as_mut().unwrap().input = serde_json::json!({"revision": 2});
+    original.src_offset = Some(2);
+    let stats = store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(original)),
+                IngestOp::ToolResult {
+                    session_id: "s1".into(),
+                    tool_id: "replacement-tool".into(),
+                    result: Some("replacement result".into()),
+                    payload: None,
+                    is_error: Some(false),
+                    at: Some(2_000),
+                },
+            ],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        })
+        .unwrap();
+
+    assert_eq!(stats.source_sweeps, 1);
+    assert_eq!(stats.profile.chunk_tool_result_folds, 0);
+    assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT tool_result FROM message WHERE timeline_id = 'replacement-call'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "replacement result"
     );
 }
 
