@@ -35,6 +35,10 @@ const TAG_META: u8 = 3;
 const TAG_GENERATION_COMPLETE: u8 = 4;
 const TAG_META_VERSIONED: u8 = 5;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
+// One frozen mixed-corpus cold batch averaged about 1.10 MiB of ledger frames.
+// A 1 MiB buffer amortizes writes within that checkpoint boundary while
+// preserving the caller's explicit flush/durability cadence.
+const LEDGER_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
 
 /// Everything replay needs to rebuild a normalization context for a source
 /// file. Written into each segment the first time the source appears there.
@@ -401,7 +405,7 @@ impl Ledger {
         self.queue_directory_sync(self.dir.clone());
         self.write_stats.segments_opened = self.write_stats.segments_opened.saturating_add(1);
         self.written = SEGMENT_MAGIC.len() as u64;
-        self.writer = Some(BufWriter::new(file));
+        self.writer = Some(BufWriter::with_capacity(LEDGER_WRITE_BUFFER_BYTES, file));
         Ok(())
     }
 
