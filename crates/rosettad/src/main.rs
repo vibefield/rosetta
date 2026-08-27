@@ -1,6 +1,7 @@
 //! rosettad — ingestion, live watching, and ledger-backed projection rebuilds.
 //!
 //!   rosettad discover [--home DIR]
+//!   rosettad meta --db PATH [--home DIR] [--agent KIND ...] [--profile]
 //!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]
 //!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N]
 //!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...]
@@ -29,6 +30,7 @@ use rosetta_pipeline::{
 };
 use rosetta_store::Store;
 
+mod bench;
 mod serve;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
@@ -48,15 +50,17 @@ fn registry() -> Vec<&'static dyn AgentAdapter> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
-        Some("discover") => cmd_discover(&args[1..]),
+        Some("discover") => bench::cmd_discover(&args[1..]),
+        Some("meta") => bench::cmd_meta(&args[1..]),
         Some("ingest") => cmd_ingest(&args[1..]),
         Some("watch") => cmd_watch(&args[1..]),
         Some("serve") => serve::cmd_serve(&args[1..]),
         Some("rebuild") => cmd_rebuild(&args[1..]),
         _ => {
-            eprintln!("usage: rosettad <discover|ingest|watch|serve|rebuild> [options]");
-            eprintln!("  discover [--home DIR]");
-            eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]");
+            eprintln!("usage: rosettad <discover|meta|ingest|watch|serve|rebuild> [options]");
+            eprintln!("  discover [--home DIR] [--agent KIND ...] [--json]");
+            eprintln!("  meta --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
+            eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
                 "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile]"
@@ -82,6 +86,8 @@ struct Flags {
     db: Option<PathBuf>,
     agents: Vec<String>,
     profile: bool,
+    /// Emit newline-delimited JSON events for repository tools.
+    json: bool,
     ticks: Option<u64>,
     ledger: Option<PathBuf>,
     /// serve only: the localhost listen address.
@@ -94,6 +100,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         db: None,
         agents: Vec::new(),
         profile: false,
+        json: false,
         ticks: None,
         ledger: None,
         addr: None,
@@ -112,6 +119,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--profile" => {
                 flags.profile = true;
+                at += 1;
+            }
+            "--json" => {
+                flags.json = true;
                 at += 1;
             }
             "--ledger" => {
@@ -215,46 +226,6 @@ fn selected(flags: &Flags) -> Result<Vec<&'static dyn AgentAdapter>, String> {
         .collect()
 }
 
-fn cmd_discover(args: &[String]) -> Result<(), String> {
-    let flags = parse_flags(args)?;
-    let opts = IngestOptions::default();
-    let instrument = Instrument::new();
-    let discoveries = discover(&selected(&flags)?, &flags.home, &opts, &instrument)
-        .map_err(|error| error.to_string())?;
-
-    println!(
-        "{:<14} {:>10} {:>8} {:>14} {:>22}",
-        "agent", "installed", "files", "bytes", "newest activity (ms)"
-    );
-    for discovery in &discoveries {
-        println!(
-            "{:<14} {:>10} {:>8} {:>14} {:>22}{}",
-            discovery.runtime.kind,
-            if discovery.installed { "yes" } else { "no" },
-            discovery.file_count,
-            discovery.total_bytes,
-            discovery.newest_modified_ms,
-            if discovery.walk_truncated {
-                "  (walk truncated)"
-            } else {
-                ""
-            },
-        );
-    }
-    let truncated: Vec<&str> = discoveries
-        .iter()
-        .filter(|discovery| discovery.walk_truncated)
-        .map(|discovery| discovery.runtime.kind.as_str())
-        .collect();
-    if !truncated.is_empty() {
-        return Err(format!(
-            "discovery coverage was truncated for {}",
-            truncated.join(", ")
-        ));
-    }
-    Ok(())
-}
-
 fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("ingest needs --db PATH")?;
@@ -271,7 +242,16 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
 
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
         if !discovery.installed {
-            println!("{}: not installed, skipping", adapter.kind());
+            if flags.json {
+                bench::emit(&serde_json::json!({
+                    "event": "skipped",
+                    "phase": "ingest",
+                    "agent": adapter.kind(),
+                    "reason": "not-installed",
+                }));
+            } else {
+                println!("{}: not installed, skipping", adapter.kind());
+            }
             continue;
         }
         let mut runtime = discovery.runtime.clone();
@@ -291,15 +271,19 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
-        println!(
-            "{}: meta — {} sessions, {} projects, {} files ({} inventory-only, {} unidentified)",
-            adapter.kind(),
-            meta.sessions,
-            meta.projects,
-            meta.files_matched,
-            meta.files_inventory_only,
-            meta.files_unidentified,
-        );
+        if flags.json {
+            bench::emit(&bench::meta_event(adapter.kind(), &meta));
+        } else {
+            println!(
+                "{}: meta — {} sessions, {} projects, {} files ({} inventory-only, {} unidentified)",
+                adapter.kind(),
+                meta.sessions,
+                meta.projects,
+                meta.files_matched,
+                meta.files_inventory_only,
+                meta.files_unidentified,
+            );
+        }
         if meta.walk_truncated {
             failures.push(format!("{} meta walk was truncated", adapter.kind()));
         }
@@ -329,18 +313,38 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
-        println!(
-            "{}: stream — {} records ({} parsed, {} unknown, {} hard errors), \
-             {} rows inserted, {} tool results merged, {} sessions indexed",
-            adapter.kind(),
-            stream.records,
-            stream.parsed,
-            stream.unknown,
-            stream.hard_errors,
-            stream.stats.messages_inserted,
-            stream.stats.tool_results_merged,
-            stream.sessions_indexed,
-        );
+        if flags.json {
+            bench::emit(&serde_json::json!({
+                "event": "stream",
+                "agent": adapter.kind(),
+                "records": stream.records,
+                "parsed": stream.parsed,
+                "unknown": stream.unknown,
+                "hardErrors": stream.hard_errors,
+                "oversized": stream.oversized,
+                "filesMissing": stream.files_missing,
+                "retriesExhausted": stream.retries_exhausted,
+                "conflicts": stream.conflicts,
+                "filesIncomplete": stream.files_incomplete,
+                "messagesInserted": stream.stats.messages_inserted,
+                "messagesUpdated": stream.stats.messages_updated,
+                "toolResultsMerged": stream.stats.tool_results_merged,
+                "sessionsIndexed": stream.sessions_indexed,
+            }));
+        } else {
+            println!(
+                "{}: stream — {} records ({} parsed, {} unknown, {} hard errors), \
+                 {} rows inserted, {} tool results merged, {} sessions indexed",
+                adapter.kind(),
+                stream.records,
+                stream.parsed,
+                stream.unknown,
+                stream.hard_errors,
+                stream.stats.messages_inserted,
+                stream.stats.tool_results_merged,
+                stream.sessions_indexed,
+            );
+        }
         if stream.hard_errors > 0
             || stream.oversized > 0
             || stream.files_missing > 0
@@ -362,7 +366,9 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     }
 
     if !failures.is_empty() {
-        if flags.profile {
+        if flags.json {
+            bench::emit_profile("ingest", &instrument);
+        } else if flags.profile {
             println!("\n== profile ==\n{}", instrument.report());
         }
         return Err(failures.join("; "));
@@ -370,7 +376,9 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     if let Some(temp) = private_projection {
         publish_private_projection(store, temp, &db, &instrument)?;
     }
-    if flags.profile {
+    if flags.json {
+        bench::emit_profile("ingest", &instrument);
+    } else if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
@@ -787,6 +795,24 @@ mod tests {
                 "pi",
             ]
         );
+    }
+
+    #[test]
+    fn standalone_meta_refuses_an_existing_projection() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("existing.sqlite");
+        std::fs::write(&db, b"sentinel").unwrap();
+        let error = bench::cmd_meta(&[
+            "--db".into(),
+            db.display().to_string(),
+            "--home".into(),
+            root.path().display().to_string(),
+            "--agent".into(),
+            "codex".into(),
+        ])
+        .unwrap_err();
+        assert!(error.contains("needs new paths"));
+        assert_eq!(std::fs::read(db).unwrap(), b"sentinel");
     }
 
     fn args(db: &std::path::Path, ledger: &std::path::Path, agent: &str) -> Vec<String> {

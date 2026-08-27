@@ -13,7 +13,7 @@ Three layers, strictly separated:
    and one generated `groundtruth.html` report.
 2. **Runtime** — Rust crates under `crates/`: permissive per-agent parsers, one
    canonical model, replayable normalization, capture, and storage.
-3. **Services** — the planned localhost REST + WebSocket layer.
+3. **Services** — the localhost REST + WebSocket layer and generated client contract.
 
 Current implementation status: all nine captured agents have ground-truth packs,
 runtime adapters, and CLI registration. The generic pipeline ingests adapter-selected
@@ -22,9 +22,9 @@ changes with polling/audit recovery, and writes the canonical SQLite projection.
 `ingest` and `watch` durably append source records to a checksummed raw ledger before
 projection commits; `rebuild` validates and replays the whole ledger into a private
 database before atomically replacing the projection. Ordinary opens still fail closed
-on a schema mismatch so replacement is never implicit. The in-process hot tier and
-subscription hub exist; the localhost HTTP/WebSocket surface and generated clients are
-still pending.
+on a schema mismatch so replacement is never implicit. The in-process hot tier,
+subscription hub, localhost HTTP/WebSocket surface, and generated TypeScript protocol
+package are implemented. Consumer migrations and the dedicated metrics stream remain.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
 
@@ -39,6 +39,9 @@ python3 -m tools.groundtruth farm codex --schemas-only
 
 # Verify Rust runtime crates.
 cargo test --workspace
+
+# Profile discovery/meta/cold ingest and inspect the final projection.
+cd tools/ingest-bench && npm install && npm start
 ```
 
 `farm` without `--schemas-only` installs and executes downloaded agent CLIs. It fails

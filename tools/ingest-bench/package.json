@@ -1,0 +1,19 @@
+{
+  "name": "@rosetta/ingest-bench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron workbench for timing rosettad cold ingestion and inspecting its SQLite projection",
+  "main": "src/main.js",
+  "scripts": {
+    "prestart": "cargo build -p rosettad --release",
+    "start": "electron .",
+    "test": "node --test",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

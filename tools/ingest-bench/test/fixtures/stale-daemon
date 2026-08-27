@@ -1,0 +1,2 @@
+process.stderr.write('rosettad: unknown flag --json\n');
+process.exitCode = 1;

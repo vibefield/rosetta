@@ -637,6 +637,15 @@ trait <b>AgentAdapter</b>: Send + Sync {
     </div>
   </div>
 
+  <div class="callout"><b>Implemented — local ingestion workbench.</b>
+    <code>tools/ingest-bench</code> drives newline-delimited JSON diagnostic seams on the real
+    <code>rosettad</code> binary and records independent process wall times for discovery, bounded
+    metadata ingestion, and a fresh full cold ingest. Each phase has isolated database/ledger
+    artifacts; after atomic publication the Electron main process opens the final SQLite projection
+    defensively and read-only for schema, row, and ad hoc query verification. It is repository
+    tooling, not a consumer contract: adapters and canonical writes remain exclusively in L2, and
+    the direct SQL surface does not cross L3.</div>
+
   <div style="margin-top:20px" class="tbl-scroll">
   <table>
     <thead>
@@ -697,8 +706,10 @@ trait <b>AgentAdapter</b>: Send + Sync {
   histories continued to grow. Claude/Grok wall times therefore must not be used as agent-to-agent
   speed comparisons. The final Codex cold run and later frozen-ledger rebuild are the phase-level
   baselines. The volume was 98% full during the final measurements, so absolute times include a
-  documented storage-pressure penalty. Standalone meta-only wall time was not retained; the next
-  benchmark must report discover, meta, stream, canonical-finalize, and search-finalize separately.
+  documented storage-pressure penalty. Standalone meta-only wall time was not retained in this
+  baseline. The ingest workbench now captures discovery and standalone-meta process walls plus the
+  existing internal stream, canonical-finalize, and search-finalize profile counters; a new organic
+  run is still required before replacing this historical evidence gap with a measured number.
   The earlier “frozen” rebuild only meant the ledger did not change during that command; its organic
   artifacts were deleted and cannot support a new comparison. The later FTS campaign improved this:
   the tool rejected write-permitted input, fingerprinted every ledger file and the query suite,

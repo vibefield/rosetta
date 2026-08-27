@@ -68,6 +68,7 @@ groundtruth/               LAYER 1 data only                           [Phase 1]
 tools/groundtruth/         LAYER 1 dev tools (stdlib Python): fixture farm,
                            mock model, census, schema merge, HTML render,
                            boundary/artifact checks
+tools/ingest-bench/        local Electron cold-ingest profiler + read-only DB inspector
 crates/                    all Rust crates
   adapter-support/         permissive parser + replay-test primitives
   adapters/<agent>/        raw parsers using canonical ground truth as spec

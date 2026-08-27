@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:">
+  <title>Rosetta Ingest Bench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&amp;family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-bar">
+    <div class="wordmark"><span class="mark">R</span><span>rosetta</span><b>ingest bench</b></div>
+    <nav class="tabs" aria-label="Workbench views">
+      <button class="tab active" data-tab="benchmark">Benchmark</button>
+      <button class="tab" data-tab="database">Database</button>
+      <button class="tab" data-tab="logs">Daemon log <span id="log-count" class="count">0</span></button>
+    </nav>
+    <div id="global-state" class="global-state"><span class="state-dot"></span><span>Ready</span></div>
+  </header>
+
+  <main>
+    <section id="benchmark-view" class="view active">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">rosetta · L2 verification · local only</div>
+          <h1>Cold ingestion workbench</h1>
+          <p class="sub">Measure discovery, bounded metadata ingestion, and a clean full ingest through the real <code>rosettad</code> process. Each run gets new databases and ledgers; the final projection opens read-only for inspection.</p>
+        </div>
+        <div class="head-actions">
+          <button id="stop-button" class="button danger" disabled>Stop run</button>
+          <button id="run-button" class="button primary" disabled>Run selected agents</button>
+        </div>
+      </div>
+
+      <div class="bench-layout">
+        <aside class="setup card">
+          <div class="section-label">Run configuration</div>
+          <label class="field">
+            <span>rosettad binary</span>
+            <div class="path-control"><input id="binary-input" spellcheck="false"><button id="binary-browse" class="icon-button" aria-label="Choose binary">…</button></div>
+          </label>
+          <label class="field">
+            <span>home to probe</span>
+            <div class="path-control"><input id="home-input" spellcheck="false"><button id="home-browse" class="icon-button" aria-label="Choose home directory">…</button></div>
+          </label>
+          <label class="field">
+            <span>benchmark output</span>
+            <div class="path-control"><input id="output-input" spellcheck="false"><button id="output-browse" class="icon-button" aria-label="Choose output directory">…</button></div>
+          </label>
+          <button id="discover-button" class="button secondary wide">Discover installed agents</button>
+          <p class="hint">The final cold database is never reused. Meta and full ingest have separate scratch ledgers so their costs stay independent.</p>
+        </aside>
+
+        <div class="bench-main">
+          <section class="card agent-panel">
+            <div class="panel-head">
+              <div><div class="section-label">Discovery</div><h2>Installed runtimes</h2></div>
+              <div class="mini-actions"><button id="select-all" class="text-button">Select installed</button><button id="select-none" class="text-button">Clear</button></div>
+            </div>
+            <div id="agents" class="agents empty-state">Run discovery to inspect all registered data roots.</div>
+          </section>
+
+          <section class="phase-grid" aria-label="Benchmark phases">
+            <article class="phase-card" data-phase="discovery">
+              <div class="phase-index">01</div><span class="badge pure">read only</span>
+              <h3>Discovery</h3><p>Probe registered layouts, walk matching paths, and measure source size.</p>
+              <div class="phase-result"><strong>—</strong><span>not run</span></div>
+              <div class="progress"><i></i></div>
+            </article>
+            <article class="phase-card" data-phase="meta">
+              <div class="phase-index">02</div><span class="badge io">bounded I/O</span>
+              <h3>Meta ingest</h3><p>Skim heads and tails into an isolated metadata-only projection and ledger.</p>
+              <div class="phase-result"><strong>—</strong><span>not run</span></div>
+              <div class="progress"><i></i></div>
+            </article>
+            <article class="phase-card" data-phase="ingest">
+              <div class="phase-index">03</div><span class="badge io">cold publish</span>
+              <h3>Full ingestion</h3><p>Ledger, normalize, canonical rows, buckets, FTS, validation, and atomic publication.</p>
+              <div class="phase-result"><strong>—</strong><span>not run</span></div>
+              <div class="progress"><i></i></div>
+            </article>
+          </section>
+
+          <section id="result-panel" class="card result-panel hidden">
+            <div class="panel-head">
+              <div><div class="section-label">Last run</div><h2 id="result-title">Benchmark result</h2></div>
+              <button id="reveal-run" class="button secondary small">Reveal artifacts</button>
+            </div>
+            <div id="result-summary" class="result-summary"></div>
+            <div class="table-shell"><table><thead><tr><th>phase</th><th>wall</th><th>walk</th><th>skim</th><th>read</th><th>normalize</th><th>apply</th><th>FTS</th></tr></thead><tbody id="phase-table"></tbody></table></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="database-view" class="view">
+      <div class="page-head compact">
+        <div><div class="eyebrow">direct · read-only · SQLite</div><h1>Projection inspector</h1><p class="sub">Browse the published canonical projection independently of L3. Table pages and ad hoc SQL use a defensive, query-only connection.</p></div>
+        <div class="head-actions"><button id="open-db-button" class="button secondary">Open projection…</button><button id="reveal-db" class="button secondary" disabled>Reveal file</button></div>
+      </div>
+
+      <div id="db-empty" class="callout"><b>No projection open.</b> Complete a benchmark or choose an existing Rosetta SQLite file.</div>
+      <div id="db-content" class="hidden">
+        <section id="db-summary" class="stat-grid"></section>
+        <div class="db-layout">
+          <aside class="object-browser card">
+            <div class="section-label">Schema objects</div>
+            <input id="object-filter" class="filter" placeholder="Filter tables and views">
+            <div id="objects" class="objects"></div>
+          </aside>
+          <section class="data-browser card">
+            <div class="panel-head data-head">
+              <div><div id="object-kind" class="section-label">Table</div><h2 id="object-title">Choose an object</h2></div>
+              <div class="pager"><button id="prev-page" class="icon-button" disabled>←</button><span id="page-label">—</span><button id="next-page" class="icon-button" disabled>→</button></div>
+            </div>
+            <details id="schema-details"><summary>Show DDL</summary><pre id="object-ddl"></pre></details>
+            <div id="data-table" class="table-shell data-table"><div class="empty-state">Select a table or view from the schema.</div></div>
+          </section>
+        </div>
+
+        <section class="query-panel card">
+          <div class="panel-head"><div><div class="section-label">Read-only console</div><h2>SQL verification query</h2></div><button id="run-query" class="button primary small">Run query</button></div>
+          <textarea id="query-input" spellcheck="false">SELECT type, count(*) AS rows
+FROM message
+GROUP BY type
+ORDER BY rows DESC;</textarea>
+          <div id="query-meta" class="query-meta">SELECT / WITH / EXPLAIN / PRAGMA · first 1,000 rows</div>
+          <div id="query-result" class="table-shell data-table"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="logs-view" class="view">
+      <div class="page-head compact"><div><div class="eyebrow">rosettad · stdout + stderr</div><h1>Daemon log</h1><p class="sub">Structured JSON events and diagnostic output from the current session.</p></div><button id="clear-logs" class="button secondary">Clear</button></div>
+      <div class="log-toolbar"><button class="log-filter active" data-stream="all">All</button><button class="log-filter" data-stream="stdout">stdout</button><button class="log-filter" data-stream="stderr">stderr</button></div>
+      <pre id="logs" class="logs">No daemon output yet.</pre>
+    </section>
+  </main>
+
+  <dialog id="cell-dialog">
+    <div class="dialog-head"><div><div class="section-label">Cell value</div><h2 id="cell-title"></h2></div><button id="close-dialog" class="icon-button">×</button></div>
+    <pre id="cell-value"></pre>
+  </dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
