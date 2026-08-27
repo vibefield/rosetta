@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use rusqlite::Connection;
 
-pub use apply::{ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
+pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
 pub use hot::{Effects, HotConfig, MetaMirror, Mutation, Replay, Stamp, TailRings};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

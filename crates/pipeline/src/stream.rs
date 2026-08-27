@@ -506,7 +506,7 @@ fn ingest_file(
         // may reference them. Oversized records are quarantined by the
         // tailer and carry no payload, so only ordinary records land here.
         if let Some(ledger) = ledger.as_deref_mut() {
-            instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+            instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
                 let source = rosetta_capture::SourceDef {
                     relative_path: file.relative_path.clone(),
                     stream_id: file.stream_id.clone(),
@@ -603,16 +603,5 @@ fn ingest_file(
 }
 
 pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
-    total.messages_inserted += batch.messages_inserted;
-    total.messages_updated += batch.messages_updated;
-    total.tool_results_merged += batch.tool_results_merged;
-    total.tool_results_unmatched += batch.tool_results_unmatched;
-    total.usage_applied += batch.usage_applied;
-    total.usage_unmatched += batch.usage_unmatched;
-    total.drift_recorded += batch.drift_recorded;
-    total.bucket_rebuilds += batch.bucket_rebuilds;
-    total.source_sweeps += batch.source_sweeps;
-    total.source_stage_nanos += batch.source_stage_nanos;
-    total.canonical_apply_nanos += batch.canonical_apply_nanos;
-    total.sqlite_commit_nanos += batch.sqlite_commit_nanos;
+    total.merge_from(batch);
 }

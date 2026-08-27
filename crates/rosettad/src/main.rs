@@ -25,8 +25,8 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, LiveOptions, LiveRunner, Metric, discover, meta_ingest_into,
-    rebuild_runtime, stream_backfill_into,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, discover,
+    meta_ingest_into, rebuild_runtime, stream_backfill_into,
 };
 use rosetta_store::Store;
 
@@ -716,6 +716,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         .map_err(|error| format!("opening rebuild database {}: {error:?}", temp.display()))?;
     let mut reports = Vec::new();
     for adapter in adapters {
+        let profile_before = instrument.snapshot();
         let dir = ledgers.join(adapter.kind());
         let layout = adapter.layout();
         let runtime = rosetta_core::rows::RuntimeRow {
@@ -744,12 +745,13 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                 adapter.kind()
             ));
         }
-        reports.push((adapter.kind(), report));
+        let profile = instrument.snapshot().delta_since(&profile_before);
+        reports.push((adapter.kind(), report, profile));
     }
 
     publish_private_projection(store, temp, &db, &instrument)?;
 
-    for (kind, report) in reports {
+    for (kind, report, profile) in reports {
         println!(
             "{kind}: rebuilt {} files from {} segments — {} records replayed \
              ({} stale, {} duplicate, {} already projected), {} meta batches, \
@@ -764,11 +766,18 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
             report.stats.messages_inserted,
             report.sessions_stubbed,
         );
+        if flags.profile {
+            print_agent_profile(kind, &profile);
+        }
     }
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
+}
+
+fn print_agent_profile(kind: &str, profile: &InstrumentSnapshot) {
+    println!("\n== profile: {kind} ==\n{}", profile.report());
 }
 
 #[cfg(test)]

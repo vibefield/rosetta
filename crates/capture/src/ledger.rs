@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::{CaptureError, io_error};
 
@@ -70,6 +71,29 @@ pub enum LedgerEntry {
     },
 }
 
+/// Non-overlapping append-side measurements. The pipeline drains these after
+/// each durable ledger batch so profiling never changes the write ordering.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerWriteStats {
+    pub frames: u64,
+    pub frame_bytes: u64,
+    pub flushes: u64,
+    pub syncs: u64,
+    pub segments_opened: u64,
+    /// Body construction/copy plus frame-header and checksum work.
+    pub frame_nanos: u64,
+    /// Bytes handed to the buffered writer, including any writes it triggers.
+    pub buffer_write_nanos: u64,
+    pub flush_nanos: u64,
+    pub sync_nanos: u64,
+    /// Segment create plus the magic-header write.
+    pub segment_open_nanos: u64,
+}
+
+fn elapsed_nanos(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// Append side. One ledger per runtime; the pipeline owns the write order.
 pub struct Ledger {
     dir: PathBuf,
@@ -79,6 +103,7 @@ pub struct Ledger {
     written: u64,
     /// Sources already defined in the CURRENT segment → their local id.
     defined: HashMap<SourceDef, u32>,
+    write_stats: LedgerWriteStats,
 }
 
 impl Ledger {
@@ -98,12 +123,19 @@ impl Ledger {
             writer: None,
             written: 0,
             defined: HashMap::new(),
+            write_stats: LedgerWriteStats::default(),
         })
     }
 
     pub fn with_max_segment_bytes(mut self, max: u64) -> Self {
         self.max_segment_bytes = max.max(1);
         self
+    }
+
+    /// Drain measurements accumulated since the previous call. This does not
+    /// flush or otherwise affect ledger durability.
+    pub fn take_write_stats(&mut self) -> LedgerWriteStats {
+        std::mem::take(&mut self.write_stats)
     }
 
     /// Append one batch of raw records for one source. Buffered — nothing is
@@ -117,11 +149,16 @@ impl Ledger {
         let file_id = self.define(source)?;
         for (start_offset, payload) in records {
             let payload = payload.as_ref();
+            let started = Instant::now();
             let mut body = Vec::with_capacity(20 + payload.len());
             body.extend_from_slice(&file_id.to_be_bytes());
             body.extend_from_slice(&generation.to_be_bytes());
             body.extend_from_slice(&start_offset.to_be_bytes());
             body.extend_from_slice(payload);
+            self.write_stats.frame_nanos = self
+                .write_stats
+                .frame_nanos
+                .saturating_add(elapsed_nanos(started));
             self.frame(TAG_RAW, &body)?;
         }
         Ok(())
@@ -138,19 +175,29 @@ impl Ledger {
         normalized_clean: bool,
     ) -> Result<(), CaptureError> {
         let file_id = self.define(source)?;
+        let started = Instant::now();
         let mut body = Vec::with_capacity(17);
         body.extend_from_slice(&file_id.to_be_bytes());
         body.extend_from_slice(&generation.to_be_bytes());
         body.extend_from_slice(&normalizer_version.to_be_bytes());
         body.push(u8::from(normalized_clean));
+        self.write_stats.frame_nanos = self
+            .write_stats
+            .frame_nanos
+            .saturating_add(elapsed_nanos(started));
         self.frame(TAG_GENERATION_COMPLETE, &body)
     }
 
     /// Append a version-routed serialized meta-ops batch.
     pub fn append_meta(&mut self, schema_version: u32, ops_json: &str) -> Result<(), CaptureError> {
+        let started = Instant::now();
         let mut body = Vec::with_capacity(4 + ops_json.len());
         body.extend_from_slice(&schema_version.to_be_bytes());
         body.extend_from_slice(ops_json.as_bytes());
+        self.write_stats.frame_nanos = self
+            .write_stats
+            .frame_nanos
+            .saturating_add(elapsed_nanos(started));
         self.frame(TAG_META_VERSIONED, &body)
     }
 
@@ -161,13 +208,23 @@ impl Ledger {
             return Ok(());
         };
         let path = self.dir.join(segment_name(self.segment_seq));
-        writer
-            .flush()
-            .map_err(|error| io_error("flushing", &path, error))?;
-        writer
-            .get_ref()
-            .sync_data()
-            .map_err(|error| io_error("syncing", &path, error))?;
+        self.write_stats.flushes = self.write_stats.flushes.saturating_add(1);
+        let started = Instant::now();
+        let flushed = writer.flush();
+        self.write_stats.flush_nanos = self
+            .write_stats
+            .flush_nanos
+            .saturating_add(elapsed_nanos(started));
+        flushed.map_err(|error| io_error("flushing", &path, error))?;
+
+        self.write_stats.syncs = self.write_stats.syncs.saturating_add(1);
+        let started = Instant::now();
+        let synced = writer.get_ref().sync_data();
+        self.write_stats.sync_nanos = self
+            .write_stats
+            .sync_nanos
+            .saturating_add(elapsed_nanos(started));
+        synced.map_err(|error| io_error("syncing", &path, error))?;
         // Rotate AFTER the durable point so a segment never splits a batch.
         if self.written >= self.max_segment_bytes {
             self.writer = None;
@@ -186,6 +243,7 @@ impl Ledger {
             return Ok(*id);
         }
         let id = self.defined.len() as u32;
+        let started = Instant::now();
         let body = serde_encode(&[
             ("file_id", &id.to_string()),
             ("relative_path", &source.relative_path),
@@ -197,6 +255,10 @@ impl Ledger {
                 source.agent_version.as_deref().unwrap_or(""),
             ),
         ]);
+        self.write_stats.frame_nanos = self
+            .write_stats
+            .frame_nanos
+            .saturating_add(elapsed_nanos(started));
         self.frame(TAG_DEFINE, body.as_bytes())?;
         self.defined.insert(source.clone(), id);
         Ok(id)
@@ -205,7 +267,7 @@ impl Ledger {
     fn frame(&mut self, tag: u8, body: &[u8]) -> Result<(), CaptureError> {
         self.ensure_writer()?;
         let path = self.dir.join(segment_name(self.segment_seq));
-        let writer = self.writer.as_mut().expect("ensure_writer just ran");
+        let started = Instant::now();
         let mut head = [0_u8; 5];
         head[0] = tag;
         head[1..5].copy_from_slice(&(body.len() as u32).to_be_bytes());
@@ -214,12 +276,29 @@ impl Ledger {
         hasher.update(body);
         let digest = hasher.finalize();
         let checksum = &digest.as_bytes()[..CHECKSUM_BYTES];
-        writer
-            .write_all(&head)
-            .and_then(|_| writer.write_all(body))
-            .and_then(|_| writer.write_all(checksum))
-            .map_err(|error| io_error("appending to", &path, error))?;
-        self.written += (head.len() + body.len() + CHECKSUM_BYTES) as u64;
+        self.write_stats.frame_nanos = self
+            .write_stats
+            .frame_nanos
+            .saturating_add(elapsed_nanos(started));
+
+        let started = Instant::now();
+        let written = {
+            let writer = self.writer.as_mut().expect("ensure_writer just ran");
+            writer
+                .write_all(&head)
+                .and_then(|_| writer.write_all(body))
+                .and_then(|_| writer.write_all(checksum))
+        };
+        self.write_stats.buffer_write_nanos = self
+            .write_stats
+            .buffer_write_nanos
+            .saturating_add(elapsed_nanos(started));
+        written.map_err(|error| io_error("appending to", &path, error))?;
+
+        let frame_bytes = (head.len() + body.len() + CHECKSUM_BYTES) as u64;
+        self.write_stats.frames = self.write_stats.frames.saturating_add(1);
+        self.write_stats.frame_bytes = self.write_stats.frame_bytes.saturating_add(frame_bytes);
+        self.written += frame_bytes;
         Ok(())
     }
 
@@ -228,13 +307,23 @@ impl Ledger {
             return Ok(());
         }
         let path = self.dir.join(segment_name(self.segment_seq));
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .append(true)
-            .open(&path)
-            .map_err(|error| io_error("creating segment", &path, error))?;
-        file.write_all(SEGMENT_MAGIC)
-            .map_err(|error| io_error("writing segment header to", &path, error))?;
+        let started = Instant::now();
+        let opened = (|| {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .append(true)
+                .open(&path)
+                .map_err(|error| io_error("creating segment", &path, error))?;
+            file.write_all(SEGMENT_MAGIC)
+                .map_err(|error| io_error("writing segment header to", &path, error))?;
+            Ok::<_, CaptureError>(file)
+        })();
+        self.write_stats.segment_open_nanos = self
+            .write_stats
+            .segment_open_nanos
+            .saturating_add(elapsed_nanos(started));
+        let file = opened?;
+        self.write_stats.segments_opened = self.write_stats.segments_opened.saturating_add(1);
         self.written = SEGMENT_MAGIC.len() as u64;
         self.writer = Some(BufWriter::new(file));
         Ok(())
@@ -576,6 +665,32 @@ mod tests {
         assert_eq!(from_scan, &source("a.jsonl"));
         assert_eq!((*generation, *start_offset), (1, 4));
         assert_eq!(payload, b"two");
+    }
+
+    #[test]
+    fn write_stats_split_frames_flush_and_sync_without_changing_the_ledger() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .append_raw(
+                &source("a.jsonl"),
+                1,
+                [(0_u64, b"one".as_slice()), (4, b"two")],
+            )
+            .unwrap();
+        ledger.flush().unwrap();
+
+        let stats = ledger.take_write_stats();
+        assert_eq!(stats.frames, 3, "one define plus two raw frames");
+        assert!(stats.frame_bytes > 6);
+        assert_eq!(stats.flushes, 1);
+        assert_eq!(stats.syncs, 1);
+        assert_eq!(stats.segments_opened, 1);
+        assert_eq!(ledger.take_write_stats(), LedgerWriteStats::default());
+
+        let scanned = scan(dir.path()).unwrap();
+        assert_eq!(scanned.entries.len(), 2);
+        assert_eq!(scanned.torn_segments, 0);
     }
 
     #[test]

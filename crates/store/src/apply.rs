@@ -91,10 +91,121 @@ pub struct ApplyStats {
     pub canonical_apply_nanos: u64,
     /// Time spent committing the SQLite transaction after all statements ran.
     pub sqlite_commit_nanos: u64,
+    pub profile: ApplyProfile,
+}
+
+/// Statement-level attribution within [`ApplyStats::canonical_apply_nanos`].
+/// Timers below are non-overlapping with each other; unlisted orchestration is
+/// the residual between their sum and the canonical parent timer.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ApplyProfile {
+    pub message_attempts: u64,
+    pub tool_result_attempts: u64,
+    pub usage_attempts: u64,
+    pub drift_attempts: u64,
+    pub other_attempts: u64,
+    pub session_touch_attempts: u64,
+    pub session_touch_rows: u64,
+    pub pending_lookups: u64,
+    pub pending_rows: u64,
+    pub pending_queues: u64,
+    pub ordinal_lookups: u64,
+    pub session_renumbers: u64,
+    pub session_renumber_rows: u64,
+    pub message_lookup_nanos: u64,
+    pub message_write_nanos: u64,
+    pub tool_result_lookup_nanos: u64,
+    pub tool_result_write_nanos: u64,
+    pub usage_lookup_nanos: u64,
+    pub usage_write_nanos: u64,
+    pub session_touch_nanos: u64,
+    pub pending_lookup_nanos: u64,
+    pub pending_queue_nanos: u64,
+    pub drift_apply_nanos: u64,
+    pub other_apply_nanos: u64,
+    pub ordinal_lookup_nanos: u64,
+    pub session_renumber_nanos: u64,
+}
+
+impl ApplyStats {
+    pub fn merge_from(&mut self, batch: &Self) {
+        self.messages_inserted += batch.messages_inserted;
+        self.messages_updated += batch.messages_updated;
+        self.tool_results_merged += batch.tool_results_merged;
+        self.tool_results_unmatched += batch.tool_results_unmatched;
+        self.usage_applied += batch.usage_applied;
+        self.usage_unmatched += batch.usage_unmatched;
+        self.drift_recorded += batch.drift_recorded;
+        self.bucket_rebuilds += batch.bucket_rebuilds;
+        self.source_sweeps += batch.source_sweeps;
+        self.source_stage_nanos += batch.source_stage_nanos;
+        self.canonical_apply_nanos += batch.canonical_apply_nanos;
+        self.sqlite_commit_nanos += batch.sqlite_commit_nanos;
+        self.profile.merge_from(&batch.profile);
+    }
+}
+
+impl ApplyProfile {
+    fn merge_from(&mut self, batch: &Self) {
+        self.message_attempts += batch.message_attempts;
+        self.tool_result_attempts += batch.tool_result_attempts;
+        self.usage_attempts += batch.usage_attempts;
+        self.drift_attempts += batch.drift_attempts;
+        self.other_attempts += batch.other_attempts;
+        self.session_touch_attempts += batch.session_touch_attempts;
+        self.session_touch_rows += batch.session_touch_rows;
+        self.pending_lookups += batch.pending_lookups;
+        self.pending_rows += batch.pending_rows;
+        self.pending_queues += batch.pending_queues;
+        self.ordinal_lookups += batch.ordinal_lookups;
+        self.session_renumbers += batch.session_renumbers;
+        self.session_renumber_rows += batch.session_renumber_rows;
+        self.message_lookup_nanos += batch.message_lookup_nanos;
+        self.message_write_nanos += batch.message_write_nanos;
+        self.tool_result_lookup_nanos += batch.tool_result_lookup_nanos;
+        self.tool_result_write_nanos += batch.tool_result_write_nanos;
+        self.usage_lookup_nanos += batch.usage_lookup_nanos;
+        self.usage_write_nanos += batch.usage_write_nanos;
+        self.session_touch_nanos += batch.session_touch_nanos;
+        self.pending_lookup_nanos += batch.pending_lookup_nanos;
+        self.pending_queue_nanos += batch.pending_queue_nanos;
+        self.drift_apply_nanos += batch.drift_apply_nanos;
+        self.other_apply_nanos += batch.other_apply_nanos;
+        self.ordinal_lookup_nanos += batch.ordinal_lookup_nanos;
+        self.session_renumber_nanos += batch.session_renumber_nanos;
+    }
 }
 
 fn elapsed_nanos(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn profile_other<T>(
+    stats: &mut ApplyStats,
+    work: impl FnOnce() -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    stats.profile.other_attempts += 1;
+    let started = Instant::now();
+    let result = work();
+    stats.profile.other_apply_nanos = stats
+        .profile
+        .other_apply_nanos
+        .saturating_add(elapsed_nanos(started));
+    result
+}
+
+fn profile_ordinal_lookup<T>(
+    stats: &mut ApplyStats,
+    work: impl FnOnce() -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    stats.profile.ordinal_lookups += 1;
+    let started = Instant::now();
+    let result = work();
+    stats.profile.ordinal_lookup_nanos = stats
+        .profile
+        .ordinal_lookup_nanos
+        .saturating_add(elapsed_nanos(started));
+    result
 }
 
 mod rows;
@@ -240,45 +351,54 @@ fn apply_drift(
     fact: &DriftFact,
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
-    let event_key = serde_json::to_string(fact)?;
-    let inserted = tx
-        .prepare_cached("INSERT OR IGNORE INTO drift_seen (event_key) VALUES (?1)")?
-        .execute(params![event_key])?;
-    if inserted == 0 {
-        return Ok(());
-    }
-    tx.prepare_cached(
-        "INSERT INTO drift_agg
-           (runtime_id, agent_version, stream, record_kind, error_code, shape_hash,
-            count, first_seen, last_seen, sample_cursor, sample_offset)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7, ?8, ?9)
-         ON CONFLICT(runtime_id, agent_version, stream, record_kind, error_code, shape_hash)
-         DO UPDATE SET
-           count = count + 1,
-           first_seen = CASE
-             WHEN first_seen IS NULL THEN excluded.first_seen
-             WHEN excluded.first_seen IS NULL THEN first_seen
-             ELSE MIN(first_seen, excluded.first_seen) END,
-           last_seen = CASE
-             WHEN last_seen IS NULL THEN excluded.last_seen
-             WHEN excluded.last_seen IS NULL THEN last_seen
-             ELSE MAX(last_seen, excluded.last_seen) END,
-           sample_cursor = COALESCE(sample_cursor, excluded.sample_cursor),
-           sample_offset = COALESCE(sample_offset, excluded.sample_offset)",
-    )?
-    .execute(params![
-        fact.runtime_id,
-        fact.agent_version,
-        fact.stream,
-        fact.record_kind,
-        fact.error_code,
-        fact.shape_hash,
-        fact.at,
-        fact.sample_cursor,
-        fact.sample_offset,
-    ])?;
-    stats.drift_recorded += 1;
-    Ok(())
+    stats.profile.drift_attempts += 1;
+    let started = Instant::now();
+    let result = (|| -> Result<(), StoreError> {
+        let event_key = serde_json::to_string(fact)?;
+        let inserted = tx
+            .prepare_cached("INSERT OR IGNORE INTO drift_seen (event_key) VALUES (?1)")?
+            .execute(params![event_key])?;
+        if inserted == 0 {
+            return Ok(());
+        }
+        tx.prepare_cached(
+            "INSERT INTO drift_agg
+               (runtime_id, agent_version, stream, record_kind, error_code, shape_hash,
+                count, first_seen, last_seen, sample_cursor, sample_offset)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7, ?8, ?9)
+             ON CONFLICT(runtime_id, agent_version, stream, record_kind, error_code, shape_hash)
+             DO UPDATE SET
+               count = count + 1,
+               first_seen = CASE
+                 WHEN first_seen IS NULL THEN excluded.first_seen
+                 WHEN excluded.first_seen IS NULL THEN first_seen
+                 ELSE MIN(first_seen, excluded.first_seen) END,
+               last_seen = CASE
+                 WHEN last_seen IS NULL THEN excluded.last_seen
+                 WHEN excluded.last_seen IS NULL THEN last_seen
+                 ELSE MAX(last_seen, excluded.last_seen) END,
+               sample_cursor = COALESCE(sample_cursor, excluded.sample_cursor),
+               sample_offset = COALESCE(sample_offset, excluded.sample_offset)",
+        )?
+        .execute(params![
+            fact.runtime_id,
+            fact.agent_version,
+            fact.stream,
+            fact.record_kind,
+            fact.error_code,
+            fact.shape_hash,
+            fact.at,
+            fact.sample_cursor,
+            fact.sample_offset,
+        ])?;
+        stats.drift_recorded += 1;
+        Ok(())
+    })();
+    stats.profile.drift_apply_nanos = stats
+        .profile
+        .drift_apply_nanos
+        .saturating_add(elapsed_nanos(started));
+    result
 }
 
 fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64, u64), StoreError> {
@@ -390,9 +510,12 @@ fn project_source_ops(
         if let IngestOp::Message(row) = op {
             let mut row = (**row).clone();
             let existing = if projection.preserve_message_ordinals {
-                tx.prepare_cached("SELECT ordinal FROM message WHERE timeline_id = ?1")?
-                    .query_row(params![row.timeline_id], |record| record.get::<_, i64>(0))
-                    .optional()?
+                profile_ordinal_lookup(stats, || {
+                    Ok(tx
+                        .prepare_cached("SELECT ordinal FROM message WHERE timeline_id = ?1")?
+                        .query_row(params![row.timeline_id], |record| record.get::<_, i64>(0))
+                        .optional()?)
+                })?
             } else {
                 None
             };
@@ -407,12 +530,14 @@ fn project_source_ops(
                         })?;
                         ordinal
                     } else {
-                        let ordinal: i64 = tx
-                            .prepare_cached(
-                                "SELECT COALESCE(MAX(ordinal) + 1, 0)
-                                 FROM message WHERE session_id = ?1",
-                            )?
-                            .query_row(params![row.session_id], |record| record.get(0))?;
+                        let ordinal: i64 = profile_ordinal_lookup(stats, || {
+                            Ok(tx
+                                .prepare_cached(
+                                    "SELECT COALESCE(MAX(ordinal) + 1, 0)
+                                     FROM message WHERE session_id = ?1",
+                                )?
+                                .query_row(params![row.session_id], |record| record.get(0))?)
+                        })?;
                         next_ordinals.insert(
                             row.session_id.clone(),
                             ordinal
@@ -561,7 +686,7 @@ fn remove_cursor_projection(
 /// total order the journal replay used to produce. Two phases through
 /// negative space so UNIQUE(session_id, ordinal) never sees a transient
 /// collision.
-fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError> {
+fn renumber_session(tx: &Transaction, session_id: &str) -> Result<u64, StoreError> {
     // Materialize the window once. Putting this ranking subquery directly in
     // UPDATE's scalar expression lets SQLite execute the full window for each
     // outer message, which is quadratic on long real-world sessions.
@@ -572,8 +697,9 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError
          ) WITHOUT ROWID;
          DELETE FROM renumber_message;",
     )?;
-    tx.prepare_cached(
-        "INSERT INTO renumber_message (message_id, ordinal)
+    let rows = tx
+        .prepare_cached(
+            "INSERT INTO renumber_message (message_id, ordinal)
          SELECT message_id, ranked_ordinal
          FROM (
            SELECT m.id AS message_id, m.ordinal AS current_ordinal,
@@ -584,8 +710,8 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError
            WHERE m.session_id = ?1
          )
          WHERE current_ordinal != ranked_ordinal",
-    )?
-    .execute(params![session_id])?;
+        )?
+        .execute(params![session_id])? as u64;
     tx.prepare_cached(
         "UPDATE message AS m
          SET ordinal = -1 - ranked.ordinal
@@ -602,6 +728,23 @@ fn renumber_session(tx: &Transaction, session_id: &str) -> Result<(), StoreError
     .execute([])?;
     tx.prepare_cached("DELETE FROM renumber_message")?
         .execute([])?;
+    Ok(rows)
+}
+
+fn profile_renumber_session(
+    tx: &Transaction,
+    session_id: &str,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
+    stats.profile.session_renumbers += 1;
+    let started = Instant::now();
+    let result = renumber_session(tx, session_id);
+    stats.profile.session_renumber_nanos = stats
+        .profile
+        .session_renumber_nanos
+        .saturating_add(elapsed_nanos(started));
+    stats.profile.session_renumber_rows =
+        stats.profile.session_renumber_rows.saturating_add(result?);
     Ok(())
 }
 
@@ -652,9 +795,13 @@ fn activate_cursor(
     // Messages land with collision-free ordinals above the session max; the
     // renumber below assigns the real presentation order. Edits then merge
     // ops trail all rows, exactly as the journal replay ordered them.
-    let mut ordinal: i64 = tx
-        .prepare_cached("SELECT COALESCE(MAX(ordinal) + 1, 0) FROM message WHERE session_id = ?1")?
-        .query_row(params![source.session_id], |row| row.get(0))?;
+    let mut ordinal: i64 = profile_ordinal_lookup(stats, || {
+        Ok(tx
+            .prepare_cached(
+                "SELECT COALESCE(MAX(ordinal) + 1, 0) FROM message WHERE session_id = ?1",
+            )?
+            .query_row(params![source.session_id], |row| row.get(0))?)
+    })?;
     let mut edits = Vec::new();
     let mut merges = Vec::new();
     for op in &staged {
@@ -698,7 +845,7 @@ fn activate_cursor(
         )?;
     }
 
-    renumber_session(tx, &source.session_id)?;
+    profile_renumber_session(tx, &source.session_id, stats)?;
     tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
         .execute(params![source.cursor_id])?;
 
@@ -826,9 +973,9 @@ fn apply_op(
         note_touch(fx, op);
     }
     match op {
-        IngestOp::Runtime(row) => apply_runtime(tx, row)?,
-        IngestOp::Project(row) => apply_project(tx, row)?,
-        IngestOp::SessionMeta(row) => apply_session(tx, row)?,
+        IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
+        IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
+        IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,
         IngestOp::Message(row) => {
             apply_message(tx, row, stats, maintenance, dirty_buckets, effects)?
         }
@@ -852,7 +999,7 @@ fn apply_op(
                 maintenance,
                 effects,
             )? {
-                queue_pending(tx, op, src_cursor)?;
+                queue_pending(tx, op, src_cursor, stats)?;
             }
         }
         IngestOp::Usage {
@@ -874,14 +1021,16 @@ fn apply_op(
                 dirty_buckets,
                 effects,
             )? {
-                queue_pending(tx, op, src_cursor)?;
+                queue_pending(tx, op, src_cursor, stats)?;
             }
         }
-        IngestOp::WorkspaceObs(row) => apply_workspace_obs(tx, row, src_cursor)?,
-        IngestOp::FileEdit(row) => apply_file_edit(tx, row, src_cursor)?,
-        IngestOp::Plan(row) => apply_plan(tx, row, src_cursor)?,
-        IngestOp::Task(row) => apply_task(tx, row, src_cursor)?,
-        IngestOp::GitCommit(row) => apply_git_commit(tx, row, src_cursor)?,
+        IngestOp::WorkspaceObs(row) => {
+            profile_other(stats, || apply_workspace_obs(tx, row, src_cursor))?
+        }
+        IngestOp::FileEdit(row) => profile_other(stats, || apply_file_edit(tx, row, src_cursor))?,
+        IngestOp::Plan(row) => profile_other(stats, || apply_plan(tx, row, src_cursor))?,
+        IngestOp::Task(row) => profile_other(stats, || apply_task(tx, row, src_cursor))?,
+        IngestOp::GitCommit(row) => profile_other(stats, || apply_git_commit(tx, row, src_cursor))?,
         IngestOp::Drift(fact) => apply_drift(tx, fact, stats)?,
     }
     Ok(())
@@ -1007,7 +1156,7 @@ pub(crate) fn apply_batch(
                         )?;
                         if source.mode == SourceMode::Activate {
                             set_active_generation(tx, source, active_generation)?;
-                            renumber_session(tx, &source.session_id)?;
+                            profile_renumber_session(tx, &source.session_id, &mut stats)?;
                             tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
                                 .execute(params![source.cursor_id])?;
                         }

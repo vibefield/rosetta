@@ -34,6 +34,7 @@ const CHUNK_OPS: usize = 512;
 fn visit_ledger_profiled<E, F>(
     ledger_dir: &Path,
     instrument: &Instrument,
+    pass_metric: Metric,
     mut visitor: F,
 ) -> Result<LedgerVisit, E>
 where
@@ -51,11 +52,44 @@ where
         result
     });
     let total_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-    instrument.add(
-        Metric::LedgerReadNanos,
-        total_nanos.saturating_sub(visitor_nanos),
-    );
+    let ledger_nanos = total_nanos.saturating_sub(visitor_nanos);
+    instrument.add(Metric::LedgerReadNanos, ledger_nanos);
+    instrument.add(pass_metric, ledger_nanos);
     result
+}
+
+fn visit_election<E, F>(
+    ledger_dir: &Path,
+    instrument: &Instrument,
+    visitor: F,
+) -> Result<LedgerVisit, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
+    visit_ledger_profiled(
+        ledger_dir,
+        instrument,
+        Metric::LedgerElectionReadNanos,
+        visitor,
+    )
+}
+
+fn visit_replay<E, F>(
+    ledger_dir: &Path,
+    instrument: &Instrument,
+    visitor: F,
+) -> Result<LedgerVisit, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
+    visit_ledger_profiled(
+        ledger_dir,
+        instrument,
+        Metric::LedgerReplayReadNanos,
+        visitor,
+    )
 }
 
 #[derive(Debug, Default)]
@@ -112,7 +146,7 @@ pub fn rebuild_runtime(
     let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
     let mut raw_paths: HashSet<String> = HashSet::new();
     let mut sealed_paths: HashSet<String> = HashSet::new();
-    let first = visit_ledger_profiled::<PipelineError, _>(ledger_dir, instrument, |entry| {
+    let first = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
         match entry {
             LedgerEntry::Raw { source, .. } => {
                 raw_paths.insert(source.relative_path);
@@ -172,7 +206,7 @@ pub fn rebuild_runtime(
     let mut already_projected: HashSet<String> = HashSet::new();
     let mut files: BTreeMap<String, FileReplay> = BTreeMap::new();
 
-    let second = visit_ledger_profiled::<PipelineError, _>(ledger_dir, instrument, |entry| {
+    let second = visit_replay::<PipelineError, _>(ledger_dir, instrument, |entry| {
         match entry {
             LedgerEntry::Meta {
                 schema_version,

@@ -14,7 +14,7 @@ pub use discovery::{
     HeadTail, ScannedFile, WalkReport, first_record, head_tail, walk, walk_filtered,
 };
 pub use ledger::{
-    Ledger, LedgerEntry, LedgerScan, LedgerVisit, SourceDef, scan as scan_ledger,
+    Ledger, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef, scan as scan_ledger,
     visit as visit_ledger,
 };
 pub use sqlite::{

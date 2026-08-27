@@ -104,6 +104,9 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         })
         .unwrap();
     assert_eq!(stats.messages_inserted, 1);
+    assert_eq!(stats.profile.message_attempts, 1);
+    assert_eq!(stats.profile.pending_lookups, 1);
+    assert_eq!(stats.profile.session_touch_attempts, 1);
 
     let stats = store
         .apply(&Batch {
@@ -120,6 +123,8 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         })
         .unwrap();
     assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(stats.profile.tool_result_attempts, 1);
+    assert_eq!(stats.profile.session_touch_attempts, 1);
 
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     let tool = page[0].tool.as_ref().unwrap();
@@ -151,6 +156,8 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         })
         .unwrap();
     assert_eq!(stats.tool_results_unmatched, 1);
+    assert_eq!(stats.profile.tool_result_attempts, 1);
+    assert_eq!(stats.profile.pending_queues, 1);
     let pending: i64 = store
         .conn()
         .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row.get(0))
@@ -174,6 +181,10 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         })
         .unwrap();
     assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(stats.profile.message_attempts, 1);
+    assert_eq!(stats.profile.pending_lookups, 1);
+    assert_eq!(stats.profile.pending_rows, 1);
+    assert_eq!(stats.profile.tool_result_attempts, 1);
     assert_eq!(
         store
             .conn()

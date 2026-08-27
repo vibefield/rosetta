@@ -227,7 +227,7 @@ pub fn meta_ingest_into(
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
     ops.extend(skim_ops);
     if let Some(ledger) = ledger {
-        instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+        instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
             let json = serde_json::to_string(&ops).map_err(|error| {
                 PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
             })?;

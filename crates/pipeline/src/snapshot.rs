@@ -192,7 +192,7 @@ pub(crate) fn stream_snapshot_sources(
                 })?;
 
             if let Some(ledger) = ledger.as_deref_mut() {
-                instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+                instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
                     let source = rosetta_capture::SourceDef {
                         relative_path: file.relative_path.clone(),
                         stream_id: file.stream_id.clone(),
@@ -338,7 +338,7 @@ fn seal_generation(
     let Some(ledger) = ledger.as_deref_mut() else {
         return Ok(());
     };
-    instrument.time(Metric::LedgerWriteNanos, || -> Result<(), PipelineError> {
+    instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
         ledger.complete_generation(
             &rosetta_capture::SourceDef {
                 relative_path: file.relative_path.clone(),
