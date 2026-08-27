@@ -49,7 +49,11 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > The same ledger rebuilt in 253.54 s. Remaining cold costs are canonical application
 > (102.64 s in the hardened run), synchronous FTS5 (84.99 s), global ordinal
 > finalization (36.75 s), source read (22.10 s), normalization (16.52 s), and usage
-> buckets (15.06 s); these phases vary materially between otherwise equal runs.
+> buckets (15.06 s); these phases vary materially between otherwise equal runs. A newer
+> frozen pair at `25d18e9` enlarged only the ledger writer buffer and reduced its split
+> phase from 18.237 s to 16.988 s (−1.249 s / −6.8%) for about 5 MiB additional peak RSS.
+> A separately measured zero-copy raw-frame candidate regressed total ledger time and was
+> reverted; neither result is extrapolated from whole-run wall variance.
 > Diagnostic broad-ranked FTS p95 is 193.99–196.59 ms while selective-ranked p95 is
 > 10.11–10.91 ms. The bounded Tantivy bake-off on the retained 768,280-message frozen
 > projection built in 11.285–11.330 s and returned aggregate p95/p99 in
@@ -503,6 +507,15 @@ This makes the optimization boundary explicit:
   seek-heavy variants regressed. Do not carry the extra two-pass safety surface. Any future
   shortcut needs a writer-produced authenticated control index or footer that the full
   checksummed replay verifies.
+- Raw ledger framing and buffering are also below the adapter boundary, and the latest
+  frozen-source pair separated them. Borrowing payloads removed the temporary raw-frame
+  allocation but moved total ledger time from 18.237 s to 18.394 s, so it was reverted.
+  Raising only the writer buffer to 1 MiB reduced buffered write plus explicit flush from
+  7.950 s to 6.522 s and total ledger time to 16.988 s; `25d18e9` retains that change.
+  Source checksums, projection aggregates/integrity, segment shape, all post-meta ledger
+  bytes, and 100-cycle ranked-search results matched. The measured cost is about 5 MiB peak
+  RSS across six open runtime writers; the 7.41 s whole-wall delta is not attributed because
+  FTS alone varied by 6.406 s.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
 now attribute replay cost by adapter and canonical statement family. The target-aware gate

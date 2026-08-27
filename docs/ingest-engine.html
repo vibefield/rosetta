@@ -700,7 +700,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">M</td><td>Measured on the developer's organic agent histories, macOS 26.5.2
       on arm64, using the shipped <code>--profile</code> counters and a declared external wall clock.</td>
       <td>Corroboration and optimization direction only; never a CI correctness dependency.</td></tr>
-      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>c6319e6</code>.</td>
+      <tr><td class="cm">C</td><td>Static evidence in the current code through <code>25d18e9</code>.</td>
       <td>May establish present behavior and a refactoring seam.</td></tr>
       <tr><td class="cm">T</td><td>Automated fixture, replay, SQLite, or crash-protocol test.</td>
       <td>May gate implementation and CI.</td></tr>
@@ -1357,7 +1357,8 @@ seal all sources → fsync every staged file + child/parent directory entries
       <tr><td class="cm">split ledger profiling</td><td>Frame/copy, buffered write, flush, file sync, directory sync, segment-open, election-read, and replay-read counters are always on. The frozen baseline and candidate emitted exact frame/byte counts.</td><td class="metric">complete</td><td>retain for regression attribution</td></tr>
       <tr><td class="cm">stage cold runs; one publication barrier</td><td>96.644 s → 18.020 s ledger time; file sync 81.139 s → 0.128 s and 7,435 → 66 calls; twelve directory barriers cost 0.0005 s</td><td class="metric"><b>landed: −78.624 s ledger / −99.02 s wall</b></td><td>accepted; existing/live cadence unchanged</td></tr>
       <tr><td class="cm">payload-light RLG1 election pass</td><td>A frozen paired scan reduced wall by only 0.19–0.34 s (0.9–1.6%) even though one pair reduced user CPU from 8.66 s to 0.28 s. Seek-heavy variants regressed. In the full candidate run election moved from 21.466 s to 23.711 s while the unchanged replay pass also slowed from 10.208 s to 13.061 s, so no rebuild-wall saving was attributable.</td><td class="metric">rejected: subsecond isolated wall benefit</td><td>do not retry on the current frame format</td></tr>
-      <tr><td class="cm">zero-copy raw framing + larger buffer</td><td><code>append_raw</code> allocates and copies every payload into a frame body</td><td class="metric">historical 1–3 s; current TBD</td><td>benchmark after sync change</td></tr>
+      <tr><td class="cm">zero-copy raw framing</td><td>The isolated borrowed-payload implementation preserved exact RLG1 bytes, but framing moved only 8.443 s → 8.231 s while buffered writes moved 7.909 s → 8.350 s; total ledger time regressed 18.237 s → 18.394 s.</td><td class="metric">rejected: +0.158 s / +0.9%</td><td>code reverted; the allocation/copy was not an independently removable wall cost</td></tr>
+      <tr><td class="cm">1 MiB ledger writer buffer</td><td>The frozen pair kept 2,245,999 frames, 8,538,565,179 bytes, 66 segments, and every post-meta ledger byte identical. Buffered write + explicit flush fell 7.950 s → 6.522 s; total ledger time fell 18.237 s → 16.988 s.</td><td class="metric"><b>landed: −1.249 s / −6.8%</b></td><td><code>25d18e9</code>; about +5 MiB peak RSS</td></tr>
       <tr><td class="cm">compression / retention GC</td><td>8.45 GB retained mixed ledger; keep-forever policy</td><td class="metric">storage benefit; time unknown</td><td>separate RLG2 experiment</td></tr>
     </tbody>
   </table>
@@ -1369,6 +1370,19 @@ seal all sources → fsync every staged file + child/parent directory entries
   writer-produced, authenticated per-segment control index or footer, but that is an RLG format
   change whose disposable summary must be verified by the full replay pass. Do not revive payload
   skipping in the current RLG1 scanner or add a persistent manifest without that design.</p>
+  <p>The next frozen-source pair separated raw-frame copying from writer capacity instead of landing
+  them together. Borrowing each raw payload removed its temporary frame-body allocation and retained
+  exact wire bytes, but saved only 0.212 s of framing while buffered-write variance made total ledger
+  time 0.158 s slower; it was reverted before the buffer experiment. Replacing the standard writer
+  capacity with 1 MiB then reduced buffered write plus explicit flush by 1.428 s and total ledger
+  time by 1.249 s (6.8%). The six simultaneously retained writers raised measured peak RSS from
+  602,406,912 to 607,813,632 bytes, about 5 MiB.</p>
+  <p class="spec-note">The accepted <code>25d18e9</code> run passed source checksums before and after,
+  SQLite quick check and foreign keys, exact schema/logical/aggregate/FTS cardinality, identical
+  segment shape and all ledger bytes after each runtime's timestamped opening meta frame, and one
+  100-cycle frozen ranked-search comparison. Shared/fresh aggregate search p95 moved −1.51%/−1.01%;
+  this establishes no regression, not a search-latency improvement. Whole cold wall moved 375.11 s
+  → 367.70 s, but FTS alone moved −6.406 s, so only the split 1.249 s ledger reduction is attributed.</p>
 
   <h3 class="spec">Canonical-apply cost: reduce statements before redesigning storage</h3>
   <p><span class="badge b-io">C</span> Every message still performs an identity lookup, insert or
@@ -1495,6 +1509,11 @@ seal all sources → fsync every staged file + child/parent directory entries
     0.19–0.34 s of wall time despite removing nearly all measured user CPU; seek-heavy variants were
     slower. The implementation was reverted. Reopen only around writer-produced authenticated
     metadata, not another scanner-only payload skip.</li>
+    <li><b>Separate framing copies from writer buffering — complete.</b> Borrowed raw payloads
+    preserved byte-identical RLG1 output but made total ledger time 0.9% slower and were reverted.
+    The independent 1 MiB writer at <code>25d18e9</code> reduced frozen cold ledger time from
+    18.237 s to 16.988 s with about 5 MiB additional peak RSS; source, projection, ledger-byte, test,
+    Clippy, and ranked-search gates passed.</li>
     <li><b>Reject private-generation insert-first — complete.</b> Unique-index work moved from the
     explicit lookup into the insert, leaving only a 1.742 s combined-family saving while canonical
     apply regressed by 1.142 s. The five campaign cardinalities matched; the implementation was
