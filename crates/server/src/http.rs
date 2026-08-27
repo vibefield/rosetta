@@ -292,6 +292,7 @@ async fn search(
         runtime: request.runtime,
         project: request.project,
         kind: request.kind,
+        is_error: request.is_error,
         after_ts: request.after_ts,
         before_ts: request.before_ts,
     };

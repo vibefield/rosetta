@@ -66,6 +66,7 @@ fn filter(spec: &QueryFilterSpec) -> SearchFilter {
         runtime: spec.runtime.clone(),
         project: spec.project.clone(),
         kind: spec.kind.clone(),
+        is_error: spec.is_error,
         after_ts: spec.after_ts,
         before_ts: spec.before_ts,
     }
@@ -158,6 +159,12 @@ fn compile_query(
         (case.filter.runtime.as_deref(), fields.runtime),
         (case.filter.project.as_deref(), fields.project),
         (case.filter.kind.as_deref(), fields.kind),
+        (
+            case.filter
+                .is_error
+                .map(|value| if value { "true" } else { "false" }),
+            fields.is_error,
+        ),
     ] {
         if let Some(value) = value {
             clauses.push((Occur::Must, term_filter(field, value)));
@@ -208,6 +215,11 @@ fn matches_filter(doc: &TantivyDocument, fields: Fields, filter: &QueryFilterSpe
     }
     if let Some(value) = &filter.kind
         && text_value(doc, fields.kind) != value
+    {
+        return false;
+    }
+    if let Some(value) = filter.is_error
+        && text_value(doc, fields.is_error) != if value { "true" } else { "false" }
     {
         return false;
     }
@@ -557,6 +569,7 @@ mod tests {
     use rosetta_core::IngestOp;
     use rosetta_core::rows::{
         MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+        ToolCall,
     };
     use rosetta_store::{Batch, Store};
 
@@ -591,6 +604,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = temp.path().join("projection.sqlite");
         let mut store = Store::open(&db).unwrap();
+        let mut error_tool = message("m-tool", 1, MessageKind::ToolUse, "ionosphere", 200);
+        error_tool.tool = Some(ToolCall {
+            tool_id: Some("tool-1".into()),
+            name: "fixture".into(),
+            input: serde_json::json!({}),
+            result: Some("failed".into()),
+            payload: None,
+            is_error: Some(true),
+        });
         store
             .apply(&Batch {
                 ops: vec![
@@ -632,13 +654,7 @@ mod tests {
                         "ionosphere",
                         100,
                     ))),
-                    IngestOp::Message(Box::new(message(
-                        "m-tool",
-                        1,
-                        MessageKind::ToolUse,
-                        "ionosphere",
-                        200,
-                    ))),
+                    IngestOp::Message(Box::new(error_tool)),
                 ],
                 checkpoints: vec![],
                 source: None,
@@ -671,6 +687,28 @@ mod tests {
                     ..QueryFilterSpec::default()
                 },
             },
+            QueryCase {
+                label: "error".into(),
+                class: "filtered".into(),
+                query: "ionosphere".into(),
+                weight: 1,
+                limit: 10,
+                filter: QueryFilterSpec {
+                    is_error: Some(true),
+                    ..QueryFilterSpec::default()
+                },
+            },
+            QueryCase {
+                label: "non-error".into(),
+                class: "filtered".into(),
+                query: "ionosphere".into(),
+                weight: 1,
+                limit: 10,
+                filter: QueryFilterSpec {
+                    is_error: Some(false),
+                    ..QueryFilterSpec::default()
+                },
+            },
         ];
         let conn = open_read(&db).unwrap();
         let reference = cases
@@ -696,6 +734,12 @@ mod tests {
         assert_eq!(report.cases[1].tantivy_hits, 1);
         assert_eq!(report.cases[1].filter_violations, 0);
         assert_eq!(report.cases[1].overlap, 1);
+        assert_eq!(report.cases[2].tantivy_hits, 1);
+        assert_eq!(report.cases[2].filter_violations, 0);
+        assert_eq!(report.cases[2].overlap, 1);
+        assert_eq!(report.cases[3].tantivy_hits, 0);
+        assert_eq!(report.cases[3].filter_violations, 0);
+        assert_eq!(report.cases[3].overlap, 0);
 
         drop(index);
         unseal_for_test(&index_path);

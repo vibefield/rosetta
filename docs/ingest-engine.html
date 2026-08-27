@@ -1126,12 +1126,14 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   <p>The search document must index <code>timeline_id</code> (unique term), <code>session_id</code>,
   runtime/agent, project, timestamp, message kind, content, tool input, and tool result. Filter keys
   live in the index; retrieving top K and filtering afterward in SQLite is ranking-incorrect. The
-  backend returns timeline ids, scores, and matched-field information; SQLite remains responsible
-  for authorization/filter validation and canonical row hydration. Text need not be stored twice:
+  backend returns timeline ids, scores, and snippets; matched-field metadata stays out of the wire
+  until a named consumer needs it. SQLite remains responsible for authorization/filter validation
+  and canonical row hydration. Text need not be stored twice:
   hydrate the top rows from SQLite and generate snippets against that text.</p>
   <p>The L3 contract accepts whitespace-separated required terms and double-quoted required phrases,
   bounded to 4,096 bytes and 64 clauses, plus agent/runtime, project, session, time-range, kind,
-  and error filters. FTS/Tantivy operators and field selectors are ordinary text, not backend syntax.
+  and <code>is_error</code> filters. A false error filter excludes never-reported state rather than
+  coercing unknown to false. FTS/Tantivy operators and field selectors are ordinary text, not backend syntax.
   Ordering is score then a stable
   <code>timeline_id</code> tie-breaker. Numerical scores are diagnostic and have no cross-backend
   meaning. Responses expose readiness, projection epoch, index revision, and hits so a lagging index

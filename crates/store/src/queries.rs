@@ -51,6 +51,9 @@ pub struct SearchFilter {
     pub project: Option<String>,
     /// Message kind, in wire form (`user`, `agent`, `tool_use`, …).
     pub kind: Option<String>,
+    /// Tool terminal state. `Some` excludes rows that never reported a tool
+    /// error state; `false` is distinct from unknown.
+    pub is_error: Option<bool>,
     pub after_ts: Option<Ms>,
     pub before_ts: Option<Ms>,
 }
@@ -492,6 +495,14 @@ pub fn search_filtered(
     }
     if let Some(kind) = &filter.kind {
         clause(&mut sql, "m.type =", Value::from(kind.clone()), &mut binds);
+    }
+    if let Some(is_error) = filter.is_error {
+        clause(
+            &mut sql,
+            "m.tool_is_error =",
+            Value::from(i64::from(is_error)),
+            &mut binds,
+        );
     }
     if let Some(after) = filter.after_ts {
         clause(

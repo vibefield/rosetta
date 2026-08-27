@@ -12,7 +12,7 @@ use tower::ServiceExt;
 
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{
-    MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+    MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, ToolCall,
 };
 use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
 use rosetta_search::{
@@ -330,6 +330,14 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     let mut h = harness();
     let mut tool_row = message("m-tool", MessageKind::ToolUse, "ionosphere via tool");
     tool_row.ts = Some(7_200_000);
+    tool_row.tool = Some(ToolCall {
+        tool_id: Some("tool-1".into()),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "false"}),
+        result: Some("failed".into()),
+        payload: None,
+        is_error: Some(true),
+    });
     h.append(vec![
         message("m-user", MessageKind::User, "ionosphere question"),
         tool_row,
@@ -344,6 +352,15 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
     assert_eq!(parsed.hits.len(), 1);
     assert_eq!(parsed.hits[0].timeline_id, "m-tool");
+
+    let (_, body) = h.get("/api/search?q=ionosphere&is_error=true").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 1);
+    assert_eq!(parsed.hits[0].timeline_id, "m-tool");
+
+    let (_, body) = h.get("/api/search?q=ionosphere&is_error=false").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert!(parsed.hits.is_empty(), "unknown is not coerced to false");
 
     let (_, body) = h
         .get("/api/search?q=ionosphere&before_ts=3700000&session=s1")

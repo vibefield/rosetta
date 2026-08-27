@@ -2,9 +2,11 @@
 
 /**
  * Search request: structured text plus filters. No backend query syntax.
+ * `is_error` omitted includes true, false, and unreported; explicit false
+ * never matches unreported tool state.
  */
 export type SearchRequest = { q: string, limit: number | null, session: string | null, runtime: string | null, project: string | null, 
 /**
  * Message kind in wire form (`user`, `agent`, `tool_use`, …).
  */
-kind: string | null, after_ts: number | null, before_ts: number | null, };
+kind: string | null, is_error: boolean | null, after_ts: number | null, before_ts: number | null, };

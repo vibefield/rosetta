@@ -118,6 +118,7 @@ fn filter(spec: &QueryFilterSpec) -> SearchFilter {
         runtime: spec.runtime.clone(),
         project: spec.project.clone(),
         kind: spec.kind.clone(),
+        is_error: spec.is_error,
         after_ts: spec.after_ts,
         before_ts: spec.before_ts,
     }

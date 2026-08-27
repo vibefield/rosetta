@@ -45,6 +45,14 @@
       "filter": {
         "kind": "tool_use"
       }
+    },
+    {
+      "label": "tool-error-1",
+      "class": "filtered-error",
+      "query": "error",
+      "filter": {
+        "is_error": true
+      }
     }
   ]
 }

@@ -211,6 +211,7 @@ pub struct SearchQuery {
     pub runtime: Option<String>,
     pub project: Option<String>,
     pub kind: Option<String>,
+    pub is_error: Option<bool>,
     pub after_ts: Option<Ms>,
     pub before_ts: Option<Ms>,
 }
@@ -293,6 +294,7 @@ impl SearchBackend for Fts5Search {
             runtime: query.runtime,
             project: query.project,
             kind: query.kind,
+            is_error: query.is_error,
             after_ts: query.after_ts,
             before_ts: query.before_ts,
         };
@@ -334,6 +336,7 @@ mod tests {
                 runtime: None,
                 project: None,
                 kind: None,
+                is_error: None,
                 after_ts: None,
                 before_ts: None,
             })

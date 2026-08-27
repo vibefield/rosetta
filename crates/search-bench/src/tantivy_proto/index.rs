@@ -18,6 +18,7 @@ pub(crate) struct Fields {
     pub runtime: Field,
     pub project: Field,
     pub kind: Field,
+    pub is_error: Field,
     pub ts: Field,
     pub content: Field,
     pub tool_input: Field,
@@ -34,6 +35,7 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
     let runtime = builder.add_text_field("runtime", STRING | STORED);
     let project = builder.add_text_field("project", STRING | STORED);
     let kind = builder.add_text_field("kind", STRING | STORED);
+    let is_error = builder.add_text_field("is_error", STRING | STORED);
     // Index null timestamps as zero to match the reference query's
     // COALESCE(m.ts, 0) filter semantics.
     let ts = builder.add_i64_field("ts", INDEXED | FAST | STORED);
@@ -51,6 +53,7 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
             runtime,
             project,
             kind,
+            is_error,
             ts,
             content,
             tool_input,
@@ -87,6 +90,7 @@ fn add_row(
     runtime: String,
     project: Option<String>,
     kind: String,
+    is_error: Option<bool>,
     ts: Option<i64>,
     content: Option<String>,
     tool_input: Option<String>,
@@ -98,6 +102,10 @@ fn add_row(
     doc.add_text(fields.runtime, runtime);
     doc.add_text(fields.project, project.unwrap_or_default());
     doc.add_text(fields.kind, kind);
+    doc.add_text(
+        fields.is_error,
+        is_error.map_or("unknown", |value| if value { "true" } else { "false" }),
+    );
     doc.add_i64(fields.ts, ts.unwrap_or(0));
     let mut text_bytes = 0_u64;
     for (field, value) in [
@@ -148,7 +156,7 @@ pub(crate) fn build_index(
     let mut stmt = conn
         .prepare(
             "SELECT m.timeline_id, m.session_id, s.runtime_id, s.project_id,
-                    m.type, m.ts, m.content, m.tool_input, m.tool_result
+                    m.type, m.tool_is_error, m.ts, m.content, m.tool_input, m.tool_result
              FROM message m
              JOIN session s ON s.id = m.session_id
              ORDER BY m.id",
@@ -176,6 +184,7 @@ pub(crate) fn build_index(
                 row.get(6).map_err(|error| error.to_string())?,
                 row.get(7).map_err(|error| error.to_string())?,
                 row.get(8).map_err(|error| error.to_string())?,
+                row.get(9).map_err(|error| error.to_string())?,
             )?)
             .ok_or("source text byte count overflow")?;
         documents += 1;

@@ -20,6 +20,7 @@ pub struct QueryFilterSpec {
     pub runtime: Option<String>,
     pub project: Option<String>,
     pub kind: Option<String>,
+    pub is_error: Option<bool>,
     pub after_ts: Option<i64>,
     pub before_ts: Option<i64>,
 }
