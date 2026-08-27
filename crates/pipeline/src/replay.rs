@@ -24,9 +24,17 @@ use crate::checkpoint::{PIPE_CHECKPOINT_VERSION, PipeCheckpoint};
 use crate::instrument::{Instrument, Metric};
 use crate::stream::merge_stats;
 
-/// Ops per staged chunk. Small enough to bound memory, large enough that the
-/// per-transaction cost amortizes.
-const CHUNK_OPS: usize = 512;
+/// Private ledger replay can amortize more transaction commits than the live
+/// tail path, but one large record must not let an op-count limit imply
+/// unbounded buffering. The byte limit counts source payloads that contributed
+/// at least one buffered op; one record may exceed it and is flushed
+/// immediately after normalization.
+const REPLAY_CHUNK_OPS: usize = 2_048;
+const REPLAY_CHUNK_SOURCE_BYTES: usize = 32 * 1024 * 1024;
+
+fn replay_chunk_ready(ops: usize, source_bytes: usize) -> bool {
+    ops >= REPLAY_CHUNK_OPS || source_bytes >= REPLAY_CHUNK_SOURCE_BYTES
+}
 
 /// `visit_ledger` interleaves IO/decoding with the caller's normalization and
 /// SQLite work. Time the visitor separately and subtract it so "ledger read"
@@ -122,6 +130,7 @@ struct FileReplay {
     generation: u64,
     next_sequence: u64,
     ops: Vec<IngestOp>,
+    buffered_source_bytes: usize,
     last_offset: Option<u64>,
     generation_clean: bool,
     activated: bool,
@@ -316,8 +325,12 @@ pub fn rebuild_runtime(
                         report.hard_errors += 1;
                     }
                 }
+                if !outcome.ops.is_empty() {
+                    file.buffered_source_bytes =
+                        file.buffered_source_bytes.saturating_add(payload.len());
+                }
                 file.ops.extend(outcome.ops);
-                if file.ops.len() >= CHUNK_OPS {
+                if replay_chunk_ready(file.ops.len(), file.buffered_source_bytes) {
                     let mode = if file.activated {
                         SourceMode::Append
                     } else {
@@ -560,6 +573,7 @@ fn open_file(
         generation,
         next_sequence: 0,
         ops: Vec::new(),
+        buffered_source_bytes: 0,
         last_offset: None,
         generation_clean: true,
         activated: false,
@@ -578,6 +592,7 @@ fn flush_chunk(
     instrument: &Instrument,
 ) -> Result<(), PipelineError> {
     let ops = std::mem::take(&mut file.ops);
+    file.buffered_source_bytes = 0;
     let first_sequence = file.next_sequence;
     file.next_sequence += ops.len() as u64;
 
@@ -637,4 +652,19 @@ fn flush_chunk(
     merge_stats(&mut report.stats, &stats);
     instrument.add(Metric::BatchesApplied, 1);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REPLAY_CHUNK_OPS, REPLAY_CHUNK_SOURCE_BYTES, replay_chunk_ready};
+
+    #[test]
+    fn private_replay_chunks_stop_at_either_bound() {
+        assert!(!replay_chunk_ready(
+            REPLAY_CHUNK_OPS - 1,
+            REPLAY_CHUNK_SOURCE_BYTES - 1,
+        ));
+        assert!(replay_chunk_ready(REPLAY_CHUNK_OPS, 0));
+        assert!(replay_chunk_ready(1, REPLAY_CHUNK_SOURCE_BYTES));
+    }
 }
