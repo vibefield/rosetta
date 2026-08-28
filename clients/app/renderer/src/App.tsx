@@ -1,18 +1,18 @@
 // The History room. Columns change content, never geometry (H-2); search is
 // the front door and transforms columns 2–3; the ledger's scale is global
-// and stable whatever the filter says. The worktree rail is a guest and the
-// measure is not: below 1360px the rail closes rather than squeezing the
-// transcript (H-3), and an explicit toggle outranks the automatic close.
-import { useEffect, useMemo, useRef, useState } from "react";
+// and stable whatever the filter says. The worktree column is a guest and
+// the measure is not (H-3) — see `components/worktree/use-worktree-guest`,
+// which owns that rule and the engine lifecycle behind it.
+import { useEffect, useMemo, useState } from "react";
 import type { SearchHit, SearchReadiness, SessionRow } from "@rosetta/protocol";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
-import { RailColumn } from "./components/Rail";
 import { SearchStrip } from "./components/SearchStrip";
 import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts, SessionScope } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
+import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
 import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
 import {
   UNASSIGNED_PROJECT_ID,
@@ -22,7 +22,7 @@ import {
   unassignedProject,
 } from "./lib/model";
 import type { ProjectViewModel } from "./lib/model";
-import { host } from "./lib/rail-port";
+import { desktopHost } from "./lib/desktop-host";
 import { client } from "./lib/rosetta";
 import { createSearchResultsViewModel } from "./lib/search-results";
 
@@ -97,7 +97,7 @@ export default function App() {
     // knows agent data roots, and it now reports them already shortened
     // (`~/.claude`) — a string that names no home — so derive from one only
     // when it is still absolute, and otherwise show paths in full.
-    const fromShell = host()?.homeDir ?? null;
+    const fromShell = desktopHost()?.homeDir ?? null;
     if (fromShell !== null) return fromShell;
     const root = meta?.runtimes[0]?.data_root ?? null;
     if (root === null || !root.startsWith("/")) return null;
@@ -178,40 +178,8 @@ export default function App() {
     return projectById.get(projectId)?.row.root_paths[0] ?? null;
   }, [projectId, projectById]);
 
-  /* ── the worktree rail: a guest, per H-3 ────────────────────────────── */
-  const railAvailable = host() !== null;
-  const [railWanted, setRailWanted] = useState(true);
-  // An explicit choice outranks the automatic close — once the reader
-  // presses the toggle, the width heuristic stops applying.
-  const [railChosen, setRailChosen] = useState(false);
-  const [frameWide, setFrameWide] = useState(() => window.innerWidth >= 1360);
-  useEffect(() => {
-    const measure = () => setFrameWide(window.innerWidth >= 1360);
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, []);
-  const railShown =
-    railAvailable && projectRoot !== null && railWanted && (railChosen || frameWide);
-  // The toggle flips what is SHOWN, not what was last wanted — the first
-  // press on an already-auto-closed rail must never do nothing.
-  const toggleRail = () => {
-    if (railShown) {
-      setRailWanted(false);
-    } else {
-      setRailWanted(true);
-      setRailChosen(true);
-    }
-  };
-
-  // Point the engine at the selected project's root; kill-and-refork is the
-  // host's concern, so this only speaks when the root actually changes.
-  const openedRoot = useRef<string | null>(null);
-  useEffect(() => {
-    if (!railShown || projectRoot === null) return;
-    if (openedRoot.current === projectRoot) return;
-    openedRoot.current = projectRoot;
-    void host()?.openRail(projectRoot);
-  }, [railShown, projectRoot]);
+  /* ── column ③, a guest per H-3 ──────────────────────────────────────── */
+  const worktree = useWorktreeGuest(projectRoot);
 
   /* ── one search view model shared by all three result columns ───────── */
   const searchResults = useMemo(() => {
@@ -275,7 +243,7 @@ export default function App() {
           <div
             className="ah-cols"
             data-mode={searching ? "search" : "browse"}
-            data-rail={railShown ? "on" : "off"}
+            data-rail={worktree.visible ? "on" : "off"}
           >
             <ProjectsColumn
               projects={projectViewModels}
@@ -302,9 +270,9 @@ export default function App() {
               activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
               currentTimestamp={nowMs}
               isWorktreeVisible={
-                railAvailable && projectRoot !== null ? railShown : null
+                worktree.available && projectRoot !== null ? worktree.visible : null
               }
-              onToggleWorktree={toggleRail}
+              onToggleWorktree={worktree.toggle}
               onSessionSelect={(selectedSession) => {
                 if (searching) {
                   setQuery("");
@@ -315,12 +283,12 @@ export default function App() {
               }}
               searchGroups={searchResults?.groups ?? null}
             />
-            {/* Always in the grid — a closed rail is a 0px track, and the
-                measure takes back whatever the guest gives up. */}
-            <RailColumn
+            {/* Always in the grid — a closed guest is a 0px track, and the
+                measure takes back whatever it gives up. */}
+            <WorktreeColumn
               projectRoot={projectRoot}
               tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
-              home={home}
+              homeDirectory={home}
             />
             <TranscriptColumn
               session={session}

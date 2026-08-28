@@ -5,7 +5,7 @@
 // admitted by the daemon before file:// is ever an origin — deliberately not
 // wired yet.
 //
-// The worktree rail adds the one native concern this shell owns: the mille
+// The worktree column adds the one native concern this shell owns: the mille
 // engine runs in a UtilityProcess per project root (killed and re-forked on
 // every switch), a MessagePort reaches the renderer through the preload, and
 // read-only git facts (branch, dirty count, worktrees) answer over IPC — the
@@ -18,16 +18,17 @@ import { BrowserWindow, MessageChannelMain, app, ipcMain, shell, utilityProcess 
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** The one root the rail is currently allowed to answer git questions for.
- * IPC never trusts a renderer-supplied path beyond equality with this. */
-let railRoot = null;
+/** The one root the worktree column is currently allowed to answer git
+ * questions for. IPC never trusts a renderer-supplied path beyond equality
+ * with this. */
+let worktreeRoot = null;
 let fxProcess = null;
 
 function forkFxHost(root) {
   const proc = utilityProcess.fork(path.join(here, "fx-host.mjs"), [], {
     serviceName: "agent-history-worktree",
     stdio: "pipe",
-    env: { ...process.env, AH_RAIL_ROOT: root },
+    env: { ...process.env, AH_WORKTREE_ROOT: root },
   });
   proc.stdout?.on("data", (d) => process.stdout.write(`[fx-host] ${d}`));
   proc.stderr?.on("data", (d) => process.stderr.write(`[fx-host] ${d}`));
@@ -38,7 +39,7 @@ function forkFxHost(root) {
  * port. The old utility dies first so its watchers release; the port only
  * transfers after the utility's `ready`, or Node's parent-channel delivery
  * can drop it. */
-function openRail(win, root) {
+function openWorktree(win, root) {
   if (fxProcess !== null) {
     try {
       fxProcess.kill();
@@ -47,7 +48,7 @@ function openRail(win, root) {
     }
     fxProcess = null;
   }
-  railRoot = root;
+  worktreeRoot = root;
   const proc = forkFxHost(root);
   fxProcess = proc;
   const onMessage = (msg) => {
@@ -56,7 +57,7 @@ function openRail(win, root) {
     if (proc !== fxProcess) return; // superseded by a newer switch
     const { port1, port2 } = new MessageChannelMain();
     proc.postMessage({ type: "attach" }, [port1]);
-    win.webContents.postMessage("ah-rail-port", { root }, [port2]);
+    win.webContents.postMessage("ah-worktree-port", { root }, [port2]);
   };
   proc.on("message", onMessage);
 }
@@ -69,7 +70,7 @@ function git(root, args) {
   });
 }
 
-/** Read-only git facts for the open rail root: branch, dirty count, and the
+/** Read-only git facts for the open worktree root: branch, dirty count, and the
  * repository's worktrees. Absence is honest — a folder without git answers
  * with nulls, never an error. */
 async function gitFacts(root) {
@@ -148,19 +149,19 @@ app.whenReady().then(() => {
   // The renderer names the project root it is reading (learned from
   // rosettad); this process validates it is a real directory before any
   // walker or git call sees it.
-  ipcMain.handle("ah-rail-open", (_evt, raw) => {
+  ipcMain.handle("ah-worktree-open", (_evt, raw) => {
     if (typeof raw !== "string" || raw.length === 0) return false;
     try {
       if (!statSync(raw).isDirectory()) return false;
     } catch {
       return false;
     }
-    openRail(win, raw);
+    openWorktree(win, raw);
     return true;
   });
 
-  ipcMain.handle("ah-rail-git-facts", async (_evt, raw) => {
-    if (typeof raw !== "string" || raw !== railRoot) return null;
+  ipcMain.handle("ah-worktree-git-facts", async (_evt, raw) => {
+    if (typeof raw !== "string" || raw !== worktreeRoot) return null;
     return gitFacts(raw);
   });
 

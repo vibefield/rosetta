@@ -33,8 +33,8 @@ function wrapMessagePortMain(port) {
 let host = null;
 
 async function bootstrap() {
-  const root = process.env.AH_RAIL_ROOT;
-  if (!root) throw new Error("AH_RAIL_ROOT not set");
+  const root = process.env.AH_WORKTREE_ROOT;
+  if (!root) throw new Error("AH_WORKTREE_ROOT not set");
 
   host = await createFileExplorerHost({
     roots: [root],
@@ -42,7 +42,7 @@ async function bootstrap() {
     followSymlinks: "smart",
     watchDebounceMs: 75,
     // Lazy expansion: seed the root, prefetch children on expand. A history
-    // room's rail must never walk a monorepo upfront.
+    // room's worktree column must never walk a monorepo upfront.
     initialWalk: "roots-only",
     // One row is one directory. mille's default collapses a single-child
     // chain into `clients/app/electron`, which is an IDE convenience that

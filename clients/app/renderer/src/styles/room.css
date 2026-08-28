@@ -712,7 +712,13 @@ code, .mono { font-family: var(--vf-font-mono); }
    above already carry the rail track and its H-3 close); the footprint
    guest still waits on Q4, so its 0px fifth track stays empty. */
 
-/* The mille tree owns its own scroller and is sized to its CONTENT, so the
+/* `ah-rail*` throughout is the design record's vocabulary, not the app's:
+   this file is a port of the proto §03 class names and all, and the two are
+   diffed against each other. The React side calls the column what it shows
+   — `components/worktree` — and leaves the stylesheet speaking the record's
+   language.
+
+   The mille tree owns its own scroller and is sized to its CONTENT, so the
    worktrees below sit against the last row the way the proto's single-flow
    rail draws them. `flex-shrink` caps that height at the space the foot
    leaves, and the unmeasured case falls back to filling the column. */
