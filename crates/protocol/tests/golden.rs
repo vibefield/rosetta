@@ -7,11 +7,11 @@
 
 use rosetta_protocol::{
     ApiError, ContributionResponse, ContributionRow, DaemonStatus, ErrorCode, HeatmapDay,
-    HeatmapResponse, HubStatus, MessageKind, MessageRow, Mutation, PROTOCOL_VERSION, ProjectRow,
-    ProjectsResponse, RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit,
-    SearchReadiness, SearchRequest, SearchResponse, SearchState, ServerFrame, SessionResponse,
-    SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState, TimelinePage,
-    TokenSnapshot, ToolCall,
+    HeatmapResponse, HourTotal, HubStatus, MessageKind, MessageRow, ModelDay, Mutation,
+    PROTOCOL_VERSION, ProjectRow, ProjectsResponse, RuntimeIngestStatus, RuntimeRow,
+    RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState,
+    ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse,
+    StreamState, TimelinePage, TokenSnapshot, ToolCall, UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -238,6 +238,13 @@ fn exemplars() -> serde_json::Value {
         ],
         "heatmap": HeatmapResponse {
             days: vec![HeatmapDay { day: "2026-08-26".into(), tokens: 123 }],
+        },
+        "usage": UsageResponse {
+            models: vec![
+                ModelDay { day: "2026-08-26".into(), model: "claude-opus-5".into(), tokens: 100 },
+                ModelDay { day: "2026-08-26".into(), model: "unknown".into(), tokens: 23 },
+            ],
+            hours: vec![HourTotal { hour: 15, tokens: 123 }],
         },
         "contribution": ContributionResponse {
             rows: vec![ContributionRow {

@@ -443,5 +443,25 @@
         "uuid": "u1"
       }
     ]
+  },
+  "usage": {
+    "hours": [
+      {
+        "hour": 15,
+        "tokens": 123
+      }
+    ],
+    "models": [
+      {
+        "day": "2026-08-26",
+        "model": "claude-opus-5",
+        "tokens": 100
+      },
+      {
+        "day": "2026-08-26",
+        "model": "unknown",
+        "tokens": 23
+      }
+    ]
   }
 }

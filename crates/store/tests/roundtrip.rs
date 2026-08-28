@@ -477,6 +477,71 @@ fn usage_replacement_never_double_counts_and_preserves_unknownness() {
 }
 
 #[test]
+fn model_days_and_hour_profile_are_views_of_the_heatmap_sum() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    // Two models in the same day, hours 1 and 3 — distinct responses.
+    let mut a = message("m-a", 1, MessageKind::Agent);
+    a.ts = Some(3_600_000);
+    a.model = Some("opus-5".into());
+    a.usage = Some(TokenSnapshot {
+        input: Some(100),
+        output: Some(20),
+        ..Default::default()
+    });
+    let mut b = message("m-b", 2, MessageKind::Agent);
+    b.ts = Some(3_600_000 * 3);
+    b.model = Some("haiku-4-5".into());
+    b.usage = Some(TokenSnapshot {
+        output: Some(7),
+        ..Default::default()
+    });
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(a)),
+                IngestOp::Message(Box::new(b)),
+            ],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    let models = queries::model_days_in_timezone(store.conn(), "p1", 0, 0).unwrap();
+    assert_eq!(models.len(), 2);
+    assert_eq!(
+        (
+            models[0].day.as_str(),
+            models[0].model.as_str(),
+            models[0].tokens
+        ),
+        ("1970-01-01", "haiku-4-5", 7)
+    );
+    assert_eq!(
+        (
+            models[1].day.as_str(),
+            models[1].model.as_str(),
+            models[1].tokens
+        ),
+        ("1970-01-01", "opus-5", 120)
+    );
+
+    // The coherence contract: per-model days sum back to the heatmap's day.
+    let days = queries::heatmap_days(store.conn(), "p1", 0).unwrap();
+    assert_eq!(days[0].tokens, models.iter().map(|m| m.tokens).sum::<i64>());
+
+    // Hour profile in UTC, then shifted two hours west: same totals, moved.
+    let hours = queries::hour_profile_in_timezone(store.conn(), "p1", 0, 0).unwrap();
+    assert_eq!(hours.len(), 2);
+    assert_eq!((hours[0].hour, hours[0].tokens), (1, 120));
+    assert_eq!((hours[1].hour, hours[1].tokens), (3, 7));
+    let west = queries::hour_profile_in_timezone(store.conn(), "p1", 0, -120).unwrap();
+    assert_eq!((west[0].hour, west[0].tokens), (1, 7));
+    assert_eq!((west[1].hour, west[1].tokens), (23, 120));
+}
+
+#[test]
 fn contribution_folds_subagents_into_their_root() {
     let mut store = Store::open_in_memory().unwrap();
     let mut batch = base_batch();

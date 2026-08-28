@@ -23,7 +23,7 @@ use serde_json::json;
 use rosetta_protocol::{
     ApiError, ContributionResponse, ErrorCode, HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse,
     RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
-    StatusResponse, TimelineCursor, TimelinePage,
+    StatusResponse, TimelineCursor, TimelinePage, UsageResponse,
 };
 use rosetta_search::{Fts5Search, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery};
 use rosetta_store::queries;
@@ -84,6 +84,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runtimes", get(runtimes))
         .route("/api/projects", get(projects))
         .route("/api/projects/{id}/heatmap", get(heatmap))
+        .route("/api/projects/{id}/usage", get(usage))
         .route("/api/projects/{id}/contribution", get(contribution))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}", get(session))
@@ -405,6 +406,27 @@ async fn heatmap(
         )
         .map_err(store_err)?;
         Ok(HeatmapResponse { days })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+/// The heatmap figure's decomposition: per-model days plus an hour-of-day
+/// profile, both over the same `since_ms` window in the same offset — so
+/// every number here sums back to a `/heatmap` figure exactly.
+async fn usage(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<HeatmapQuery>,
+) -> Result<Json<UsageResponse>, Failure> {
+    let response = with_read(state.db.clone(), move |conn| {
+        let since_ms = query.since_ms.unwrap_or(0);
+        let offset_minutes = query.offset_minutes.unwrap_or(0);
+        let models = queries::model_days_in_timezone(conn, &id, since_ms, offset_minutes)
+            .map_err(store_err)?;
+        let hours = queries::hour_profile_in_timezone(conn, &id, since_ms, offset_minutes)
+            .map_err(store_err)?;
+        Ok(UsageResponse { models, hours })
     })
     .await?;
     Ok(Json(response))

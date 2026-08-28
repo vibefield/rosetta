@@ -22,7 +22,7 @@ pub use rosetta_core::rows::{
 };
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
-pub use rosetta_store::queries::{ContributionRow, HeatmapDay};
+pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -195,6 +195,16 @@ pub struct HeatmapResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ContributionResponse {
     pub rows: Vec<ContributionRow>,
+}
+
+/// What one project's heatmap figure decomposes into over the same window:
+/// per-model days (they sum back to the heatmap's exactly) and an
+/// hour-of-day profile. Both obey the request's timezone offset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct UsageResponse {
+    pub models: Vec<ModelDay>,
+    pub hours: Vec<HourTotal>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

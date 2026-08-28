@@ -22,6 +22,24 @@ pub struct HeatmapDay {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ModelDay {
+    /// Date in the caller-selected timezone, `YYYY-MM-DD`.
+    pub day: String,
+    /// Model id as the agent reported it; `unknown` when it never did.
+    pub model: String,
+    pub tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HourTotal {
+    /// Hour of day 0–23 in the caller-selected timezone.
+    pub hour: i64,
+    pub tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ContributionRow {
     pub session_id: String,
     pub project_id: Option<String>,
@@ -408,6 +426,70 @@ pub fn heatmap_days_in_timezone(
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
         Ok(HeatmapDay {
             day: row.get(0)?,
+            tokens: row.get(1)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// The heatmap's daily totals split by model — the same `usage_bucket` sum
+/// with `model` kept in the grouping, so per-model days always add back to
+/// [`heatmap_days_in_timezone`]'s figure for the same window and offset.
+pub fn model_days_in_timezone(
+    conn: &Connection,
+    project_id: &str,
+    since_ms: Ms,
+    offset_minutes: i32,
+) -> Result<Vec<ModelDay>, StoreError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day, b.model,
+                SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
+                    + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
+                    + COALESCE(b.think_tokens,0)) AS tokens
+         FROM usage_bucket b
+         JOIN session s ON s.id = b.session_id
+         WHERE s.project_id = ?1 AND b.hour_ts >= ?2
+         GROUP BY day, b.model ORDER BY day, b.model",
+    )?;
+    let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
+        Ok(ModelDay {
+            day: row.get(0)?,
+            model: row.get(1)?,
+            tokens: row.get(2)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Tokens by hour of day (0–23) over the window — which hours a project's
+/// work actually happens in. Hours with no usage are absent, not zero.
+pub fn hour_profile_in_timezone(
+    conn: &Connection,
+    project_id: &str,
+    since_ms: Ms,
+    offset_minutes: i32,
+) -> Result<Vec<HourTotal>, StoreError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT CAST(strftime('%H', (b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
+                SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
+                    + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
+                    + COALESCE(b.think_tokens,0)) AS tokens
+         FROM usage_bucket b
+         JOIN session s ON s.id = b.session_id
+         WHERE s.project_id = ?1 AND b.hour_ts >= ?2
+         GROUP BY hour ORDER BY hour",
+    )?;
+    let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
+        Ok(HourTotal {
+            hour: row.get(0)?,
             tokens: row.get(1)?,
         })
     })?;

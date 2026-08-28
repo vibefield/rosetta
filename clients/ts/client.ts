@@ -23,6 +23,7 @@ import type { SessionsResponse } from "./generated/SessionsResponse";
 import type { Stamp } from "./generated/Stamp";
 import type { StatusResponse } from "./generated/StatusResponse";
 import type { TimelinePage } from "./generated/TimelinePage";
+import type { UsageResponse } from "./generated/UsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
 
@@ -190,6 +191,20 @@ export class RosettaClient {
 
   contribution(projectId: string): Promise<ContributionResponse> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/contribution`);
+  }
+
+  /** The heatmap figure's decomposition over the same window: per-model days
+   * (they sum back to the heatmap exactly) plus an hour-of-day profile. */
+  usage(
+    projectId: string,
+    options: { sinceMs?: number; offsetMinutes?: number } = {},
+  ): Promise<UsageResponse> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/usage${queryString({
+        since_ms: options.sinceMs,
+        offset_minutes: options.offsetMinutes,
+      })}`,
+    );
   }
 
   subscribeSession(
