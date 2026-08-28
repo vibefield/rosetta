@@ -50,6 +50,67 @@ pub struct DaemonStatus {
     pub uptime_ms: u64,
     pub runtimes: Vec<RuntimeIngestStatus>,
     pub hub: HubStatus,
+    /// Cold-start progress. Answers from process start, so the app can
+    /// render honest meters before the projection is even readable.
+    pub ingest: IngestProgress,
+}
+
+/// Where the daemon's ingest is in its life. `Live` means the watch loop
+/// owns the store and the cold backfill is history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum IngestPhase {
+    Discovering,
+    Backfilling,
+    Live,
+}
+
+/// One runtime's position in the cold backfill queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum BackfillState {
+    Queued,
+    Skimming,
+    Streaming,
+    Done,
+}
+
+/// The ingest block on [`DaemonStatus`]: phase plus per-runtime meters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct IngestProgress {
+    pub phase: IngestPhase,
+    /// Installed runtimes in serve order.
+    pub runtimes: Vec<RuntimeBackfill>,
+}
+
+/// Cold-start progress for one runtime. Denominators come from discovery's
+/// census walk; numerators advance live while the writer streams, so both
+/// meters are determinate: skims measure in files, streams in bytes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RuntimeBackfill {
+    pub kind: String,
+    pub state: BackfillState,
+    /// Census denominators from discovery's walk.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub files_total: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub bytes_total: u64,
+    /// Skim meter numerator: files skimmed so far.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub files_skimmed: u64,
+    /// Stream meter numerator: transcript bytes read so far.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub bytes_streamed: u64,
+    /// Sessions the skim identified; 0 until the skim lands.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub sessions_total: u64,
+    /// Transcript records parsed so far.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub records: u64,
 }
 
 /// One watched runtime's live-ingest counters, cumulative since start.

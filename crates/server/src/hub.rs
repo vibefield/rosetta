@@ -184,6 +184,40 @@ impl Hub {
         Ok(events.len())
     }
 
+    /// Mid-backfill mirror refresh: re-read the whole surface and fan the
+    /// changes to meta subscribers. The cold path's substitute for effects,
+    /// which only flow once the live loop owns the store — and precise,
+    /// because the mirror's warm diffs against resident state and emits
+    /// only rows that actually changed. Returns the diffs delivered.
+    pub fn rewarm(&self, conn: &Connection) -> Result<usize, StoreError> {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        let state = &mut *state;
+        state
+            .subs
+            .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
+        let events = state.mirror.warm(conn)?;
+        let delivered = events.len();
+        let mut resyncs = 0_u64;
+        for event in events {
+            let item = Arc::new(event);
+            for entry in state.subs.values() {
+                if entry.topic == Topic::Meta {
+                    resyncs += u64::from(deliver(
+                        &entry.shared,
+                        self.config.subscriber_queue,
+                        HubItem::Mutation {
+                            stamp: None,
+                            mutation: item.clone(),
+                        },
+                    ));
+                }
+            }
+        }
+        state.totals.meta_events += delivered as u64;
+        state.totals.resyncs += resyncs;
+        Ok(delivered)
+    }
+
     /// Subscribe to one session's timeline. Take the DB snapshot AFTER this
     /// returns and stamp it with the returned [`Stamp`]; mutations delivered
     /// afterwards continue from there (overlap is idempotent).

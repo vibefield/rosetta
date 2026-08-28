@@ -9,6 +9,6 @@ pub mod http;
 pub mod hub;
 pub mod ws;
 
-pub use health::{DaemonHealth, RuntimeTick};
+pub use health::{DaemonHealth, IngestCounterSource, IngestCounters, RuntimeTick};
 pub use http::{AppState, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};

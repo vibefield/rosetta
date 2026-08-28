@@ -380,6 +380,21 @@
         "session_mutations": 12,
         "subscribers": 2
       },
+      "ingest": {
+        "phase": "backfilling",
+        "runtimes": [
+          {
+            "bytes_streamed": 1073741824,
+            "bytes_total": 2147483648,
+            "files_skimmed": 1209,
+            "files_total": 1209,
+            "kind": "claude-code",
+            "records": 214032,
+            "sessions_total": 5912,
+            "state": "streaming"
+          }
+        ]
+      },
       "runtimes": [
         {
           "admissions": 2,

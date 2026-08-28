@@ -218,33 +218,46 @@ fn clamp_limit(limit: Option<i64>, default: i64) -> i64 {
     limit.unwrap_or(default).clamp(1, MAX_LIMIT)
 }
 
-async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, Failure> {
+async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     let search_state = state.search.state();
     let daemon = state
         .health
         .as_ref()
         .map(|health| health.snapshot(&state.hub, now_ms()));
-    let response = with_read(state.db.clone(), |conn| {
-        let schema_version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(|error| Failure::internal(format!("{error}")))?;
-        let canonical_ready = schema_version == schema::SCHEMA_VERSION;
-        Ok(StatusResponse {
-            protocol_version: PROTOCOL_VERSION,
-            schema_version,
-            canonical_ready,
-            // Synchronous FTS5 commits with canonical rows; a foreign schema
-            // means neither surface is serveable.
-            search: if canonical_ready {
-                search_state
-            } else {
-                SearchState::failed()
-            },
-            daemon,
-        })
+    let schema_version = with_read(state.db.clone(), |conn| {
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| Failure::internal(format!("{error}")))
     })
-    .await?;
-    Ok(Json(response))
+    .await;
+    let response = match schema_version {
+        Ok(schema_version) => {
+            let canonical_ready = schema_version == schema::SCHEMA_VERSION;
+            StatusResponse {
+                protocol_version: PROTOCOL_VERSION,
+                schema_version,
+                canonical_ready,
+                // Synchronous FTS5 commits with canonical rows; a foreign
+                // schema means neither surface is serveable.
+                search: if canonical_ready {
+                    search_state
+                } else {
+                    SearchState::failed()
+                },
+                daemon,
+            }
+        }
+        // No readable projection — a fresh install still cold-loading its
+        // private file. Status is the app's connectivity truth and answers
+        // anyway; the daemon block carries the backfill meters.
+        Err(_) => StatusResponse {
+            protocol_version: PROTOCOL_VERSION,
+            schema_version: 0,
+            canonical_ready: false,
+            search: SearchState::failed(),
+            daemon,
+        },
+    };
+    Json(response)
 }
 
 fn now_ms() -> i64 {

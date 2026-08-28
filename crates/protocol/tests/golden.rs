@@ -6,12 +6,13 @@
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
 use rosetta_protocol::{
-    ApiError, ContributionResponse, ContributionRow, DaemonStatus, ErrorCode, HeatmapDay,
-    HeatmapResponse, HourTotal, HubStatus, MessageKind, MessageRow, ModelDay, Mutation,
-    PROTOCOL_VERSION, ProjectRow, ProjectsResponse, RuntimeIngestStatus, RuntimeRow,
-    RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState,
-    ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse,
-    StreamState, TimelinePage, TokenSnapshot, ToolCall, UsageResponse,
+    ApiError, BackfillState, ContributionResponse, ContributionRow, DaemonStatus, ErrorCode,
+    HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, MessageKind,
+    MessageRow, ModelDay, Mutation, PROTOCOL_VERSION, ProjectRow, ProjectsResponse,
+    RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness,
+    SearchRequest, SearchResponse, SearchState, ServerFrame, SessionResponse, SessionRole,
+    SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState, TimelinePage, TokenSnapshot,
+    ToolCall, UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -130,6 +131,19 @@ fn exemplars() -> serde_json::Value {
                 resyncs: 1,
                 rings_evicted: 0,
                 overflow_rewarms: 0,
+            },
+            ingest: IngestProgress {
+                phase: IngestPhase::Backfilling,
+                runtimes: vec![RuntimeBackfill {
+                    kind: "claude-code".into(),
+                    state: BackfillState::Streaming,
+                    files_total: 1_209,
+                    bytes_total: 2_147_483_648,
+                    files_skimmed: 1_209,
+                    bytes_streamed: 1_073_741_824,
+                    sessions_total: 5_912,
+                    records: 214_032,
+                }],
             },
         }),
     };
