@@ -225,6 +225,7 @@
 .ah-treemap__item { position: absolute; border: 0; padding: 0; background: transparent; }
 .ah-treemap__item-content {
   position: absolute; inset: 0 2px 2px 0; border-radius: 4px;
+  overflow: hidden;
   background: color-mix(in srgb, var(--treemap-item-color) 26%, transparent);
   transition: background-color 160ms ease, box-shadow 160ms ease;
 }
@@ -237,12 +238,12 @@
 }
 .ah-treemap__item b {
   position: absolute; left: 6px; right: 6px; top: 5px;
-  font-size: 9px; font-weight: 500; color: var(--vf-text-secondary);
+  font-size: 9px; font-weight: 500; line-height: 11px; color: var(--vf-text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
 }
 .ah-treemap__item em {
   position: absolute; right: 6px; bottom: 4px;
-  font-style: normal; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  font-style: normal; font-size: 9.5px; line-height: 11px; font-variant-numeric: tabular-nums;
   color: var(--vf-text-primary);
 }
 .ah-treemap__item:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; border-radius: 5px; }

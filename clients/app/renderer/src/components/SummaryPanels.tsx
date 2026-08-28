@@ -20,6 +20,8 @@ import type { ProjectViewModel } from "../lib/model";
 type TintStyle = CSSProperties & { "--tint": string };
 type ProjectChart = "activity" | "models";
 const MAX_TREEMAP_PROJECT_COUNT = 10;
+// Matches the project chart's 25px selector track, 9px gap, and 106px chart body.
+const SUMMARY_CHART_CONTENT_HEIGHT = 140;
 
 const PROJECT_CHART_OPTIONS = [
   { value: "activity", label: "Overview" },
@@ -340,6 +342,7 @@ export function PortfolioSummaryPanel({
               ariaLabel="Top projects by 30-day spend, where area represents share among displayed projects"
               emptyMessage="No project spend in this window"
               showFooter={false}
+              height={SUMMARY_CHART_CONTENT_HEIGHT}
               selectedItemId={selectedProjectId}
               onItemSelect={(item) => onProjectSelect(item.id)}
               formatValue={tokenText}

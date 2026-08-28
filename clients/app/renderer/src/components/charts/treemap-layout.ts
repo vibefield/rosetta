@@ -32,7 +32,8 @@ export interface TreemapLayoutOptions {
 
 const DEFAULT_MINIMUM_VISIBLE_SHARE = 0.009;
 const DEFAULT_MINIMUM_LABEL_WIDTH = 46;
-const DEFAULT_MINIMUM_LABEL_HEIGHT = 27;
+// Two 11px lines plus the tile's top/bottom insets and a safe interline gap.
+const DEFAULT_MINIMUM_LABEL_HEIGHT = 38;
 
 function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
