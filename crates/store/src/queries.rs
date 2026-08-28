@@ -29,6 +29,9 @@ pub struct ContributionRow {
     pub commits: i64,
     pub edits: i64,
     pub loc: i64,
+    /// Message rows across the session's whole subagent tree, folded into the
+    /// root the same way the view folds tokens.
+    pub messages: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -422,9 +425,14 @@ pub fn contribution(
     project_id: &str,
 ) -> Result<Vec<ContributionRow>, StoreError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT session_id, project_id, tokens, commits, edits, loc
-         FROM session_contribution WHERE project_id = ?1
-         ORDER BY tokens DESC",
+        "SELECT c.session_id, c.project_id, c.tokens, c.commits, c.edits, c.loc,
+                COALESCE(m.messages, 0) AS messages
+         FROM session_contribution c
+         LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) messages
+                    FROM message msg JOIN session s ON s.id = msg.session_id
+                    GROUP BY rid) m ON m.rid = c.session_id
+         WHERE c.project_id = ?1
+         ORDER BY c.tokens DESC",
     )?;
     let rows = stmt.query_map(params![project_id], |row| {
         Ok(ContributionRow {
@@ -434,6 +442,7 @@ pub fn contribution(
             commits: row.get(3)?,
             edits: row.get(4)?,
             loc: row.get(5)?,
+            messages: row.get(6)?,
         })
     })?;
     let mut out = Vec::new();

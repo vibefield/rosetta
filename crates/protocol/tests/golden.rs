@@ -247,6 +247,7 @@ fn exemplars() -> serde_json::Value {
                 commits: 1,
                 edits: 2,
                 loc: 30,
+                messages: 41,
             }],
         },
         "mutations": mutations,
