@@ -9,6 +9,4 @@ export type { SessionsColumnProps } from "./SessionsColumn";
 export type {
   SessionFacts,
   SessionScope,
-  SessionSearchGroup,
-  SessionSearchResult,
 } from "./types";

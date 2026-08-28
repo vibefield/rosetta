@@ -7,6 +7,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
 import { CalendarHeatmap, Streamgraph, Treemap } from "./charts";
 import type { TreemapData } from "./charts";
+import { SegmentedControl } from "./ui";
 import {
   calculateActivityStats,
   createCalendarHeatmapData,
@@ -18,6 +19,11 @@ import type { ProjectViewModel } from "../lib/model";
 
 type TintStyle = CSSProperties & { "--tint": string };
 type ProjectChart = "activity" | "models";
+
+const PROJECT_CHART_OPTIONS = [
+  { value: "activity", label: "Overview" },
+  { value: "models", label: "Models" },
+] as const;
 
 /* ── four chips, not four cards ─────────────────────────────────────────── */
 
@@ -184,24 +190,13 @@ export function ProjectSummaryPanel({
             ]}
           />
           <div className="ah-chartcard">
-            <div className="ah-seg ah-tabseg" role="group" aria-label="Project chart">
-              <button
-                type="button"
-                className={activeChart === "activity" ? "is-on" : ""}
-                aria-pressed={activeChart === "activity"}
-                onClick={() => setActiveChart("activity")}
-              >
-                Overview
-              </button>
-              <button
-                type="button"
-                className={activeChart === "models" ? "is-on" : ""}
-                aria-pressed={activeChart === "models"}
-                onClick={() => setActiveChart("models")}
-              >
-                Models
-              </button>
-            </div>
+            <SegmentedControl
+              value={activeChart}
+              options={PROJECT_CHART_OPTIONS}
+              accessibleLabel="Project chart"
+              className="ah-tabseg"
+              onValueChange={setActiveChart}
+            />
             <div className="ah-tabbody">
               {activeChart === "models" ? (
                 <Streamgraph

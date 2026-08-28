@@ -1,9 +1,10 @@
 import type { SessionRow, UsageResponse } from "@rosetta/protocol";
 import type { ProjectViewModel } from "../../lib/model";
+import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { ProjectSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
 import { SessionList } from "./SessionList";
-import type { SessionFacts, SessionScope, SessionSearchGroup } from "./types";
+import type { SessionFacts, SessionScope } from "./types";
 
 const SESSION_SCOPE_OPTIONS = [
   { value: "roots", label: "roots" },
@@ -27,7 +28,7 @@ export interface SessionsColumnProps {
   readonly onToggleWorktree: () => void;
   readonly onSessionSelect: (session: SessionRow) => void;
   /** Non-null selects search mode and replaces the browse-mode sessions. */
-  readonly searchGroups: readonly SessionSearchGroup[] | null;
+  readonly searchGroups: readonly ProjectSearchResultGroup[] | null;
 }
 
 export function SessionsColumn({

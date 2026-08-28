@@ -10,12 +10,9 @@ import type { ProjectSort } from "./components/projects";
 import { RailColumn } from "./components/Rail";
 import { SearchStrip } from "./components/SearchStrip";
 import { SessionsColumn } from "./components/sessions";
-import type {
-  SessionFacts,
-  SessionScope,
-  SessionSearchGroup,
-} from "./components/sessions";
+import type { SessionFacts, SessionScope } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
+import { EmptyState } from "./components/ui";
 import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
 import {
   UNASSIGNED_PROJECT_ID,
@@ -27,6 +24,7 @@ import {
 import type { ProjectViewModel } from "./lib/model";
 import { host } from "./lib/rail-port";
 import { client } from "./lib/rosetta";
+import { createSearchResultsViewModel } from "./lib/search-results";
 
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -208,75 +206,15 @@ export default function App() {
     void host()?.openRail(projectRoot);
   }, [railShown, projectRoot]);
 
-  /* ── search groupings: project → session → hits ─────────────────────── */
-  const grouped = useMemo(() => {
+  /* ── one search view model shared by all three result columns ───────── */
+  const searchResults = useMemo(() => {
     if (!searching || search.response === null || meta === null) return null;
-    const sessionById = new Map(meta.sessions.map((s) => [s.id, s]));
-    const bySession = new Map<string, SearchHit[]>();
-    for (const hit of search.response.hits) {
-      const list = bySession.get(hit.session_id);
-      if (list) list.push(hit);
-      else bySession.set(hit.session_id, [hit]);
-    }
-    const byProject = new Map<string, { session: SessionRow; hits: SearchHit[] }[]>();
-    for (const [sid, hits] of bySession) {
-      const s = sessionById.get(sid);
-      if (!s) continue;
-      const pid = projectKey(s);
-      const list = byProject.get(pid);
-      const entry = { session: s, hits };
-      if (list) list.push(entry);
-      else byProject.set(pid, [entry]);
-    }
-    const groups = [...byProject.entries()]
-      .map(([pid, entries]) => ({
-        project: projectById.get(pid) ?? null,
-        entries: entries.sort((a, b) => b.hits.length - a.hits.length),
-      }))
-      .filter(
-        (g): g is { project: ProjectViewModel; entries: typeof g.entries } =>
-          g.project !== null,
-      )
-      .sort(
-        (a, b) =>
-          b.entries.reduce((n, e) => n + e.hits.length, 0) -
-          a.entries.reduce((n, e) => n + e.hits.length, 0),
-      );
-    return groups;
+    return createSearchResultsViewModel(
+      search.response.hits,
+      meta.sessions,
+      projectById,
+    );
   }, [searching, search.response, meta, projectById]);
-
-  const ledgerCounts = useMemo(() => {
-    if (grouped === null) return null;
-    const out = new Map<string, number>();
-    for (const g of grouped) {
-      out.set(
-        g.project.row.id,
-        g.entries.reduce((n, e) => n + e.hits.length, 0),
-      );
-    }
-    return out;
-  }, [grouped]);
-
-  const sessionSearchGroups = useMemo<readonly SessionSearchGroup[] | null>(
-    () =>
-      grouped?.map((group) => ({
-        project: group.project,
-        sessions: group.entries.map((entry) => ({
-          session: entry.session,
-          hitCount: entry.hits.length,
-        })),
-      })) ?? null,
-    [grouped],
-  );
-
-  const searchCounts = useMemo(() => {
-    if (grouped === null) return null;
-    return {
-      matches: grouped.reduce((n, g) => n + g.entries.reduce((m, e) => m + e.hits.length, 0), 0),
-      sessions: grouped.reduce((n, g) => n + g.entries.length, 0),
-      projects: grouped.length,
-    };
-  }, [grouped]);
 
   const openHit = (hitSession: SessionRow, hit: SearchHit) => {
     setQuery("");
@@ -307,18 +245,25 @@ export default function App() {
       <div className="ah-room">
         <SearchStrip query={query} onQuery={setQuery} scope={scope} />
         {disconnected ? (
-          <div className="ah-empty" style={{ flex: 1 }}>
+          <EmptyState
+            style={{ flex: 1 }}
+            title={
+              metaStatus === "closed"
+                ? "rosettad is not answering"
+                : "Connecting to rosettad"
+            }
+            description={
+              <>
+                Looking for the daemon at <code>{client.baseUrl}</code>. Start it with{" "}
+                <code>rosettad serve --db &lt;projection&gt;</code> and this room fills in on
+                its own.
+              </>
+            }
+          >
             <div className="ah-meter">
               <i style={{ width: metaStatus === "connecting" ? "30%" : "8%" }} />
             </div>
-            <strong>
-              {metaStatus === "closed" ? "rosettad is not answering" : "Connecting to rosettad"}
-            </strong>
-            <p>
-              Looking for the daemon at <code>{client.baseUrl}</code>. Start it with{" "}
-              <code>rosettad serve --db &lt;projection&gt;</code> and this room fills in on its own.
-            </p>
-          </div>
+          </EmptyState>
         ) : (
           <div
             className="ah-cols"
@@ -330,7 +275,7 @@ export default function App() {
               selectedProjectId={projectId}
               sort={sort}
               onSortChange={setSort}
-              searchHitCounts={ledgerCounts}
+              searchHitCounts={searchResults?.hitCountByProject ?? null}
               homeDirectory={home}
               currentTimestamp={nowMs}
               onProjectSelect={(id) => {
@@ -361,7 +306,7 @@ export default function App() {
                 }
                 setSessionId(selectedSession.id);
               }}
-              searchGroups={sessionSearchGroups}
+              searchGroups={searchResults?.groups ?? null}
             />
             {/* Always in the grid — a closed rail is a 0px track, and the
                 measure takes back whatever the guest gives up. */}
@@ -377,14 +322,7 @@ export default function App() {
               focusId={focusId}
               onFocusConsumed={() => setFocusId(null)}
               onReceipt={showReceipt}
-              searchHits={
-                grouped === null
-                  ? null
-                  : grouped.flatMap((g) =>
-                      g.entries.map((e) => ({ project: g.project, session: e.session, hits: e.hits })),
-                    )
-              }
-              searchCounts={searchCounts}
+              searchResults={searchResults}
               onOpenHit={openHit}
             />
           </div>

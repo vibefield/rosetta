@@ -10,7 +10,9 @@ import type { TimelineFeed } from "../lib/hooks";
 import { ChevronGlyph } from "../lib/icons";
 import type { DocBlock, ProjectViewModel } from "../lib/model";
 import { documentBlocks, parseSnippet, verbSummary } from "../lib/model";
+import type { SearchResultsViewModel } from "../lib/search-results";
 import { getSessionTitle } from "./sessions/session-display";
+import { EmptyState, ResultGroupHeader } from "./ui";
 
 function fmtDur(ms: number | null): string {
   if (ms === null || ms <= 0) return "";
@@ -78,6 +80,19 @@ function roleName(row: MessageRow): string {
   }
 }
 
+export interface TranscriptColumnProps {
+  readonly session: SessionRow | null;
+  readonly project: ProjectViewModel | null;
+  readonly feed: TimelineFeed;
+  /** A timeline ID to land on and ring once after opening a search hit. */
+  readonly focusId: string | null;
+  readonly onFocusConsumed: () => void;
+  readonly onReceipt: (text: string) => void;
+  /** Search mode: grouped hits replace the document. */
+  readonly searchResults: SearchResultsViewModel | null;
+  readonly onOpenHit: (session: SessionRow, hit: SearchHit) => void;
+}
+
 export function TranscriptColumn({
   session,
   project,
@@ -85,31 +100,16 @@ export function TranscriptColumn({
   focusId,
   onFocusConsumed,
   onReceipt,
-  searchHits,
-  searchCounts,
+  searchResults,
   onOpenHit,
-}: {
-  session: SessionRow | null;
-  project: ProjectViewModel | null;
-  feed: TimelineFeed;
-  /** A timeline_id to land on and ring once (search → continuation). */
-  focusId: string | null;
-  onFocusConsumed: () => void;
-  onReceipt: (text: string) => void;
-  /** Search mode: grouped hits replace the document. */
-  searchHits:
-    | { project: ProjectViewModel; session: SessionRow; hits: SearchHit[] }[]
-    | null;
-  searchCounts: { matches: number; sessions: number; projects: number } | null;
-  onOpenHit: (session: SessionRow, hit: SearchHit) => void;
-}) {
+}: TranscriptColumnProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const seenMax = useRef<number>(-1);
   const [unseen, setUnseen] = useState(0);
   const [rung, setRung] = useState<string | null>(null);
   const focusTries = useRef(0);
 
-  const searching = searchHits !== null;
+  const searching = searchResults !== null;
   const blocks = useMemo(() => documentBlocks(feed.rows), [feed.rows]);
   const maxOrdinal = feed.rows.length ? feed.rows[feed.rows.length - 1].ordinal : -1;
   const live = session?.stream_state === "streaming";
@@ -199,8 +199,8 @@ export function TranscriptColumn({
         </div>
         <span className="ah-headacts">
           <span className="ah-caption tnum">
-            {searching && searchCounts
-              ? `${searchCounts.matches} ${searchCounts.matches === 1 ? "match" : "matches"} · ${searchCounts.sessions} ${searchCounts.sessions === 1 ? "session" : "sessions"} · ${searchCounts.projects} ${searchCounts.projects === 1 ? "project" : "projects"}`
+            {searchResults
+              ? `${searchResults.counts.matches} ${searchResults.counts.matches === 1 ? "match" : "matches"} · ${searchResults.counts.sessions} ${searchResults.counts.sessions === 1 ? "session" : "sessions"} · ${searchResults.counts.projects} ${searchResults.counts.projects === 1 ? "project" : "projects"}`
               : range}
           </span>
         </span>
@@ -216,41 +216,44 @@ export function TranscriptColumn({
       >
         {searching ? (
           <div className="ah-hitlist">
-            {searchHits.map((group) => (
-              <div key={group.session.id}>
-                <div className="ah-group" style={{ "--tint": group.project.tint } as CSSProperties}>
-                  <i />
-                  {group.project.row.name} · {getSessionTitle(group.session)}
-                  <span className="ah-hitcount">{group.hits.length}</span>
+            {searchResults.groups.flatMap((group) =>
+              group.sessions.map((result) => (
+                <div key={result.session.id}>
+                  <ResultGroupHeader
+                    label={`${group.project.row.name} · ${getSessionTitle(result.session)}`}
+                    count={result.hits.length}
+                    countLabel={`${result.hits.length} ${result.hits.length === 1 ? "hit" : "hits"}`}
+                    tint={group.project.tint}
+                  />
+                  {result.hits.map((hit) => (
+                    <button
+                      type="button"
+                      className="ah-hit"
+                      key={hit.timeline_id}
+                      onClick={() => onOpenHit(result.session, hit)}
+                    >
+                      <p>
+                        {parseSnippet(hit.snippet).map((part, i) =>
+                          part.mark ? <mark key={i}>{part.text}</mark> : <span key={i}>{part.text}</span>,
+                        )}
+                      </p>
+                    </button>
+                  ))}
                 </div>
-                {group.hits.map((hit) => (
-                  <button
-                    type="button"
-                    className="ah-hit"
-                    key={hit.timeline_id}
-                    onClick={() => onOpenHit(group.session, hit)}
-                  >
-                    <p>
-                      {parseSnippet(hit.snippet).map((part, i) =>
-                        part.mark ? <mark key={i}>{part.text}</mark> : <span key={i}>{part.text}</span>,
-                      )}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            ))}
-            {searchHits.length === 0 && (
-              <div className="ah-empty">
-                <strong>Nothing matched</strong>
-                <p>No indexed message contains that.</p>
-              </div>
+              )),
+            )}
+            {searchResults.counts.matches === 0 && (
+              <EmptyState
+                title="Nothing matched"
+                description="No indexed message contains that."
+              />
             )}
           </div>
         ) : session === null ? (
-          <div className="ah-empty">
-            <strong>No session open</strong>
-            <p>Pick a session — or search, which is the front door.</p>
-          </div>
+          <EmptyState
+            title="No session open"
+            description="Pick a session — or search, which is the front door."
+          />
         ) : (
           <div className="ah-transcript">
             {feed.canLoadEarlier && (
@@ -315,10 +318,10 @@ export function TranscriptColumn({
               );
             })}
             {blocks.length === 0 && feed.status !== "connecting" && (
-              <div className="ah-empty">
-                <strong>Nothing readable yet</strong>
-                <p>This session has no readable timeline rows in the index.</p>
-              </div>
+              <EmptyState
+                title="Nothing readable yet"
+                description="This session has no readable timeline rows in the index."
+              />
             )}
             {live && (
               <div className="ah-mark ah-watermark" title="this session is still running">

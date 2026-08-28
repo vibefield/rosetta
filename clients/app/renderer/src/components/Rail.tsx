@@ -14,6 +14,7 @@ import { vibefieldIconTheme } from "@vibecook/mille-ui/icons/vibefield";
 import { tildePath } from "../lib/format";
 import { host, onRailPort, takeRailPort } from "../lib/rail-port";
 import type { GitFacts } from "../lib/rail-port";
+import { EmptyState } from "./ui";
 
 interface Connection {
   fx: FileExplorer;
@@ -117,15 +118,15 @@ export function RailColumn({
         {factText !== null && <span className="ah-caption tnum">{factText}</span>}
       </header>
       {bridge === null ? (
-        <div className="ah-empty">
-          <strong>No worktree here</strong>
-          <p>The tree needs the desktop shell — a browser tab has no engine to walk it.</p>
-        </div>
+        <EmptyState
+          title="No worktree here"
+          description="The tree needs the desktop shell — a browser tab has no engine to walk it."
+        />
       ) : conn === null ? (
-        <div className="ah-empty">
-          <strong>Opening the worktree</strong>
-          <p>The engine is walking the project root.</p>
-        </div>
+        <EmptyState
+          title="Opening the worktree"
+          description="The engine is walking the project root."
+        />
       ) : (
         <>
           <div

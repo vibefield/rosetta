@@ -257,7 +257,7 @@
    band names what a column holds, and ordering is not part of the name. */
 .ah-listbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 3px; }
 .ah-listbar .ah-colnote { padding: 0; }
-.ah-sortseg, .ah-rangeseg { flex: none; }
+.ah-sortseg { flex: none; }
 .ah-seg.ah-sortseg button { height: 19px; padding: 0 8px; font-size: 9.5px; }
 
 /* ── the treemap ──────────────────────────────────────────────────────────
@@ -535,8 +535,6 @@
 .ah-push svg { width: 8px; height: 8px; }
 /* the only control in its row, so it takes the row: the same track and the
    same thumb, stretched — a switch's shape is its material, not its width */
-.ah-seg.ah-gitseg { display: flex; flex: 1; }
-.ah-seg.ah-gitseg button { flex: 1; height: 20px; padding: 0 9px; font-size: 10px; }
 /* the two change groups head themselves like search's result groups do */
 .ah-col--foot .ah-group { padding-top: 10px; }
 .ah-col--foot .ah-group:first-child { padding-top: 6px; }

@@ -1,9 +1,10 @@
 import { Fragment, useMemo } from "react";
 import type { SessionRow } from "@rosetta/protocol";
 import { dayLabel } from "../../lib/format";
+import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { EmptyState, ResultGroupHeader } from "../ui";
 import { SessionListItem } from "./SessionListItem";
-import type { SessionFacts, SessionSearchGroup } from "./types";
+import type { SessionFacts } from "./types";
 
 interface SessionListCommonProps {
   readonly factsBySessionId: ReadonlyMap<string, SessionFacts>;
@@ -21,7 +22,7 @@ interface BrowseSessionListProps extends SessionListCommonProps {
 
 interface SearchSessionListProps extends SessionListCommonProps {
   readonly mode: "search";
-  readonly groups: readonly SessionSearchGroup[];
+  readonly groups: readonly ProjectSearchResultGroup[];
 }
 
 export type SessionListProps = BrowseSessionListProps | SearchSessionListProps;
@@ -103,28 +104,23 @@ function SearchSessionItems({
   groups,
   common,
 }: {
-  readonly groups: readonly SessionSearchGroup[];
+  readonly groups: readonly ProjectSearchResultGroup[];
   readonly common: SessionListCommonProps;
 }) {
   return groups.map((group) => {
-    const groupHitCount = group.sessions.reduce(
-      (total, result) => total + result.hitCount,
-      0,
-    );
-
     return (
       <div key={group.project.row.id}>
         <ResultGroupHeader
           label={group.project.row.name}
-          count={groupHitCount}
-          countLabel={`${groupHitCount} ${groupHitCount === 1 ? "hit" : "hits"}`}
+          count={group.hitCount}
+          countLabel={`${group.hitCount} ${group.hitCount === 1 ? "hit" : "hits"}`}
           tint={group.project.tint}
         />
         {group.sessions.map((result) => (
           <SessionItem
             key={result.session.id}
             session={result.session}
-            searchHitCount={result.hitCount}
+            searchHitCount={result.hits.length}
             common={common}
           />
         ))}
