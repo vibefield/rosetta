@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rosetta_capture::NotifyEvents;
 use rosetta_pipeline::{IngestOptions, Instrument, LiveOptions, LiveRunner};
-use rosetta_server::{AppState, Hub, HubConfig, router};
+use rosetta_server::{AppState, DaemonHealth, Hub, HubConfig, RuntimeTick, router};
 use rosetta_store::Store;
 
 use crate::{
@@ -193,7 +193,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         });
     }
-    let state = AppState::new(hub.clone(), db.clone());
+    let health = Arc::new(DaemonHealth::new(now_ms()));
+    let state = AppState::new(hub.clone(), db.clone()).with_daemon_health(health.clone());
     let server = tokio_runtime.spawn(async move {
         let mut shutdown_rx = shutdown_rx;
         axum::serve(listener, router(state))
@@ -214,10 +215,24 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             Some(count) => *count -= 1,
             None => {}
         }
-        for (_, runner, _) in &mut runners {
+        for (kind, runner, _) in &mut runners {
             runner
                 .tick(&mut store, &instrument)
                 .map_err(|error| error.to_string())?;
+            let report = runner.report();
+            health.update(
+                kind,
+                RuntimeTick {
+                    ticks: report.ticks,
+                    events: report.events,
+                    polls: report.polls,
+                    rescans: report.rescans,
+                    admissions: report.admissions,
+                    live_rows: report.stream.stats.messages_inserted
+                        + report.stream.stats.messages_updated,
+                },
+                now_ms(),
+            );
         }
         let effects = store.drain_effects();
         if !effects.is_empty() {

@@ -44,6 +44,8 @@ pub struct AppState {
     /// shipped backend points at `db`; a detached backend can report its own
     /// readiness and answer without changing this transport contract.
     pub search: Arc<dyn SearchBackend>,
+    /// Daemon liveness, present only when a live ingest loop feeds it.
+    pub health: Option<Arc<crate::health::DaemonHealth>>,
 }
 
 impl AppState {
@@ -54,6 +56,7 @@ impl AppState {
             hub,
             db: Arc::new(db),
             search,
+            health: None,
         }
     }
 
@@ -64,7 +67,14 @@ impl AppState {
             hub,
             db: Arc::new(db),
             search,
+            health: None,
         }
+    }
+
+    /// Attach the daemon's health surface (the serve loop updates it).
+    pub fn with_daemon_health(mut self, health: Arc<crate::health::DaemonHealth>) -> Self {
+        self.health = Some(health);
+        self
     }
 }
 
@@ -209,6 +219,10 @@ fn clamp_limit(limit: Option<i64>, default: i64) -> i64 {
 
 async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, Failure> {
     let search_state = state.search.state();
+    let daemon = state
+        .health
+        .as_ref()
+        .map(|health| health.snapshot(&state.hub, now_ms()));
     let response = with_read(state.db.clone(), |conn| {
         let schema_version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -225,10 +239,19 @@ async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, F
             } else {
                 SearchState::failed()
             },
+            daemon,
         })
     })
     .await?;
     Ok(Json(response))
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 async fn runtimes(State(state): State<AppState>) -> Json<RuntimesResponse> {

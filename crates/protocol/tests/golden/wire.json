@@ -1,0 +1,446 @@
+{
+  "contribution": {
+    "rows": [
+      {
+        "commits": 1,
+        "edits": 2,
+        "loc": 30,
+        "project_id": "p1",
+        "session_id": "s1",
+        "tokens": 5
+      }
+    ]
+  },
+  "error_codes": [
+    "not_found",
+    "bad_request",
+    "cursor_expired",
+    "internal"
+  ],
+  "frames": [
+    {
+      "frame": "hello",
+      "protocol_version": 1,
+      "stamp": {
+        "epoch": 9,
+        "seq": 3
+      }
+    },
+    {
+      "frame": "timeline_snapshot",
+      "messages": [
+        {
+          "agent_version": "2.1.240",
+          "branch_tool_id": "toolu_0",
+          "content": "body",
+          "effort": "high",
+          "kind": "tool_use",
+          "model": "claude-opus-5",
+          "ordinal": 7,
+          "parent_uuid": "u0",
+          "session_id": "s1",
+          "src_cursor": 4,
+          "src_offset": 1024,
+          "subtype": "sub",
+          "timeline_id": "t1",
+          "tool": {
+            "input": {
+              "command": "true"
+            },
+            "is_error": false,
+            "name": "Bash",
+            "payload": {
+              "exit": 0
+            },
+            "result": "ok",
+            "tool_id": "toolu_1"
+          },
+          "ts": 3600000,
+          "usage": {
+            "cache_read": 3,
+            "cache_write": 2,
+            "input": 10,
+            "output": 5,
+            "thinking": 1
+          },
+          "uuid": "u1"
+        }
+      ],
+      "stamp": {
+        "epoch": 9,
+        "seq": 3
+      }
+    },
+    {
+      "frame": "meta_snapshot",
+      "projects": [
+        {
+          "git_repo": "git@example.com:w/rosetta.git",
+          "id": "p1",
+          "name": "rosetta",
+          "root_paths": [
+            "/w/rosetta"
+          ]
+        }
+      ],
+      "runtimes": [
+        {
+          "account": {
+            "email": "user@example.com"
+          },
+          "config": {
+            "theme": "dark"
+          },
+          "data_root": "~/.claude",
+          "discovered_at": 1000,
+          "enabled": true,
+          "id": "rt1",
+          "kind": "claude-code",
+          "skills": [
+            "review"
+          ],
+          "versions_seen": [
+            "2.1.240"
+          ]
+        }
+      ],
+      "sessions": [
+        {
+          "id": "s1",
+          "native_session_id": "native-s1",
+          "parent_session_id": "s0",
+          "project_id": "p1",
+          "role": "subagent",
+          "root_session_id": "s0",
+          "runtime_id": "rt1",
+          "started_at": 10000,
+          "stream_state": "streaming",
+          "summary": "A summary",
+          "title": "Named",
+          "updated_at": 20000
+        }
+      ]
+    },
+    {
+      "frame": "mutation",
+      "mutation": {
+        "session_id": "s1",
+        "type": "session_swept"
+      },
+      "stamp": {
+        "epoch": 9,
+        "seq": 3
+      }
+    },
+    {
+      "frame": "resync"
+    },
+    {
+      "error": {
+        "code": "internal",
+        "message": "boom"
+      },
+      "frame": "error"
+    }
+  ],
+  "heatmap": {
+    "days": [
+      {
+        "day": "2026-08-26",
+        "tokens": 123
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "agent_version": "2.1.240",
+      "branch_tool_id": "toolu_0",
+      "content": "body",
+      "effort": "high",
+      "kind": "tool_use",
+      "model": "claude-opus-5",
+      "ordinal": 7,
+      "parent_uuid": "u0",
+      "session_id": "s1",
+      "src_cursor": 4,
+      "src_offset": 1024,
+      "subtype": "sub",
+      "timeline_id": "t1",
+      "tool": {
+        "input": {
+          "command": "true"
+        },
+        "is_error": false,
+        "name": "Bash",
+        "payload": {
+          "exit": 0
+        },
+        "result": "ok",
+        "tool_id": "toolu_1"
+      },
+      "ts": 3600000,
+      "type": "message",
+      "usage": {
+        "cache_read": 3,
+        "cache_write": 2,
+        "input": 10,
+        "output": 5,
+        "thinking": 1
+      },
+      "uuid": "u1"
+    },
+    {
+      "at": 3700000,
+      "is_error": false,
+      "payload": {
+        "exit": 0
+      },
+      "result": "ok",
+      "session_id": "s1",
+      "timeline_id": "t1",
+      "type": "tool_result"
+    },
+    {
+      "model": "claude-opus-5",
+      "session_id": "s1",
+      "timeline_id": "t1",
+      "tokens": {
+        "cache_read": null,
+        "cache_write": null,
+        "input": 10,
+        "output": 5,
+        "thinking": null
+      },
+      "ts": 3600000,
+      "type": "usage"
+    },
+    {
+      "session_id": "s1",
+      "type": "session_swept"
+    },
+    {
+      "id": "s1",
+      "native_session_id": "native-s1",
+      "parent_session_id": "s0",
+      "project_id": "p1",
+      "role": "subagent",
+      "root_session_id": "s0",
+      "runtime_id": "rt1",
+      "started_at": 10000,
+      "stream_state": "streaming",
+      "summary": "A summary",
+      "title": "Named",
+      "type": "session",
+      "updated_at": 20000
+    },
+    {
+      "git_repo": "git@example.com:w/rosetta.git",
+      "id": "p1",
+      "name": "rosetta",
+      "root_paths": [
+        "/w/rosetta"
+      ],
+      "type": "project"
+    },
+    {
+      "account": {
+        "email": "user@example.com"
+      },
+      "config": {
+        "theme": "dark"
+      },
+      "data_root": "~/.claude",
+      "discovered_at": 1000,
+      "enabled": true,
+      "id": "rt1",
+      "kind": "claude-code",
+      "skills": [
+        "review"
+      ],
+      "type": "runtime",
+      "versions_seen": [
+        "2.1.240"
+      ]
+    }
+  ],
+  "projects": {
+    "projects": [
+      {
+        "git_repo": "git@example.com:w/rosetta.git",
+        "id": "p1",
+        "name": "rosetta",
+        "root_paths": [
+          "/w/rosetta"
+        ]
+      }
+    ]
+  },
+  "protocol_version": 1,
+  "runtimes": {
+    "runtimes": [
+      {
+        "account": {
+          "email": "user@example.com"
+        },
+        "config": {
+          "theme": "dark"
+        },
+        "data_root": "~/.claude",
+        "discovered_at": 1000,
+        "enabled": true,
+        "id": "rt1",
+        "kind": "claude-code",
+        "skills": [
+          "review"
+        ],
+        "versions_seen": [
+          "2.1.240"
+        ]
+      }
+    ]
+  },
+  "search_readiness": [
+    "ready",
+    "building",
+    "catching-up",
+    "stale",
+    "failed"
+  ],
+  "search_request": {
+    "after_ts": 1,
+    "agent": "claude-code",
+    "before_ts": 2,
+    "is_error": false,
+    "kind": "tool_use",
+    "limit": 50,
+    "project": "p1",
+    "q": "needle",
+    "runtime": "rt1",
+    "session": "s1"
+  },
+  "search_response": {
+    "hits": [
+      {
+        "score": -1.5,
+        "session_id": "s1",
+        "snippet": "[needle] in a haystack",
+        "timeline_id": "t1"
+      }
+    ],
+    "state": {
+      "projection_epoch": "epoch-1",
+      "readiness": "catching-up",
+      "revision": 42
+    }
+  },
+  "session": {
+    "session": {
+      "id": "s1",
+      "native_session_id": "native-s1",
+      "parent_session_id": "s0",
+      "project_id": "p1",
+      "role": "subagent",
+      "root_session_id": "s0",
+      "runtime_id": "rt1",
+      "started_at": 10000,
+      "stream_state": "streaming",
+      "summary": "A summary",
+      "title": "Named",
+      "updated_at": 20000
+    }
+  },
+  "sessions": {
+    "sessions": [
+      {
+        "id": "s1",
+        "native_session_id": "native-s1",
+        "parent_session_id": "s0",
+        "project_id": "p1",
+        "role": "subagent",
+        "root_session_id": "s0",
+        "runtime_id": "rt1",
+        "started_at": 10000,
+        "stream_state": "streaming",
+        "summary": "A summary",
+        "title": "Named",
+        "updated_at": 20000
+      }
+    ]
+  },
+  "status": {
+    "canonical_ready": true,
+    "daemon": {
+      "hub": {
+        "meta_events": 4,
+        "overflow_rewarms": 0,
+        "resyncs": 1,
+        "rings": 1,
+        "rings_evicted": 0,
+        "session_mutations": 12,
+        "subscribers": 2
+      },
+      "runtimes": [
+        {
+          "admissions": 2,
+          "events": 5,
+          "kind": "claude-code",
+          "last_activity_ms": 50000,
+          "live_rows": 12,
+          "polls": 20,
+          "rescans": 1,
+          "ticks": 100
+        }
+      ],
+      "started_at": 1000,
+      "uptime_ms": 60000
+    },
+    "protocol_version": 1,
+    "schema_version": 5,
+    "search": {
+      "projection_epoch": "epoch-1",
+      "readiness": "catching-up",
+      "revision": 42
+    }
+  },
+  "timeline_page": {
+    "cursor": "{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}",
+    "messages": [
+      {
+        "agent_version": "2.1.240",
+        "branch_tool_id": "toolu_0",
+        "content": "body",
+        "effort": "high",
+        "kind": "tool_use",
+        "model": "claude-opus-5",
+        "ordinal": 7,
+        "parent_uuid": "u0",
+        "session_id": "s1",
+        "src_cursor": 4,
+        "src_offset": 1024,
+        "subtype": "sub",
+        "timeline_id": "t1",
+        "tool": {
+          "input": {
+            "command": "true"
+          },
+          "is_error": false,
+          "name": "Bash",
+          "payload": {
+            "exit": 0
+          },
+          "result": "ok",
+          "tool_id": "toolu_1"
+        },
+        "ts": 3600000,
+        "usage": {
+          "cache_read": 3,
+          "cache_write": 2,
+          "input": 10,
+          "output": 5,
+          "thinking": 1
+        },
+        "uuid": "u1"
+      }
+    ]
+  }
+}

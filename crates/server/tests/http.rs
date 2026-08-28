@@ -537,3 +537,51 @@ async fn websocket_upgrades_enforce_the_origin_policy() {
         .unwrap();
     assert_eq!(native.status(), StatusCode::UPGRADE_REQUIRED);
 }
+
+#[tokio::test]
+async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
+    // The plain harness serves without an ingest loop: daemon is null.
+    let h = harness();
+    let (_, body) = h.get("/api/status").await;
+    assert!(body["daemon"].is_null());
+
+    // A serve-shaped state carries the health surface.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = dir.path().join("projection.sqlite");
+    drop(rosetta_store::Store::open(&db).unwrap());
+    let hub = std::sync::Arc::new(rosetta_server::Hub::new(
+        rosetta_server::HubConfig::default(),
+        1,
+    ));
+    let health = std::sync::Arc::new(rosetta_server::DaemonHealth::new(1_000));
+    health.update(
+        "claude-code",
+        rosetta_server::RuntimeTick {
+            ticks: 10,
+            events: 2,
+            polls: 4,
+            rescans: 0,
+            admissions: 1,
+            live_rows: 7,
+        },
+        5_000,
+    );
+    let app = router(AppState::new(hub, db).with_daemon_health(health));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let daemon = &body["daemon"];
+    assert_eq!(daemon["runtimes"][0]["kind"], "claude-code");
+    assert_eq!(daemon["runtimes"][0]["live_rows"], 7);
+    assert_eq!(daemon["runtimes"][0]["last_activity_ms"], 5_000);
+    assert_eq!(daemon["hub"]["subscribers"], 0);
+    assert!(daemon["uptime_ms"].is_number());
+}

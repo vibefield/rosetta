@@ -132,6 +132,8 @@ struct HubState {
     mirror: MetaMirror,
     subs: HashMap<u64, SubEntry>,
     next_sub_id: u64,
+    /// Cumulative absorb counters since construction, for /api/status.
+    totals: rosetta_protocol::HubStatus,
 }
 
 /// What one [`Hub::absorb`] call did — the live path's instrumentation.
@@ -169,6 +171,7 @@ impl Hub {
                 mirror: MetaMirror::default(),
                 subs: HashMap::new(),
                 next_sub_id: 1,
+                totals: rosetta_protocol::HubStatus::default(),
             }),
         }
     }
@@ -330,7 +333,25 @@ impl Hub {
             })
             .collect();
         report.rings_evicted = state.rings.evict_idle(now, &keep) as u64;
+
+        state.totals.session_mutations += report.session_mutations;
+        state.totals.meta_events += report.meta_events;
+        state.totals.resyncs += report.resyncs;
+        state.totals.rings_evicted += report.rings_evicted;
+        state.totals.overflow_rewarms += u64::from(report.overflow_rewarm);
         Ok(report)
+    }
+
+    /// Cumulative fan-out counters plus current subscriber/ring occupancy.
+    pub fn status(&self) -> rosetta_protocol::HubStatus {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        state
+            .subs
+            .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
+        let mut status = state.totals.clone();
+        status.subscribers = state.subs.len() as u64;
+        status.rings = state.rings.len() as u64;
+        status
     }
 }
 

@@ -36,6 +36,65 @@ pub struct StatusResponse {
     /// queries are serveable.
     pub canonical_ready: bool,
     pub search: SearchState,
+    /// Live-daemon health; `None` when the projection is served without an
+    /// ingest loop (tests, static serving).
+    pub daemon: Option<DaemonStatus>,
+}
+
+/// The serve process's liveness surface — the health panel's one read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DaemonStatus {
+    pub started_at: Ms,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub uptime_ms: u64,
+    pub runtimes: Vec<RuntimeIngestStatus>,
+    pub hub: HubStatus,
+}
+
+/// One watched runtime's live-ingest counters, cumulative since start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RuntimeIngestStatus {
+    pub kind: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub ticks: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub events: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub polls: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub rescans: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub admissions: u64,
+    /// Rows written by the live lane (inserts + replacements).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub live_rows: u64,
+    /// Last tick that moved data (events, admissions, rescans, or rows) —
+    /// idle polling does not count as activity.
+    pub last_activity_ms: Option<Ms>,
+}
+
+/// Hub fan-out counters, cumulative since start.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HubStatus {
+    /// Live subscriptions across all topics.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub subscribers: u64,
+    /// Warm per-session tail rings.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub rings: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub session_mutations: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub meta_events: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub resyncs: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub rings_evicted: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub overflow_rewarms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

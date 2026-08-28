@@ -1,14 +1,17 @@
 export type * from "./generated/ApiError";
 export type * from "./generated/ContributionResponse";
 export type * from "./generated/ContributionRow";
+export type * from "./generated/DaemonStatus";
 export type * from "./generated/ErrorCode";
 export type * from "./generated/HeatmapDay";
 export type * from "./generated/HeatmapResponse";
+export type * from "./generated/HubStatus";
 export type * from "./generated/MessageKind";
 export type * from "./generated/MessageRow";
 export type * from "./generated/Mutation";
 export type * from "./generated/ProjectRow";
 export type * from "./generated/ProjectsResponse";
+export type * from "./generated/RuntimeIngestStatus";
 export type * from "./generated/RuntimeRow";
 export type * from "./generated/RuntimesResponse";
 export type * from "./generated/SearchHit";

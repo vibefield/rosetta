@@ -4,9 +4,11 @@
 //! subscriptions speaking `rosetta-protocol` frames). Async lives only in
 //! this layer; the ingest engine below stays synchronous.
 
+pub mod health;
 pub mod http;
 pub mod hub;
 pub mod ws;
 
+pub use health::{DaemonHealth, RuntimeTick};
 pub use http::{AppState, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};
