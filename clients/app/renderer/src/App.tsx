@@ -9,8 +9,8 @@ import { SearchStrip } from "./components/SearchStrip";
 import { SessionsColumn } from "./components/Sessions";
 import type { SessionFacts } from "./components/Sessions";
 import { TranscriptColumn } from "./components/Transcript";
-import { useMeta, useProjectStats, useSearch, useTimeline } from "./lib/hooks";
-import { buildProjectVM } from "./lib/model";
+import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
+import { buildProjectVM, yearGridStartMs } from "./lib/model";
 import type { ProjectVM } from "./lib/model";
 import { client } from "./lib/rosetta";
 
@@ -96,14 +96,16 @@ export default function App() {
     return out;
   }, [stats]);
 
-  // Default selections once data lands; heal them when they go stale.
+  // Default selections once data lands; heal them when they go stale. The
+  // default is the top 30d spender, so it waits for the figures — picking
+  // before stats land would crown whichever project happened to list first.
   useEffect(() => {
-    if (vms.length === 0) return;
+    if (vms.length === 0 || stats.size === 0) return;
     if (projectId === null || !vmById.has(projectId)) {
       const top = [...vms].sort((a, b) => b.tokens30 - a.tokens30)[0];
       setProjectId(top.row.id);
     }
-  }, [vms, vmById, projectId]);
+  }, [vms, vmById, projectId, stats]);
 
   const projectSessions = useMemo(() => {
     if (projectId === null) return [];
@@ -124,6 +126,7 @@ export default function App() {
     [meta, sessionId],
   );
   const feed = useTimeline(sessionId);
+  const usage = useProjectUsage(projectId);
 
   /* ── search groupings: project → session → hits ─────────────────────── */
   const grouped = useMemo(() => {
@@ -241,6 +244,8 @@ export default function App() {
               facts={facts}
               kindOf={kindOf}
               activeId={sessionId}
+              usage={usage}
+              gridStartMs={yearGridStartMs(nowMs)}
               nowMs={nowMs}
               onSelect={(s) => {
                 if (searching) {

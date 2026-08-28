@@ -11,7 +11,8 @@ import type { AgentShare } from "./agents";
 import { projectTint } from "./tint";
 
 export interface ProjectStats {
-  /** Daily token totals for the last 30 days, from /heatmap?since_ms=…. */
+  /** Daily token totals over the ribbon's window (53 Sunday-aligned weeks
+   * ending today), from /heatmap?since_ms=…. */
   heat: HeatmapDay[];
   /** Per-root-session contribution (tokens, messages, …), whole project life. */
   contribution: ContributionRow[];
@@ -24,6 +25,16 @@ export interface ProjectVM {
   tokens30: number;
   /** 15 two-day buckets, oldest first — the activity shape. */
   buckets: number[];
+  /** 53×7 daily totals from the grid's Sunday; cells after today are -1.
+   * The ribbon is all of it and the 30-day figures are its tail, so the
+   * charts are views of one number and cannot disagree. */
+  yearCells: number[];
+  /** Index of today inside yearCells. */
+  todayIndex: number;
+  /** Tokens over the whole 53-week window — the meta block's stated window. */
+  yearTokens: number;
+  /** Message rows across the project's whole life (contribution sum). */
+  messagesLife: number;
   agents: AgentShare[];
   lastActiveMs: number | null;
   sessionCount: number;
@@ -31,26 +42,76 @@ export interface ProjectVM {
 
 const DAY_MS = 86_400_000;
 
+/* ── the ribbon's grid: 53 columns of weeks, Sunday-aligned, ending today ── */
+
+export const HEAT_WEEKS = 53;
+export const HEAT_DAYS = HEAT_WEEKS * 7;
+
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Midnight of the Sunday opening the grid's first column. */
+export function yearGridStartMs(nowMs: number): number {
+  const today = startOfDay(nowMs);
+  return today - (52 * 7 + new Date(today).getDay()) * DAY_MS;
+}
+
+/** GitHub-style streak facts, walked from the series rather than declared
+ * beside it. */
+export function heatStats(cells: number[], todayIndex: number): {
+  active: number;
+  current: number;
+  longest: number;
+} {
+  let active = 0;
+  let longest = 0;
+  let run = 0;
+  for (let i = 0; i <= todayIndex; i += 1) {
+    if (cells[i] > 0) {
+      active += 1;
+      run += 1;
+      if (run > longest) longest = run;
+    } else {
+      run = 0;
+    }
+  }
+  let current = 0;
+  for (let i = todayIndex; i >= 0 && cells[i] > 0; i -= 1) current += 1;
+  return { active, current, longest };
+}
+
 /** The viewer's offset, minutes east of UTC — passed to /heatmap so the
  * daemon buckets days the way this screen will label them. */
 export function viewerOffsetMinutes(): number {
   return -new Date().getTimezoneOffset();
 }
 
-/** 30 daily totals ending today, zero-filled from sparse heatmap days.
- * Days are keyed in the same viewer offset the heatmap was asked in. */
-function dailySeries(heat: HeatmapDay[], nowMs: number): number[] {
+/** The viewer-offset day key for a timestamp — the exact form the heatmap
+ * endpoint was asked to bucket in. */
+export function dayKey(ms: number): string {
+  const d = new Date(ms + viewerOffsetMinutes() * 60_000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    d.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+/** The full 53×7 grid, zero-filled from sparse heatmap days; cells after
+ * today hold -1 (not yet, which is not the same as empty). */
+function yearSeries(heat: HeatmapDay[], nowMs: number): { cells: number[]; todayIndex: number } {
   const byDay = new Map(heat.map((d) => [d.day, d.tokens]));
-  const shift = viewerOffsetMinutes() * 60_000;
-  const out: number[] = [];
-  for (let i = 29; i >= 0; i -= 1) {
-    const d = new Date(nowMs - i * DAY_MS + shift);
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
-      d.getUTCDate(),
-    ).padStart(2, "0")}`;
-    out.push(byDay.get(key) ?? 0);
+  const start = yearGridStartMs(nowMs);
+  const today = dayKey(nowMs);
+  const cells: number[] = [];
+  let todayIndex = HEAT_DAYS - 1;
+  for (let i = 0; i < HEAT_DAYS; i += 1) {
+    const key = dayKey(start + i * DAY_MS + DAY_MS / 2);
+    if (key === today) todayIndex = i;
+    cells.push(i > todayIndex ? -1 : (byDay.get(key) ?? 0));
   }
-  return out;
+  return { cells, todayIndex };
 }
 
 export function buildProjectVM(
@@ -61,10 +122,16 @@ export function buildProjectVM(
   nowMs: number,
 ): ProjectVM {
   const own = sessions.filter((s) => s.project_id === row.id && s.id === s.root_session_id);
-  const daily = stats ? dailySeries(stats.heat, nowMs) : [];
+  const { cells: yearCells, todayIndex } = yearSeries(stats?.heat ?? [], nowMs);
+  // The ledger's 30-day figures are the same series' tail, so the ribbon,
+  // the sparkline, and the figure can never disagree.
+  const daily: number[] = [];
+  for (let i = 29; i >= 0; i -= 1) daily.push(Math.max(0, yearCells[todayIndex - i] ?? 0));
   const buckets: number[] = [];
   for (let i = 0; i < 15; i += 1) buckets.push((daily[i * 2] ?? 0) + (daily[i * 2 + 1] ?? 0));
   const tokens30 = daily.reduce((t, v) => t + v, 0);
+  const yearTokens = yearCells.reduce((t, v) => t + Math.max(0, v), 0);
+  const messagesLife = (stats?.contribution ?? []).reduce((t, r) => t + r.messages, 0);
 
   const byKind = new Map<string, number>();
   for (const s of own) {
@@ -77,7 +144,19 @@ export function buildProjectVM(
     .sort((a, b) => b.pct - a.pct);
 
   const lastActiveMs = own.length ? Math.max(...own.map((s) => s.updated_at)) : null;
-  return { row, tint: projectTint(row.id), tokens30, buckets, agents, lastActiveMs, sessionCount: own.length };
+  return {
+    row,
+    tint: projectTint(row.id),
+    tokens30,
+    buckets,
+    yearCells,
+    todayIndex,
+    yearTokens,
+    messagesLife,
+    agents,
+    lastActiveMs,
+    sessionCount: own.length,
+  };
 }
 
 /* ── the work block: a contiguous run of tool calls is ONE object ────────── */

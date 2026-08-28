@@ -7,13 +7,12 @@ import type {
   MetaState,
   SearchResponse,
   SubscriptionStatus,
+  UsageResponse,
 } from "@rosetta/protocol";
 import { CursorExpiredError } from "@rosetta/protocol";
 import type { ProjectStats } from "./model";
-import { viewerOffsetMinutes } from "./model";
+import { viewerOffsetMinutes, yearGridStartMs } from "./model";
 import { client } from "./rosetta";
-
-const DAY_MS = 86_400_000;
 
 export interface MetaFeed {
   meta: MetaState | null;
@@ -39,8 +38,9 @@ export function useMeta(): MetaFeed {
   return { meta, status, error };
 }
 
-/** Per-project 30-day heatmaps and contributions, refreshed when the project
- * set changes and on a quiet interval afterwards. */
+/** Per-project heatmaps (the ribbon's 53-week window — the ledger's 30-day
+ * figures are its tail) and contributions, refreshed when the project set
+ * changes and on a quiet interval afterwards. */
 export function useProjectStats(projectIds: string[]): Map<string, ProjectStats> {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
   const key = projectIds.join("\n");
@@ -48,7 +48,7 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
     let cancelled = false;
     const ids = key === "" ? [] : key.split("\n");
     async function loadAll() {
-      const sinceMs = Date.now() - 30 * DAY_MS;
+      const sinceMs = yearGridStartMs(Date.now());
       const offsetMinutes = viewerOffsetMinutes();
       const next = new Map<string, ProjectStats>();
       await Promise.all(
@@ -74,6 +74,37 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
     };
   }, [key]);
   return stats;
+}
+
+/** The selected project's usage decomposition — per-model days and the
+ * hour-of-day profile, over the same 53-week window the ribbon draws. */
+export function useProjectUsage(projectId: string | null): UsageResponse | null {
+  const [usage, setUsage] = useState<UsageResponse | null>(null);
+  useEffect(() => {
+    setUsage(null);
+    if (projectId === null) return;
+    let cancelled = false;
+    const load = () => {
+      client
+        .usage(projectId, {
+          sinceMs: yearGridStartMs(Date.now()),
+          offsetMinutes: viewerOffsetMinutes(),
+        })
+        .then((res) => {
+          if (!cancelled) setUsage(res);
+        })
+        .catch(() => {
+          // the meta block degrades to what the heatmap alone can say
+        });
+    };
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [projectId]);
+  return usage;
 }
 
 export interface TimelineFeed {

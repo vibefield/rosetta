@@ -6,6 +6,7 @@ import type { CSSProperties } from "react";
 import { AgentBadges } from "../lib/agents";
 import { fmtTokens, lastActive, tildePath, tokenText } from "../lib/format";
 import type { ProjectVM } from "../lib/model";
+import { PortfolioBlock } from "./MetaBlock";
 
 function Activity({ vm }: { vm: ProjectVM }) {
   const peak = Math.max(...vm.buckets, 0) || 1;
@@ -117,28 +118,21 @@ export function LedgerColumn({
   const withHits = searching ? shown.length : null;
   return (
     <div className="ah-col">
-      <div className="ah-meta">
-        <div className="ah-meta__head">
-          <span className="ah-colhead">
-            {searching ? (
-              <span className="ah-eyebrow">Projects with hits</span>
-            ) : (
-              <>
-                <i style={{ "--tint": "var(--vf-text-tertiary)" } as CSSProperties} />
-                <strong>Projects</strong>
-                <span className="ah-bubble" title={`${vms.length} projects in this list`}>
-                  {vms.length}
-                </span>
-              </>
-            )}
-          </span>
-          {searching && (
+      {searching ? (
+        // In search the block goes, exactly as ②'s does, and the head becomes
+        // an eyebrow: a portfolio treemap above a list filtered to three would
+        // be answering a question nobody asked.
+        <div className="ah-meta">
+          <div className="ah-meta__head">
+            <span className="ah-eyebrow">Projects with hits</span>
             <span className="ah-caption tnum">
               {withHits} {withHits === 1 ? "project" : "projects"}
             </span>
-          )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <PortfolioBlock vms={vms} activeId={activeId} onSelect={onSelect} />
+      )}
       <div className="ah-listbar">
         <p className="ah-colnote">spend over 30d</p>
         <div className="ah-seg ah-sortseg" role="group" aria-label="Rank projects by">

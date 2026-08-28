@@ -2,10 +2,11 @@
 // component serves both; search only adds a hit count to the facts line.
 // The state is the dot and only the dot (§2.5 meanings, unchanged).
 import type { CSSProperties } from "react";
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow, UsageResponse } from "@rosetta/protocol";
 import { AgentMark, agentLabel } from "../lib/agents";
 import { dayLabel, duration, lastActive, tokenText } from "../lib/format";
 import type { ProjectVM } from "../lib/model";
+import { ProjectMetaBlock } from "./MetaBlock";
 
 export interface SessionFacts {
   tokens: number;
@@ -105,6 +106,8 @@ export function SessionsColumn({
   facts,
   kindOf,
   activeId,
+  usage,
+  gridStartMs,
   nowMs,
   onSelect,
   searchGroups,
@@ -115,6 +118,9 @@ export function SessionsColumn({
   facts: Map<string, SessionFacts>;
   kindOf: (runtimeId: string) => string;
   activeId: string | null;
+  /** The selected project's usage decomposition, for the meta block. */
+  usage: UsageResponse | null;
+  gridStartMs: number;
   nowMs: number;
   onSelect: (session: SessionRow) => void;
   /** Search mode: sessions-with-hits under project eyebrows. */
@@ -126,29 +132,26 @@ export function SessionsColumn({
   const total = searching ? searchGroups.reduce((n, g) => n + g.sessions.length, 0) : sessions.length;
   return (
     <div className="ah-col">
-      <div
-        className="ah-meta"
-        style={project && !searching ? ({ "--tint": project.tint } as CSSProperties) : undefined}
-      >
-        <div className="ah-meta__head">
-          {searching ? (
-            <>
-              <span className="ah-eyebrow">Sessions with hits</span>
-              <span className="ah-caption tnum">
-                {total} {total === 1 ? "session" : "sessions"}
-              </span>
-            </>
-          ) : (
-            <span className="ah-colhead">
-              <i />
-              <strong title={project?.row.name ?? ""}>{project?.row.name ?? "—"}</strong>
-              <span className="ah-bubble" title={`${total} sessions in this list`}>
-                {total}
-              </span>
+      {searching || project === null ? (
+        // Search has no project to name, so the head says what the column now
+        // holds instead: same band, same height, different content (H-2).
+        <div className="ah-meta">
+          <div className="ah-meta__head">
+            <span className="ah-eyebrow">{searching ? "Sessions with hits" : "Sessions"}</span>
+            <span className="ah-caption tnum">
+              {total} {total === 1 ? "session" : "sessions"}
             </span>
-          )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <ProjectMetaBlock
+          vm={project}
+          sessionsInList={total}
+          usage={usage}
+          gridStartMs={gridStartMs}
+          nowMs={nowMs}
+        />
+      )}
       <div className="ah-scroll">
         {searching
           ? searchGroups.map((group) => (
