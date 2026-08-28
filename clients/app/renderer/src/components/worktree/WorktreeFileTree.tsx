@@ -40,12 +40,10 @@ function useContentHeight(resetKey: string): {
     const wrapper = ref.current;
     if (wrapper === null || typeof MutationObserver === "undefined") return;
 
-    let frame = 0;
     // The scroller's only child is the virtualizer's sizer, and its height is
     // the whole tree's — the rows inside it are a viewport-sized subset, so
     // counting them would measure the window, not the document.
     const measure = (): void => {
-      frame = 0;
       const scroller = wrapper.querySelector<HTMLElement>('[role="tree"]');
       const sizer = scroller?.firstElementChild;
       if (!(scroller instanceof HTMLElement) || !(sizer instanceof HTMLElement)) {
@@ -56,22 +54,21 @@ function useContentHeight(resetKey: string): {
       const padding =
         (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
       const next = sizer.offsetHeight + padding;
+      // An unchanged height sets no state, which is what stops the loop this
+      // would otherwise be: the height lands as an inline style, and that is
+      // itself a mutation the observer sees.
       setHeight((current) => (current === next ? current : next));
-    };
-    const schedule = (): void => {
-      if (frame === 0) frame = requestAnimationFrame(measure);
     };
 
     measure();
-    // Rows come and go with the viewport, so this fires on every scroll frame
-    // as well as on every expand — the rAF collapses a burst into one read,
-    // and an unchanged height sets no state.
-    const observer = new MutationObserver(schedule);
+    // Measured straight from the observer rather than off an animation frame.
+    // The callback already arrives once per batch of records, so a frame buys
+    // no further coalescing — and a window that is merely occluded gets no
+    // frames at all, which left the tree stuck at whatever height it had when
+    // it went to the back.
+    const observer = new MutationObserver(measure);
     observer.observe(wrapper, { childList: true, subtree: true, attributeFilter: ["style"] });
-    return () => {
-      observer.disconnect();
-      if (frame !== 0) cancelAnimationFrame(frame);
-    };
+    return () => observer.disconnect();
     // Re-measured from scratch per root: a project switch replaces the tree
     // wholesale, and carrying the old height across would size the new one to
     // the old one until its first mutation.
