@@ -44,6 +44,13 @@ async function bootstrap() {
     // Lazy expansion: seed the root, prefetch children on expand. A history
     // room's rail must never walk a monorepo upfront.
     initialWalk: "roots-only",
+    // One row is one directory. mille's default collapses a single-child
+    // chain into `clients/app/electron`, which is an IDE convenience that
+    // trades a path for a name — and the design record's rail (§8) names
+    // one folder per row. It is also the honest reading under lazy
+    // expansion: "only one child" is a claim about what has been walked,
+    // not about the directory.
+    compactFolders: false,
   });
 
   // Attach handler installs before anything slow so the renderer's
@@ -61,6 +68,12 @@ async function bootstrap() {
       fx: host.local,
       client: createShellGitClient({ rootPath: root }),
       rootPath: root,
+      // Letters on files only. A folder roll-up (`M*`) answers "is anything
+      // dirty below here", which the column head already answers once for
+      // the whole worktree — and it answers it in a second place, in a
+      // second colour, on every ancestor of every edit. The design record's
+      // rail decorates the file that changed and nothing else.
+      propagateToParent: false,
       // The host's store, not host.local's — only the host store fans
       // decorations out to attached port sessions.
       registrar: (provider) => currentHost.registerDecorationProvider(provider),

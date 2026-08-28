@@ -712,8 +712,11 @@ code, .mono { font-family: var(--vf-font-mono); }
    above already carry the rail track and its H-3 close); the footprint
    guest still waits on Q4, so its 0px fifth track stays empty. */
 
-/* the mille tree fills the guest and owns its own scroller */
-.ah-railtree { flex: 1; min-height: 0; padding: 6px 6px 0; }
+/* The mille tree owns its own scroller and is sized to its CONTENT, so the
+   worktrees below sit against the last row the way the proto's single-flow
+   rail draws them. `flex-shrink` caps that height at the space the foot
+   leaves, and the unmeasured case falls back to filling the column. */
+.ah-railtree { flex: 0 1 auto; height: 100%; min-height: 0; padding: 6px 6px 0; }
 /* the engine lags a project switch: the old tree dims rather than lies */
 .ah-railtree[data-stale] { opacity: 0.45; transition: opacity 160ms; }
 .ah-railfoot { flex: none; padding-bottom: 12px; }
