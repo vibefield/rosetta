@@ -15,32 +15,81 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::response::Response;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use futures_util::stream::{SplitSink, SplitStream, StreamExt};
 
 use rosetta_protocol::{PROTOCOL_VERSION, ServerFrame, Stamp};
 use rosetta_store::hot::Replay;
 use rosetta_store::queries;
 
-use crate::http::{AppState, Failure, with_read};
+use crate::http::{AppState, Failure, origin_allowed, with_read};
 use crate::hub::{Hub, HubItem, Subscription};
 
 /// Messages in the initial timeline snapshot; older history pages via REST.
 const SNAPSHOT_LIMIT: i64 = 200;
 const BRIDGE_POLL: Duration = Duration::from_millis(200);
+/// Idle interval before the server pings. A vanished client fails the ping
+/// (or a later send) instead of holding its subscription forever. Unit
+/// tests compile the short interval so liveness is provable in real time.
+const KEEPALIVE: Duration = if cfg!(test) {
+    Duration::from_millis(150)
+} else {
+    Duration::from_secs(20)
+};
 
 pub(crate) trait FrameSink: Send {
     /// Deliver one frame; `Err(())` means the client is gone and the stream
     /// loop must end.
     fn send(&mut self, frame: ServerFrame) -> impl Future<Output = Result<(), ()>> + Send;
+
+    /// Transport-level liveness probe on an idle stream. `Err(())` ends the
+    /// loop like a failed send.
+    fn ping(&mut self) -> impl Future<Output = Result<(), ()>> + Send;
 }
 
-struct WsSink(WebSocket);
+struct WsSink(SplitSink<WebSocket, Message>);
 
 impl FrameSink for WsSink {
     async fn send(&mut self, frame: ServerFrame) -> Result<(), ()> {
+        use futures_util::SinkExt;
         let text = serde_json::to_string(&frame).map_err(|_| ())?;
         self.0.send(Message::text(text)).await.map_err(|_| ())
     }
+
+    async fn ping(&mut self) -> Result<(), ()> {
+        use futures_util::SinkExt;
+        self.0
+            .send(Message::Ping(axum::body::Bytes::new()))
+            .await
+            .map_err(|_| ())
+    }
+}
+
+/// Consume the client half until it closes or errors. Reading is what lets
+/// tungstenite answer client pings and observe Close frames — a push-only
+/// socket never notices a polite disconnect.
+async fn drain_until_close(mut receiver: SplitStream<WebSocket>) {
+    while let Some(Ok(message)) = receiver.next().await {
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+    }
+}
+
+/// Anti cross-site-WebSocket-hijacking: browsers do not apply CORS to WS,
+/// so this route layer enforces the same origin policy the REST layer uses,
+/// BEFORE upgrade extraction. Native clients send no Origin and pass.
+pub(crate) async fn require_local_origin(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Some(origin) = request.headers().get(header::ORIGIN)
+        && !origin_allowed(origin)
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
 }
 
 fn now_ms() -> i64 {
@@ -97,15 +146,26 @@ pub(crate) async fn session(
     upgrade: WebSocketUpgrade,
 ) -> Response {
     upgrade.on_upgrade(move |socket| async move {
-        let mut sink = WsSink(socket);
-        run_session_stream(state, id, resume.stamp(), &mut sink).await;
+        let (sender, receiver) = socket.split();
+        let mut sink = WsSink(sender);
+        // Either side ending tears the connection down: a Close/error on the
+        // read half cancels the stream, dropping the subscription so the hub
+        // prunes it and the bridge thread exits.
+        tokio::select! {
+            _ = run_session_stream(state, id, resume.stamp(), &mut sink) => {}
+            _ = drain_until_close(receiver) => {}
+        }
     })
 }
 
 pub(crate) async fn meta(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
     upgrade.on_upgrade(move |socket| async move {
-        let mut sink = WsSink(socket);
-        run_meta_stream(state.hub, &mut sink).await;
+        let (sender, receiver) = socket.split();
+        let mut sink = WsSink(sender);
+        tokio::select! {
+            _ = run_meta_stream(state.hub, &mut sink) => {}
+            _ = drain_until_close(receiver) => {}
+        }
     })
 }
 
@@ -183,7 +243,11 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
     }
 
     let mut items = bridge(sub.clone());
-    while let Some(item) = items.recv().await {
+    loop {
+        let item = match next_or_ping(&mut items, sink).await {
+            ItemOrEnd::Item(item) => item,
+            ItemOrEnd::End => return,
+        };
         match item {
             HubItem::Mutation { stamp, mutation } => {
                 let frame = ServerFrame::Mutation {
@@ -208,6 +272,30 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
                         }
                     }
                     Err(_) => return,
+                }
+            }
+        }
+    }
+}
+
+enum ItemOrEnd {
+    Item(HubItem),
+    End,
+}
+
+/// Wait for the next hub item, pinging on idle so a dead transport surfaces
+/// within one keepalive interval instead of never.
+async fn next_or_ping<S: FrameSink>(
+    items: &mut tokio::sync::mpsc::Receiver<HubItem>,
+    sink: &mut S,
+) -> ItemOrEnd {
+    loop {
+        match tokio::time::timeout(KEEPALIVE, items.recv()).await {
+            Ok(Some(item)) => return ItemOrEnd::Item(item),
+            Ok(None) => return ItemOrEnd::End,
+            Err(_idle) => {
+                if sink.ping().await.is_err() {
+                    return ItemOrEnd::End;
                 }
             }
         }
@@ -251,7 +339,11 @@ pub(crate) async fn run_meta_stream<S: FrameSink>(hub: Arc<Hub>, sink: &mut S) {
     }
 
     let mut items = bridge(sub.clone());
-    while let Some(item) = items.recv().await {
+    loop {
+        let item = match next_or_ping(&mut items, sink).await {
+            ItemOrEnd::Item(item) => item,
+            ItemOrEnd::End => return,
+        };
         match item {
             HubItem::Mutation { stamp, mutation } => {
                 let frame = ServerFrame::Mutation {
@@ -292,11 +384,17 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingSink {
         frames: Arc<Mutex<Vec<ServerFrame>>>,
+        pings: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl FrameSink for RecordingSink {
         async fn send(&mut self, frame: ServerFrame) -> Result<(), ()> {
             self.frames.lock().unwrap().push(frame);
+            Ok(())
+        }
+
+        async fn ping(&mut self) -> Result<(), ()> {
+            self.pings.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
     }
@@ -613,6 +711,38 @@ mod tests {
                 other => panic!("expected session diff, got {other:?}"),
             }
         }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn idle_streams_ping_and_stay_deliverable() {
+        let mut h = harness();
+        h.append("m1");
+        h.absorb();
+
+        let sink = RecordingSink::default();
+        let frames = sink.frames.clone();
+        let pings = sink.pings.clone();
+        let state = h.state.clone();
+        let task = tokio::spawn(async move {
+            let mut sink = sink;
+            run_session_stream(state, "s1".into(), None, &mut sink).await;
+        });
+        wait_for_frames(&frames, 2).await;
+
+        // Idle past the (test-scaled) keepalive: pings flow.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while pings.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("an idle stream must ping");
+
+        // The stream is still live after pinging.
+        h.append("m2");
+        h.absorb();
+        wait_for_frames(&frames, 3).await;
         task.abort();
     }
 }

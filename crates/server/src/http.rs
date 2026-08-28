@@ -79,9 +79,54 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/timeline", get(timeline))
         .route("/api/search", get(search))
-        .route("/ws/meta", get(crate::ws::meta))
-        .route("/ws/sessions/{id}", get(crate::ws::session))
+        .route(
+            "/ws/meta",
+            get(crate::ws::meta)
+                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
+        .route(
+            "/ws/sessions/{id}",
+            get(crate::ws::session)
+                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
+        .layer(cors_layer())
         .with_state(state)
+}
+
+/// Local-app CORS. The daemon serves personal transcript data on localhost,
+/// so a permissive `Any` origin would hand every website in the user's
+/// browser a read API — only local app origins (a dev server, the packaged
+/// Tauri/Electron shell) may cross origins. Non-browser clients send no
+/// Origin and are unaffected.
+fn cors_layer() -> tower_http::cors::CorsLayer {
+    use tower_http::cors::{AllowOrigin, CorsLayer};
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _| origin_allowed(origin)))
+        .allow_methods([axum::http::Method::GET])
+        .allow_headers(tower_http::cors::Any)
+}
+
+/// The origin policy, shared with the WebSocket upgrade guard: any port on a
+/// loopback host, plus the packaged Tauri shell. A `null` origin (sandboxed
+/// iframes, some file:// contexts) is deliberately NOT allowed — any site
+/// can manufacture one.
+pub(crate) fn origin_allowed(origin: &axum::http::HeaderValue) -> bool {
+    let Ok(text) = origin.to_str() else {
+        return false;
+    };
+    if text == "tauri://localhost" {
+        return true;
+    }
+    let rest = match text.split_once("://") {
+        Some(("http" | "https", rest)) => rest,
+        _ => return false,
+    };
+    let host_port = rest.split('/').next().unwrap_or("");
+    let host = match host_port.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.bytes().all(|c| c.is_ascii_digit()) => name,
+        _ => host_port,
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 /// A typed failure that renders as `{code, message}` with the right status.

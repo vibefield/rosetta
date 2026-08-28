@@ -28,3 +28,4 @@ export type * from "./generated/TimelinePage";
 export type * from "./generated/TokenSnapshot";
 export type * from "./generated/ToolCall";
 export type * from "./generated/serde_json/JsonValue";
+export * from "./client";

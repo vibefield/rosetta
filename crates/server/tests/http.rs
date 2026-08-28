@@ -440,3 +440,100 @@ fn urlencode(text: &str) -> String {
     }
     out
 }
+
+#[tokio::test]
+async fn cors_admits_local_app_origins_only() {
+    let h = harness();
+    let allowed = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .header("origin", "http://localhost:5173")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        allowed
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("http://localhost:5173")
+    );
+
+    // A foreign website gets no CORS grant: the daemon serves personal
+    // transcript data and must never be readable by drive-by pages.
+    let foreign = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .header("origin", "https://evil.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        foreign
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+}
+
+fn ws_upgrade_request(uri: &str, origin: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder()
+        .uri(uri)
+        .header("host", "127.0.0.1:4640")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+    if let Some(origin) = origin {
+        builder = builder.header("origin", origin);
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn websocket_upgrades_enforce_the_origin_policy() {
+    let h = harness();
+    // Browsers do not apply CORS to WebSocket, so the upgrade itself must
+    // refuse foreign origins (cross-site WebSocket hijacking).
+    let foreign = h
+        .app
+        .clone()
+        .oneshot(ws_upgrade_request("/ws/meta", Some("https://evil.example")))
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+
+    // Allowed and origin-less requests pass the guard and reach the upgrade
+    // extractor. A synthetic oneshot request cannot carry a real connection
+    // upgrade, so "past the guard" reads as 426 here; the real 101 is
+    // exercised over an actual socket in the serve smoke.
+    let local = h
+        .app
+        .clone()
+        .oneshot(ws_upgrade_request(
+            "/ws/sessions/s1",
+            Some("http://127.0.0.1:5173"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(local.status(), StatusCode::UPGRADE_REQUIRED);
+
+    // Native clients send no Origin at all and pass.
+    let native = h
+        .app
+        .clone()
+        .oneshot(ws_upgrade_request("/ws/meta", None))
+        .await
+        .unwrap();
+    assert_eq!(native.status(), StatusCode::UPGRADE_REQUIRED);
+}

@@ -36,7 +36,9 @@ notify = "8"
 rusqlite = { version = "0.32", features = ["backup", "bundled"] }
 tempfile = "3"
 axum = { version = "0.8", features = ["ws"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { version = "0.6", features = ["cors"] }
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
