@@ -13,8 +13,14 @@ import { SessionsColumn } from "./components/Sessions";
 import type { SessionFacts } from "./components/Sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
-import { buildProjectVM, yearGridStartMs } from "./lib/model";
-import type { ProjectVM } from "./lib/model";
+import {
+  UNASSIGNED_PROJECT_ID,
+  buildProjectViewModel,
+  getActivityGridStartTimestamp,
+  projectKey,
+  unassignedProject,
+} from "./lib/model";
+import type { ProjectViewModel } from "./lib/model";
 import { host } from "./lib/rail-port";
 import { client } from "./lib/rosetta";
 
@@ -61,6 +67,7 @@ export default function App() {
   const [sort, setSort] = useState<LedgerSort>("spend");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionScope, setSessionScope] = useState<"roots" | "all">("all");
   const [focusId, setFocusId] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -69,6 +76,14 @@ export default function App() {
 
   const projectIds = useMemo(() => (meta?.projects ?? []).map((p) => p.id).sort(), [meta]);
   const stats = useProjectStats(projectIds);
+
+  const projectRows = useMemo(() => {
+    const rows = [...(meta?.projects ?? [])];
+    if ((meta?.sessions ?? []).some((session) => session.project_id === null)) {
+      rows.push(unassignedProject());
+    }
+    return rows;
+  }, [meta]);
 
   const kindOf = useMemo(() => {
     const byId = new Map((meta?.runtimes ?? []).map((r) => [r.id, r.kind]));
@@ -80,14 +95,17 @@ export default function App() {
     return root ? root.replace(/\/\.[^/]+$/, "") : null;
   }, [meta]);
 
-  const vms: ProjectVM[] = useMemo(
+  const projectViewModels: ProjectViewModel[] = useMemo(
     () =>
-      (meta?.projects ?? []).map((p) =>
-        buildProjectVM(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs),
+      projectRows.map((p) =>
+        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs),
       ),
-    [meta, stats, kindOf, nowMs],
+    [projectRows, meta, stats, kindOf, nowMs],
   );
-  const vmById = useMemo(() => new Map(vms.map((vm) => [vm.row.id, vm])), [vms]);
+  const projectById = useMemo(
+    () => new Map(projectViewModels.map((project) => [project.row.id, project])),
+    [projectViewModels],
+  );
 
   // Per-session facts (tokens + messages) from every loaded contribution.
   const facts = useMemo(() => {
@@ -104,22 +122,36 @@ export default function App() {
   // default is the top 30d spender, so it waits for the figures — picking
   // before stats land would crown whichever project happened to list first.
   useEffect(() => {
-    if (vms.length === 0 || stats.size === 0) return;
-    if (projectId === null || !vmById.has(projectId)) {
-      const top = [...vms].sort((a, b) => b.tokens30 - a.tokens30)[0];
+    if (
+      projectViewModels.length === 0 ||
+      (projectIds.length > 0 && stats.size === 0)
+    ) {
+      return;
+    }
+    if (projectId === null || !projectById.has(projectId)) {
+      const top = [...projectViewModels].sort(
+        (a, b) => b.tokensLast30Days - a.tokensLast30Days,
+      )[0];
       setProjectId(top.row.id);
     }
-  }, [vms, vmById, projectId, stats]);
+  }, [projectViewModels, projectById, projectId, stats, projectIds.length]);
 
   const projectSessions = useMemo(() => {
     if (projectId === null) return [];
     return (meta?.sessions ?? [])
-      .filter((s) => s.project_id === projectId && s.id === s.root_session_id)
+      .filter(
+        (s) =>
+          projectKey(s) === projectId &&
+          (sessionScope === "all" || s.id === s.root_session_id),
+      )
       .sort((a, b) => b.updated_at - a.updated_at);
-  }, [meta, projectId]);
+  }, [meta, projectId, sessionScope]);
 
   useEffect(() => {
-    if (projectSessions.length === 0) return;
+    if (projectSessions.length === 0) {
+      setSessionId(null);
+      return;
+    }
     if (sessionId === null || !projectSessions.some((s) => s.id === sessionId)) {
       setSessionId(projectSessions[0].id);
     }
@@ -130,7 +162,12 @@ export default function App() {
     [meta, sessionId],
   );
   const feed = useTimeline(sessionId);
-  const usage = useProjectUsage(projectId);
+  const usage = useProjectUsage(projectId === UNASSIGNED_PROJECT_ID ? null : projectId);
+
+  const projectRoot = useMemo(() => {
+    if (projectId === null) return null;
+    return projectById.get(projectId)?.row.root_paths[0] ?? null;
+  }, [projectId, projectById]);
 
   /* ── the worktree rail: a guest, per H-3 ────────────────────────────── */
   const railAvailable = host() !== null;
@@ -144,7 +181,8 @@ export default function App() {
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
-  const railShown = railAvailable && railWanted && (railChosen || frameWide);
+  const railShown =
+    railAvailable && projectRoot !== null && railWanted && (railChosen || frameWide);
   // The toggle flips what is SHOWN, not what was last wanted — the first
   // press on an already-auto-closed rail must never do nothing.
   const toggleRail = () => {
@@ -155,11 +193,6 @@ export default function App() {
       setRailChosen(true);
     }
   };
-
-  const projectRoot = useMemo(() => {
-    if (projectId === null) return null;
-    return vmById.get(projectId)?.row.root_paths[0] ?? null;
-  }, [projectId, vmById]);
 
   // Point the engine at the selected project's root; kill-and-refork is the
   // host's concern, so this only speaks when the root actually changes.
@@ -185,7 +218,7 @@ export default function App() {
     for (const [sid, hits] of bySession) {
       const s = sessionById.get(sid);
       if (!s) continue;
-      const pid = s.project_id ?? "";
+      const pid = projectKey(s);
       const list = byProject.get(pid);
       const entry = { session: s, hits };
       if (list) list.push(entry);
@@ -193,17 +226,20 @@ export default function App() {
     }
     const groups = [...byProject.entries()]
       .map(([pid, entries]) => ({
-        project: vmById.get(pid) ?? null,
+        project: projectById.get(pid) ?? null,
         entries: entries.sort((a, b) => b.hits.length - a.hits.length),
       }))
-      .filter((g): g is { project: ProjectVM; entries: typeof g.entries } => g.project !== null)
+      .filter(
+        (g): g is { project: ProjectViewModel; entries: typeof g.entries } =>
+          g.project !== null,
+      )
       .sort(
         (a, b) =>
           b.entries.reduce((n, e) => n + e.hits.length, 0) -
           a.entries.reduce((n, e) => n + e.hits.length, 0),
       );
     return groups;
-  }, [searching, search.response, meta, vmById]);
+  }, [searching, search.response, meta, projectById]);
 
   const ledgerCounts = useMemo(() => {
     if (grouped === null) return null;
@@ -228,8 +264,9 @@ export default function App() {
 
   const openHit = (hitSession: SessionRow, hit: SearchHit) => {
     setQuery("");
-    if (hitSession.project_id) setProjectId(hitSession.project_id);
-    setSessionId(hitSession.root_session_id);
+    setProjectId(projectKey(hitSession));
+    setSessionScope("all");
+    setSessionId(hitSession.id);
     setFocusId(hit.timeline_id);
   };
 
@@ -273,33 +310,38 @@ export default function App() {
             data-rail={railShown ? "on" : "off"}
           >
             <LedgerColumn
-              vms={vms}
-              activeId={projectId}
+              projects={projectViewModels}
+              selectedProjectId={projectId}
               sort={sort}
-              onSort={setSort}
-              hitCounts={ledgerCounts}
-              home={home}
-              nowMs={nowMs}
-              onSelect={(id) => {
+              onSortChange={setSort}
+              searchHitCounts={ledgerCounts}
+              homeDirectory={home}
+              currentTimestamp={nowMs}
+              onProjectSelect={(id) => {
                 setProjectId(id);
                 setSessionId(null);
               }}
             />
             <SessionsColumn
-              project={projectId ? (vmById.get(projectId) ?? null) : null}
+              project={projectId ? (projectById.get(projectId) ?? null) : null}
               sessions={projectSessions}
               facts={facts}
               kindOf={kindOf}
               activeId={sessionId}
               usage={usage}
-              gridStartMs={yearGridStartMs(nowMs)}
-              nowMs={nowMs}
-              railOn={railAvailable ? railShown : null}
-              onToggleRail={toggleRail}
+              sessionScope={sessionScope}
+              onSessionScope={setSessionScope}
+              activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
+              currentTimestamp={nowMs}
+              isWorktreeVisible={
+                railAvailable && projectRoot !== null ? railShown : null
+              }
+              onToggleWorktree={toggleRail}
               onSelect={(s) => {
                 if (searching) {
                   setQuery("");
-                  if (s.project_id) setProjectId(s.project_id);
+                  setProjectId(projectKey(s));
+                  setSessionScope("all");
                 }
                 setSessionId(s.id);
               }}
@@ -316,12 +358,12 @@ export default function App() {
                 measure takes back whatever the guest gives up. */}
             <RailColumn
               projectRoot={projectRoot}
-              tint={projectId ? (vmById.get(projectId)?.tint ?? null) : null}
+              tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
               home={home}
             />
             <TranscriptColumn
               session={session}
-              project={session?.project_id ? (vmById.get(session.project_id) ?? null) : null}
+              project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}
               focusId={focusId}
               onFocusConsumed={() => setFocusId(null)}

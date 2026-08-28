@@ -8,7 +8,7 @@ import type { MessageRow, SearchHit, SessionRow } from "@rosetta/protocol";
 import { clock, clockShort, tokenText } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
 import { ChevronGlyph } from "../lib/icons";
-import type { DocBlock, ProjectVM } from "../lib/model";
+import type { DocBlock, ProjectViewModel } from "../lib/model";
 import { documentBlocks, parseSnippet, verbSummary } from "../lib/model";
 import { sessionTitle } from "./Sessions";
 
@@ -62,7 +62,20 @@ function WorkBlock({ block }: { block: Extract<DocBlock, { type: "work" }> }) {
 }
 
 function roleName(row: MessageRow): string {
-  return row.kind === "user" ? "You" : (row.model ?? "Agent");
+  switch (row.kind) {
+    case "user":
+      return "You";
+    case "agent":
+      return row.model ?? "Agent";
+    case "thinking":
+      return "Reasoning";
+    case "summary":
+      return "Summary";
+    case "system":
+      return row.subtype ?? "System";
+    default:
+      return row.model ?? "Agent";
+  }
 }
 
 export function TranscriptColumn({
@@ -77,7 +90,7 @@ export function TranscriptColumn({
   onOpenHit,
 }: {
   session: SessionRow | null;
-  project: ProjectVM | null;
+  project: ProjectViewModel | null;
   feed: TimelineFeed;
   /** A timeline_id to land on and ring once (search → continuation). */
   focusId: string | null;
@@ -85,7 +98,7 @@ export function TranscriptColumn({
   onReceipt: (text: string) => void;
   /** Search mode: grouped hits replace the document. */
   searchHits:
-    | { project: ProjectVM; session: SessionRow; hits: SearchHit[] }[]
+    | { project: ProjectViewModel; session: SessionRow; hits: SearchHit[] }[]
     | null;
   searchCounts: { matches: number; sessions: number; projects: number } | null;
   onOpenHit: (session: SessionRow, hit: SearchHit) => void;
@@ -259,7 +272,7 @@ export function TranscriptColumn({
               const marked =
                 feed.watermark !== null &&
                 row.ordinal > feed.watermark &&
-                blocks.find((b) => b.type === "prose" && b.row.ordinal > feed.watermark!) === block;
+                blocks.find((b) => b.type !== "work" && b.row.ordinal > feed.watermark!) === block;
               return (
                 <div key={row.timeline_id}>
                   {marked && <div className="ah-mark ah-watermark">live from here</div>}
@@ -267,6 +280,7 @@ export function TranscriptColumn({
                     className="ah-tmsg"
                     id={`msg-${row.timeline_id}`}
                     data-hit={rung === row.timeline_id || undefined}
+                    data-kind={row.kind}
                   >
                     <div className="ah-tmsg__head">
                       {roleName(row)}{" "}
@@ -303,7 +317,7 @@ export function TranscriptColumn({
             {blocks.length === 0 && feed.status !== "connecting" && (
               <div className="ah-empty">
                 <strong>Nothing readable yet</strong>
-                <p>This session has no prose or tool rows in the index.</p>
+                <p>This session has no readable timeline rows in the index.</p>
               </div>
             )}
             {live && (

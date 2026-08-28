@@ -11,7 +11,7 @@ import type {
 } from "@rosetta/protocol";
 import { CursorExpiredError } from "@rosetta/protocol";
 import type { ProjectStats } from "./model";
-import { viewerOffsetMinutes, yearGridStartMs } from "./model";
+import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
 import { client } from "./rosetta";
 
 export interface MetaFeed {
@@ -38,7 +38,7 @@ export function useMeta(): MetaFeed {
   return { meta, status, error };
 }
 
-/** Per-project heatmaps (the ribbon's 53-week window — the ledger's 30-day
+/** Per-project heatmaps (the calendar heatmap's 53-week window — the ledger's 30-day
  * figures are its tail) and contributions, refreshed when the project set
  * changes and on a quiet interval afterwards. */
 export function useProjectStats(projectIds: string[]): Map<string, ProjectStats> {
@@ -49,8 +49,8 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
     let timer: number | undefined;
     const ids = key === "" ? [] : key.split("\n");
     async function loadAll() {
-      const sinceMs = yearGridStartMs(Date.now());
-      const offsetMinutes = viewerOffsetMinutes();
+      const sinceMs = getActivityGridStartTimestamp(Date.now());
+      const offsetMinutes = getViewerUtcOffsetMinutes();
       const next = new Map<string, ProjectStats>();
       let failed = false;
       await Promise.all(
@@ -83,7 +83,7 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
 }
 
 /** The selected project's usage decomposition — per-model days and the
- * hour-of-day profile, over the same 53-week window the ribbon draws. */
+ * hour-of-day profile, over the same 53-week window the heatmap draws. */
 export function useProjectUsage(projectId: string | null): UsageResponse | null {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   useEffect(() => {
@@ -93,14 +93,14 @@ export function useProjectUsage(projectId: string | null): UsageResponse | null 
     const load = () => {
       client
         .usage(projectId, {
-          sinceMs: yearGridStartMs(Date.now()),
-          offsetMinutes: viewerOffsetMinutes(),
+          sinceMs: getActivityGridStartTimestamp(Date.now()),
+          offsetMinutes: getViewerUtcOffsetMinutes(),
         })
         .then((res) => {
           if (!cancelled) setUsage(res);
         })
         .catch(() => {
-          // the meta block degrades to what the heatmap alone can say
+          // the summary panel degrades to what the heatmap alone can say
         });
     };
     load();

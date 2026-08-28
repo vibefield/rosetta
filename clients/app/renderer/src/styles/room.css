@@ -224,6 +224,11 @@
 .ah-agents { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; flex: 0 0 58px; }
 .ah-agent { display: inline-flex; width: 12px; height: 12px; flex: none; color: var(--vf-text-primary); }
 .ah-agent svg { width: 100%; height: 100%; display: block; }
+.ah-agent--generic {
+  align-items: center; justify-content: center; border: 1px solid currentColor;
+  border-radius: 999px; font-size: 5.5px; font-weight: 700; line-height: 1;
+  letter-spacing: -0.02em;
+}
 .ah-more { color: var(--vf-text-faint); font-size: 8.5px; font-variant-numeric: tabular-nums; }
 
 .ah-hits {
@@ -256,39 +261,45 @@
 .ah-seg.ah-sortseg button { height: 19px; padding: 0 8px; font-size: 9.5px; }
 
 /* ── the treemap ──────────────────────────────────────────────────────────
-   Area is the quantity and hue is the identity — the same division the room
-   makes everywhere else, drawn in two dimensions instead of one. The layout
-   is squarified (Bruls, Huizing and van Wijk), so tiles stay near-square and
-   a share is legible as an area rather than as a sliver.
-   True area, no floor: a project at 0.2% of the spend gets 0.2% of the box,
-   and the tiles too small to hold their own label say so underneath rather
-   than being quietly enlarged until they fit. */
-.ah-treemap { position: relative; width: 100%; height: 110px; }
-.ah-tile { position: absolute; border: 0; padding: 0; background: transparent; }
-.ah-tile > span {
+   Area is quantity and hue is identity. Layout uses the measured container
+   ratio, and tiny interactive targets receive a documented minimum area. */
+.ah-treemap { width: 100%; }
+.ah-treemap__plot { position: relative; width: 100%; }
+.ah-treemap__item { position: absolute; border: 0; padding: 0; background: transparent; }
+.ah-treemap__item-content {
   position: absolute; inset: 0 2px 2px 0; border-radius: 4px;
-  background: color-mix(in srgb, var(--tint) 26%, transparent);
+  background: color-mix(in srgb, var(--treemap-item-color) 26%, transparent);
   transition: background-color 160ms ease, box-shadow 160ms ease;
 }
-.ah-tile:hover > span { background: color-mix(in srgb, var(--tint) 42%, transparent); }
-.ah-tile.is-on > span {
-  background: color-mix(in srgb, var(--tint) 58%, transparent);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--tint) 90%, transparent);
+.ah-treemap__item:hover .ah-treemap__item-content {
+  background: color-mix(in srgb, var(--treemap-item-color) 42%, transparent);
 }
-.ah-tile b {
+.ah-treemap__item.is-selected .ah-treemap__item-content {
+  background: color-mix(in srgb, var(--treemap-item-color) 58%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--treemap-item-color) 90%, transparent);
+}
+.ah-treemap__item b {
   position: absolute; left: 6px; right: 6px; top: 5px;
   font-size: 9px; font-weight: 500; color: var(--vf-text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
 }
-.ah-tile em {
+.ah-treemap__item em {
   position: absolute; right: 6px; bottom: 4px;
   font-style: normal; font-size: 9.5px; font-variant-numeric: tabular-nums;
   color: var(--vf-text-primary);
 }
-.ah-tile:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; border-radius: 5px; }
+.ah-treemap__item:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; border-radius: 5px; }
+.ah-treemap__empty, .ah-streamgraph__empty {
+  display: grid; place-items: center; height: 100%; margin: 0;
+  color: var(--vf-text-faint); font-size: 8.5px; text-align: center;
+}
+.ah-treemap__footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 8px; color: var(--vf-text-faint); font-size: 9px;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
-   THE PROJECT META BLOCK — what the ledger row's figure decomposes into.
+   THE SUMMARY PANEL — what the ledger row's figure decomposes into.
    A READER: no cards, no material, hairlines and the ramp doing the
    hierarchy (§8's file-tree law, one surface over).
    ═══════════════════════════════════════════════════════════════════════ */
@@ -344,9 +355,9 @@
 }
 .ah-iconbtn svg { width: 14px; height: 14px; }
 
-/* the two views take the segmented control the ledger already uses to rank
-   itself — one switch shape for the whole room, whatever it switches. They
-   keep tab semantics, because what changes is a chart, not a setting. */
+/* The two views use the segmented control the ledger already uses to rank
+   itself. Mutually exclusive pressed buttons keep the interaction explicit
+   without claiming the full keyboard contract of ARIA tabs. */
 .ah-seg.ah-tabseg { margin-bottom: 9px; }
 .ah-seg.ah-tabseg button { height: 21px; padding: 0 11px; font-size: 10px; }
 
@@ -377,49 +388,58 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ── the year ribbon ──────────────────────────────────────────────────────
+/* ── the calendar heatmap ─────────────────────────────────────────────────
    53 weeks across, days down. The scale is the project's own §2.6 accent at
    four steps of alpha — never a hue ramp: colour in this room means *which*,
    and a heat scale that ignored that would be the one thing on screen using
    hue for quantity. An empty day is a faint square rather than nothing: the
    day was measured and was empty, which is not the same as missing. */
-.ah-months { display: flex; margin: 10px 0 3px; height: 10px; position: relative; }
-.ah-months span {
+.ah-calendar-heatmap__axis { margin: 10px 0 3px; height: 10px; position: relative; }
+.ah-calendar-heatmap__axis span {
   position: absolute; top: 0; color: var(--vf-text-faint);
   font-size: 8px; letter-spacing: 0.02em; white-space: nowrap;
 }
-.ah-heat { display: flex; gap: 1px; }
-.ah-heat__col { display: flex; flex-direction: column; gap: 1px; flex: 1 1 0; min-width: 0; }
-.ah-heat i {
+.ah-calendar-heatmap__grid { display: flex; gap: 1px; }
+.ah-calendar-heatmap__week { display: flex; flex-direction: column; gap: 1px; flex: 1 1 0; min-width: 0; }
+.ah-calendar-heatmap__cell {
   display: block; width: 100%; aspect-ratio: 1; border-radius: 1px;
-  background: color-mix(in srgb, var(--tint) calc(var(--l) * 25%), transparent);
+  background: color-mix(in srgb, var(--heatmap-color) calc(var(--heatmap-intensity) * 25%), transparent);
 }
-.ah-heat i[data-l="0"] { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
-.ah-heatfoot {
+.ah-calendar-heatmap__cell[data-empty] { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
+.ah-calendar-heatmap__cell[data-unavailable] { visibility: hidden; }
+.ah-calendar-heatmap__footer {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   margin-top: 8px; color: var(--vf-text-faint); font-size: 9px;
 }
-.ah-heat__scale { display: flex; align-items: center; gap: 3px; }
-.ah-heat__scale i { width: 7px; height: 7px; border-radius: 2px; background: color-mix(in srgb, var(--tint) calc(var(--l) * 25%), transparent); }
-.ah-heat__scale i[data-l="0"] { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
+.ah-calendar-heatmap__legend { display: flex; align-items: center; gap: 3px; }
+.ah-calendar-heatmap__legend i {
+  width: 7px; height: 7px; border-radius: 2px;
+  background: color-mix(in srgb, var(--heatmap-color) calc(var(--heatmap-intensity) * 25%), transparent);
+}
+.ah-calendar-heatmap__legend i[data-empty] { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
 
-/* ── the models chart ─────────────────────────────────────────────────────
+/* ── the streamgraph ──────────────────────────────────────────────────────
    A model is an object being grouped, which is precisely what §2.6's accents
    are for — so each model takes one, assigned stably by id. The project tint
    and the model tints never share a chart; the legend names every line. */
 /* Both tabs draw into one box of fixed height, so switching between them
    never moves the session list below. */
 .ah-tabbody { height: 106px; display: flex; flex-direction: column; justify-content: space-between; }
-.ah-chart__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.ah-chart__note { color: var(--vf-text-faint); font-size: 8.5px; }
-.ah-chart { flex: 1; min-height: 0; }
-.ah-chart svg { display: block; width: 100%; height: 100%; }
-.ah-dates { display: flex; justify-content: space-between; margin-top: 3px; color: var(--vf-text-faint); font-size: 8px; font-variant-numeric: tabular-nums; }
-.ah-chart__title { color: var(--vf-text-tertiary); font-size: 9px; font-weight: 500; }
-.ah-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 11px; margin-top: 6px; }
-.ah-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--vf-text-tertiary); font-size: 9.5px; }
-.ah-legend i { width: 6px; height: 6px; border-radius: 999px; background: var(--m); flex: none; }
-.ah-legend b { color: var(--vf-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
+.ah-chart-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ah-chart-header__title { margin: 0; color: var(--vf-text-tertiary); font-size: 9px; font-weight: 500; }
+.ah-chart-header__note { color: var(--vf-text-faint); font-size: 8.5px; }
+.ah-streamgraph { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.ah-streamgraph__plot { flex: 1; min-height: 0; }
+.ah-streamgraph__plot svg { display: block; width: 100%; height: 100%; }
+.ah-streamgraph__plot path { opacity: 0.72; }
+.ah-streamgraph__axis { position: relative; height: 10px; margin-top: 3px; color: var(--vf-text-faint); font-size: 8px; font-variant-numeric: tabular-nums; }
+.ah-streamgraph__axis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.ah-streamgraph__axis span[data-first] { transform: none; }
+.ah-streamgraph__axis span[data-last] { transform: translateX(-100%); }
+.ah-streamgraph__legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 11px; margin-top: 3px; }
+.ah-streamgraph__legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--vf-text-tertiary); font-size: 9.5px; }
+.ah-streamgraph__legend i { width: 6px; height: 6px; border-radius: 999px; background: var(--series-color); flex: none; }
+.ah-streamgraph__legend b { color: var(--vf-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
 
 .ah-meta__facts { margin: 9px 0 0; color: var(--vf-text-tertiary); font-size: 10px; line-height: 1.5; }
 .ah-meta__facts b { color: var(--vf-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -480,6 +500,8 @@
 .ah-sessrow .ah-last[data-live] { color: var(--vf-green); font-weight: 500; }
 .ah-sessrow .ah-agent { width: 12px; height: 12px; opacity: 0.5; }
 .ah-sessrow:hover .ah-agent, .ah-sessrow.is-active .ah-agent { opacity: 0.7; }
+.ah-sessrow[data-role="subagent"] .ah-dot,
+.ah-sessrow[data-role="team"] .ah-dot { transform: scale(0.72); }
 
 /* ── a commit ─────────────────────────────────────────────────────────────
    The session row's four corners, one object down: message and author on top,
@@ -541,6 +563,19 @@
 .ah-tmsg p { margin: 0; color: var(--vf-text-secondary); font-size: 14px; line-height: 1.55; }
 .ah-tmsg p + p { margin-top: 10px; }
 .ah-tmsg p code { font-size: 12.5px; color: var(--vf-text-primary); }
+.ah-tmsg[data-kind="thinking"],
+.ah-tmsg[data-kind="system"],
+.ah-tmsg[data-kind="summary"] {
+  margin: 3px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--vf-hairline);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vf-fill) 52%, transparent);
+}
+.ah-tmsg[data-kind="thinking"] p,
+.ah-tmsg[data-kind="system"] p,
+.ah-tmsg[data-kind="summary"] p { color: var(--vf-text-tertiary); font-size: 13px; }
+.ah-tmsg[data-kind="summary"] { border-left: 2px solid var(--vf-green); }
 .ah-tmsg[data-hit="true"] { animation: ah-land 1400ms ease; }
 @keyframes ah-land {
   0%, 62% { box-shadow: inset 0 0 0 1.5px var(--vf-select); border-radius: 10px; }

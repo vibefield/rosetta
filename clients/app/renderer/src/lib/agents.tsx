@@ -4,7 +4,7 @@
 // minor contributor never reads as disabled.
 import { AGENT_PATHS } from "./agent-paths";
 
-/** rosetta runtime kinds → lobehub mark ids. Unknown kinds get no mark. */
+/** rosetta runtime kinds → bundled brand marks. */
 const KIND_TO_MARK: Record<string, string> = {
   "claude-code": "claudecode",
   codex: "codex",
@@ -17,13 +17,36 @@ const KIND_TO_MARK: Record<string, string> = {
   cline: "cline",
 };
 
+const KIND_LABELS: Record<string, string> = {
+  antigravity: "Antigravity",
+  grok: "Grok",
+  hermes: "Hermes",
+  "kimi-code": "Kimi Code",
+  opencode: "OpenCode",
+  pi: "Pi",
+};
+
 export function markIdForKind(kind: string): string | null {
   return KIND_TO_MARK[kind] ?? null;
 }
 
 export function agentLabel(kind: string): string {
   const id = markIdForKind(kind);
-  return id ? AGENT_PATHS[id].label : kind;
+  if (id) return AGENT_PATHS[id].label;
+  return (
+    KIND_LABELS[kind] ??
+    kind
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((word) => word[0].toUpperCase() + word.slice(1))
+      .join(" ")
+  );
+}
+
+function initials(kind: string): string {
+  const words = agentLabel(kind).split(/\s+/).filter(Boolean);
+  return (words.length > 1 ? `${words[0][0]}${words.at(-1)?.[0] ?? ""}` : words[0]?.slice(0, 2))
+    .toUpperCase();
 }
 
 export function AgentMark({
@@ -36,9 +59,22 @@ export function AgentMark({
   note?: string;
 }) {
   const id = markIdForKind(kind);
-  if (!id) return null;
+  const label = agentLabel(kind);
+  const name = note ? `${label} · ${note}` : label;
+  if (!id) {
+    return (
+      <span
+        className="ah-agent ah-agent--generic"
+        role="img"
+        style={{ opacity }}
+        aria-label={name}
+        title={name}
+      >
+        {initials(kind)}
+      </span>
+    );
+  }
   const def = AGENT_PATHS[id];
-  const name = note ? `${def.label} · ${note}` : def.label;
   return (
     <span className="ah-agent" role="img" style={{ opacity }} aria-label={name} title={name}>
       <svg
@@ -57,11 +93,10 @@ export interface AgentShare {
   pct: number;
 }
 
-export function AgentBadges({ shares, cap = 3 }: { shares: AgentShare[]; cap?: number }) {
-  const marked = shares.filter((s) => markIdForKind(s.kind) !== null);
-  if (marked.length === 0) return <span className="ah-agents" />;
-  const shown = marked.slice(0, cap);
-  const extra = marked.length - shown.length;
+export function AgentBadges({ shares, cap = 3 }: { shares: readonly AgentShare[]; cap?: number }) {
+  if (shares.length === 0) return <span className="ah-agents" />;
+  const shown = shares.slice(0, cap);
+  const extra = shares.length - shown.length;
   const lead = shown[0].pct || 1;
   return (
     <span className="ah-agents">

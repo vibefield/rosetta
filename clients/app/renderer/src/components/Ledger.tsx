@@ -5,81 +5,116 @@
 import type { CSSProperties } from "react";
 import { AgentBadges } from "../lib/agents";
 import { fmtTokens, lastActive, tildePath, tokenText } from "../lib/format";
-import type { ProjectVM } from "../lib/model";
-import { PortfolioBlock } from "./MetaBlock";
+import type { ProjectViewModel } from "../lib/model";
+import { PortfolioSummaryPanel } from "./SummaryPanels";
 
-function Activity({ vm }: { vm: ProjectVM }) {
-  const peak = Math.max(...vm.buckets, 0) || 1;
+type ActivityBarStyle = CSSProperties & { "--h": string };
+type ProjectRowStyle = CSSProperties & { "--tint": string; "--share": string };
+
+function RecentTokenActivity({ values }: { values: readonly number[] }) {
+  const peak = Math.max(...values, 0) || 1;
   return (
     <div className="ah-activity" role="img" aria-label="token activity, last 30 days">
-      {vm.buckets.map((v, i) =>
-        v === 0 ? (
-          <i key={i} data-zero="" style={{ "--h": "1px" } as CSSProperties} />
+      {values.map((value, bucketIndex) =>
+        value === 0 ? (
+          <i
+            key={bucketIndex}
+            data-zero=""
+            style={{ "--h": "1px" } as ActivityBarStyle}
+          />
         ) : (
-          <i key={i} style={{ "--h": `${Math.max(12, Math.round((v / peak) * 100))}%` } as CSSProperties} />
+          <i
+            key={bucketIndex}
+            style={
+              {
+                "--h": `${Math.max(12, Math.round((value / peak) * 100))}%`,
+              } as ActivityBarStyle
+            }
+          />
         ),
       )}
     </div>
   );
 }
 
-function TokenFigure({ n }: { n: number }) {
-  const t = fmtTokens(n);
+function TokenFigure({ value }: { value: number }) {
+  const formattedValue = fmtTokens(value);
   return (
     <span className="ah-tok">
-      <b>{t.n}</b>
-      <i>{t.u}</i>
+      <b>{formattedValue.n}</b>
+      <i>{formattedValue.u}</i>
     </span>
   );
 }
 
+export interface ProjectRowButtonProps {
+  readonly project: ProjectViewModel;
+  readonly maximumTokensLast30Days: number;
+  readonly isSelected: boolean;
+  readonly searchHitCount: number | null;
+  readonly homeDirectory: string | null;
+  readonly currentTimestamp: number;
+  readonly onProjectSelect: (projectId: string) => void;
+}
+
 export function ProjectRowButton({
-  vm,
-  maxTokens,
-  active,
-  hits,
-  home,
-  nowMs,
-  onSelect,
-}: {
-  vm: ProjectVM;
-  maxTokens: number;
-  active: boolean;
-  hits: number | null;
-  home: string | null;
-  nowMs: number;
-  onSelect: (id: string) => void;
-}) {
-  const share = maxTokens > 0 ? (vm.tokens30 / maxTokens) * 100 : 0;
-  const last = vm.lastActiveMs === null ? null : lastActive(vm.lastActiveMs, nowMs);
-  const path = tildePath(vm.row.root_paths[0] ?? "", home);
+  project,
+  maximumTokensLast30Days,
+  isSelected,
+  searchHitCount,
+  homeDirectory,
+  currentTimestamp,
+  onProjectSelect,
+}: ProjectRowButtonProps) {
+  const spendShare =
+    maximumTokensLast30Days > 0
+      ? (project.tokensLast30Days / maximumTokensLast30Days) * 100
+      : 0;
+  const lastActiveLabel =
+    project.lastActiveMs === null
+      ? null
+      : lastActive(project.lastActiveMs, currentTimestamp);
+  const workspacePath = project.row.root_paths[0]
+    ? tildePath(project.row.root_paths[0], homeDirectory)
+    : "No workspace recorded";
   return (
     <button
       type="button"
-      className={`ah-projrow${active ? " is-active" : ""}`}
-      style={{ "--tint": vm.tint, "--share": `${share.toFixed(2)}%` } as CSSProperties}
-      onClick={() => onSelect(vm.row.id)}
-      aria-label={`${vm.row.name} · ${tokenText(vm.tokens30)} tokens over 30 days${
-        last ? ` · last active ${last}` : ""
+      className={`ah-projrow${isSelected ? " is-active" : ""}`}
+      style={
+        {
+          "--tint": project.tint,
+          "--share": `${spendShare.toFixed(2)}%`,
+        } as ProjectRowStyle
+      }
+      onClick={() => onProjectSelect(project.row.id)}
+      aria-label={`${project.row.name} · ${tokenText(
+        project.tokensLast30Days,
+      )} tokens over 30 days${
+        lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
       }`}
     >
       <i className="ah-tint" />
       <span className="ah-projrow__head">
-        <strong title={vm.row.name}>{vm.row.name}</strong>
-        {hits !== null && <span className="ah-hits tnum">{hits}</span>}
-        <AgentBadges shares={vm.agents} />
+        <strong title={project.row.name}>{project.row.name}</strong>
+        {searchHitCount !== null && <span className="ah-hits tnum">{searchHitCount}</span>}
+        <AgentBadges shares={project.agents} />
       </span>
       <span className="ah-projrow__sub">
-        <small title={path}>{path}</small>
+        <small title={workspacePath}>{workspacePath}</small>
       </span>
       <span className="ah-projrow__foot">
         <span className="ah-quant">
-          <Activity vm={vm} />
-          <TokenFigure n={vm.tokens30} />
+          <RecentTokenActivity values={project.recentTokenBuckets} />
+          <TokenFigure value={project.tokensLast30Days} />
         </span>
-        {last !== null && (
-          <span className="ah-last" data-live={last === "now" ? "" : undefined} title={`last active ${last}`}>
-            {last}
+        {lastActiveLabel !== null && (
+          <span
+            className="ah-last"
+            data-live={lastActiveLabel === "now" ? "" : undefined}
+            title={`last active ${lastActiveLabel}`}
+          >
+            {lastActiveLabel}
           </span>
         )}
       </span>
@@ -89,36 +124,47 @@ export function ProjectRowButton({
 
 export type LedgerSort = "spend" | "recent";
 
-export function LedgerColumn({
-  vms,
-  activeId,
-  sort,
-  onSort,
-  hitCounts,
-  home,
-  nowMs,
-  onSelect,
-}: {
-  vms: ProjectVM[];
-  activeId: string | null;
-  sort: LedgerSort;
-  onSort: (sort: LedgerSort) => void;
+export interface LedgerColumnProps {
+  readonly projects: readonly ProjectViewModel[];
+  readonly selectedProjectId: string | null;
+  readonly sort: LedgerSort;
+  readonly onSortChange: (sort: LedgerSort) => void;
   /** Non-null in search mode: projects with zero hits leave the list. */
-  hitCounts: Map<string, number> | null;
-  home: string | null;
-  nowMs: number;
-  onSelect: (id: string) => void;
-}) {
-  const searching = hitCounts !== null;
-  const maxTokens = Math.max(...vms.map((vm) => vm.tokens30), 0);
-  const sorted = [...vms].sort((a, b) =>
-    sort === "recent" ? (b.lastActiveMs ?? 0) - (a.lastActiveMs ?? 0) : b.tokens30 - a.tokens30,
+  readonly searchHitCounts: ReadonlyMap<string, number> | null;
+  readonly homeDirectory: string | null;
+  readonly currentTimestamp: number;
+  readonly onProjectSelect: (projectId: string) => void;
+}
+
+export function LedgerColumn({
+  projects,
+  selectedProjectId,
+  sort,
+  onSortChange,
+  searchHitCounts,
+  homeDirectory,
+  currentTimestamp,
+  onProjectSelect,
+}: LedgerColumnProps) {
+  const isSearching = searchHitCounts !== null;
+  const maximumTokensLast30Days = projects.reduce(
+    (maximum, project) => Math.max(maximum, project.tokensLast30Days),
+    0,
   );
-  const shown = searching ? sorted.filter((vm) => (hitCounts.get(vm.row.id) ?? 0) > 0) : sorted;
-  const withHits = searching ? shown.length : null;
+  const sortedProjects = [...projects].sort((left, right) =>
+    sort === "recent"
+      ? (right.lastActiveMs ?? 0) - (left.lastActiveMs ?? 0)
+      : right.tokensLast30Days - left.tokensLast30Days,
+  );
+  const visibleProjects = isSearching
+    ? sortedProjects.filter(
+        (project) => (searchHitCounts.get(project.row.id) ?? 0) > 0,
+      )
+    : sortedProjects;
+  const projectCountWithHits = isSearching ? visibleProjects.length : null;
   return (
     <div className="ah-col">
-      {searching ? (
+      {isSearching ? (
         // In search the block goes, exactly as ②'s does, and the head becomes
         // an eyebrow: a portfolio treemap above a list filtered to three would
         // be answering a question nobody asked.
@@ -126,42 +172,56 @@ export function LedgerColumn({
           <div className="ah-meta__head">
             <span className="ah-eyebrow">Projects with hits</span>
             <span className="ah-caption tnum">
-              {withHits} {withHits === 1 ? "project" : "projects"}
+              {projectCountWithHits} {projectCountWithHits === 1 ? "project" : "projects"}
             </span>
           </div>
         </div>
       ) : (
-        <PortfolioBlock vms={vms} activeId={activeId} onSelect={onSelect} />
+        <PortfolioSummaryPanel
+          projects={projects}
+          selectedProjectId={selectedProjectId}
+          onProjectSelect={onProjectSelect}
+        />
       )}
       <div className="ah-listbar">
         <p className="ah-colnote">spend over 30d</p>
         <div className="ah-seg ah-sortseg" role="group" aria-label="Rank projects by">
-          <button type="button" className={sort === "spend" ? "is-on" : ""} onClick={() => onSort("spend")}>
+          <button
+            type="button"
+            className={sort === "spend" ? "is-on" : ""}
+            onClick={() => onSortChange("spend")}
+          >
             spend
           </button>
-          <button type="button" className={sort === "recent" ? "is-on" : ""} onClick={() => onSort("recent")}>
+          <button
+            type="button"
+            className={sort === "recent" ? "is-on" : ""}
+            onClick={() => onSortChange("recent")}
+          >
             recent
           </button>
         </div>
       </div>
       <div className="ah-scroll">
-        {shown.map((vm) => (
+        {visibleProjects.map((project) => (
           <ProjectRowButton
-            key={vm.row.id}
-            vm={vm}
-            maxTokens={maxTokens}
-            active={vm.row.id === activeId}
-            hits={searching ? (hitCounts.get(vm.row.id) ?? 0) : null}
-            home={home}
-            nowMs={nowMs}
-            onSelect={onSelect}
+            key={project.row.id}
+            project={project}
+            maximumTokensLast30Days={maximumTokensLast30Days}
+            isSelected={project.row.id === selectedProjectId}
+            searchHitCount={
+              isSearching ? (searchHitCounts.get(project.row.id) ?? 0) : null
+            }
+            homeDirectory={homeDirectory}
+            currentTimestamp={currentTimestamp}
+            onProjectSelect={onProjectSelect}
           />
         ))}
-        {shown.length === 0 && (
+        {visibleProjects.length === 0 && (
           <div className="ah-empty">
-            <strong>{searching ? "No project matched" : "No projects yet"}</strong>
+            <strong>{isSearching ? "No project matched" : "No projects yet"}</strong>
             <p>
-              {searching
+              {isSearching
                 ? "No indexed message contains that."
                 : "rosettad has not indexed any project yet — leave it serving and this fills in."}
             </p>

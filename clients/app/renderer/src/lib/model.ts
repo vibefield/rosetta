@@ -11,41 +11,58 @@ import type { AgentShare } from "./agents";
 import { projectTint } from "./tint";
 
 export interface ProjectStats {
-  /** Daily token totals over the ribbon's window (53 Sunday-aligned weeks
+  /** Daily token totals over the heatmap's window (53 Sunday-aligned weeks
    * ending today), from /heatmap?since_ms=…. */
-  heat: HeatmapDay[];
+  heat: readonly HeatmapDay[];
   /** Per-root-session contribution (tokens, messages, …), whole project life. */
-  contribution: ContributionRow[];
+  contribution: readonly ContributionRow[];
 }
 
-export interface ProjectVM {
-  row: ProjectRow;
-  tint: string;
+export interface ProjectViewModel {
+  readonly row: ProjectRow;
+  readonly tint: string;
   /** Tokens over the last 30 days — the ledger's stated window. */
-  tokens30: number;
+  readonly tokensLast30Days: number;
   /** 15 two-day buckets, oldest first — the activity shape. */
-  buckets: number[];
+  readonly recentTokenBuckets: readonly number[];
   /** 53×7 daily totals from the grid's Sunday; cells after today are -1.
-   * The ribbon is all of it and the 30-day figures are its tail, so the
+   * The heatmap is all of it and the 30-day figures are its tail, so the
    * charts are views of one number and cannot disagree. */
-  yearCells: number[];
-  /** Index of today inside yearCells. */
-  todayIndex: number;
-  /** Tokens over the whole 53-week window — the meta block's stated window. */
-  yearTokens: number;
+  readonly dailyTokens: readonly number[];
+  /** Index of today inside dailyTokens. */
+  readonly currentDayIndex: number;
+  /** Tokens over the whole 53-week window — the summary panel's stated window. */
+  readonly tokensLast53Weeks: number;
   /** Message rows across the project's whole life (contribution sum). */
-  messagesLife: number;
-  agents: AgentShare[];
-  lastActiveMs: number | null;
-  sessionCount: number;
+  readonly lifetimeMessages: number;
+  readonly agents: readonly AgentShare[];
+  readonly lastActiveMs: number | null;
+  readonly rootSessionCount: number;
 }
 
-const DAY_MS = 86_400_000;
+const DAY_IN_MS = 86_400_000;
 
-/* ── the ribbon's grid: 53 columns of weeks, Sunday-aligned, ending today ── */
+/** Client-only bucket for sessions whose adapters have no native cwd fact.
+ * It is deliberately not persisted as a canonical project. */
+export const UNASSIGNED_PROJECT_ID = "__rosetta_unassigned__";
 
-export const HEAT_WEEKS = 53;
-export const HEAT_DAYS = HEAT_WEEKS * 7;
+export function projectKey(session: SessionRow): string {
+  return session.project_id ?? UNASSIGNED_PROJECT_ID;
+}
+
+export function unassignedProject(): ProjectRow {
+  return {
+    id: UNASSIGNED_PROJECT_ID,
+    name: "Unassigned sessions",
+    root_paths: [],
+    git_repo: null,
+  };
+}
+
+/* ── heatmap grid: 53 columns of weeks, Sunday-aligned, ending today ────── */
+
+export const ACTIVITY_HEATMAP_WEEK_COUNT = 53;
+export const ACTIVITY_HEATMAP_DAY_COUNT = ACTIVITY_HEATMAP_WEEK_COUNT * 7;
 
 function startOfDay(ms: number): number {
   const d = new Date(ms);
@@ -54,45 +71,24 @@ function startOfDay(ms: number): number {
 }
 
 /** Midnight of the Sunday opening the grid's first column. */
-export function yearGridStartMs(nowMs: number): number {
-  const today = startOfDay(nowMs);
-  return today - (52 * 7 + new Date(today).getDay()) * DAY_MS;
-}
-
-/** GitHub-style streak facts, walked from the series rather than declared
- * beside it. */
-export function heatStats(cells: number[], todayIndex: number): {
-  active: number;
-  current: number;
-  longest: number;
-} {
-  let active = 0;
-  let longest = 0;
-  let run = 0;
-  for (let i = 0; i <= todayIndex; i += 1) {
-    if (cells[i] > 0) {
-      active += 1;
-      run += 1;
-      if (run > longest) longest = run;
-    } else {
-      run = 0;
-    }
-  }
-  let current = 0;
-  for (let i = todayIndex; i >= 0 && cells[i] > 0; i -= 1) current += 1;
-  return { active, current, longest };
+export function getActivityGridStartTimestamp(currentTimestamp: number): number {
+  const today = startOfDay(currentTimestamp);
+  return (
+    today -
+    ((ACTIVITY_HEATMAP_WEEK_COUNT - 1) * 7 + new Date(today).getDay()) * DAY_IN_MS
+  );
 }
 
 /** The viewer's offset, minutes east of UTC — passed to /heatmap so the
  * daemon buckets days the way this screen will label them. */
-export function viewerOffsetMinutes(): number {
+export function getViewerUtcOffsetMinutes(): number {
   return -new Date().getTimezoneOffset();
 }
 
 /** The viewer-offset day key for a timestamp — the exact form the heatmap
  * endpoint was asked to bucket in. */
-export function dayKey(ms: number): string {
-  const d = new Date(ms + viewerOffsetMinutes() * 60_000);
+export function getCalendarDayKey(timestamp: number): string {
+  const d = new Date(timestamp + getViewerUtcOffsetMinutes() * 60_000);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
     d.getUTCDate(),
   ).padStart(2, "0")}`;
@@ -100,62 +96,90 @@ export function dayKey(ms: number): string {
 
 /** The full 53×7 grid, zero-filled from sparse heatmap days; cells after
  * today hold -1 (not yet, which is not the same as empty). */
-function yearSeries(heat: HeatmapDay[], nowMs: number): { cells: number[]; todayIndex: number } {
-  const byDay = new Map(heat.map((d) => [d.day, d.tokens]));
-  const start = yearGridStartMs(nowMs);
-  const today = dayKey(nowMs);
-  const cells: number[] = [];
-  let todayIndex = HEAT_DAYS - 1;
-  for (let i = 0; i < HEAT_DAYS; i += 1) {
-    const key = dayKey(start + i * DAY_MS + DAY_MS / 2);
-    if (key === today) todayIndex = i;
-    cells.push(i > todayIndex ? -1 : (byDay.get(key) ?? 0));
+function createActivitySeries(
+  heatmapDays: readonly HeatmapDay[],
+  currentTimestamp: number,
+): { dailyTokens: number[]; currentDayIndex: number } {
+  const tokensByDay = new Map(heatmapDays.map((day) => [day.day, day.tokens]));
+  const startTimestamp = getActivityGridStartTimestamp(currentTimestamp);
+  const currentDayKey = getCalendarDayKey(currentTimestamp);
+  const dailyTokens: number[] = [];
+  let currentDayIndex = ACTIVITY_HEATMAP_DAY_COUNT - 1;
+  for (let index = 0; index < ACTIVITY_HEATMAP_DAY_COUNT; index += 1) {
+    const key = getCalendarDayKey(startTimestamp + index * DAY_IN_MS + DAY_IN_MS / 2);
+    if (key === currentDayKey) currentDayIndex = index;
+    dailyTokens.push(index > currentDayIndex ? -1 : (tokensByDay.get(key) ?? 0));
   }
-  return { cells, todayIndex };
+  return { dailyTokens, currentDayIndex };
 }
 
-export function buildProjectVM(
-  row: ProjectRow,
-  sessions: SessionRow[],
-  stats: ProjectStats | undefined,
-  kindOf: (runtimeId: string) => string,
-  nowMs: number,
-): ProjectVM {
-  const own = sessions.filter((s) => s.project_id === row.id && s.id === s.root_session_id);
-  const { cells: yearCells, todayIndex } = yearSeries(stats?.heat ?? [], nowMs);
-  // The ledger's 30-day figures are the same series' tail, so the ribbon,
+export function buildProjectViewModel(
+  projectRow: ProjectRow,
+  allSessions: readonly SessionRow[],
+  projectStats: ProjectStats | undefined,
+  getRuntimeKind: (runtimeId: string) => string,
+  currentTimestamp: number,
+): ProjectViewModel {
+  const rootSessions = allSessions.filter(
+    (session) =>
+      projectKey(session) === projectRow.id && session.id === session.root_session_id,
+  );
+  const { dailyTokens, currentDayIndex } = createActivitySeries(
+    projectStats?.heat ?? [],
+    currentTimestamp,
+  );
+  // The ledger's 30-day figures are the same series' tail, so the heatmap,
   // the sparkline, and the figure can never disagree.
-  const daily: number[] = [];
-  for (let i = 29; i >= 0; i -= 1) daily.push(Math.max(0, yearCells[todayIndex - i] ?? 0));
-  const buckets: number[] = [];
-  for (let i = 0; i < 15; i += 1) buckets.push((daily[i * 2] ?? 0) + (daily[i * 2 + 1] ?? 0));
-  const tokens30 = daily.reduce((t, v) => t + v, 0);
-  const yearTokens = yearCells.reduce((t, v) => t + Math.max(0, v), 0);
-  const messagesLife = (stats?.contribution ?? []).reduce((t, r) => t + r.messages, 0);
+  const dailyTokensLast30Days = Array.from({ length: 30 }, (_, dayIndex) =>
+    Math.max(0, dailyTokens[currentDayIndex - (29 - dayIndex)] ?? 0),
+  );
+  const recentTokenBuckets = Array.from({ length: 15 }, (_, bucketIndex) =>
+    [dailyTokensLast30Days[bucketIndex * 2], dailyTokensLast30Days[bucketIndex * 2 + 1]].reduce(
+      (total, value) => total + (value ?? 0),
+      0,
+    ),
+  );
+  const tokensLast30Days = dailyTokensLast30Days.reduce((total, value) => total + value, 0);
+  const tokensLast53Weeks = dailyTokens.reduce(
+    (total, value) => total + Math.max(0, value),
+    0,
+  );
+  const lifetimeMessages = (projectStats?.contribution ?? []).reduce(
+    (total, contribution) => total + contribution.messages,
+    0,
+  );
 
-  const byKind = new Map<string, number>();
-  for (const s of own) {
-    const kind = kindOf(s.runtime_id);
-    byKind.set(kind, (byKind.get(kind) ?? 0) + 1);
+  const sessionCountByRuntimeKind = new Map<string, number>();
+  for (const session of rootSessions) {
+    const runtimeKind = getRuntimeKind(session.runtime_id);
+    sessionCountByRuntimeKind.set(
+      runtimeKind,
+      (sessionCountByRuntimeKind.get(runtimeKind) ?? 0) + 1,
+    );
   }
-  const total = own.length || 1;
-  const agents: AgentShare[] = [...byKind.entries()]
-    .map(([kind, count]) => ({ kind, pct: Math.round((count / total) * 100) }))
-    .sort((a, b) => b.pct - a.pct);
+  const totalSessionCount = rootSessions.length || 1;
+  const agents: AgentShare[] = [...sessionCountByRuntimeKind.entries()]
+    .map(([kind, count]) => ({
+      kind,
+      pct: Math.round((count / totalSessionCount) * 100),
+    }))
+    .sort((left, right) => right.pct - left.pct);
 
-  const lastActiveMs = own.length ? Math.max(...own.map((s) => s.updated_at)) : null;
+  const lastActiveMs = rootSessions.length
+    ? Math.max(...rootSessions.map((session) => session.updated_at))
+    : null;
   return {
-    row,
-    tint: projectTint(row.id),
-    tokens30,
-    buckets,
-    yearCells,
-    todayIndex,
-    yearTokens,
-    messagesLife,
+    row: projectRow,
+    tint: projectTint(projectRow.id),
+    tokensLast30Days,
+    recentTokenBuckets,
+    dailyTokens,
+    currentDayIndex,
+    tokensLast53Weeks,
+    lifetimeMessages,
     agents,
     lastActiveMs,
-    sessionCount: own.length,
+    rootSessionCount: rootSessions.length,
   };
 }
 
@@ -171,6 +195,7 @@ export interface WorkCall {
 
 export type DocBlock =
   | { type: "prose"; row: MessageRow }
+  | { type: "aside"; row: MessageRow }
   | { type: "work"; key: string; calls: WorkCall[]; durMs: number | null };
 
 function firstLine(text: string, max = 90): string {
@@ -214,7 +239,8 @@ export function toWorkCall(row: MessageRow): WorkCall {
 /**
  * Fold an ordered timeline into a document: prose rows stand alone, and each
  * contiguous run of tool_use rows becomes one work block (H-1 / M1 at
- * transcript scale). Thinking, system, and summary rows are not drawn yet.
+ * transcript scale). Thinking, system, and summary rows remain readable but
+ * render as quieter asides rather than masquerading as user/agent prose.
  */
 export function documentBlocks(rows: MessageRow[]): DocBlock[] {
   const out: DocBlock[] = [];
@@ -234,6 +260,8 @@ export function documentBlocks(rows: MessageRow[]): DocBlock[] {
     flush();
     if (row.kind === "user" || row.kind === "agent") {
       if (row.content && row.content.trim() !== "") out.push({ type: "prose", row });
+    } else if (row.content && row.content.trim() !== "") {
+      out.push({ type: "aside", row });
     }
   }
   flush();

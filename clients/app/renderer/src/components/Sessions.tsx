@@ -5,8 +5,8 @@ import type { CSSProperties } from "react";
 import type { SessionRow, UsageResponse } from "@rosetta/protocol";
 import { AgentMark, agentLabel } from "../lib/agents";
 import { dayLabel, duration, lastActive, tokenText } from "../lib/format";
-import type { ProjectVM } from "../lib/model";
-import { ProjectMetaBlock } from "./MetaBlock";
+import type { ProjectViewModel } from "../lib/model";
+import { ProjectSummaryPanel } from "./SummaryPanels";
 
 export interface SessionFacts {
   tokens: number;
@@ -52,6 +52,7 @@ export function SessionRowButton({
     <button
       type="button"
       className={`ah-sessrow${active ? " is-active is-focused" : ""}`}
+      data-role={session.role}
       onClick={() => onSelect(session)}
       aria-label={`${title} · ${word} · last active ${last}`}
     >
@@ -66,6 +67,12 @@ export function SessionRowButton({
         <AgentMark kind={kind} note={agentLabel(kind)} />
       </span>
       <span className="ah-sessmeta">
+        {session.role !== "main" && (
+          <>
+            <span>{session.role}</span>
+            <span>·</span>
+          </>
+        )}
         {hits !== null && (
           <>
             <span>
@@ -107,29 +114,33 @@ export function SessionsColumn({
   kindOf,
   activeId,
   usage,
-  gridStartMs,
-  nowMs,
-  railOn,
-  onToggleRail,
+  sessionScope,
+  onSessionScope,
+  activityGridStartTimestamp,
+  currentTimestamp,
+  isWorktreeVisible,
+  onToggleWorktree,
   onSelect,
   searchGroups,
 }: {
-  project: ProjectVM | null;
+  project: ProjectViewModel | null;
   /** Browse mode: the selected project's root sessions, newest first. */
   sessions: SessionRow[];
   facts: Map<string, SessionFacts>;
   kindOf: (runtimeId: string) => string;
   activeId: string | null;
-  /** The selected project's usage decomposition, for the meta block. */
+  /** The selected project's usage decomposition, for the summary panel. */
   usage: UsageResponse | null;
-  gridStartMs: number;
-  nowMs: number;
-  railOn: boolean | null;
-  onToggleRail: () => void;
+  sessionScope: "roots" | "all";
+  onSessionScope: (scope: "roots" | "all") => void;
+  activityGridStartTimestamp: number;
+  currentTimestamp: number;
+  isWorktreeVisible: boolean | null;
+  onToggleWorktree: () => void;
   onSelect: (session: SessionRow) => void;
   /** Search mode: sessions-with-hits under project eyebrows. */
   searchGroups:
-    | { project: ProjectVM; sessions: { session: SessionRow; hits: number }[] }[]
+    | { project: ProjectViewModel; sessions: { session: SessionRow; hits: number }[] }[]
     | null;
 }) {
   const searching = searchGroups !== null;
@@ -148,16 +159,37 @@ export function SessionsColumn({
           </div>
         </div>
       ) : (
-        <ProjectMetaBlock
-          vm={project}
-          sessionsInList={total}
+        <ProjectSummaryPanel
+          project={project}
+          visibleSessionCount={total}
           usage={usage}
-          gridStartMs={gridStartMs}
-          nowMs={nowMs}
-          railOn={railOn}
-          onToggleRail={onToggleRail}
+          activityGridStartTimestamp={activityGridStartTimestamp}
+          currentTimestamp={currentTimestamp}
+          isWorktreeVisible={isWorktreeVisible}
+          onToggleWorktree={onToggleWorktree}
         />
       )}
+      <div className="ah-listbar">
+        <p className="ah-colnote">{searching ? "ranked by hits" : "session threads"}</p>
+        {!searching && (
+          <div className="ah-seg ah-sortseg" role="group" aria-label="Show session threads">
+            <button
+              type="button"
+              className={sessionScope === "roots" ? "is-on" : ""}
+              onClick={() => onSessionScope("roots")}
+            >
+              roots
+            </button>
+            <button
+              type="button"
+              className={sessionScope === "all" ? "is-on" : ""}
+              onClick={() => onSessionScope("all")}
+            >
+              all
+            </button>
+          </div>
+        )}
+      </div>
       <div className="ah-scroll">
         {searching
           ? searchGroups.map((group) => (
@@ -177,7 +209,7 @@ export function SessionsColumn({
                     kind={kindOf(session.runtime_id)}
                     active={session.id === activeId}
                     hits={hits}
-                    nowMs={nowMs}
+                    nowMs={currentTimestamp}
                     onSelect={onSelect}
                   />
                 ))}
@@ -187,7 +219,7 @@ export function SessionsColumn({
               let day: string | null = null;
               const out: React.ReactNode[] = [];
               for (const session of sessions) {
-                const label = dayLabel(session.updated_at, nowMs);
+                const label = dayLabel(session.updated_at, currentTimestamp);
                 if (label !== day) {
                   day = label;
                   out.push(
@@ -204,7 +236,7 @@ export function SessionsColumn({
                     kind={kindOf(session.runtime_id)}
                     active={session.id === activeId}
                     hits={null}
-                    nowMs={nowMs}
+                    nowMs={currentTimestamp}
                     onSelect={onSelect}
                   />,
                 );
