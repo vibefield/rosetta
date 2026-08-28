@@ -10,7 +10,7 @@ import type { TimelineFeed } from "../lib/hooks";
 import { ChevronGlyph } from "../lib/icons";
 import type { DocBlock, ProjectViewModel } from "../lib/model";
 import { documentBlocks, parseSnippet, verbSummary } from "../lib/model";
-import { sessionTitle } from "./Sessions";
+import { getSessionTitle } from "./sessions/session-display";
 
 function fmtDur(ms: number | null): string {
   if (ms === null || ms <= 0) return "";
@@ -188,7 +188,7 @@ export function TranscriptColumn({
           ) : session ? (
             <>
               <i />
-              <strong title={sessionTitle(session)}>{sessionTitle(session)}</strong>
+              <strong title={getSessionTitle(session)}>{getSessionTitle(session)}</strong>
               <span className="ah-bubble" title={`${feed.rows.length} messages loaded`}>
                 {feed.rows.length}
               </span>
@@ -220,7 +220,7 @@ export function TranscriptColumn({
               <div key={group.session.id}>
                 <div className="ah-group" style={{ "--tint": group.project.tint } as CSSProperties}>
                   <i />
-                  {group.project.row.name} · {sessionTitle(group.session)}
+                  {group.project.row.name} · {getSessionTitle(group.session)}
                   <span className="ah-hitcount">{group.hits.length}</span>
                 </div>
                 {group.hits.map((hit) => (

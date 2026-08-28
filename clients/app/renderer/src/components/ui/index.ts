@@ -4,6 +4,8 @@ export { ListSummaryHeader } from "./ListSummaryHeader";
 export type { ListSummaryHeaderProps } from "./ListSummaryHeader";
 export { ListToolbar } from "./ListToolbar";
 export type { ListToolbarProps } from "./ListToolbar";
+export { ResultGroupHeader } from "./ResultGroupHeader";
+export type { ResultGroupHeaderProps } from "./ResultGroupHeader";
 export { SegmentedControl } from "./SegmentedControl";
 export type {
   SegmentedControlOption,

@@ -9,8 +9,12 @@ import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
 import { RailColumn } from "./components/Rail";
 import { SearchStrip } from "./components/SearchStrip";
-import { SessionsColumn } from "./components/Sessions";
-import type { SessionFacts } from "./components/Sessions";
+import { SessionsColumn } from "./components/sessions";
+import type {
+  SessionFacts,
+  SessionScope,
+  SessionSearchGroup,
+} from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
 import {
@@ -67,7 +71,7 @@ export default function App() {
   const [sort, setSort] = useState<ProjectSort>("spend");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionScope, setSessionScope] = useState<"roots" | "all">("all");
+  const [sessionScope, setSessionScope] = useState<SessionScope>("all");
   const [focusId, setFocusId] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -253,6 +257,18 @@ export default function App() {
     return out;
   }, [grouped]);
 
+  const sessionSearchGroups = useMemo<readonly SessionSearchGroup[] | null>(
+    () =>
+      grouped?.map((group) => ({
+        project: group.project,
+        sessions: group.entries.map((entry) => ({
+          session: entry.session,
+          hitCount: entry.hits.length,
+        })),
+      })) ?? null,
+    [grouped],
+  );
+
   const searchCounts = useMemo(() => {
     if (grouped === null) return null;
     return {
@@ -325,34 +341,27 @@ export default function App() {
             <SessionsColumn
               project={projectId ? (projectById.get(projectId) ?? null) : null}
               sessions={projectSessions}
-              facts={facts}
-              kindOf={kindOf}
-              activeId={sessionId}
+              factsBySessionId={facts}
+              getRuntimeKind={kindOf}
+              selectedSessionId={sessionId}
               usage={usage}
               sessionScope={sessionScope}
-              onSessionScope={setSessionScope}
+              onSessionScopeChange={setSessionScope}
               activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
               currentTimestamp={nowMs}
               isWorktreeVisible={
                 railAvailable && projectRoot !== null ? railShown : null
               }
               onToggleWorktree={toggleRail}
-              onSelect={(s) => {
+              onSessionSelect={(selectedSession) => {
                 if (searching) {
                   setQuery("");
-                  setProjectId(projectKey(s));
+                  setProjectId(projectKey(selectedSession));
                   setSessionScope("all");
                 }
-                setSessionId(s.id);
+                setSessionId(selectedSession.id);
               }}
-              searchGroups={
-                grouped === null
-                  ? null
-                  : grouped.map((g) => ({
-                      project: g.project,
-                      sessions: g.entries.map((e) => ({ session: e.session, hits: e.hits.length })),
-                    }))
-              }
+              searchGroups={sessionSearchGroups}
             />
             {/* Always in the grid — a closed rail is a 0px track, and the
                 measure takes back whatever the guest gives up. */}
