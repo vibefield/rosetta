@@ -296,7 +296,6 @@ export function PortfolioSummaryPanel({
       ),
       activeDayCount: activeDayIndices.size,
       treemapData,
-      hiddenTreemapProjectCount: projects.length - treemapProjects.length,
     };
   }, [projects]);
 
@@ -338,15 +337,9 @@ export function PortfolioSummaryPanel({
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}
-              title="Top projects · 30-day spend"
-              note={
-                summary.hiddenTreemapProjectCount > 0
-                  ? `${summary.treemapData.items.length} of ${projects.length} shown · area is share`
-                  : "area is the share"
-              }
               ariaLabel="Top projects by 30-day spend, where area represents share among displayed projects"
               emptyMessage="No project spend in this window"
-              itemNoun={{ singular: "project", plural: "projects" }}
+              showFooter={false}
               selectedItemId={selectedProjectId}
               onItemSelect={(item) => onProjectSelect(item.id)}
               formatValue={tokenText}

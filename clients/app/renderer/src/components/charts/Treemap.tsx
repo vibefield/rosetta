@@ -21,11 +21,12 @@ export interface TreemapItemNoun {
 
 export interface TreemapProps {
   readonly data: TreemapData;
-  readonly title: string;
   readonly ariaLabel: string;
+  readonly title?: string;
   readonly selectedItemId?: string | null;
   readonly onItemSelect?: (item: TreemapItemData) => void;
   readonly note?: string;
+  readonly showFooter?: boolean;
   readonly emptyMessage?: string;
   readonly itemNoun?: TreemapItemNoun;
   readonly height?: number;
@@ -59,6 +60,7 @@ export function Treemap({
   selectedItemId = null,
   onItemSelect,
   note,
+  showFooter = true,
   emptyMessage = "No data in this period",
   itemNoun = { singular: "item", plural: "items" },
   height = DEFAULT_HEIGHT,
@@ -120,10 +122,12 @@ export function Treemap({
 
   return (
     <div className="ah-treemap">
-      <div className="ah-chart-header">
-        <p className="ah-chart-header__title">{title}</p>
-        {note && <span className="ah-chart-header__note">{note}</span>}
-      </div>
+      {(title || note) && (
+        <div className="ah-chart-header">
+          {title && <p className="ah-chart-header__title">{title}</p>}
+          {note && <span className="ah-chart-header__note">{note}</span>}
+        </div>
+      )}
 
       <div
         ref={containerRef}
@@ -197,10 +201,12 @@ export function Treemap({
         )}
       </div>
 
-      <div className="ah-treemap__footer">
-        <span>{countLabel(data.items.length, itemNoun)}</span>
-        <span>{layoutNote}</span>
-      </div>
+      {showFooter && (
+        <div className="ah-treemap__footer">
+          <span>{countLabel(data.items.length, itemNoun)}</span>
+          <span>{layoutNote}</span>
+        </div>
+      )}
     </div>
   );
 }
