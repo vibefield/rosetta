@@ -44,6 +44,8 @@ export interface GitFacts {
 }
 
 interface AgentHistoryHost {
+  /** The user's home directory — absent in a browser tab. */
+  homeDir?: string;
   openRail(root: string): Promise<boolean>;
   gitFacts(root: string): Promise<GitFacts | null>;
 }

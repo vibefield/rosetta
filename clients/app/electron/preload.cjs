@@ -2,6 +2,7 @@
 // for the open rail root, the act of pointing the rail at a project, and the
 // engine MessagePort relay. Nothing here can write to disk.
 const { contextBridge, ipcRenderer } = require("electron");
+const os = require("node:os");
 
 // MessagePort cannot pass through contextBridge (the prototype is stripped);
 // forwarding through window.postMessage keeps the port object intact — the
@@ -11,6 +12,10 @@ ipcRenderer.on("ah-rail-port", (event, payload) => {
 });
 
 contextBridge.exposeInMainWorld("agentHistoryHost", {
+  /** The user's home directory, so paths can set as `~/…` the way the design
+   * record writes them. The daemon cannot answer this: it reports agent data
+   * roots already shortened to `~/.claude`, which names no home. */
+  homeDir: os.homedir(),
   /** Point the worktree rail's engine at a project root. */
   openRail: (root) => ipcRenderer.invoke("ah-rail-open", root),
   /** Branch · dirty count · worktrees for the open rail root, or null. */

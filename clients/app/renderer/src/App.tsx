@@ -93,8 +93,15 @@ export default function App() {
   }, [meta]);
 
   const home = useMemo(() => {
+    // The desktop shell knows the home directory outright. The daemon only
+    // knows agent data roots, and it now reports them already shortened
+    // (`~/.claude`) — a string that names no home — so derive from one only
+    // when it is still absolute, and otherwise show paths in full.
+    const fromShell = host()?.homeDir ?? null;
+    if (fromShell !== null) return fromShell;
     const root = meta?.runtimes[0]?.data_root ?? null;
-    return root ? root.replace(/\/\.[^/]+$/, "") : null;
+    if (root === null || !root.startsWith("/")) return null;
+    return root.replace(/\/\.[^/]+$/, "");
   }, [meta]);
 
   const projectViewModels: ProjectViewModel[] = useMemo(
