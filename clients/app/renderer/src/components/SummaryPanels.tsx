@@ -19,6 +19,7 @@ import type { ProjectViewModel } from "../lib/model";
 
 type TintStyle = CSSProperties & { "--tint": string };
 type ProjectChart = "activity" | "models";
+const MAX_TREEMAP_PROJECT_COUNT = 10;
 
 const PROJECT_CHART_OPTIONS = [
   { value: "activity", label: "Overview" },
@@ -263,8 +264,16 @@ export function PortfolioSummaryPanel({
       });
     }
 
+    const treemapProjects = [...projects]
+      .sort(
+        (left, right) =>
+          right.tokensLast30Days - left.tokensLast30Days ||
+          left.row.name.localeCompare(right.row.name) ||
+          left.row.id.localeCompare(right.row.id),
+      )
+      .slice(0, MAX_TREEMAP_PROJECT_COUNT);
     const treemapData: TreemapData = {
-      items: projects.map((project) => ({
+      items: treemapProjects.map((project) => ({
         id: project.row.id,
         label: project.row.name,
         value: project.tokensLast30Days,
@@ -287,6 +296,7 @@ export function PortfolioSummaryPanel({
       ),
       activeDayCount: activeDayIndices.size,
       treemapData,
+      hiddenTreemapProjectCount: projects.length - treemapProjects.length,
     };
   }, [projects]);
 
@@ -328,9 +338,13 @@ export function PortfolioSummaryPanel({
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}
-              title="Spend · 30 days"
-              note="area is the share"
-              ariaLabel="Spend by project, where area represents share"
+              title="Top projects · 30-day spend"
+              note={
+                summary.hiddenTreemapProjectCount > 0
+                  ? `${summary.treemapData.items.length} of ${projects.length} shown · area is share`
+                  : "area is the share"
+              }
+              ariaLabel="Top projects by 30-day spend, where area represents share among displayed projects"
               emptyMessage="No project spend in this window"
               itemNoun={{ singular: "project", plural: "projects" }}
               selectedItemId={selectedProjectId}
@@ -339,7 +353,7 @@ export function PortfolioSummaryPanel({
               getItemAccessibleLabel={(item, context) =>
                 `${item.label} · ${tokenText(item.value)} over 30 days · ${(
                   context.share * 100
-                ).toFixed(1)}% of all spend${
+                ).toFixed(1)}% of displayed spend${
                   context.isMinimumSized ? " · shown at the minimum visible size" : ""
                 }`
               }
