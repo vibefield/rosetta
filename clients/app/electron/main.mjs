@@ -128,6 +128,13 @@ function createWindow() {
 async function smoke(win, out, delayMs) {
   await new Promise((resolve) => win.webContents.once("did-finish-load", resolve));
   await new Promise((resolve) => setTimeout(resolve, delayMs));
+  // An occluded window stops painting, and `capturePage` then returns the
+  // blank frame rather than the room. Raise it first — a smoke shot that
+  // silently captures nothing is worse than no gate at all.
+  win.setAlwaysOnTop(true);
+  win.show();
+  win.focus();
+  await new Promise((resolve) => setTimeout(resolve, 900));
   const image = await win.webContents.capturePage();
   const { writeFileSync } = await import("node:fs");
   writeFileSync(out, image.toPNG());
