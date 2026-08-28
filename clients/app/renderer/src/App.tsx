@@ -5,8 +5,8 @@
 // transcript (H-3), and an explicit toggle outranks the automatic close.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchHit, SearchReadiness, SessionRow } from "@rosetta/protocol";
-import { LedgerColumn } from "./components/Ledger";
-import type { LedgerSort } from "./components/Ledger";
+import { ProjectsColumn } from "./components/projects";
+import type { ProjectSort } from "./components/projects";
 import { RailColumn } from "./components/Rail";
 import { SearchStrip } from "./components/SearchStrip";
 import { SessionsColumn } from "./components/Sessions";
@@ -64,7 +64,7 @@ export default function App() {
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
   );
-  const [sort, setSort] = useState<LedgerSort>("spend");
+  const [sort, setSort] = useState<ProjectSort>("spend");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionScope, setSessionScope] = useState<"roots" | "all">("all");
@@ -309,7 +309,7 @@ export default function App() {
             data-mode={searching ? "search" : "browse"}
             data-rail={railShown ? "on" : "off"}
           >
-            <LedgerColumn
+            <ProjectsColumn
               projects={projectViewModels}
               selectedProjectId={projectId}
               sort={sort}
