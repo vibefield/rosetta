@@ -1,0 +1,33 @@
+{
+  "name": "@rosetta/agent-history",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The History room — rosetta's agent-view app, to be ported into vibe-field once polished.",
+  "main": "electron/main.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite",
+    "build": "tsc --noEmit && vite build",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "electron": "^43.1.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.13"
+  },
+  "allowScripts": {
+    "electron@43.4.1": true
+  }
+}

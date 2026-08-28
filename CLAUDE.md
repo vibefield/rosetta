@@ -82,7 +82,10 @@ crates/                    all Rust crates
   search/                  backend-neutral query/readiness seam + FTS5 reference
   rosettad/                discover, ingest, watch, serve, and atomic rebuild CLI
   search-bench/            frozen-input FTS percentile campaign harness
-clients/                   generated TypeScript protocol package      [Phase 4]
+clients/                   TypeScript consumers                       [Phase 4]
+  ts/                      generated protocol types + RosettaClient SDK
+  app/                     agent-history app — Electron + React History room,
+                           design source: protos/agent-history-proto
 ```
 
 ## Conventions

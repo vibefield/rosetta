@@ -1,0 +1,110 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tokens — transcribed from vibe-field/packages/design-kit/src/tokens.css via
+   protos/agent-history-proto (the design record's own transcription). The doc
+   moves first, then that file, then this one. Nothing here invents a palette.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --vf-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --vf-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --vf-canvas-bg: #fafafa;
+  --vf-canvas-dot: rgba(0, 0, 0, 0.16);
+
+  --vf-card: #1c1c1e;
+  --vf-fill: #f2f2f7;
+  --vf-fill-hover: #e5e5ea;
+
+  --vf-foreground: #1c1c1e;
+  --vf-foreground-inverse: #ffffff;
+  --vf-text-primary: rgb(28 28 30 / 85%);
+  --vf-text-secondary: rgb(28 28 30 / 70%);
+  --vf-text-tertiary: rgb(28 28 30 / 45%);
+  --vf-text-faint: rgb(28 28 30 / 30%);
+  --vf-hairline: rgb(0 0 0 / 5%);
+  --vf-hairline-strong: rgb(0 0 0 / 10%);
+  --vf-chrome-solid: #ffffff;
+  --vf-chrome-surface: rgb(255 255 255 / 90%);
+  --vf-sheet-surface: rgb(255 255 255 / 96%);
+  --vf-backdrop-dim: rgb(0 0 0 / 10%);
+
+  --vf-green: #30d158;
+  --vf-orange: #ff9f0a;
+  --vf-red: #ff453a;
+  --vf-yellow: #ffd60a;
+  --vf-cyan: #5ac8fa;
+  --vf-select: #4a90d9;
+  --vf-state-on-solid: #ffffff;
+
+  --vf-accent-1: #6366f1;
+  --vf-accent-2: #ec4899;
+  --vf-accent-3: #22c55e;
+  --vf-accent-4: #f59e0b;
+  --vf-accent-5: #06b6d4;
+  --vf-accent-6: #8b5cf6;
+  --vf-accent-7: #ef4444;
+  --vf-accent-8: #3b82f6;
+
+  /* PROJECT IDENTITY — the band every project tint is cut from. Only the hue
+     varies from project to project; lightness and chroma are the same for all
+     of them, so no project can look louder than another by accident. Two
+     values per theme, and a project is the same colour in both. */
+  --tint-l: 0.60;
+  --tint-c: 0.15;
+
+  --vf-radius-card: 22px;
+  --vf-radius-island: 32px;
+  --vf-radius-sheet: 40px;
+  --vf-radius-control: 9px;
+
+  /* §8 The file tree — geometry only; every colour it wears is a token above. */
+  --vf-tree-row-height: 26px;
+  --vf-tree-row-height-compact: 22px;
+  --vf-tree-indent: 14px;
+  --vf-tree-gutter: 8px;
+
+  --vf-shadow-card: 0 20px 40px rgb(0 0 0 / 15%), 0 0 0 1px rgb(0 0 0 / 5%);
+  --vf-shadow-island: 0 8px 30px rgb(0 0 0 / 8%);
+  --vf-shadow-sheet: 0 -20px 40px rgb(0 0 0 / 8%);
+  --vf-shadow-dialog: 0 42px 100px rgb(0 0 0 / 18%), 0 12px 36px rgb(0 0 0 / 10%);
+
+  --vf-ease-island: cubic-bezier(0.25, 1, 0.3, 1);
+  --vf-ease-lift: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --vf-ease-pop: cubic-bezier(0.34, 1.45, 0.64, 1);
+
+  --ic-glow-color: 128, 128, 128;
+
+  /* §4 weight means readiness (four-views §4) */
+  --vf-ready: color-mix(in srgb, var(--vf-foreground) 8%, transparent);
+  --vf-ready-hover: color-mix(in srgb, var(--vf-foreground) 14%, transparent);
+
+}
+
+.dark {
+  --tint-l: 0.74;
+
+  --vf-canvas-bg: #171717;
+  --vf-canvas-dot: rgba(255, 255, 255, 0.08);
+
+  --vf-fill: #2c2c2e;
+  --vf-fill-hover: #2c2c2e;
+
+  --vf-foreground: #f5f5f7;
+  --vf-foreground-inverse: #1c1c1e;
+  --vf-text-primary: rgb(245 245 247 / 85%);
+  --vf-text-secondary: rgb(245 245 247 / 70%);
+  --vf-text-tertiary: rgb(245 245 247 / 45%);
+  --vf-text-faint: rgb(245 245 247 / 30%);
+  --vf-hairline: rgb(255 255 255 / 10%);
+  --vf-hairline-strong: rgb(255 255 255 / 15%);
+  --vf-chrome-solid: #1c1c1e;
+  --vf-chrome-surface: rgb(28 28 30 / 90%);
+  --vf-sheet-surface: rgb(28 28 30 / 96%);
+  --vf-backdrop-dim: rgb(0 0 0 / 40%);
+
+  --vf-shadow-island: 0 8px 30px rgb(0 0 0 / 40%);
+  --vf-shadow-sheet: 0 -20px 40px rgb(0 0 0 / 40%);
+  --vf-shadow-dialog: 0 48px 120px rgb(0 0 0 / 48%), 0 14px 40px rgb(0 0 0 / 30%);
+
+  --ic-glow-color: 255, 255, 255;
+}

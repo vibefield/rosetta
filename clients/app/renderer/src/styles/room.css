@@ -1,0 +1,779 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE ROOM — ported from protos/agent-history-proto/index.html §03, class
+   names and all: the proto is the fidelity reference, and renaming its
+   vocabulary would only make the two harder to diff. App-shell adaptations
+   live in the clearly marked section at the end.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE ROOM. History is depth 1 on the materiality ladder, and its material is
+   PAPER: opaque sheet, no ground bleed. Reading is the job, and translucency
+   taxes it. (four-views §3.)
+   ═══════════════════════════════════════════════════════════════════════ */
+.ah-frame {
+  position: relative; height: 760px; min-height: 760px;
+  border-radius: 22px; overflow: hidden;
+  border: 1px solid var(--vf-hairline-strong);
+  background: var(--vf-canvas-bg);
+  box-shadow: var(--vf-shadow-card);
+  /* the ground the room sits over — always underneath, per the ladder */
+  background-image: radial-gradient(var(--vf-canvas-dot) 1.2px, transparent 1.2px);
+  background-size: 25px 25px;
+  --composer-h: 196px;
+  color: var(--vf-text-primary);
+}
+.ah-frame.is-tall { height: 860px; min-height: 860px; }
+
+.ah-room {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  background: var(--vf-sheet-surface);
+  backdrop-filter: blur(40px);
+  border-top: 1px solid var(--vf-hairline);
+}
+
+/* Five columns and two guests: projects · sessions · the project's WORKTREE ·
+   the messages · what THIS SESSION touched. Each tree opens from the head of
+   the column it describes and sits immediately to that column's right, so a
+   tree is always beside its owner rather than across the room from it. The
+   measure keeps the middle and takes back whatever a closed guest gives up.
+   H-3 is unchanged and now has two subjects: guests yield, the measure never
+   does — and when both guests want a room that seats one, the newer takes the
+   seat and the room says so. */
+.ah-cols {
+  display: grid; height: 100%;
+  grid-template-columns: 260px 300px 280px minmax(0, 1fr) 0px;
+  transition: grid-template-columns 240ms var(--vf-ease-island);
+}
+.ah-cols[data-rail="off"] { grid-template-columns: 260px 300px 0px minmax(0, 1fr) 0px; }
+.ah-cols[data-foot="on"] { grid-template-columns: 260px 300px 280px minmax(0, 1fr) 280px; }
+.ah-cols[data-rail="off"][data-foot="on"] { grid-template-columns: 260px 300px 0px minmax(0, 1fr) 280px; }
+/* a closed guest leaves nothing behind — including its own hairline, which
+   would otherwise stand beside its neighbour's as a second line */
+.ah-cols[data-rail="off"] .ah-col--rail,
+.ah-cols:not([data-foot="on"]) .ah-col--measure,
+.ah-col--foot { border-right: 0; }
+/* the transcript head carries a range and an act, so they travel together */
+.ah-headacts { display: flex; align-items: center; gap: 8px; flex: none; }
+
+.ah-col { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--vf-hairline); overflow: hidden; }
+.ah-col:last-child { border-right: 0; }
+/* One band across all four columns. The padding is horizontal only and the
+   height is the band's: a header holding a 26px segmented control used to
+   stand 1px taller than one holding a 15px eyebrow, which put a visible
+   step in the line that is supposed to run the width of the room. */
+.ah-col > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 46px; padding: 0 14px;
+  border-bottom: 1px solid var(--vf-hairline);
+}
+.ah-col > header > div { min-width: 0; }
+.ah-eyebrow {
+  display: block; color: var(--vf-text-tertiary);
+  font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-caption { color: var(--vf-text-faint); font-size: 10px; white-space: nowrap; }
+/* CB-4 — every room's scroll container reserves the capsule's height plus 16. */
+.ah-scroll {
+  flex: 1; overflow-y: auto; scrollbar-width: none;
+  padding: 6px 6px calc(var(--composer-h) + 16px);
+}
+.ah-scroll::-webkit-scrollbar { display: none; }
+.ah-scroll[data-flush] { padding-left: 0; padding-right: 0; }
+
+/* ── the search line: a line at the head of the Ledger, never a modal ────── */
+.ah-searchline { padding: 8px 8px 0; }
+.ah-search {
+  display: flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 11px; border-radius: 999px;
+  background: var(--vf-fill);
+  transition: box-shadow 160ms ease;
+}
+.ah-search:focus-within { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.ah-search svg { width: 13px; height: 13px; flex: none; color: var(--vf-text-tertiary); }
+.ah-search input {
+  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  color: var(--vf-text-primary); font-size: 12px;
+}
+.ah-search input::placeholder { color: var(--vf-text-tertiary); }
+.ah-search button {
+  display: grid; place-items: center; width: 18px; height: 18px; flex: none;
+  border: 0; border-radius: 999px; background: transparent; color: var(--vf-text-tertiary);
+  font-size: 13px; line-height: 1;
+}
+.ah-search button:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
+.ah-search button[hidden] { display: none; }
+/* PP6 at the surface: the product reads the vendors' own stores and says so. */
+.ah-scope { padding: 7px 8px 9px 14px; color: var(--vf-text-faint); font-size: 10px; line-height: 1.5; }
+
+/* ── the Ledger ─────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   THE LEDGER ROW — option A, "ground fill" (chosen 2026-08-27).
+   The comparison is not a mark on the row; it is the row. A tint wash runs
+   from the left edge, its width the project's share of the busiest project,
+   fading out at its leading edge so it reads as ground rather than as a
+   progress bar. That frees the foreground to be almost nothing: identity on
+   line 1, and a right-hand column of figures on line 2.
+
+   The right column is a FIXED width and everything in it is right-aligned and
+   stacked — figure over shape over time. That is what keeps the sparklines on
+   one axis down the whole ledger: the earlier draft set the time beside the
+   chart, so "yesterday" pushed its chart 30px left of "3d"'s.
+   ═══════════════════════════════════════════════════════════════════════ */
+.ah-projrow {
+  position: relative; isolation: isolate;
+  display: grid; grid-template-columns: 3px minmax(0, 1fr); gap: 0 11px;
+  width: 100%; padding: 11px 12px 12px; margin-bottom: 3px;
+  border: 0; border-radius: 12px; background: transparent; text-align: left;
+  transition: background-color 160ms ease;
+}
+.ah-projrow > * { position: relative; z-index: 1; }
+/* The wash. Chromatic, where every state fill in this room is neutral — that
+   is the whole of what keeps a quantity from being mistaken for a state. */
+.ah-projrow::before {
+  content: ""; position: absolute; z-index: 0; inset: 0 auto 0 0;
+  width: max(3px, var(--share)); border-radius: 12px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--tint) 15%, transparent) 0%,
+    color-mix(in srgb, var(--tint) 8%, transparent) 64%,
+    color-mix(in srgb, var(--tint) 0%, transparent) 100%);
+  transition: width 300ms var(--vf-ease-island);
+}
+.ah-projrow:hover { background: color-mix(in srgb, var(--vf-foreground) 5%, transparent); }
+.ah-projrow.is-active { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
+.ah-projrow.is-active .ah-tint { opacity: 1; }
+.ah-tint { grid-column: 1; grid-row: 1 / span 3; align-self: stretch; width: 3px; border-radius: 999px; background: var(--tint); opacity: 0.45; transition: opacity 160ms ease; }
+.ah-projrow__head { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.ah-projrow__sub { grid-column: 2; margin-top: 3px; min-width: 0; }
+.ah-projrow__foot { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+.ah-quant { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.ah-projrow strong { display: block; min-width: 0; font-size: 12.5px; font-weight: 500; color: var(--vf-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-projrow small {
+  display: block; min-width: 0; padding-top: 1px; color: var(--vf-text-faint);
+  font-size: 10px; font-family: var(--vf-font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-projrow[data-unavailable] strong { color: var(--vf-text-tertiary); font-style: italic; }
+.ah-projrow[data-unavailable] .ah-tint { opacity: 0.18; }
+
+/* figure over shape over time, one axis, fixed width */
+.ah-when { flex: 0 0 96px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.ah-whenfoot { display: flex; align-items: baseline; justify-content: space-between; width: 100%; gap: 8px; }
+.ah-last {
+  color: var(--vf-text-faint); font-size: 9.5px; line-height: 1;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ah-projrow.is-active .ah-last, .ah-projrow:hover .ah-last { color: var(--vf-text-tertiary); }
+/* `now` is the same claim the session list makes with `live`, so it takes the
+   same §2.5 green — and it has to outrank the active-row rule to keep it. */
+.ah-projrow .ah-last[data-live] { color: var(--vf-green); font-weight: 500; }
+
+/* ── the figure ───────────────────────────────────────────────────────────
+   Digits in a fixed slot and the unit in its own, so the column right-aligns
+   on the decimal rather than on the letter. §3: every number that can change
+   is tabular. */
+.ah-tok { display: inline-flex; align-items: baseline; gap: 1px; flex: none; font-variant-numeric: tabular-nums; }
+.ah-projrow .ah-tok { justify-content: flex-start; }
+.ah-tok b { min-width: 29px; text-align: right; color: var(--vf-text-secondary); font-size: 11px; font-weight: 500; }
+.ah-tok i { width: 7px; color: var(--vf-text-faint); font-size: 9.5px; font-style: normal; }
+.ah-projrow.is-active .ah-tok b { color: var(--vf-text-primary); }
+
+/* ── the spend bar ────────────────────────────────────────────────────────
+   Length is the ONLY comparative encoding here, and it is scaled to the
+   largest project across the whole ledger — never to the filtered set, so a
+   project's bar is a stable property of that project rather than of what you
+   happen to be looking at. A `max(2px, …)` floor means a nonzero project can
+   never render as nothing: an empty track means zero, and nothing else does.
+   Colour is the project's own §2.6 accent, which is what that palette is for. */
+/* TWO ENCODINGS, TWO ELEMENTS. The parent's mistake was not the sparkline —
+   it was asking one per-row-normalised sparkline to carry magnitude, which it
+   structurally cannot. So each gets an element that does one job: the bar is
+   HOW MUCH (comparable), the sparkline is WHEN (shape), and the figure is the
+   exact number. Neither is asked to do the other's work, and the sparkline is
+   free to normalise to its own peak precisely because the comparable thing is
+   sitting right beside it. */
+.ah-spend { position: relative; flex: 1 1 auto; min-width: 0; height: 4px; margin-bottom: 4px; }
+.ah-spend::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 999px; background: color-mix(in srgb, var(--vf-foreground) 8%, transparent);
+}
+.ah-spend__fill {
+  position: absolute; inset: 0 auto 0 0; z-index: 1; width: max(2px, var(--share));
+  border-radius: 999px; background: var(--tint); opacity: 0.62;
+  transition: width 300ms var(--vf-ease-island), opacity 160ms ease;
+}
+.ah-projrow:hover .ah-spend__fill, .ah-projrow.is-active .ah-spend__fill { opacity: 1; }
+
+/* The activity shape: 30 days in 15 two-day buckets, normalised to this
+   project's own peak. It answers "when", never "how much". */
+.ah-activity { display: flex; align-items: flex-end; gap: 1px; width: 96px; height: 14px; flex: none; }
+.ah-activity i {
+  flex: 1 1 0; min-width: 0; height: var(--h); border-radius: 1px;
+  background: var(--tint); opacity: 0.38; transition: opacity 160ms ease;
+}
+.ah-projrow:hover .ah-activity i, .ah-projrow.is-active .ah-activity i { opacity: 0.72; }
+/* A bucket with nothing in it is drawn as a hairline rather than as nothing,
+   so a dead stretch reads as measured-and-empty instead of as missing. */
+.ah-activity i[data-zero] { height: 1px; opacity: 0.28; }
+
+/* ── the agent marks ──────────────────────────────────────────────────────
+   lobehub marks, monochrome on the row's ramp. Opacity ranks them by share
+   against this project's lead agent, so the leftmost mark is also the darkest
+   and the row reads as an ordering rather than as a set. */
+.ah-agents { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; flex: 0 0 58px; }
+.ah-agent { display: inline-flex; width: 12px; height: 12px; flex: none; color: var(--vf-text-primary); }
+.ah-agent svg { width: 100%; height: 100%; display: block; }
+.ah-more { color: var(--vf-text-faint); font-size: 8.5px; font-variant-numeric: tabular-nums; }
+
+.ah-hits {
+  padding: 1px 6px; border-radius: 5px; background: var(--vf-fill-hover);
+  color: var(--vf-text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums;
+}
+.ah-projrow.is-active .ah-hits { color: var(--tint); background: color-mix(in srgb, var(--tint) 14%, transparent); }
+
+/* ── search: a room-level strip, never a property of one column ──────────
+   Searching spans every project, so it cannot live inside the list of them.
+   It gets a line of its own across the head of the room — still not a modal,
+   which was always the parent's point. */
+.ah-searchbar {
+  display: flex; align-items: center; gap: 12px; flex: none;
+  padding: 9px 14px; border-bottom: 1px solid var(--vf-hairline);
+}
+.ah-searchbar .ah-search { flex: 1 1 auto; min-width: 0; max-width: 460px; }
+.ah-searchbar .ah-scope { padding: 0; flex: none; }
+.ah-kbd {
+  flex: none; margin-left: auto; padding: 2px 6px;
+  border: 1px solid var(--vf-hairline-strong); border-radius: 6px;
+  color: var(--vf-text-faint); font-family: var(--vf-font-sans); font-size: 10px; line-height: 1.4;
+}
+.ah-colnote { margin: 0; padding: 8px 12px 2px; color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* the rank control sits with the list it ranks, not in the header band: the
+   band names what a column holds, and ordering is not part of the name. */
+.ah-listbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 3px; }
+.ah-listbar .ah-colnote { padding: 0; }
+.ah-sortseg, .ah-rangeseg { flex: none; }
+.ah-seg.ah-sortseg button { height: 19px; padding: 0 8px; font-size: 9.5px; }
+
+/* ── the treemap ──────────────────────────────────────────────────────────
+   Area is the quantity and hue is the identity — the same division the room
+   makes everywhere else, drawn in two dimensions instead of one. The layout
+   is squarified (Bruls, Huizing and van Wijk), so tiles stay near-square and
+   a share is legible as an area rather than as a sliver.
+   True area, no floor: a project at 0.2% of the spend gets 0.2% of the box,
+   and the tiles too small to hold their own label say so underneath rather
+   than being quietly enlarged until they fit. */
+.ah-treemap { position: relative; width: 100%; height: 110px; }
+.ah-tile { position: absolute; border: 0; padding: 0; background: transparent; }
+.ah-tile > span {
+  position: absolute; inset: 0 2px 2px 0; border-radius: 4px;
+  background: color-mix(in srgb, var(--tint) 26%, transparent);
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+.ah-tile:hover > span { background: color-mix(in srgb, var(--tint) 42%, transparent); }
+.ah-tile.is-on > span {
+  background: color-mix(in srgb, var(--tint) 58%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--tint) 90%, transparent);
+}
+.ah-tile b {
+  position: absolute; left: 6px; right: 6px; top: 5px;
+  font-size: 9px; font-weight: 500; color: var(--vf-text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+.ah-tile em {
+  position: absolute; right: 6px; bottom: 4px;
+  font-style: normal; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  color: var(--vf-text-primary);
+}
+.ah-tile:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; border-radius: 5px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THE PROJECT META BLOCK — what the ledger row's figure decomposes into.
+   A READER: no cards, no material, hairlines and the ramp doing the
+   hierarchy (§8's file-tree law, one surface over).
+   ═══════════════════════════════════════════════════════════════════════ */
+/* The block now heads its own column — there is no separate column header
+   above it — so its head takes the header band's metrics (46px, hairline
+   beneath) and the room's header line runs unbroken across all four columns.
+   Collapsed, only the head and that one hairline remain. */
+.ah-meta { flex: none; }
+.ah-meta__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 46px; padding: 0 12px;
+  border-bottom: 1px solid var(--vf-hairline);
+}
+.ah-meta__body { padding: 10px 12px 12px; border-bottom: 1px solid var(--vf-hairline); }
+/* ── the column head ──────────────────────────────────────────────────────
+   Two columns name the thing they are showing — ② a project, ③ a session —
+   and they are the same object at different depths, so they are one component:
+   tint marker, name, count. Nothing about them may drift apart. */
+.ah-colhead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ah-colhead > i { flex: none; width: 3px; height: 14px; border-radius: 999px; background: var(--tint); }
+.ah-colhead > strong {
+  font-size: 11.5px; font-weight: 500; color: var(--vf-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* a path and a branch are ids, so they set in mono — the same rule the sha
+   follows. The head keeps its size and weight; only the face changes. */
+.ah-colhead > strong.ah-idname { font-family: var(--vf-font-mono); font-size: 11px; letter-spacing: -0.01em; }
+/* the count is a fact about the name, so it travels with it rather than
+   sitting at the far end of the band. Neutral fill, never the tint: the
+   marker two elements over already says which project this is. */
+.ah-bubble {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 19px; height: 16px; padding: 0 5px; border-radius: 999px;
+  background: var(--vf-fill); color: var(--vf-text-tertiary);
+  font-size: 9.5px; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums;
+}
+
+/* two acts, standing on the fill at rest so the head reads as two controls
+   rather than two glyphs. The pressed step is the segmented control's own —
+   thumb over track — so a thing that is ON looks the same everywhere here. */
+.ah-meta__acts { display: flex; align-items: center; gap: 4px; flex: none; }
+.ah-iconbtn {
+  display: grid; place-items: center; width: 26px; height: 26px; flex: none;
+  border: 0; border-radius: 8px; background: var(--vf-fill); color: var(--vf-text-tertiary);
+  transition: color 160ms ease, background-color 160ms ease;
+}
+.ah-iconbtn:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
+.ah-iconbtn[aria-pressed="true"] {
+  color: var(--vf-foreground); background: var(--vf-chrome-solid); box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+}
+.dark .ah-iconbtn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--vf-foreground) 20%, transparent); box-shadow: none;
+}
+.ah-iconbtn svg { width: 14px; height: 14px; }
+
+/* the two views take the segmented control the ledger already uses to rank
+   itself — one switch shape for the whole room, whatever it switches. They
+   keep tab semantics, because what changes is a chart, not a setting. */
+.ah-seg.ah-tabseg { margin-bottom: 9px; }
+.ah-seg.ah-tabseg button { height: 21px; padding: 0 11px; font-size: 10px; }
+
+/* The switch and the chart it switches are one object, so they share one
+   fill — the same step the four chips stand on. Inside the card the seg's
+   track would vanish into it, so the track takes a further step up the ramp;
+   the thumb keeps its own. Three steps, and each one still reads. */
+.ah-chartcard { padding: 9px; border-radius: 12px; background: var(--vf-fill); }
+.ah-chartcard .ah-seg { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
+
+/* four chips, not four cards: a fill on the same surface, no border and no
+   shadow — they group the figures without pretending to float (§5). */
+/* Four equal quarters of a 260px column leave 46px for a label that needs 54,
+   so the tracks are floored at their own content and share what is left. The
+   chips come out slightly unequal in the narrow column and equal in the wide
+   one — which is the honest way round: the width follows the word, and no
+   label is ever cut to keep a grid tidy. */
+.ah-stats { margin-bottom: 10px; display: grid; grid-template-columns: repeat(4, minmax(min-content, 1fr)); gap: 3px; }
+.ah-stat { min-width: 0; padding: 7px 4px 6px; border-radius: 9px; background: var(--vf-fill); }
+.ah-stat b {
+  display: block; font-size: 15px; font-weight: 300; line-height: 1.05;
+  letter-spacing: -0.015em; font-variant-numeric: tabular-nums; color: var(--vf-text-primary);
+}
+.ah-stat b small { font-size: 10px; color: var(--vf-text-faint); margin-left: 1px; font-weight: 400; }
+.ah-stat span {
+  display: block; margin-top: 4px; color: var(--vf-text-faint);
+  font-size: 8px; font-weight: 500; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── the year ribbon ──────────────────────────────────────────────────────
+   53 weeks across, days down. The scale is the project's own §2.6 accent at
+   four steps of alpha — never a hue ramp: colour in this room means *which*,
+   and a heat scale that ignored that would be the one thing on screen using
+   hue for quantity. An empty day is a faint square rather than nothing: the
+   day was measured and was empty, which is not the same as missing. */
+.ah-months { display: flex; margin: 10px 0 3px; height: 10px; position: relative; }
+.ah-months span {
+  position: absolute; top: 0; color: var(--vf-text-faint);
+  font-size: 8px; letter-spacing: 0.02em; white-space: nowrap;
+}
+.ah-heat { display: flex; gap: 1px; }
+.ah-heat__col { display: flex; flex-direction: column; gap: 1px; flex: 1 1 0; min-width: 0; }
+.ah-heat i {
+  display: block; width: 100%; aspect-ratio: 1; border-radius: 1px;
+  background: color-mix(in srgb, var(--tint) calc(var(--l) * 25%), transparent);
+}
+.ah-heat i[data-l="0"] { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
+.ah-heatfoot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 8px; color: var(--vf-text-faint); font-size: 9px;
+}
+.ah-heat__scale { display: flex; align-items: center; gap: 3px; }
+.ah-heat__scale i { width: 7px; height: 7px; border-radius: 2px; background: color-mix(in srgb, var(--tint) calc(var(--l) * 25%), transparent); }
+.ah-heat__scale i[data-l="0"] { background: color-mix(in srgb, var(--vf-foreground) 7%, transparent); }
+
+/* ── the models chart ─────────────────────────────────────────────────────
+   A model is an object being grouped, which is precisely what §2.6's accents
+   are for — so each model takes one, assigned stably by id. The project tint
+   and the model tints never share a chart; the legend names every line. */
+/* Both tabs draw into one box of fixed height, so switching between them
+   never moves the session list below. */
+.ah-tabbody { height: 106px; display: flex; flex-direction: column; justify-content: space-between; }
+.ah-chart__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ah-chart__note { color: var(--vf-text-faint); font-size: 8.5px; }
+.ah-chart { flex: 1; min-height: 0; }
+.ah-chart svg { display: block; width: 100%; height: 100%; }
+.ah-dates { display: flex; justify-content: space-between; margin-top: 3px; color: var(--vf-text-faint); font-size: 8px; font-variant-numeric: tabular-nums; }
+.ah-chart__title { color: var(--vf-text-tertiary); font-size: 9px; font-weight: 500; }
+.ah-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 11px; margin-top: 6px; }
+.ah-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--vf-text-tertiary); font-size: 9.5px; }
+.ah-legend i { width: 6px; height: 6px; border-radius: 999px; background: var(--m); flex: none; }
+.ah-legend b { color: var(--vf-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.ah-meta__facts { margin: 9px 0 0; color: var(--vf-text-tertiary); font-size: 10px; line-height: 1.5; }
+.ah-meta__facts b { color: var(--vf-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* ── Sessions ───────────────────────────────────────────────────────────── */
+/* A 128-session list without day breaks is undifferentiated, so the days are
+   drawn — sticky, quiet, and never a card. */
+.ah-day {
+  position: sticky; top: 0; z-index: 2;
+  padding: 10px 10px 5px; margin-top: 4px;
+  background: linear-gradient(var(--vf-sheet-surface) 72%, transparent);
+  color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+/* The session row answers the same four questions the ledger row does, in the
+   same corners: state and title on the first line, the agent top-right, the
+   facts in the middle, the branch bottom-left and the time bottom-right. */
+.ah-sessrow {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 0 9px;
+  width: 100%; padding: 8px 10px 9px; border: 0; border-radius: 11px;
+  background: transparent; text-align: left;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+.ah-sessrow:hover { background: var(--vf-fill); }
+/* location, not interaction — the same law the tree states (§8 file tree) */
+.ah-sessrow.is-active { background: var(--vf-fill); }
+.ah-sessrow.is-focused { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+
+/* The state is the dot and only the dot — the word it replaced was saying the
+   same thing twice. §2.5's meanings, unchanged: green working, orange needs
+   attention, red failed, muted done or idle. */
+.ah-dot {
+  grid-column: 1; grid-row: 1; align-self: center; width: 8px; height: 8px;
+  border-radius: 999px; background: var(--vf-text-faint);
+}
+.ah-dot[data-tone="green"] { background: var(--vf-green); }
+.ah-dot[data-tone="orange"] { background: var(--vf-orange); }
+.ah-dot[data-tone="red"] { background: var(--vf-red); }
+/* live is the one state that is still happening, so it also breathes */
+.ah-dot[data-live] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--vf-green) 22%, transparent); }
+
+.ah-sessrow__l1 { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 16px; }
+.ah-sessrow__l3 { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
+.ah-sessrow strong { display: block; min-width: 0; font-size: 12px; font-weight: 500; color: var(--vf-text-primary); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-sessmeta {
+  grid-column: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 3px;
+  color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums;
+}
+/* the branch is an id, so it is mono (§3) */
+.ah-branch {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+  color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 9.5px;
+}
+.ah-branch span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-branch svg { width: 9px; height: 9px; flex: none; opacity: 0.6; }
+.ah-sessrow .ah-last { flex: none; }
+.ah-sessrow:hover .ah-last, .ah-sessrow.is-active .ah-last { color: var(--vf-text-tertiary); }
+.ah-sessrow .ah-last[data-live] { color: var(--vf-green); font-weight: 500; }
+.ah-sessrow .ah-agent { width: 12px; height: 12px; opacity: 0.5; }
+.ah-sessrow:hover .ah-agent, .ah-sessrow.is-active .ah-agent { opacity: 0.7; }
+
+/* ── a commit ─────────────────────────────────────────────────────────────
+   The session row's four corners, one object down: message and author on top,
+   the diffstat in the middle, the sha bottom-left and the age bottom-right.
+   Not pressable — this proposal has no diff view, and a hover fill would be
+   promising one. The diffstat is neutral, never git's green and red: hue in
+   this room says which project or which state, and a direction of change is
+   neither. */
+.ah-commit {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 0 9px;
+  width: 100%; padding: 9px 10px 10px;
+}
+/* the room's lists separate their rows with a fill on hover; this one has no
+   hover to spend, so the boundary is drawn — a hairline, the quietest one */
+.ah-commit + .ah-commit { border-top: 1px solid var(--vf-hairline); }
+.ah-commit__l1 { grid-column: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.ah-commit__l3 { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
+.ah-commit strong {
+  display: block; min-width: 0; font-size: 11.5px; font-weight: 500; line-height: 1.35;
+  color: var(--vf-text-primary);
+}
+.ah-commit .ah-sessmeta { margin-top: 3px; }
+.ah-commit .ah-agent { width: 12px; height: 12px; opacity: 0.5; flex: none; margin-top: 1px; }
+.ah-commit code { font-family: var(--vf-font-mono); font-size: 9.5px; color: var(--vf-text-faint); }
+.ah-commit .ah-last { flex: none; }
+/* the one git state the reader can still act on gets the marker column */
+.ah-push {
+  grid-column: 1; grid-row: 1; align-self: start; margin-top: 3px;
+  display: grid; place-items: center; width: 8px; height: 8px; color: var(--vf-text-tertiary);
+}
+.ah-push svg { width: 8px; height: 8px; }
+/* the only control in its row, so it takes the row: the same track and the
+   same thumb, stretched — a switch's shape is its material, not its width */
+.ah-seg.ah-gitseg { display: flex; flex: 1; }
+.ah-seg.ah-gitseg button { flex: 1; height: 20px; padding: 0 9px; font-size: 10px; }
+/* the two change groups head themselves like search's result groups do */
+.ah-col--foot .ah-group { padding-top: 10px; }
+.ah-col--foot .ah-group:first-child { padding-top: 6px; }
+
+/* ── the Transcript — a document, not a chat log ─────────────────────────── */
+.ah-transcript { max-width: 68ch; margin: 0 auto; padding: 20px 28px 30px; font-size: 14px; }
+.ah-tmsg { position: relative; padding: 13px 0; scroll-margin-top: 20px; }
+.ah-tmsg + .ah-tmsg { border-top: 1px solid var(--vf-hairline); }
+.ah-tmsg__head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  color: var(--vf-text-tertiary);
+  font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em;
+}
+/* the anchor: History is retrieval, so a message has to be pointable-at */
+.ah-tmsg__head time {
+  color: var(--vf-text-faint); font-variant-numeric: tabular-nums;
+  letter-spacing: 0; text-transform: none; cursor: copy;
+  border-radius: 4px; padding: 1px 3px; margin: -1px -3px;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.ah-tmsg__head time:hover { background: var(--vf-fill); color: var(--vf-text-secondary); }
+/* Body: 14px/1.55 on a 68ch measure. DESIGN.md §3 says 13–14/1.45; a document
+   column wants more leading than a settings label, so this is a stated delta. */
+.ah-tmsg p { margin: 0; color: var(--vf-text-secondary); font-size: 14px; line-height: 1.55; }
+.ah-tmsg p + p { margin-top: 10px; }
+.ah-tmsg p code { font-size: 12.5px; color: var(--vf-text-primary); }
+.ah-tmsg[data-hit="true"] { animation: ah-land 1400ms ease; }
+@keyframes ah-land {
+  0%, 62% { box-shadow: inset 0 0 0 1.5px var(--vf-select); border-radius: 10px; }
+  100% { box-shadow: inset 0 0 0 1.5px transparent; border-radius: 10px; }
+}
+
+.ah-tmsg__acts {
+  position: absolute; top: 9px; right: 0; display: flex; gap: 5px;
+  opacity: 0; transition: opacity 160ms ease;
+}
+.ah-tmsg:hover .ah-tmsg__acts, .ah-tmsg:focus-within .ah-tmsg__acts { opacity: 1; }
+.ah-tmsg__acts button {
+  height: 24px; padding: 0 9px; border: 1px solid var(--vf-hairline); border-radius: 999px;
+  background: var(--vf-chrome-solid); color: var(--vf-text-secondary); font-size: 10.5px;
+  transition: transform 140ms ease, background-color 160ms ease;
+}
+.ah-tmsg__acts button:hover { background: var(--vf-fill); color: var(--vf-text-primary); }
+.ah-tmsg__acts button:active { transform: scale(0.94); }
+
+/* ── THE WORK BLOCK ───────────────────────────────────────────────────────
+   A real agent turn is two sentences of prose and six tool calls. Six hairline
+   blocks between two sentences destroys the measure and the document reads as
+   a build log — which is the one thing History is trying not to be. So a
+   contiguous run of tool calls inside one turn is ONE object that opens, not N
+   that are revealed: M1 at transcript scale.
+
+   No material. This is a reader (§8's file-tree law), so: hairline, fill,
+   control radius, and the type ramp doing the hierarchy. */
+.ah-work {
+  width: 100%; margin-top: 11px; padding: 0;
+  border: 1px solid var(--vf-hairline); border-radius: var(--vf-radius-control);
+  background: var(--vf-fill); overflow: hidden;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.ah-work:hover { border-color: var(--vf-hairline-strong); }
+.ah-work__head {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  min-height: 34px; padding: 0 10px 0 11px;
+  border: 0; background: transparent; text-align: left;
+  color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 10.5px;
+}
+.ah-work__summary {
+  flex: 1; min-width: 0; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Hue only for the concern. A passing test is not news — the same honesty the
+   tree theme states for `passed and skipped muted`. */
+.ah-work__summary b { color: var(--vf-red); font-weight: 500; }
+.ah-work__time { flex: none; color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
+.ah-work__chev { flex: none; width: 12px; height: 12px; color: var(--vf-text-faint); }
+.ah-work__chev svg { width: 12px; height: 12px; display: block; transition: transform 180ms var(--vf-ease-island); }
+.ah-work[data-open="true"] .ah-work__chev svg { transform: rotate(90deg); }
+
+.ah-work__ladder { display: none; padding: 2px 10px 8px 11px; }
+.ah-work[data-open="true"] .ah-work__ladder { display: block; }
+/* The rung pitch is the tree's compact row. A ladder of machine facts and a
+   file tree are the same kind of object, so they share a pitch rather than
+   each inventing one. */
+.ah-rung {
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 9px; align-items: center;
+  height: var(--vf-tree-row-height-compact);
+  padding-left: 9px; border-left: 1px solid var(--vf-hairline-strong);
+  font-family: var(--vf-font-mono); font-size: 10.5px;
+}
+.ah-rung__verb { color: var(--vf-text-tertiary); }
+.ah-rung__target { color: var(--vf-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-rung__result { color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
+.ah-rung[data-failed="true"] .ah-rung__result,
+.ah-rung[data-failed="true"] .ah-rung__verb { color: var(--vf-red); }
+
+/* ── the two drawn markers ───────────────────────────────────────────────── */
+.ah-mark {
+  display: flex; align-items: center; gap: 10px; margin: 18px 0;
+  color: var(--vf-text-faint); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.ah-mark::before, .ah-mark::after { content: ""; flex: 1; height: 1px; }
+.ah-watermark { color: var(--vf-green); }
+.ah-watermark::before, .ah-watermark::after { background: color-mix(in srgb, var(--vf-green) 38%, transparent); }
+/* D33's honesty rendered rather than swallowed — and pressable, because a
+   known unknown should name its reason (§9: say what happened). */
+.ah-gap { width: 100%; border: 0; background: transparent; padding: 0; }
+.ah-gap::before, .ah-gap::after {
+  background: repeating-linear-gradient(90deg, var(--vf-hairline-strong) 0 4px, transparent 4px 8px);
+}
+.ah-gap:hover { color: var(--vf-text-tertiary); }
+.ah-gapwhy {
+  max-width: 68ch; margin: -8px auto 16px; padding: 0 4px;
+  color: var(--vf-text-faint); font-size: 11px; line-height: 1.55; text-align: center;
+}
+.ah-gapwhy[hidden] { display: none; }
+
+/* the live tail's arrival notice: a hairline at the column's foot, never a
+   toast and never a scroll it steals from you (M4). */
+.ah-newpill {
+  position: absolute; left: 50%; bottom: calc(var(--composer-h) + 26px); z-index: 6;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 13px;
+  border: 1px solid var(--vf-hairline); border-radius: 999px;
+  background: var(--vf-chrome-surface); backdrop-filter: blur(20px);
+  box-shadow: var(--vf-shadow-island);
+  color: var(--vf-text-secondary); font-size: 10.5px;
+  animation: ah-pop 280ms var(--vf-ease-pop);
+}
+.ah-newpill i { width: 6px; height: 6px; border-radius: 999px; background: var(--vf-green); }
+.ah-newpill[hidden] { display: none; }
+@keyframes ah-pop { from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.92); } to { opacity: 1; transform: translateX(-50%); } }
+
+/* ── search results — cols 2–3 change CONTENT, never geometry ───────────── */
+.ah-group {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 10px 6px; margin-top: 2px;
+  color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.ah-group i { width: 3px; height: 11px; border-radius: 999px; background: var(--tint); flex: none; }
+.ah-hitcount { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+
+.ah-hitlist { max-width: 68ch; margin: 0 auto; padding: 12px 20px 20px; font-size: 14px; }
+.ah-hit {
+  display: block; width: 100%; padding: 11px 12px; margin-bottom: 2px;
+  border: 0; border-radius: 11px; background: transparent; text-align: left;
+  transition: background-color 160ms ease;
+}
+.ah-hit:hover { background: var(--vf-fill); }
+.ah-hit__head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
+  color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.ah-hit__head time { font-variant-numeric: tabular-nums; letter-spacing: 0; text-transform: none; }
+.ah-hit p { margin: 0; color: var(--vf-text-tertiary); font-size: 12.5px; line-height: 1.5; }
+/* The match is hierarchy, not a highlighter. §2.5 keeps hue for honest state
+   and a search match is not a state; §2.4 already has the tool — the matched
+   run takes full ink on the fill, its surroundings stay on the ramp. */
+.ah-hit mark {
+  padding: 1px 2px; margin: 0 -1px; border-radius: 3px;
+  background: var(--vf-fill-hover); color: var(--vf-text-primary);
+  font-weight: 500;
+}
+.ah-hit:hover mark { background: color-mix(in srgb, var(--vf-select) 20%, transparent); }
+
+/* the count sentence — "results" with the numbers it is actually making */
+.ah-count { color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* ── honest states ──────────────────────────────────────────────────────── */
+.ah-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 9px; height: 100%; min-height: 190px; padding: 30px 26px; text-align: center;
+}
+.ah-empty svg { width: 22px; height: 22px; color: var(--vf-text-faint); }
+.ah-empty strong { font-size: 12.5px; font-weight: 500; color: var(--vf-text-secondary); }
+.ah-empty p { margin: 0; max-width: 44ch; color: var(--vf-text-faint); font-size: 11px; line-height: 1.6; }
+.ah-empty code { font-size: 10.5px; }
+/* Loading is colourless — the veil's rule: loading is not a §2.5 state. */
+.ah-meter { width: 132px; height: 3px; border-radius: 999px; background: var(--vf-fill-hover); overflow: hidden; }
+.ah-meter i { display: block; height: 100%; border-radius: 999px; background: var(--vf-text-tertiary); }
+
+.ah-seg {
+  display: inline-flex; padding: 2px; border-radius: 999px; background: var(--vf-fill);
+}
+.ah-seg button {
+  height: 22px; padding: 0 9px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--vf-text-tertiary); font-size: 10.5px;
+  transition: color 160ms ease, background-color 300ms var(--vf-ease-island);
+}
+.ah-seg button.is-on { color: var(--vf-foreground); background: var(--vf-chrome-solid); box-shadow: 0 1px 3px rgb(0 0 0 / 8%); font-weight: 500; }
+.dark .ah-seg button.is-on { background: color-mix(in srgb, var(--vf-foreground) 20%, transparent); box-shadow: none; }
+
+/* DESIGN.md §7 — a visible focus ring, always. */
+.ah-room button:focus-visible,
+.ah-search input:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+
+/* M6 — non-negotiable quality floor */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   APP SHELL — where the specimen page's frame becomes the application.
+   Everything above is the proto verbatim; everything below is the port.
+   ═══════════════════════════════════════════════════════════════════════ */
+html, body, #root { height: 100%; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--vf-canvas-bg); color: var(--vf-text-primary);
+  font-family: var(--vf-font-sans); -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+code, .mono { font-family: var(--vf-font-mono); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* the frame is the window now: no radius, no shadow, no fixed height */
+.ah-frame, .ah-frame.is-tall {
+  height: 100%; min-height: 0;
+  border: 0; border-radius: 0; box-shadow: none;
+  --composer-h: 0px;
+}
+/* no composer in the standalone app; scrollers keep a quiet foot */
+.ah-scroll { padding-bottom: 26px; }
+.ah-newpill { bottom: 26px; }
+/* three columns; the two guests arrive with their own build */
+.ah-cols,
+.ah-cols[data-rail="off"],
+.ah-cols[data-foot="on"],
+.ah-cols[data-rail="off"][data-foot="on"] { grid-template-columns: 260px 300px minmax(0, 1fr); }
+
+/* macOS: the traffic lights sit over the search strip, and the strip is the
+   window's drag region (hiddenInset title bar; inert elsewhere) */
+.ah-searchbar { min-height: 50px; padding-left: 84px; -webkit-app-region: drag; }
+.ah-searchbar .ah-search,
+.ah-searchbar button,
+.ah-searchbar input { -webkit-app-region: no-drag; }
+
+/* paging is a quiet act at the head of the document, never an infinite trap */
+.ah-loadmore {
+  display: block; margin: 14px auto 4px; height: 26px; padding: 0 12px;
+  border: 1px solid var(--vf-hairline); border-radius: 999px;
+  background: var(--vf-chrome-solid); color: var(--vf-text-tertiary); font-size: 10.5px;
+}
+.ah-loadmore:hover { color: var(--vf-text-primary); background: var(--vf-fill); }
+
+/* a receipt, so a copy or an act is never silent */
+.ah-receipt {
+  position: absolute; left: 50%; bottom: 26px; z-index: 45;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
+  border: 1px solid var(--vf-hairline); border-radius: 999px;
+  background: var(--vf-chrome-surface); backdrop-filter: blur(20px);
+  box-shadow: var(--vf-shadow-island);
+  color: var(--vf-text-secondary); font-size: 11px;
+  animation: ah-pop 280ms var(--vf-ease-pop);
+}
+.ah-receipt[hidden] { display: none; }
