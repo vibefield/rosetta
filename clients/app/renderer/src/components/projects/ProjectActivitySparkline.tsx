@@ -18,7 +18,11 @@ export function ProjectActivitySparkline({
   );
 
   return (
-    <div className="ah-activity" role="img" aria-label={accessibleLabel}>
+    <div
+      className="ah-project-activity-sparkline"
+      role="img"
+      aria-label={accessibleLabel}
+    >
       {values.map((rawValue, bucketIndex) => {
         const value = Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
         const height = value === 0 || peak === 0

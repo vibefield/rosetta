@@ -12,7 +12,7 @@ export interface SessionListItemProps {
   /** `null` hides the search hit count. */
   readonly searchHitCount: number | null;
   readonly currentTimestamp: number;
-  readonly onSelect: (session: SessionRow) => void;
+  readonly onSessionSelect: (session: SessionRow) => void;
 }
 
 export function SessionListItem({
@@ -22,34 +22,47 @@ export function SessionListItem({
   isSelected,
   searchHitCount,
   currentTimestamp,
-  onSelect,
+  onSessionSelect,
 }: SessionListItemProps) {
   const status = getSessionStatus(session);
   const title = getSessionTitle(session);
   const lastActiveLabel = lastActive(session.updated_at, currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
+  const accessibleMetadata = [
+    roleLabel === null ? null : `${roleLabel} session`,
+    searchHitCount === null
+      ? null
+      : `${searchHitCount} ${searchHitCount === 1 ? "search hit" : "search hits"}`,
+    facts === null ? null : `${facts.messages} messages`,
+    facts !== null && facts.tokens > 0 ? `${tokenText(facts.tokens)} tokens` : null,
+  ].filter((value): value is string => value !== null);
 
   return (
     <button
       type="button"
-      className={`ah-sessrow${isSelected ? " is-active is-focused" : ""}`}
+      className={`ah-session-list-item${isSelected ? " is-selected" : ""}`}
       data-role={session.role}
       aria-current={isSelected ? "true" : undefined}
-      aria-label={`${title} · ${status.label} · last active ${lastActiveLabel}`}
-      onClick={() => onSelect(session)}
+      aria-label={[
+        title,
+        status.label,
+        ...accessibleMetadata,
+        `last active ${lastActiveLabel}`,
+      ].join(" · ")}
+      onClick={() => onSessionSelect(session)}
     >
       <i
-        className="ah-dot"
+        className="ah-session-list-item__status"
         data-tone={status.tone ?? undefined}
         data-live={status.isLive ? "" : undefined}
         title={status.label}
         aria-hidden="true"
       />
-      <span className="ah-sessrow__l1">
+      <span className="ah-session-list-item__header">
         <strong title={title}>{title}</strong>
         <AgentMark kind={runtimeKind} />
       </span>
-      <span className="ah-sessmeta">
+      <span className="ah-session-list-item__metadata">
         {roleLabel !== null && (
           <>
             <span>{roleLabel}</span>
@@ -78,8 +91,11 @@ export function SessionListItem({
           </>
         )}
       </span>
-      <span className="ah-sessrow__l3">
-        <span className="ah-branch" title={`Native session ${session.native_session_id}`}>
+      <span className="ah-session-list-item__footer">
+        <span
+          className="ah-session-list-item__native-id"
+          title={`Native session ${session.native_session_id}`}
+        >
           <span>{session.native_session_id.slice(0, 18)}</span>
         </span>
         <span className="ah-last" data-live={lastActiveLabel === "now" ? "" : undefined}>

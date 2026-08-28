@@ -36,7 +36,7 @@ export function ProjectList({
           searchHitCount={isSearching ? (searchHitCounts.get(project.row.id) ?? 0) : null}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
-          onSelect={onProjectSelect}
+          onProjectSelect={onProjectSelect}
         />
       ))}
       {projects.length === 0 && (

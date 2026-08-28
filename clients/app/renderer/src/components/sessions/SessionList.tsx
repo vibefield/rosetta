@@ -68,7 +68,7 @@ function SessionItem({
       isSelected={session.id === common.selectedSessionId}
       searchHitCount={searchHitCount}
       currentTimestamp={common.currentTimestamp}
-      onSelect={common.onSessionSelect}
+      onSessionSelect={common.onSessionSelect}
     />
   );
 }

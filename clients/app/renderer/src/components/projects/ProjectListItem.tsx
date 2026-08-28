@@ -5,14 +5,14 @@ import type { ProjectViewModel } from "../../lib/model";
 import { ProjectActivitySparkline } from "./ProjectActivitySparkline";
 
 type ProjectListItemStyle = CSSProperties & {
-  "--tint": string;
-  "--share": string;
+  "--project-color": string;
+  "--spend-share": string;
 };
 
 function TokenFigure({ value }: { readonly value: number }) {
   const formattedValue = fmtTokens(value);
   return (
-    <span className="ah-tok">
+    <span className="ah-project-list-item__token-figure">
       <b>{formattedValue.n}</b>
       <i>{formattedValue.u}</i>
     </span>
@@ -28,7 +28,7 @@ export interface ProjectListItemProps {
   readonly searchHitCount: number | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
-  readonly onSelect: (projectId: string) => void;
+  readonly onProjectSelect: (projectId: string) => void;
 }
 
 export function ProjectListItem({
@@ -38,7 +38,7 @@ export function ProjectListItem({
   searchHitCount,
   homeDirectory,
   currentTimestamp,
-  onSelect,
+  onProjectSelect,
 }: ProjectListItemProps) {
   const spendShare = maximumTokensLast30Days > 0
     ? (project.tokensLast30Days / maximumTokensLast30Days) * 100
@@ -49,36 +49,41 @@ export function ProjectListItem({
   const workspacePath = project.row.root_paths[0]
     ? tildePath(project.row.root_paths[0], homeDirectory)
     : "No workspace recorded";
+  const searchHitLabel = searchHitCount === null
+    ? ""
+    : ` · ${searchHitCount} ${searchHitCount === 1 ? "search hit" : "search hits"}`;
 
   return (
     <button
       type="button"
-      className={`ah-projrow${isSelected ? " is-active" : ""}`}
+      className={`ah-project-list-item${isSelected ? " is-selected" : ""}`}
       style={{
-        "--tint": project.tint,
-        "--share": `${spendShare.toFixed(2)}%`,
+        "--project-color": project.tint,
+        "--spend-share": `${spendShare.toFixed(2)}%`,
       } as ProjectListItemStyle}
       aria-current={isSelected ? "true" : undefined}
       aria-label={`${project.row.name} · ${tokenText(
         project.tokensLast30Days,
-      )} tokens over 30 days${
+      )} tokens over 30 days${searchHitLabel}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
       }`}
-      onClick={() => onSelect(project.row.id)}
+      onClick={() => onProjectSelect(project.row.id)}
     >
-      <i className="ah-tint" />
-      <span className="ah-projrow__head">
+      <i className="ah-project-list-item__accent" />
+      <span className="ah-project-list-item__header">
         <strong title={project.row.name}>{project.row.name}</strong>
         {searchHitCount !== null && (
-          <span className="ah-hits tnum">{searchHitCount}</span>
+          <span className="ah-project-list-item__search-hits tnum">
+            {searchHitCount}
+          </span>
         )}
         <AgentBadges shares={project.agents} />
       </span>
-      <span className="ah-projrow__sub">
+      <span className="ah-project-list-item__path">
         <small title={workspacePath}>{workspacePath}</small>
       </span>
-      <span className="ah-projrow__foot">
-        <span className="ah-quant">
+      <span className="ah-project-list-item__footer">
+        <span className="ah-project-list-item__metrics">
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
           <TokenFigure value={project.tokensLast30Days} />
         </span>
