@@ -7,7 +7,8 @@ import type { CSSProperties, ReactNode } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
 import { CalendarHeatmap, Streamgraph, Treemap } from "./charts";
 import type { TreemapData } from "./charts";
-import { SegmentedControl } from "./ui";
+import { SegmentedControl, Veil } from "./ui";
+import { sessionCountLabel } from "../lib/ingest";
 import {
   calculateActivityStats,
   createCalendarHeatmapData,
@@ -73,6 +74,9 @@ export interface ProjectSummaryPanelProps {
   readonly usage: UsageResponse | null;
   readonly activityGridStartTimestamp: number;
   readonly currentTimestamp: number;
+  /** A backfill is running: figures for an unfinished project stay veiled.
+   * Once the phase is live a veil never descends again. */
+  readonly ingestActive: boolean;
   /** `null` means the browser build has no desktop worktree integration. */
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
@@ -84,9 +88,13 @@ export function ProjectSummaryPanel({
   usage,
   activityGridStartTimestamp,
   currentTimestamp,
+  ingestActive,
   isWorktreeVisible,
   onToggleWorktree,
 }: ProjectSummaryPanelProps) {
+  // Veiled until every one of THIS project's sessions is indexed — beneath
+  // the frost the charts keep drawing the partial sums as they grow.
+  const isVeiled = ingestActive && project.readiness !== "ready";
   const [isExpanded, setIsExpanded] = useState(true);
   const [activeChart, setActiveChart] = useState<ProjectChart>(() =>
     new URLSearchParams(window.location.search).get("tab") === "models" ? "models" : "activity",
@@ -180,7 +188,20 @@ export function ProjectSummaryPanel({
         </span>
       </div>
       {isExpanded && (
-        <div className="ah-meta__body">
+        <div className="ah-meta__body ah-veilhost">
+          {isVeiled && (
+            <Veil
+              label={`counting · ${sessionCountLabel(
+                project.indexedSessionCount,
+                project.sessionCount,
+              )}`}
+              progress={
+                project.sessionCount > 0
+                  ? project.indexedSessionCount / project.sessionCount
+                  : null
+              }
+            />
+          )}
           <SummaryStats
             stats={[
               { value: <b>{project.rootSessionCount}</b>, label: "sessions" },
@@ -249,15 +270,30 @@ export function ProjectSummaryPanel({
 export interface PortfolioSummaryPanelProps {
   readonly projects: readonly ProjectViewModel[];
   readonly selectedProjectId: string | null;
+  /** A backfill is running: the portfolio's totals are still counting, so
+   * the whole panel stays veiled. It unveils last — the finale. */
+  readonly ingestActive: boolean;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
 export function PortfolioSummaryPanel({
   projects,
   selectedProjectId,
+  ingestActive,
   onProjectSelect,
 }: PortfolioSummaryPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const readinessCounts = useMemo(
+    () =>
+      projects.reduce(
+        (sum, project) => ({
+          indexed: sum.indexed + project.indexedSessionCount,
+          total: sum.total + project.sessionCount,
+        }),
+        { indexed: 0, total: 0 },
+      ),
+    [projects],
+  );
   const summary = useMemo(() => {
     const activeDayIndices = new Set<number>();
     for (const project of projects) {
@@ -327,7 +363,20 @@ export function PortfolioSummaryPanel({
         </span>
       </div>
       {isExpanded && (
-        <div className="ah-meta__body">
+        <div className="ah-meta__body ah-veilhost">
+          {ingestActive && (
+            <Veil
+              label={`preparing · ${sessionCountLabel(
+                readinessCounts.indexed,
+                readinessCounts.total,
+              )}`}
+              progress={
+                readinessCounts.total > 0
+                  ? readinessCounts.indexed / readinessCounts.total
+                  : null
+              }
+            />
+          )}
           <SummaryStats
             stats={[
               { value: <b>{summary.sessionCount}</b>, label: "sessions" },

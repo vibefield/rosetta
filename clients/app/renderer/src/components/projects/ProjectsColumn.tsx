@@ -1,7 +1,9 @@
 import { useMemo } from "react";
+import type { IngestProgress } from "@rosetta/protocol";
+import { censusProgress, isCensusRunning, isIngestActive } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { PortfolioSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
+import { ListSummaryHeader, ListToolbar, SegmentedControl, Veil } from "../ui";
 import { ProjectList } from "./ProjectList";
 
 export type ProjectSort = "spend" | "recent";
@@ -20,6 +22,8 @@ export interface ProjectsColumnProps {
   readonly searchHitCounts: ReadonlyMap<string, number> | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
+  /** The daemon's cold-start block; null on a daemon too old to carry it. */
+  readonly ingest: IngestProgress | null;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -31,9 +35,19 @@ export function ProjectsColumn({
   searchHitCounts,
   homeDirectory,
   currentTimestamp,
+  ingest,
   onProjectSelect,
 }: ProjectsColumnProps) {
   const isSearching = searchHitCounts !== null;
+  const ingestActive = isIngestActive(ingest);
+  // While the census (skim) runs the LIST ITSELF is incomplete — the veil
+  // is down and rows keep materializing beneath it. Once every runtime is
+  // streaming, the list is whole and only the figures still cook.
+  const censusRunning = isCensusRunning(ingest);
+  const sessionsFound = useMemo(
+    () => projects.reduce((total, project) => total + project.sessionCount, 0),
+    [projects],
+  );
   const maximumTokensLast30Days = useMemo(
     () => projects.reduce(
       (maximum, project) => Math.max(maximum, project.tokensLast30Days),
@@ -67,6 +81,7 @@ export function ProjectsColumn({
         <PortfolioSummaryPanel
           projects={projects}
           selectedProjectId={selectedProjectId}
+          ingestActive={ingestActive}
           onProjectSelect={onProjectSelect}
         />
       )}
@@ -79,15 +94,25 @@ export function ProjectsColumn({
           onValueChange={onSortChange}
         />
       </ListToolbar>
-      <ProjectList
-        projects={visibleProjects}
-        selectedProjectId={selectedProjectId}
-        maximumTokensLast30Days={maximumTokensLast30Days}
-        searchHitCounts={searchHitCounts}
-        homeDirectory={homeDirectory}
-        currentTimestamp={currentTimestamp}
-        onProjectSelect={onProjectSelect}
-      />
+      <div className="ah-veilhost">
+        <ProjectList
+          projects={visibleProjects}
+          selectedProjectId={selectedProjectId}
+          maximumTokensLast30Days={maximumTokensLast30Days}
+          searchHitCounts={searchHitCounts}
+          homeDirectory={homeDirectory}
+          currentTimestamp={currentTimestamp}
+          ingestActive={ingestActive}
+          pending={censusRunning}
+          onProjectSelect={onProjectSelect}
+        />
+        {censusRunning && !isSearching && (
+          <Veil
+            label={`taking the census · ${sessionsFound.toLocaleString()} sessions found`}
+            progress={censusProgress(ingest)}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -763,3 +763,73 @@ code, .mono { font-family: var(--vf-font-mono); }
   animation: ah-pop 280ms var(--vf-ease-pop);
 }
 .ah-receipt[hidden] { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE COLD START — the veil system (design record supplement "The Cold
+   Start"). Readiness is data, never a timer; only the ready may claim
+   emptiness; a veil overlays and never changes geometry (H-2).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* the veil's host: any section that can frost over. The content beneath
+   keeps rendering and updating — that motion IS the progress animation. */
+.ah-veilhost { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ah-veilhost > .ah-scroll { flex: 1; }
+/* a panel body is its own host: it keeps its size and only frosts */
+.ah-meta__body.ah-veilhost { flex: none; display: block; }
+
+.ah-veil {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: color-mix(in srgb, var(--vf-sheet-surface) 55%, transparent);
+  backdrop-filter: blur(5px);
+  animation: ah-veil-in 240ms ease;
+}
+.ah-veil__label {
+  color: var(--vf-text-tertiary); font-size: 10px;
+  font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+}
+.ah-veil .ah-meter i { transition: width 600ms var(--vf-ease-island); }
+@keyframes ah-veil-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* the cooking card's figure slots: a shimmer where the numbers will land.
+   Loading is colourless — the sweep is the ramp, never a hue. */
+.ah-cook {
+  display: inline-block; width: 54px; height: 8px; border-radius: 4px;
+  background: linear-gradient(90deg,
+    var(--vf-fill-hover) 0%, var(--vf-fill) 45%, var(--vf-fill-hover) 90%);
+  background-size: 200% 100%;
+  animation: ah-cook-sweep 1.6s ease-in-out infinite;
+}
+.ah-project-list-item__metrics[data-cooking] { position: relative; }
+.ah-project-list-item__metrics[data-cooking]::after {
+  content: ""; position: absolute; inset: -2px -4px; border-radius: 6px;
+  background: linear-gradient(100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--vf-sheet-surface) 55%, transparent) 50%,
+    transparent 80%);
+  background-size: 200% 100%;
+  animation: ah-cook-sweep 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes ah-cook-sweep { from { background-position: 160% 0; } to { background-position: -60% 0; } }
+
+/* a cooking project's accent breathes in its own tint — on the stove */
+.ah-project-list-item[data-cooking] .ah-project-list-item__accent {
+  animation: ah-stove 1.8s ease-in-out infinite;
+}
+@keyframes ah-stove { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
+
+/* the first run's honest room: per-runtime meters, no fiction */
+.ah-coldstart { display: flex; flex-direction: column; gap: 9px; width: min(340px, 84%); margin-top: 4px; }
+.ah-coldstart__row { display: grid; grid-template-columns: 86px 1fr; gap: 3px 10px; align-items: center; text-align: left; }
+.ah-coldstart__row .ah-meter { width: 100%; }
+.ah-coldstart__kind {
+  color: var(--vf-text-secondary); font-size: 10px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-coldstart__caption {
+  grid-column: 2; color: var(--vf-text-faint); font-size: 9px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-coldstart__row[data-state="done"] .ah-meter i { background: var(--vf-green); }
+.ah-coldstart__row[data-state="queued"] .ah-coldstart__kind { color: var(--vf-text-faint); }

@@ -11,6 +11,11 @@ export interface ProjectListProps {
   readonly searchHitCounts: ReadonlyMap<string, number> | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
+  /** A backfill is running: unfinished projects cook rather than lie. */
+  readonly ingestActive: boolean;
+  /** The list itself is still being censused — only the ready may claim
+   * emptiness, so the empty state yields to the section's veil. */
+  readonly pending: boolean;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -21,6 +26,8 @@ export function ProjectList({
   searchHitCounts,
   homeDirectory,
   currentTimestamp,
+  ingestActive,
+  pending,
   onProjectSelect,
 }: ProjectListProps) {
   const isSearching = searchHitCounts !== null;
@@ -36,10 +43,11 @@ export function ProjectList({
           searchHitCount={isSearching ? (searchHitCounts.get(project.row.id) ?? 0) : null}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
+          ingestActive={ingestActive}
           onProjectSelect={onProjectSelect}
         />
       ))}
-      {projects.length === 0 && (
+      {projects.length === 0 && !pending && (
         <EmptyState
           title={isSearching ? "No project matched" : "No projects yet"}
           description={

@@ -11,3 +11,5 @@ export type {
   SegmentedControlOption,
   SegmentedControlProps,
 } from "./SegmentedControl";
+export { Veil } from "./Veil";
+export type { VeilProps } from "./Veil";

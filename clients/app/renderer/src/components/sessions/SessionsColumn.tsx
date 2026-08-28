@@ -1,8 +1,9 @@
-import type { SessionRow, UsageResponse } from "@rosetta/protocol";
+import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
+import { censusProgress, isCensusRunning, isIngestActive, sessionCountLabel } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { ProjectSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
+import { ListSummaryHeader, ListToolbar, SegmentedControl, Veil } from "../ui";
 import { SessionList } from "./SessionList";
 import type { SessionFacts, SessionScope } from "./types";
 
@@ -23,6 +24,8 @@ export interface SessionsColumnProps {
   readonly onSessionScopeChange: (scope: SessionScope) => void;
   readonly activityGridStartTimestamp: number;
   readonly currentTimestamp: number;
+  /** The daemon's cold-start block; null on a daemon too old to carry it. */
+  readonly ingest: IngestProgress | null;
   /** `null` means the browser build has no desktop worktree integration. */
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
@@ -42,12 +45,15 @@ export function SessionsColumn({
   onSessionScopeChange,
   activityGridStartTimestamp,
   currentTimestamp,
+  ingest,
   isWorktreeVisible,
   onToggleWorktree,
   onSessionSelect,
   searchGroups,
 }: SessionsColumnProps) {
   const isSearching = searchGroups !== null;
+  const ingestActive = isIngestActive(ingest);
+  const censusRunning = isCensusRunning(ingest);
   const visibleSessionCount = isSearching
     ? searchGroups.reduce((total, group) => total + group.sessions.length, 0)
     : sessions.length;
@@ -67,6 +73,7 @@ export function SessionsColumn({
           usage={usage}
           activityGridStartTimestamp={activityGridStartTimestamp}
           currentTimestamp={currentTimestamp}
+          ingestActive={ingestActive}
           isWorktreeVisible={isWorktreeVisible}
           onToggleWorktree={onToggleWorktree}
         />
@@ -82,27 +89,46 @@ export function SessionsColumn({
           />
         )}
       </ListToolbar>
-      {searchGroups === null ? (
-        <SessionList
-          mode="browse"
-          sessions={sessions}
-          factsBySessionId={factsBySessionId}
-          getRuntimeKind={getRuntimeKind}
-          selectedSessionId={selectedSessionId}
-          currentTimestamp={currentTimestamp}
-          onSessionSelect={onSessionSelect}
-        />
-      ) : (
-        <SessionList
-          mode="search"
-          groups={searchGroups}
-          factsBySessionId={factsBySessionId}
-          getRuntimeKind={getRuntimeKind}
-          selectedSessionId={selectedSessionId}
-          currentTimestamp={currentTimestamp}
-          onSessionSelect={onSessionSelect}
-        />
-      )}
+      <div className="ah-veilhost">
+        {searchGroups === null ? (
+          <SessionList
+            mode="browse"
+            sessions={sessions}
+            factsBySessionId={factsBySessionId}
+            getRuntimeKind={getRuntimeKind}
+            selectedSessionId={selectedSessionId}
+            currentTimestamp={currentTimestamp}
+            duringBackfill={ingestActive}
+            pending={censusRunning}
+            onSessionSelect={onSessionSelect}
+          />
+        ) : (
+          <SessionList
+            mode="search"
+            groups={searchGroups}
+            factsBySessionId={factsBySessionId}
+            getRuntimeKind={getRuntimeKind}
+            selectedSessionId={selectedSessionId}
+            currentTimestamp={currentTimestamp}
+            duringBackfill={ingestActive}
+            pending={censusRunning}
+            onSessionSelect={onSessionSelect}
+          />
+        )}
+        {censusRunning && !isSearching && (
+          <Veil
+            label={
+              project === null
+                ? "taking the census"
+                : `taking the census · ${sessionCountLabel(
+                    project.indexedSessionCount,
+                    project.sessionCount,
+                  )}`
+            }
+            progress={censusProgress(ingest)}
+          />
+        )}
+      </div>
     </div>
   );
 }

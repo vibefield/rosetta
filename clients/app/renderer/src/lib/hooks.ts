@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
+  IngestProgress,
   MessageRow,
   MetaState,
+  SearchReadiness,
   SearchResponse,
   SubscriptionStatus,
   UsageResponse,
@@ -38,10 +40,61 @@ export function useMeta(): MetaFeed {
   return { meta, status, error };
 }
 
+export interface DaemonStatusFeed {
+  /** null until the first answer, and after the daemon stops answering. */
+  readonly searchReadiness: SearchReadiness | null;
+  /** The cold-start block; null on a daemon too old to carry it. */
+  readonly ingest: IngestProgress | null;
+}
+
+/** The daemon's status surface. It answers from the daemon's first breath —
+ * before the projection is even readable — so it is the room's connectivity
+ * truth during a cold start. Polls fast while a backfill runs (the meters
+ * are moving), quietly once the phase is live. */
+export function useDaemonStatus(): DaemonStatusFeed {
+  const [feed, setFeed] = useState<DaemonStatusFeed>({
+    searchReadiness: null,
+    ingest: null,
+  });
+  const phase = feed.ingest?.phase ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = () => {
+      client
+        .status()
+        .then((status) => {
+          if (cancelled) return;
+          setFeed({
+            searchReadiness: status.search.readiness,
+            ingest: status.daemon?.ingest ?? null,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setFeed({ searchReadiness: null, ingest: null });
+        })
+        .finally(() => {
+          if (cancelled) return;
+          timer = window.setTimeout(poll, phase !== null && phase !== "live" ? 2_500 : 30_000);
+        });
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [phase]);
+  return feed;
+}
+
 /** Per-project heatmaps (the calendar heatmap's 53-week window — the ledger's 30-day
  * figures are its tail) and contributions, refreshed when the project set
- * changes and on a quiet interval afterwards. */
-export function useProjectStats(projectIds: string[]): Map<string, ProjectStats> {
+ * changes and on a quiet interval afterwards. `fast` (a running backfill)
+ * tightens the quiet interval so figures visibly grow under the veils. */
+export function useProjectStats(
+  projectIds: string[],
+  fast = false,
+): Map<string, ProjectStats> {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
   const key = projectIds.join("\n");
   useEffect(() => {
@@ -71,20 +124,23 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
       setStats(next);
       // A failed figure (a daemon mid-restart, a dropped socket) retries in
       // seconds, not at the next quiet refresh a minute out.
-      timer = window.setTimeout(loadAll, failed ? 8_000 : 60_000);
+      timer = window.setTimeout(loadAll, failed ? 8_000 : fast ? 5_000 : 60_000);
     }
     loadAll();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [key]);
+  }, [key, fast]);
   return stats;
 }
 
 /** The selected project's usage decomposition — per-model days and the
  * hour-of-day profile, over the same 53-week window the heatmap draws. */
-export function useProjectUsage(projectId: string | null): UsageResponse | null {
+export function useProjectUsage(
+  projectId: string | null,
+  fast = false,
+): UsageResponse | null {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   useEffect(() => {
     setUsage(null);
@@ -104,12 +160,12 @@ export function useProjectUsage(projectId: string | null): UsageResponse | null 
         });
     };
     load();
-    const timer = setInterval(load, 60_000);
+    const timer = setInterval(load, fast ? 5_000 : 60_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [projectId]);
+  }, [projectId, fast]);
   return usage;
 }
 

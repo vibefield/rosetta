@@ -9,12 +9,20 @@ type ProjectListItemStyle = CSSProperties & {
   "--spend-share": string;
 };
 
-function TokenFigure({ value }: { readonly value: number }) {
+function TokenFigure({
+  value,
+  unknown,
+}: {
+  readonly value: number;
+  /** No figure has landed yet — a dash in the slot, not a claimed zero.
+   * Fixed-width either way, so nothing reflows when the number arrives. */
+  readonly unknown: boolean;
+}) {
   const formattedValue = fmtTokens(value);
   return (
     <span className="ah-project-list-item__token-figure">
-      <b>{formattedValue.n}</b>
-      <i>{formattedValue.u}</i>
+      <b>{unknown ? "—" : formattedValue.n}</b>
+      <i>{unknown ? "" : formattedValue.u}</i>
     </span>
   );
 }
@@ -28,6 +36,8 @@ export interface ProjectListItemProps {
   readonly searchHitCount: number | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
+  /** A backfill is running — projects with unindexed sessions cook. */
+  readonly ingestActive: boolean;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -38,8 +48,12 @@ export function ProjectListItem({
   searchHitCount,
   homeDirectory,
   currentTimestamp,
+  ingestActive,
   onProjectSelect,
 }: ProjectListItemProps) {
+  // The cooking card: identity (name, path, agents) renders as itself from
+  // the first skim; only the quantitative slots carry the processing state.
+  const isCooking = ingestActive && project.readiness !== "ready";
   const spendShare = maximumTokensLast30Days > 0
     ? (project.tokensLast30Days / maximumTokensLast30Days) * 100
     : 0;
@@ -57,6 +71,7 @@ export function ProjectListItem({
     <button
       type="button"
       className={`ah-project-list-item${isSelected ? " is-selected" : ""}`}
+      data-cooking={isCooking ? "" : undefined}
       style={{
         "--project-color": project.tint,
         "--spend-share": `${spendShare.toFixed(2)}%`,
@@ -83,9 +98,20 @@ export function ProjectListItem({
         <small title={workspacePath}>{workspacePath}</small>
       </span>
       <span className="ah-project-list-item__footer">
-        <span className="ah-project-list-item__metrics">
+        <span
+          className="ah-project-list-item__metrics"
+          data-cooking={isCooking ? "" : undefined}
+          title={
+            isCooking
+              ? `figures still cooking · ${project.indexedSessionCount} of ${project.sessionCount} sessions indexed`
+              : undefined
+          }
+        >
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
-          <TokenFigure value={project.tokensLast30Days} />
+          <TokenFigure
+            value={project.tokensLast30Days}
+            unknown={project.readiness === "pending" && project.tokensLast30Days === 0}
+          />
         </span>
         {lastActiveLabel !== null && (
           <span

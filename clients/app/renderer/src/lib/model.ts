@@ -38,6 +38,13 @@ export interface ProjectViewModel {
   readonly agents: readonly AgentShare[];
   readonly lastActiveMs: number | null;
   readonly rootSessionCount: number;
+  /** Every session of the project, subagents included — the readiness base. */
+  readonly sessionCount: number;
+  /** Sessions the stream phase has fully indexed. */
+  readonly indexedSessionCount: number;
+  /** Folded over the sessions' stream_state: ready = every figure on this
+   * project is final. Readiness is data, never a timer. */
+  readonly readiness: "pending" | "partial" | "ready";
 }
 
 const DAY_IN_MS = 86_400_000;
@@ -120,10 +127,21 @@ export function buildProjectViewModel(
   getRuntimeKind: (runtimeId: string) => string,
   currentTimestamp: number,
 ): ProjectViewModel {
-  const rootSessions = allSessions.filter(
-    (session) =>
-      projectKey(session) === projectRow.id && session.id === session.root_session_id,
+  const projectSessions = allSessions.filter(
+    (session) => projectKey(session) === projectRow.id,
   );
+  const rootSessions = projectSessions.filter(
+    (session) => session.id === session.root_session_id,
+  );
+  const indexedSessionCount = projectSessions.filter(
+    (session) => session.stream_state === "indexed",
+  ).length;
+  const readiness =
+    indexedSessionCount === projectSessions.length
+      ? "ready"
+      : indexedSessionCount === 0
+        ? "pending"
+        : "partial";
   const { dailyTokens, currentDayIndex } = createActivitySeries(
     projectStats?.heat ?? [],
     currentTimestamp,
@@ -180,6 +198,9 @@ export function buildProjectViewModel(
     agents,
     lastActiveMs,
     rootSessionCount: rootSessions.length,
+    sessionCount: projectSessions.length,
+    indexedSessionCount,
+    readiness,
   };
 }
 

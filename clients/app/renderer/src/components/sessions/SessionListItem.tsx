@@ -1,6 +1,7 @@
 import type { SessionRow } from "@rosetta/protocol";
 import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
+import { isSessionCooking } from "../../lib/ingest";
 import { getSessionStatus, getSessionTitle } from "./session-display";
 import type { SessionFacts } from "./types";
 
@@ -12,6 +13,8 @@ export interface SessionListItemProps {
   /** `null` hides the search hit count. */
   readonly searchHitCount: number | null;
   readonly currentTimestamp: number;
+  /** A backfill is running — an unindexed session's dot says "indexing". */
+  readonly duringBackfill: boolean;
   readonly onSessionSelect: (session: SessionRow) => void;
 }
 
@@ -22,9 +25,13 @@ export function SessionListItem({
   isSelected,
   searchHitCount,
   currentTimestamp,
+  duringBackfill,
   onSessionSelect,
 }: SessionListItemProps) {
-  const status = getSessionStatus(session);
+  const status = getSessionStatus(session, duringBackfill);
+  // The cooking card: identity is real from the skim; the figure slots are
+  // what is still unknown, and they alone carry the processing state.
+  const isCooking = isSessionCooking(session) && facts === null;
   const title = getSessionTitle(session);
   const lastActiveLabel = lastActive(session.updated_at, currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
@@ -42,6 +49,7 @@ export function SessionListItem({
       type="button"
       className={`ah-session-list-item${isSelected ? " is-selected" : ""}`}
       data-role={session.role}
+      data-cooking={isCooking ? "" : undefined}
       aria-current={isSelected ? "true" : undefined}
       aria-label={[
         title,
@@ -80,6 +88,14 @@ export function SessionListItem({
         {facts !== null && (
           <>
             <span>{facts.messages} msgs</span>
+            <span>·</span>
+          </>
+        )}
+        {/* the figure slots cook while the daemon reads this transcript —
+            a shimmer where the numbers will land, never a claimed zero */}
+        {isCooking && (
+          <>
+            <span className="ah-cook" aria-hidden="true" />
             <span>·</span>
           </>
         )}

@@ -11,6 +11,11 @@ interface SessionListCommonProps {
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly selectedSessionId: string | null;
   readonly currentTimestamp: number;
+  /** A backfill is running — unindexed sessions cook rather than lie. */
+  readonly duringBackfill: boolean;
+  /** The census is still naming sessions: the empty state yields to the
+   * section's veil, because only the ready may claim emptiness. */
+  readonly pending: boolean;
   readonly onSessionSelect: (session: SessionRow) => void;
 }
 
@@ -68,6 +73,7 @@ function SessionItem({
       isSelected={session.id === common.selectedSessionId}
       searchHitCount={searchHitCount}
       currentTimestamp={common.currentTimestamp}
+      duringBackfill={common.duringBackfill}
       onSessionSelect={common.onSessionSelect}
     />
   );
@@ -142,7 +148,7 @@ export function SessionList(props: SessionListProps) {
       ) : (
         <BrowseSessionItems sessions={props.sessions} common={common} />
       )}
-      {totalSessionCount === 0 && (
+      {totalSessionCount === 0 && !props.pending && (
         <EmptyState
           title={props.mode === "search" ? "Nothing matched" : "No sessions here yet"}
           description={

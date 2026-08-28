@@ -317,12 +317,29 @@ export function TranscriptColumn({
                 </div>
               );
             })}
-            {blocks.length === 0 && feed.status !== "connecting" && (
-              <EmptyState
-                title="Nothing readable yet"
-                description="This session has no readable timeline rows in the index."
-              />
-            )}
+            {blocks.length === 0 &&
+              feed.status !== "connecting" &&
+              (session.stream_state !== "indexed" ? (
+                // Not empty — IN LINE. Only the ready may claim emptiness;
+                // an unindexed transcript names its state and its promise.
+                <EmptyState
+                  title={
+                    session.stream_state === "streaming"
+                      ? "Being read right now"
+                      : "This transcript is in line"
+                  }
+                  description="rosettad is still reaching it — it opens the moment its turn comes."
+                >
+                  <div className="ah-meter">
+                    <i style={{ width: "8%" }} />
+                  </div>
+                </EmptyState>
+              ) : (
+                <EmptyState
+                  title="Nothing readable yet"
+                  description="This session has no readable timeline rows in the index."
+                />
+              ))}
             {live && (
               <div className="ah-mark ah-watermark" title="this session is still running">
                 live

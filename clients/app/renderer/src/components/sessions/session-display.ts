@@ -6,10 +6,19 @@ export interface SessionStatus {
   readonly label: string;
 }
 
-export function getSessionStatus(session: SessionRow): SessionStatus {
+export function getSessionStatus(
+  session: SessionRow,
+  duringBackfill = false,
+): SessionStatus {
   switch (session.stream_state) {
     case "streaming":
-      return { tone: "green", isLive: true, label: "live" };
+      // The same green breath means two honest things: mid-backfill the
+      // daemon is reading this transcript right now; live, the agent is.
+      return {
+        tone: "green",
+        isLive: true,
+        label: duringBackfill ? "indexing" : "live",
+      };
     case "pending":
       return { tone: "orange", isLive: false, label: "not yet indexed" };
     default:

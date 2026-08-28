@@ -4,7 +4,8 @@
 // the measure is not (H-3) — see `components/worktree/use-worktree-guest`,
 // which owns that rule and the engine lifecycle behind it.
 import { useEffect, useMemo, useState } from "react";
-import type { SearchHit, SearchReadiness, SessionRow } from "@rosetta/protocol";
+import type { SearchHit, SessionRow } from "@rosetta/protocol";
+import { ColdStartPanel } from "./components/ColdStart";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
 import { SearchStrip } from "./components/SearchStrip";
@@ -13,7 +14,15 @@ import type { SessionFacts, SessionScope } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
 import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
-import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
+import {
+  useDaemonStatus,
+  useMeta,
+  useProjectStats,
+  useProjectUsage,
+  useSearch,
+  useTimeline,
+} from "./lib/hooks";
+import { backfillProgress, isIngestActive } from "./lib/ingest";
 import {
   UNASSIGNED_PROJECT_ID,
   buildProjectViewModel,
@@ -35,34 +44,11 @@ function useNow(): number {
   return now;
 }
 
-function useSearchReadiness(): SearchReadiness | null {
-  const [readiness, setReadiness] = useState<SearchReadiness | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => {
-      client
-        .status()
-        .then((s) => {
-          if (!cancelled) setReadiness(s.search.readiness);
-        })
-        .catch(() => {
-          if (!cancelled) setReadiness(null);
-        });
-    };
-    poll();
-    const t = setInterval(poll, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
-  return readiness;
-}
-
 export default function App() {
   const nowMs = useNow();
   const { meta, status: metaStatus } = useMeta();
-  const readiness = useSearchReadiness();
+  const { searchReadiness: readiness, ingest } = useDaemonStatus();
+  const ingestActive = isIngestActive(ingest);
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
   );
@@ -77,7 +63,9 @@ export default function App() {
   const searching = search.query !== "";
 
   const projectIds = useMemo(() => (meta?.projects ?? []).map((p) => p.id).sort(), [meta]);
-  const stats = useProjectStats(projectIds);
+  // While the backfill runs the figures poll fast — they are visibly
+  // growing under the veils, and that motion is the progress animation.
+  const stats = useProjectStats(projectIds, ingestActive);
 
   const projectRows = useMemo(() => {
     const rows = [...(meta?.projects ?? [])];
@@ -171,7 +159,10 @@ export default function App() {
     [meta, sessionId],
   );
   const feed = useTimeline(sessionId);
-  const usage = useProjectUsage(projectId === UNASSIGNED_PROJECT_ID ? null : projectId);
+  const usage = useProjectUsage(
+    projectId === UNASSIGNED_PROJECT_ID ? null : projectId,
+    ingestActive,
+  );
 
   const projectRoot = useMemo(() => {
     if (projectId === null) return null;
@@ -205,15 +196,28 @@ export default function App() {
   };
 
   const kinds = (meta?.runtimes ?? []).map((r) => r.kind);
+  const warming = backfillProgress(ingest);
   const scope = search.error
     ? `search: ${search.error}`
     : [
         "your whole agentic past",
         ...kinds,
-        ...(readiness && readiness !== "ready" ? [`index ${readiness}`] : []),
+        ...(ingestActive
+          ? [`warming${warming !== null ? ` ${Math.round(warming * 100)}%` : ""}`]
+          : []),
+        // A fresh install has no index yet — that is warming, not failure;
+        // "index failed" is reserved for a live daemon whose index broke.
+        ...(readiness && readiness !== "ready" && !(ingestActive && readiness === "failed")
+          ? [`index ${readiness}`]
+          : []),
       ].join(" · ");
 
   const disconnected = meta === null;
+  // The first run: the daemon answers (its meters are moving) but the
+  // projection is still a private file, so there are no lists yet. Only
+  // the ready may claim emptiness — this is the honest room instead.
+  const coldStarting =
+    !disconnected && projectRows.length === 0 && ingestActive && ingest !== null;
 
   return (
     <div className="ah-frame is-tall">
@@ -239,6 +243,8 @@ export default function App() {
               <i style={{ width: metaStatus === "connecting" ? "30%" : "8%" }} />
             </div>
           </EmptyState>
+        ) : coldStarting ? (
+          <ColdStartPanel ingest={ingest} />
         ) : (
           <div
             className="ah-cols"
@@ -253,6 +259,7 @@ export default function App() {
               searchHitCounts={searchResults?.hitCountByProject ?? null}
               homeDirectory={home}
               currentTimestamp={nowMs}
+              ingest={ingest}
               onProjectSelect={(id) => {
                 setProjectId(id);
                 setSessionId(null);
@@ -269,6 +276,7 @@ export default function App() {
               onSessionScopeChange={setSessionScope}
               activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
               currentTimestamp={nowMs}
+              ingest={ingest}
               isWorktreeVisible={
                 worktree.available && projectRoot !== null ? worktree.visible : null
               }
