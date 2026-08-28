@@ -46,11 +46,13 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
   const key = projectIds.join("\n");
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
     const ids = key === "" ? [] : key.split("\n");
     async function loadAll() {
       const sinceMs = yearGridStartMs(Date.now());
       const offsetMinutes = viewerOffsetMinutes();
       const next = new Map<string, ProjectStats>();
+      let failed = false;
       await Promise.all(
         ids.map(async (id) => {
           try {
@@ -60,17 +62,21 @@ export function useProjectStats(projectIds: string[]): Map<string, ProjectStats>
             ]);
             next.set(id, { heat: heat.days, contribution: contribution.rows });
           } catch {
-            // a missing project stays unfigured; the row degrades honestly
+            // an unfigured project degrades honestly — and earns a retry
+            failed = true;
           }
         }),
       );
-      if (!cancelled) setStats(next);
+      if (cancelled) return;
+      setStats(next);
+      // A failed figure (a daemon mid-restart, a dropped socket) retries in
+      // seconds, not at the next quiet refresh a minute out.
+      timer = window.setTimeout(loadAll, failed ? 8_000 : 60_000);
     }
     loadAll();
-    const timer = setInterval(loadAll, 60_000);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [key]);
   return stats;

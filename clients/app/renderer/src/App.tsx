@@ -1,10 +1,13 @@
 // The History room. Columns change content, never geometry (H-2); search is
 // the front door and transforms columns 2–3; the ledger's scale is global
-// and stable whatever the filter says.
-import { useEffect, useMemo, useState } from "react";
+// and stable whatever the filter says. The worktree rail is a guest and the
+// measure is not: below 1360px the rail closes rather than squeezing the
+// transcript (H-3), and an explicit toggle outranks the automatic close.
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchHit, SearchReadiness, SessionRow } from "@rosetta/protocol";
 import { LedgerColumn } from "./components/Ledger";
 import type { LedgerSort } from "./components/Ledger";
+import { RailColumn } from "./components/Rail";
 import { SearchStrip } from "./components/SearchStrip";
 import { SessionsColumn } from "./components/Sessions";
 import type { SessionFacts } from "./components/Sessions";
@@ -12,6 +15,7 @@ import { TranscriptColumn } from "./components/Transcript";
 import { useMeta, useProjectStats, useProjectUsage, useSearch, useTimeline } from "./lib/hooks";
 import { buildProjectVM, yearGridStartMs } from "./lib/model";
 import type { ProjectVM } from "./lib/model";
+import { host } from "./lib/rail-port";
 import { client } from "./lib/rosetta";
 
 function useNow(): number {
@@ -128,6 +132,45 @@ export default function App() {
   const feed = useTimeline(sessionId);
   const usage = useProjectUsage(projectId);
 
+  /* ── the worktree rail: a guest, per H-3 ────────────────────────────── */
+  const railAvailable = host() !== null;
+  const [railWanted, setRailWanted] = useState(true);
+  // An explicit choice outranks the automatic close — once the reader
+  // presses the toggle, the width heuristic stops applying.
+  const [railChosen, setRailChosen] = useState(false);
+  const [frameWide, setFrameWide] = useState(() => window.innerWidth >= 1360);
+  useEffect(() => {
+    const measure = () => setFrameWide(window.innerWidth >= 1360);
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  const railShown = railAvailable && railWanted && (railChosen || frameWide);
+  // The toggle flips what is SHOWN, not what was last wanted — the first
+  // press on an already-auto-closed rail must never do nothing.
+  const toggleRail = () => {
+    if (railShown) {
+      setRailWanted(false);
+    } else {
+      setRailWanted(true);
+      setRailChosen(true);
+    }
+  };
+
+  const projectRoot = useMemo(() => {
+    if (projectId === null) return null;
+    return vmById.get(projectId)?.row.root_paths[0] ?? null;
+  }, [projectId, vmById]);
+
+  // Point the engine at the selected project's root; kill-and-refork is the
+  // host's concern, so this only speaks when the root actually changes.
+  const openedRoot = useRef<string | null>(null);
+  useEffect(() => {
+    if (!railShown || projectRoot === null) return;
+    if (openedRoot.current === projectRoot) return;
+    openedRoot.current = projectRoot;
+    void host()?.openRail(projectRoot);
+  }, [railShown, projectRoot]);
+
   /* ── search groupings: project → session → hits ─────────────────────── */
   const grouped = useMemo(() => {
     if (!searching || search.response === null || meta === null) return null;
@@ -224,7 +267,11 @@ export default function App() {
             </p>
           </div>
         ) : (
-          <div className="ah-cols" data-mode={searching ? "search" : "browse"}>
+          <div
+            className="ah-cols"
+            data-mode={searching ? "search" : "browse"}
+            data-rail={railShown ? "on" : "off"}
+          >
             <LedgerColumn
               vms={vms}
               activeId={projectId}
@@ -247,6 +294,8 @@ export default function App() {
               usage={usage}
               gridStartMs={yearGridStartMs(nowMs)}
               nowMs={nowMs}
+              railOn={railAvailable ? railShown : null}
+              onToggleRail={toggleRail}
               onSelect={(s) => {
                 if (searching) {
                   setQuery("");
@@ -262,6 +311,13 @@ export default function App() {
                       sessions: g.entries.map((e) => ({ session: e.session, hits: e.hits.length })),
                     }))
               }
+            />
+            {/* Always in the grid — a closed rail is a 0px track, and the
+                measure takes back whatever the guest gives up. */}
+            <RailColumn
+              projectRoot={projectRoot}
+              tint={projectId ? (vmById.get(projectId)?.tint ?? null) : null}
+              home={home}
             />
             <TranscriptColumn
               session={session}

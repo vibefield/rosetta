@@ -39,6 +39,27 @@ export function GitGlyph() {
   );
 }
 
+/** Root and two branches — the worktree toggle, on mille's 16-unit grid. */
+export function TreeGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4.3 4.6v6.9" />
+      <path d="M4.3 7.6h3.3M4.3 11.5h3.3" />
+      <circle cx="4.3" cy="3.2" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="9.3" cy="7.6" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="9.3" cy="11.5" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** Three ascending bars — the figures toggle. */
 export function StatsGlyph() {
   return (

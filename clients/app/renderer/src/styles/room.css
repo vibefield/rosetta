@@ -744,11 +744,24 @@ code, .mono { font-family: var(--vf-font-mono); }
 /* no composer in the standalone app; scrollers keep a quiet foot */
 .ah-scroll { padding-bottom: 26px; }
 .ah-newpill { bottom: 26px; }
-/* three columns; the two guests arrive with their own build */
-.ah-cols,
-.ah-cols[data-rail="off"],
-.ah-cols[data-foot="on"],
-.ah-cols[data-rail="off"][data-foot="on"] { grid-template-columns: 260px 300px minmax(0, 1fr); }
+/* Four columns: the worktree rail is real now (the proto's base grid rules
+   above already carry the rail track and its H-3 close); the footprint
+   guest still waits on Q4, so its 0px fifth track stays empty. */
+
+/* the mille tree fills the guest and owns its own scroller */
+.ah-railtree { flex: 1; min-height: 0; padding: 6px 6px 0; }
+/* the engine lags a project switch: the old tree dims rather than lies */
+.ah-railtree[data-stale] { opacity: 0.45; transition: opacity 160ms; }
+.ah-railfoot { flex: none; padding-bottom: 12px; }
+.ah-railfoot__list { padding: 0 6px 4px; }
+.ah-railsplit { margin: 12px 12px 6px; padding-top: 12px; border-top: 1px solid var(--vf-hairline); }
+.ah-worktree {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 7px 9px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--vf-text-secondary); font-size: 11.5px; text-align: left;
+}
+.ah-worktree code { font-size: 10px; color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
+.ah-worktree code[data-dirty] { color: var(--vf-cyan); }
 
 /* macOS: the traffic lights sit over the search strip, and the strip is the
    window's drag region (hiddenInset title bar; inert elsewhere) */

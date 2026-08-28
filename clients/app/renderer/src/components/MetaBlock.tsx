@@ -8,7 +8,7 @@ import { useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
 import { fmtTokens, tokenText } from "../lib/format";
-import { GitGlyph, StatsGlyph } from "../lib/icons";
+import { GitGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
 import { HEAT_WEEKS, dayKey, heatStats } from "../lib/model";
 import type { ProjectVM } from "../lib/model";
 import { streamPaths } from "../lib/stream";
@@ -234,12 +234,18 @@ export function ProjectMetaBlock({
   usage,
   gridStartMs,
   nowMs,
+  railOn,
+  onToggleRail,
 }: {
   vm: ProjectVM;
   sessionsInList: number;
   usage: UsageResponse | null;
   gridStartMs: number;
   nowMs: number;
+  /** Whether the worktree rail is currently shown; null = no rail on offer
+   * (a browser tab without the desktop shell). */
+  railOn: boolean | null;
+  onToggleRail: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<"overview" | "models">(() =>
@@ -255,7 +261,10 @@ export function ProjectMetaBlock({
       ? usage.hours.reduce((best, h) => (h.tokens > best.tokens ? h : best)).hour
       : null;
   const mostly = bands.length > 0 && bands[0].id !== "other" ? bands[0].label : null;
-  const repo = vm.row.git_repo;
+  // The repo act opens a REMOTE. A git_repo that is a local path is a fact
+  // about discovery, not an address anyone can visit — no button for it.
+  const repo =
+    vm.row.git_repo !== null && !vm.row.git_repo.startsWith("/") ? vm.row.git_repo : null;
 
   return (
     <div className="ah-meta" style={{ "--tint": vm.tint } as CSSProperties}>
@@ -268,6 +277,20 @@ export function ProjectMetaBlock({
           </span>
         </span>
         <span className="ah-meta__acts">
+          {/* the two toggles sit together and the one act sits last, so a
+              project with no remote never moves a control that has one */}
+          {railOn !== null && (
+            <button
+              type="button"
+              className="ah-iconbtn"
+              aria-pressed={railOn}
+              title={railOn ? "Hide the worktree" : "Show the worktree"}
+              aria-label="Toggle the project worktree"
+              onClick={onToggleRail}
+            >
+              <TreeGlyph />
+            </button>
+          )}
           <button
             type="button"
             className="ah-iconbtn"

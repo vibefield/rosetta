@@ -109,6 +109,8 @@ export function SessionsColumn({
   usage,
   gridStartMs,
   nowMs,
+  railOn,
+  onToggleRail,
   onSelect,
   searchGroups,
 }: {
@@ -122,6 +124,8 @@ export function SessionsColumn({
   usage: UsageResponse | null;
   gridStartMs: number;
   nowMs: number;
+  railOn: boolean | null;
+  onToggleRail: () => void;
   onSelect: (session: SessionRow) => void;
   /** Search mode: sessions-with-hits under project eyebrows. */
   searchGroups:
@@ -150,6 +154,8 @@ export function SessionsColumn({
           usage={usage}
           gridStartMs={gridStartMs}
           nowMs={nowMs}
+          railOn={railOn}
+          onToggleRail={onToggleRail}
         />
       )}
       <div className="ah-scroll">
