@@ -438,6 +438,12 @@ fn ingest_file(
                             instrument.add(Metric::LinesHardError, 1);
                         }
                     }
+                    instrument.observe_normalization(
+                        &file.stream_id,
+                        ctx.src_offset,
+                        &record.payload,
+                        &outcome,
+                    );
                     ops.extend(outcome.ops);
                 }
                 TailItem::Oversized {
@@ -551,28 +557,27 @@ fn ingest_file(
         }
 
         let ops_count = ops.len() as u64;
-        let applied = instrument.apply(
-            store,
-            &Batch {
-                ops,
-                checkpoints: vec![CheckpointUpdate {
-                    runtime_id: runtime.id.clone(),
-                    stream: file.stream_id.clone(),
-                    path: file.relative_path.clone(),
-                    session_id: file.session_id.clone(),
-                    expected: Some(prev_blob.clone()),
-                    next: next_blob.clone(),
-                    updated_at: Some(file.modified_ms),
-                }],
-                source: Some(SourceWrite {
-                    cursor_id,
-                    session_id: file.session_id.clone(),
-                    generation: source_generation,
-                    first_sequence,
-                    mode: source_mode,
-                }),
-            },
-        );
+        let write_batch = Batch {
+            ops,
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: runtime.id.clone(),
+                stream: file.stream_id.clone(),
+                path: file.relative_path.clone(),
+                session_id: file.session_id.clone(),
+                expected: Some(prev_blob.clone()),
+                next: next_blob.clone(),
+                updated_at: Some(file.modified_ms),
+            }],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: file.session_id.clone(),
+                generation: source_generation,
+                first_sequence,
+                mode: source_mode,
+            }),
+        };
+        instrument.observe_write_batch(&write_batch);
+        let applied = instrument.apply(store, &write_batch);
         let stats = match applied {
             Ok(stats) => stats,
             Err(StoreError::CheckpointConflict { .. }) => {

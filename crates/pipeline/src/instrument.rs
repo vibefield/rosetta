@@ -2,11 +2,15 @@
 //! always on, so `rosettad ingest --profile` and the integration tests read
 //! the same numbers real runs produce.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
+use rosetta_adapter_support::{LineOutcome, LineStatus};
 use rosetta_capture::{Ledger, LedgerWriteStats};
+use rosetta_core::IngestOp;
 use rosetta_store::{ApplyStats, Batch, BulkLoadStats, Store, StoreError};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
@@ -186,12 +190,36 @@ fn index(metric: Metric) -> usize {
 #[derive(Debug)]
 pub struct Instrument {
     values: [AtomicU64; METRIC_COUNT],
+    boundary_enabled: AtomicBool,
+    boundary_complete: AtomicBool,
+    boundary: Mutex<Option<BoundaryCapture>>,
+}
+
+#[derive(Debug, Default)]
+struct BoundaryCapture {
+    records_seen: u64,
+    priority: u8,
+    sample: Option<BoundarySample>,
+    write_batch: Option<Value>,
+}
+
+#[derive(Debug)]
+struct BoundarySample {
+    stream: String,
+    source_offset: Option<i64>,
+    line_status: &'static str,
+    timeline_id: Option<String>,
+    parsed_record: Value,
+    normalized_ops: Value,
 }
 
 impl Default for Instrument {
     fn default() -> Self {
         Self {
             values: std::array::from_fn(|_| AtomicU64::new(0)),
+            boundary_enabled: AtomicBool::new(false),
+            boundary_complete: AtomicBool::new(false),
+            boundary: Mutex::new(None),
         }
     }
 }
@@ -204,6 +232,124 @@ pub struct InstrumentSnapshot {
 impl Instrument {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable one bounded, content-bearing sample for the local JSONL audit
+    /// tool. Ordinary production runs never take the mutex or serialize data.
+    pub fn enable_boundary_evidence(&self) {
+        *self
+            .boundary
+            .lock()
+            .expect("boundary evidence mutex poisoned") = Some(BoundaryCapture::default());
+        self.boundary_complete.store(false, Ordering::Relaxed);
+        self.boundary_enabled.store(true, Ordering::Release);
+    }
+
+    /// Capture the same native bytes and canonical ops that crossed the real
+    /// adapter boundary. Prefer the first message-producing record because it
+    /// can be followed into the canonical message table; retain the first
+    /// non-empty outcome as a fallback for non-message streams.
+    pub fn observe_normalization(
+        &self,
+        stream: &str,
+        source_offset: Option<i64>,
+        payload: &[u8],
+        outcome: &LineOutcome,
+    ) {
+        if !self.boundary_enabled.load(Ordering::Acquire)
+            || self.boundary_complete.load(Ordering::Relaxed)
+            || outcome.ops.is_empty()
+        {
+            return;
+        }
+        let timeline_id = outcome.ops.iter().find_map(|op| match op {
+            IngestOp::Message(row) => Some(row.timeline_id.clone()),
+            _ => None,
+        });
+        let priority = if timeline_id.is_some() { 2 } else { 1 };
+        let mut guard = self
+            .boundary
+            .lock()
+            .expect("boundary evidence mutex poisoned");
+        let Some(capture) = guard.as_mut() else {
+            return;
+        };
+        capture.records_seen = capture.records_seen.saturating_add(1);
+        if capture.priority >= priority {
+            return;
+        }
+        let parsed = serde_json::from_slice::<Value>(payload)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(payload).into_owned()));
+        capture.priority = priority;
+        capture.sample = Some(BoundarySample {
+            stream: stream.to_owned(),
+            source_offset,
+            line_status: match &outcome.status {
+                LineStatus::Parsed => "parsed",
+                LineStatus::UnknownType => "unknown_type",
+                LineStatus::HardError { .. } => "hard_error",
+            },
+            timeline_id,
+            parsed_record: preview_value("parsed native JSON", &parsed, Some(payload.len())),
+            normalized_ops: preview_value("Vec<IngestOp>", &outcome.ops, None),
+        });
+        capture.write_batch = None;
+    }
+
+    /// Capture the concrete batch after generic workspace enrichment and
+    /// before Store::apply consumes it. The preview is intentionally bounded.
+    pub fn observe_write_batch(&self, batch: &Batch) {
+        if !self.boundary_enabled.load(Ordering::Acquire)
+            || self.boundary_complete.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        let mut guard = self
+            .boundary
+            .lock()
+            .expect("boundary evidence mutex poisoned");
+        let Some(capture) = guard.as_mut() else {
+            return;
+        };
+        let Some(sample) = capture.sample.as_ref() else {
+            return;
+        };
+        if let Some(timeline_id) = sample.timeline_id.as_deref()
+            && !batch
+                .ops
+                .iter()
+                .any(|op| matches!(op, IngestOp::Message(row) if row.timeline_id == timeline_id))
+        {
+            return;
+        }
+        capture.write_batch = Some(preview_batch(batch, sample.timeline_id.as_deref()));
+        if capture.priority >= 2 || capture.records_seen >= 64 {
+            self.boundary_complete.store(true, Ordering::Release);
+        }
+    }
+
+    /// Return the bounded sample as JSON so the diagnostic CLI can pair it
+    /// with pre/post-finalization SQLite snapshots without exposing a new
+    /// production representation.
+    pub fn boundary_evidence(&self) -> Option<Value> {
+        if !self.boundary_enabled.load(Ordering::Acquire) {
+            return None;
+        }
+        let guard = self
+            .boundary
+            .lock()
+            .expect("boundary evidence mutex poisoned");
+        let capture = guard.as_ref()?;
+        let sample = capture.sample.as_ref()?;
+        Some(json!({
+            "stream": sample.stream,
+            "sourceOffset": sample.source_offset,
+            "lineStatus": sample.line_status,
+            "sampleTimelineId": sample.timeline_id,
+            "parsedRecord": sample.parsed_record,
+            "normalizedOps": sample.normalized_ops,
+            "writeBatch": capture.write_batch,
+        }))
     }
 
     pub fn add(&self, metric: Metric, amount: u64) {
@@ -348,6 +494,107 @@ impl Instrument {
     }
 }
 
+const PREVIEW_BYTES: usize = 48 * 1024;
+const PREVIEW_OPS: usize = 8;
+
+fn truncate_utf8(text: &str, limit: usize) -> (&str, bool) {
+    if text.len() <= limit {
+        return (text, false);
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
+fn preview_value<T: serde::Serialize>(
+    representation: &str,
+    value: &T,
+    original_bytes: Option<usize>,
+) -> Value {
+    let compact = serde_json::to_vec(value).unwrap_or_default();
+    let pretty = serde_json::to_string_pretty(value)
+        .unwrap_or_else(|error| format!("<could not serialize audit preview: {error}>"));
+    let (preview, truncated) = truncate_utf8(&pretty, PREVIEW_BYTES);
+    json!({
+        "representation": representation,
+        "bytes": original_bytes.unwrap_or(compact.len()),
+        "previewBytes": preview.len(),
+        "truncated": truncated,
+        "data": if truncated {
+            format!("{preview}\n… bounded audit preview truncated …")
+        } else {
+            preview.to_owned()
+        },
+    })
+}
+
+fn source_mode(mode: rosetta_store::SourceMode) -> &'static str {
+    match mode {
+        rosetta_store::SourceMode::Stage => "stage",
+        rosetta_store::SourceMode::Append => "append",
+        rosetta_store::SourceMode::Activate => "activate",
+        rosetta_store::SourceMode::Abandon => "abandon",
+    }
+}
+
+fn preview_batch(batch: &Batch, timeline_id: Option<&str>) -> Value {
+    let selected_index = timeline_id.and_then(|timeline_id| {
+        batch
+            .ops
+            .iter()
+            .position(|op| matches!(op, IngestOp::Message(row) if row.timeline_id == timeline_id))
+    });
+    let mut sampled = Vec::new();
+    if let Some(index) = selected_index {
+        sampled.push(&batch.ops[index]);
+    }
+    for (index, op) in batch.ops.iter().enumerate() {
+        if sampled.len() >= PREVIEW_OPS {
+            break;
+        }
+        if Some(index) != selected_index {
+            sampled.push(op);
+        }
+    }
+    let source = batch.source.as_ref().map(|source| {
+        json!({
+            "cursorId": source.cursor_id,
+            "sessionId": source.session_id,
+            "generation": source.generation,
+            "firstSequence": source.first_sequence,
+            "mode": source_mode(source.mode),
+        })
+    });
+    let checkpoints: Vec<Value> = batch
+        .checkpoints
+        .iter()
+        .map(|checkpoint| {
+            json!({
+                "runtimeId": checkpoint.runtime_id,
+                "stream": checkpoint.stream,
+                "path": checkpoint.path,
+                "sessionId": checkpoint.session_id,
+                "expectedCheckpointBytes": checkpoint.expected.as_ref().map(String::len),
+                "nextCheckpointBytes": checkpoint.next.len(),
+                "updatedAt": checkpoint.updated_at,
+            })
+        })
+        .collect();
+    preview_value(
+        "WriteBatch",
+        &json!({
+            "opCount": batch.ops.len(),
+            "sampleOps": sampled,
+            "opsOmitted": batch.ops.len().saturating_sub(sampled.len()),
+            "checkpoints": checkpoints,
+            "source": source,
+        }),
+        None,
+    )
+}
+
 impl InstrumentSnapshot {
     pub fn get(&self, metric: Metric) -> u64 {
         self.values[index(metric)]
@@ -403,6 +650,9 @@ fn rate(amount: u64, nanos: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use rosetta_core::rows::{MessageKind, MessageRow};
+    use rosetta_store::{CheckpointUpdate, SourceMode, SourceWrite};
+
     use super::*;
 
     #[test]
@@ -442,5 +692,77 @@ mod tests {
         assert_eq!(delta.get(Metric::OpsEmitted), 7);
         assert_eq!(delta.get(Metric::MessageApplyAttempts), 3);
         assert_eq!(delta.get(Metric::RecordsFramed), 0);
+    }
+
+    #[test]
+    fn boundary_evidence_follows_one_native_record_into_its_real_write_batch() {
+        let instrument = Instrument::new();
+        instrument.enable_boundary_evidence();
+        let message = IngestOp::Message(Box::new(MessageRow {
+            timeline_id: "timeline-1".to_string(),
+            session_id: "session-1".to_string(),
+            ordinal: 7,
+            kind: MessageKind::Agent,
+            subtype: None,
+            uuid: Some("native-1".to_string()),
+            parent_uuid: None,
+            ts: Some(42),
+            model: Some("model-1".to_string()),
+            effort: None,
+            content: Some("canonical content".to_string()),
+            tool: None,
+            branch_tool_id: None,
+            usage: None,
+            agent_version: Some("1.0".to_string()),
+            src_cursor: Some(9),
+            src_offset: Some(12),
+        }));
+        let outcome = LineOutcome::parsed(vec![message.clone()]);
+        instrument.observe_normalization(
+            "transcript",
+            Some(12),
+            br#"{"type":"assistant","message":"native content"}"#,
+            &outcome,
+        );
+        instrument.observe_write_batch(&Batch {
+            ops: vec![message],
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: "runtime-1".to_string(),
+                stream: "transcript".to_string(),
+                path: "session.jsonl".to_string(),
+                session_id: "session-1".to_string(),
+                expected: Some("old".to_string()),
+                next: "new".to_string(),
+                updated_at: Some(42),
+            }],
+            source: Some(SourceWrite {
+                cursor_id: 9,
+                session_id: "session-1".to_string(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        });
+
+        let evidence = instrument.boundary_evidence().unwrap();
+        assert_eq!(evidence["sampleTimelineId"], "timeline-1");
+        assert!(
+            evidence["parsedRecord"]["data"]
+                .as_str()
+                .unwrap()
+                .contains("native content")
+        );
+        assert!(
+            evidence["normalizedOps"]["data"]
+                .as_str()
+                .unwrap()
+                .contains("canonical content")
+        );
+        assert!(
+            evidence["writeBatch"]["data"]
+                .as_str()
+                .unwrap()
+                .contains("activate")
+        );
     }
 }

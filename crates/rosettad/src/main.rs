@@ -4,7 +4,7 @@
 //!   rosettad sources [--home DIR] [--agent KIND ...]
 //!   rosettad streams [--agent KIND ...]
 //!   rosettad meta --db PATH [--home DIR] [--agent KIND ...] [--profile]
-//!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]
+//!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--audit-boundaries]
 //!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N]
 //!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...]
 //!
@@ -71,7 +71,9 @@ fn main() -> ExitCode {
             eprintln!("  sources [--home DIR] [--agent KIND ...] [--json]");
             eprintln!("  streams [--agent KIND ...] [--json]");
             eprintln!("  meta --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
-            eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
+            eprintln!(
+                "  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json] [--audit-boundaries]"
+            );
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
                 "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile]"
@@ -97,6 +99,8 @@ struct Flags {
     db: Option<PathBuf>,
     agents: Vec<String>,
     profile: bool,
+    /// ingest only: emit one bounded, private before/after sample for steps 5–8.
+    audit_boundaries: bool,
     /// Emit newline-delimited JSON events for repository tools.
     json: bool,
     ticks: Option<u64>,
@@ -114,6 +118,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         db: None,
         agents: Vec::new(),
         profile: false,
+        audit_boundaries: false,
         json: false,
         ticks: None,
         ledger: None,
@@ -134,6 +139,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--profile" => {
                 flags.profile = true;
+                at += 1;
+            }
+            "--audit-boundaries" => {
+                flags.audit_boundaries = true;
                 at += 1;
             }
             "--all-agents" => {
@@ -429,8 +438,17 @@ pub(crate) fn record_backfill_failures(
 fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("ingest needs --db PATH")?;
+    if flags.audit_boundaries && (!flags.json || !flags.profile) {
+        return Err("--audit-boundaries requires --json and --profile".to_string());
+    }
+    if flags.audit_boundaries && db.exists() {
+        return Err("--audit-boundaries requires a new private cold projection".to_string());
+    }
     let opts = IngestOptions::default();
     let instrument = Instrument::new();
+    if flags.audit_boundaries {
+        instrument.enable_boundary_evidence();
+    }
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
@@ -641,12 +659,67 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         }
         return Err(failures.join("; "));
     }
+    let boundary_before = if flags.audit_boundaries {
+        let pipeline = instrument.boundary_evidence().unwrap_or_else(|| {
+            serde_json::json!({
+                "stream": null,
+                "sourceOffset": null,
+                "lineStatus": "no non-empty normalized record was available",
+                "sampleTimelineId": null,
+                "parsedRecord": null,
+                "normalizedOps": null,
+                "writeBatch": null,
+            })
+        });
+        let timeline_id = pipeline
+            .get("sampleTimelineId")
+            .and_then(serde_json::Value::as_str);
+        let started = Instant::now();
+        let snapshot = bench::projection_snapshot(
+            store.conn(),
+            "after canonical apply / before global finalization",
+            timeline_id,
+            false,
+        )?;
+        Some((
+            pipeline,
+            snapshot,
+            started.elapsed().as_secs_f64() * 1_000.0,
+        ))
+    } else {
+        None
+    };
     drop(ingest_ledgers);
     if let Some(temp) = private_projection {
         let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
+        let boundary_timeline_id = boundary_before
+            .as_ref()
+            .and_then(|(pipeline, _, _)| pipeline.get("sampleTimelineId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let mut boundary_after = None;
         let stage_started = Instant::now();
         let stage_before = instrument.snapshot();
-        publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
+        publish_private_projection(
+            store,
+            temp,
+            &db,
+            &instrument,
+            |finalized| {
+                if flags.audit_boundaries {
+                    let started = Instant::now();
+                    let snapshot = bench::projection_snapshot(
+                        finalized.conn(),
+                        "after global finalization / before atomic publication",
+                        boundary_timeline_id.as_deref(),
+                        true,
+                    )?;
+                    boundary_after = Some((snapshot, started.elapsed().as_secs_f64() * 1_000.0));
+                }
+                Ok(())
+            },
+            || ledger_stage.publish(),
+        )?;
         if flags.json && flags.profile {
             bench::emit_stage_profile(
                 "finalize-publish",
@@ -655,6 +728,16 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
                 &stage_before,
                 &instrument,
             );
+        }
+        if let (Some((pipeline, before, before_ms)), Some((after, after_ms))) =
+            (boundary_before, boundary_after)
+        {
+            bench::emit(&bench::boundary_evidence_event(
+                &pipeline,
+                before,
+                after,
+                before_ms + after_ms,
+            ));
         }
         let stage_started = Instant::now();
         let stage_before = instrument.snapshot();
@@ -963,11 +1046,13 @@ fn publish_private_projection(
     temp: tempfile::TempPath,
     db: &std::path::Path,
     instrument: &Instrument,
+    after_finalize: impl FnOnce(&Store) -> Result<(), String>,
     before_install: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     instrument
         .finish_bulk_load(&mut store)
         .map_err(|error| format!("finalizing private projection: {error}"))?;
+    after_finalize(&store)?;
     instrument.time(Metric::PublishNanos, || {
         drop(store);
         let finished = rusqlite::Connection::open(&*temp)
@@ -1100,7 +1185,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         reports.push((adapter.kind(), report, profile));
     }
 
-    publish_private_projection(store, temp, &db, &instrument, || Ok(()))?;
+    publish_private_projection(store, temp, &db, &instrument, |_| Ok(()), || Ok(()))?;
     instrument.time(Metric::SearchSyncNanos, || build_search_wait(&db))?;
 
     for (kind, report, profile) in reports {
@@ -1301,7 +1386,15 @@ mod tests {
         let private = private.expect("a missing projection takes the cold path");
         assert!(private.exists());
 
-        publish_private_projection(store, private, &db, &Instrument::new(), || Ok(())).unwrap();
+        publish_private_projection(
+            store,
+            private,
+            &db,
+            &Instrument::new(),
+            |_| Ok(()),
+            || Ok(()),
+        )
+        .unwrap();
         assert!(db.exists());
         assert!(!sidecar(&db, "-wal").exists());
         Store::open(&db).unwrap();

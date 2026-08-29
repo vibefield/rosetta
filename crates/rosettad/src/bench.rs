@@ -11,6 +11,7 @@ use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, MetaReport, expand_data_root, meta_ingest_into,
 };
 use rosetta_store::Store;
+use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
 use crate::{ledger_root, open_ledger, parse_flags, projection_lock, selected};
@@ -199,6 +200,280 @@ pub(crate) fn meta_event(agent: &str, meta: &MetaReport) -> Value {
         "filesUnidentified": meta.files_unidentified,
         "filesVanished": meta.files_vanished,
         "walkTruncated": meta.walk_truncated,
+    })
+}
+
+const DEFERRED_INDEXES: [&str; 11] = [
+    "session_project",
+    "session_runtime",
+    "session_parent",
+    "workspace_obs_session",
+    "task_session",
+    "message_bucket_key",
+    "session_usage_bucket_key",
+    "file_edit_session",
+    "file_edit_path",
+    "file_edit_message",
+    "usage_bucket_hour",
+];
+
+fn table_count(connection: &Connection, table: &str) -> Result<i64, String> {
+    connection
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| format!("counting {table} for boundary evidence: {error}"))
+}
+
+fn text_preview(value: Option<String>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    const LIMIT: usize = 8 * 1024;
+    let bytes = value.len();
+    let mut end = bytes.min(LIMIT);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    json!({
+        "bytes": bytes,
+        "truncated": end < bytes,
+        "text": if end < bytes {
+            format!("{}\n… bounded SQLite value truncated …", &value[..end])
+        } else {
+            value
+        },
+    })
+}
+
+fn message_value(row: &Row<'_>) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "timelineId": row.get::<_, String>(0)?,
+        "sessionId": row.get::<_, String>(1)?,
+        "ordinal": row.get::<_, i64>(2)?,
+        "type": row.get::<_, String>(3)?,
+        "subtype": row.get::<_, Option<String>>(4)?,
+        "uuid": row.get::<_, Option<String>>(5)?,
+        "parentUuid": row.get::<_, Option<String>>(6)?,
+        "ts": row.get::<_, Option<i64>>(7)?,
+        "model": row.get::<_, Option<String>>(8)?,
+        "effort": row.get::<_, Option<String>>(9)?,
+        "content": text_preview(row.get::<_, Option<String>>(10)?),
+        "tool": {
+            "id": row.get::<_, Option<String>>(11)?,
+            "name": row.get::<_, Option<String>>(12)?,
+            "input": text_preview(row.get::<_, Option<String>>(13)?),
+            "result": text_preview(row.get::<_, Option<String>>(14)?),
+            "payload": text_preview(row.get::<_, Option<String>>(15)?),
+            "isError": row.get::<_, Option<bool>>(16)?,
+        },
+        "branchToolId": row.get::<_, Option<String>>(17)?,
+        "usage": {
+            "input": row.get::<_, Option<i64>>(18)?,
+            "output": row.get::<_, Option<i64>>(19)?,
+            "cacheRead": row.get::<_, Option<i64>>(20)?,
+            "cacheWrite": row.get::<_, Option<i64>>(21)?,
+            "thinking": row.get::<_, Option<i64>>(22)?,
+        },
+        "agentVersion": row.get::<_, Option<String>>(23)?,
+        "srcCursor": row.get::<_, Option<i64>>(24)?,
+        "srcOffset": row.get::<_, Option<i64>>(25)?,
+    }))
+}
+
+fn sample_message(
+    connection: &Connection,
+    timeline_id: Option<&str>,
+) -> Result<Option<Value>, String> {
+    const COLUMNS: &str = "timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
+        model, effort, content, tool_id, tool_name, tool_input, tool_result, tool_payload,
+        tool_is_error, branch_tool_id, in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
+        think_tokens, agent_version, src_cursor, src_offset";
+    let exact = match timeline_id {
+        Some(timeline_id) => connection
+            .query_row(
+                &format!("SELECT {COLUMNS} FROM message WHERE timeline_id = ?1"),
+                [timeline_id],
+                message_value,
+            )
+            .optional()
+            .map_err(|error| format!("reading sampled canonical message: {error}"))?,
+        None => None,
+    };
+    if exact.is_some() {
+        return Ok(exact);
+    }
+    connection
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM message ORDER BY id LIMIT 1"),
+            [],
+            message_value,
+        )
+        .optional()
+        .map_err(|error| format!("reading fallback canonical message: {error}"))
+}
+
+/// A bounded structural/content snapshot on either side of global
+/// finalization. It is diagnostic evidence only and is never a projection API.
+pub(crate) fn projection_snapshot(
+    connection: &Connection,
+    phase: &str,
+    timeline_id: Option<&str>,
+    validated: bool,
+) -> Result<Value, String> {
+    let mut index_names = Vec::new();
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        .map_err(|error| format!("preparing boundary index inventory: {error}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("reading boundary index inventory: {error}"))?;
+    for row in rows {
+        index_names.push(row.map_err(|error| format!("decoding boundary index name: {error}"))?);
+    }
+    let deferred_indexes: Vec<&str> = DEFERRED_INDEXES
+        .iter()
+        .copied()
+        .filter(|name| index_names.iter().any(|candidate| candidate == name))
+        .collect();
+    let analyzed = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| format!("checking ANALYZE evidence: {error}"))?;
+    let analyze_rows = if analyzed {
+        connection
+            .query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| format!("counting ANALYZE evidence: {error}"))?
+    } else {
+        0
+    };
+    let (epoch, revision, canonical_ready): (String, i64, bool) = connection
+        .query_row(
+            "SELECT projection_epoch, search_revision, canonical_ready
+             FROM projection_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| format!("reading projection state for boundary evidence: {error}"))?;
+    let page_count: i64 = connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .map_err(|error| format!("reading page count for boundary evidence: {error}"))?;
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(|error| format!("reading page size for boundary evidence: {error}"))?;
+
+    Ok(json!({
+        "phase": phase,
+        "databaseBytes": page_count.saturating_mul(page_size),
+        "counts": {
+            "runtimes": table_count(connection, "agent_runtime")?,
+            "projects": table_count(connection, "project")?,
+            "sessions": table_count(connection, "session")?,
+            "messages": table_count(connection, "message")?,
+            "workspaceObservations": table_count(connection, "workspace_obs")?,
+            "fileEdits": table_count(connection, "file_edit")?,
+            "plans": table_count(connection, "plan")?,
+            "tasks": table_count(connection, "task")?,
+            "gitCommits": table_count(connection, "git_commit")?,
+            "driftAggregates": table_count(connection, "drift_agg")?,
+            "sessionUsageSamples": table_count(connection, "session_usage")?,
+            "usageBuckets": table_count(connection, "usage_bucket")?,
+            "pendingMerges": table_count(connection, "pending_merge")?,
+            "stagedSourceOps": table_count(connection, "source_op")?,
+        },
+        "projectionState": {
+            "epoch": epoch,
+            "searchRevision": revision,
+            "canonicalReady": canonical_ready,
+        },
+        "materialization": {
+            "allIndexes": index_names.len(),
+            "deferredIndexesPresent": deferred_indexes,
+            "deferredIndexesExpected": DEFERRED_INDEXES.len(),
+            "analyzeRows": analyze_rows,
+        },
+        "integrity": if validated {
+            json!({"quickCheck": "ok", "foreignKeyViolations": 0})
+        } else {
+            json!({"quickCheck": "not run yet", "foreignKeyCheck": "not run yet"})
+        },
+        "sampleMessage": sample_message(connection, timeline_id)?,
+    }))
+}
+
+fn projection_block(representation: &str, snapshot: Value) -> Value {
+    let bytes = snapshot
+        .get("databaseBytes")
+        .cloned()
+        .unwrap_or(Value::Null);
+    json!({
+        "representation": representation,
+        "bytes": bytes,
+        "previewBytes": Value::Null,
+        "truncated": false,
+        "data": snapshot,
+    })
+}
+
+pub(crate) fn boundary_evidence_event(
+    pipeline: &Value,
+    before_finalize: Value,
+    after_finalize: Value,
+    diagnostic_overhead_ms: f64,
+) -> Value {
+    let parsed = pipeline.get("parsedRecord").cloned().unwrap_or(Value::Null);
+    let ops = pipeline
+        .get("normalizedOps")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let batch = pipeline.get("writeBatch").cloned().unwrap_or(Value::Null);
+    let pre = projection_block("PRIVATE SQLite before global finalization", before_finalize);
+    let post = projection_block("validated canonical SQLite", after_finalize);
+    json!({
+        "event": "boundary-evidence",
+        "command": "ingest",
+        "diagnosticOverheadMs": diagnostic_overhead_ms,
+        "sample": {
+            "stream": pipeline.get("stream"),
+            "sourceOffset": pipeline.get("sourceOffset"),
+            "lineStatus": pipeline.get("lineStatus"),
+            "timelineId": pipeline.get("sampleTimelineId"),
+        },
+        "steps": [
+            {
+                "step": 5,
+                "name": "normalize (including parse)",
+                "before": parsed,
+                "after": ops,
+                "note": "The before pane is a generic parsed view of the exact native bytes. The adapter's typed ParsedRecord is internal to ingest_line, so parse and normalization remain one production call."
+            },
+            {
+                "step": 6,
+                "name": "fold / merge",
+                "before": ops,
+                "after": batch,
+                "note": "The real next materialized value is WriteBatch after workspace enrichment. Tool-result, usage, pending-record, and identity merges do not produce a separate folded object; they complete transactionally in step 7."
+            },
+            {
+                "step": 7,
+                "name": "canonical SQLite apply",
+                "before": batch,
+                "after": pre,
+                "note": "The sampled batch has committed with its checkpoint. This private projection is transactionally consistent but still has provisional global presentation state."
+            },
+            {
+                "step": 8,
+                "name": "global finalization",
+                "before": pre,
+                "after": post,
+                "note": "The same private SQLite projection is shown on both sides: finalization renumbers timelines, rebuilds usage buckets, creates deferred indexes, runs ANALYZE, marks canonical readiness, and validates integrity."
+            }
+        ]
     })
 }
 
@@ -392,5 +667,32 @@ mod tests {
         assert!(!report.truncated);
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].relative_path, "projects/work/session.jsonl");
+    }
+
+    #[test]
+    fn projection_snapshot_exposes_the_real_global_finalization_delta() {
+        let mut store = Store::open_in_memory_for_rebuild().unwrap();
+        let before = projection_snapshot(store.conn(), "before", None, false).unwrap();
+        assert_eq!(before["projectionState"]["canonicalReady"], false);
+        assert_eq!(
+            before["materialization"]["deferredIndexesPresent"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(before["integrity"]["quickCheck"], "not run yet");
+
+        store.finish_bulk_load().unwrap();
+        let after = projection_snapshot(store.conn(), "after", None, true).unwrap();
+        assert_eq!(after["projectionState"]["canonicalReady"], true);
+        assert_eq!(
+            after["materialization"]["deferredIndexesPresent"]
+                .as_array()
+                .unwrap()
+                .len(),
+            DEFERRED_INDEXES.len()
+        );
+        assert_eq!(after["integrity"]["quickCheck"], "ok");
     }
 }
