@@ -674,8 +674,13 @@
 .ah-seg button.is-on { color: var(--vf-foreground); background: var(--vf-chrome-solid); box-shadow: 0 1px 3px rgb(0 0 0 / 8%); font-weight: 500; }
 .dark .ah-seg button.is-on { background: color-mix(in srgb, var(--vf-foreground) 20%, transparent); box-shadow: none; }
 
-/* DESIGN.md §7 — a visible focus ring, always. */
+/* DESIGN.md §7 — a visible focus ring, always. Both surfaces are named:
+   the file viewer is portalled out of `.ah-room`, and the first thing to
+   leave the room fell back to the browser's own ring, in the browser's own
+   colour. A focus rule scoped to one container is a rule with a hole in it. */
 .ah-room button:focus-visible,
+.ah-fileview button:focus-visible,
+.ah-fileview a:focus-visible,
 .ah-search input:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
 
 /* M6 — non-negotiable quality floor */
@@ -859,3 +864,303 @@ code, .mono { font-family: var(--vf-font-mono); }
 .ah-rollcall__begin:not(:disabled):active { transform: scale(0.96); }
 .ah-rollcall__begin:disabled { opacity: 0.45; cursor: default; }
 .ah-rollcall__error { margin: 4px 0 0; color: var(--vf-red); font-size: 10.5px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE FILE VIEWER — new vocabulary.
+   
+   Everything above this line is a port of protos/agent-history-proto, class
+   names and all, and the two are diffed against each other. The design record
+   has no file viewer, so `ah-fileview*` and `ah-code/md/image/hex` are the
+   app's own names and must NOT be diffed against the proto.
+   
+   What it does not invent is material. DESIGN.md §5 already specifies a
+   dialog and tokens.css already carries `--vf-shadow-dialog`,
+   `--vf-backdrop-dim` and the sheet surface — and until now nothing in this
+   room spent them. This is their first user. No new colour tokens, and the
+   one new measurement (`--ah-code-line`) is declared in CodeView.tsx, which
+   owns it because the virtualizer scrolls by it.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* M5, the stage recedes: a dialog is focus made physical, so the room behind
+   it steps back rather than merely dimming. `:has` on the body because the
+   dialog is portalled out of the room it belongs to. */
+.ah-room { transition: transform 240ms var(--vf-ease-island); }
+body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
+
+.ah-fileview__backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: var(--vf-backdrop-dim);
+  backdrop-filter: blur(2px);
+  animation: ah-fade-in 200ms ease;
+}
+.ah-fileview__backdrop[data-state="closed"] { animation: ah-fade-out 160ms ease forwards; }
+
+.ah-fileview {
+  position: fixed; z-index: 61;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex; flex-direction: column;
+  width: min(1080px, 92vw); height: min(760px, 86vh);
+  border-radius: var(--vf-radius-card);
+  /* Opaque, not the sheet's glass: this frame's job is to be read through by
+     nobody. Code at 12.5px over a blurred room is a legibility tax the room
+     is not asking anyone to pay. */
+  background: var(--vf-chrome-solid);
+  box-shadow: var(--vf-shadow-dialog);
+  overflow: hidden;
+  animation: ah-fileview-in 240ms var(--vf-ease-island);
+}
+.ah-fileview[data-state="closed"] { animation: ah-fileview-out 160ms ease forwards; }
+.ah-fileview:focus-visible, .ah-fileview:focus { outline: none; }
+
+@keyframes ah-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ah-fade-out { to { opacity: 0; } }
+@keyframes ah-fileview-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.985); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes ah-fileview-out {
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.99); }
+}
+
+/* M6 is a quality floor, not a preference: morphs become fades, and the
+   stage stops travelling. */
+@media (prefers-reduced-motion: reduce) {
+  .ah-room { transition: none; }
+  body:has([data-ah-fileview]) .ah-room { transform: none; }
+  .ah-fileview, .ah-fileview__backdrop { animation-duration: 1ms; }
+}
+
+/* ── the band ──────────────────────────────────────────────────────────── */
+
+.ah-fileview__head {
+  flex: none;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  gap: 2px 12px;
+  padding: 12px 12px 11px 16px;
+  border-bottom: 1px solid var(--vf-hairline);
+}
+.ah-fileview__title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ah-fileview__title .ah-colhead { min-width: 0; flex: 0 1 auto; }
+.ah-fileview__title .ah-colhead > strong { font-size: 12px; }
+/* The kind chip is the neutral badge the column head already uses for a
+   count — same weight, same ground — because it is doing the same job: one
+   fact, travelling beside the name it is about. */
+.ah-fileview__kind {
+  flex: none; padding: 1px 7px; border-radius: 999px;
+  background: var(--vf-fill); color: var(--vf-text-tertiary);
+  font-size: 9.5px; letter-spacing: 0.02em; white-space: nowrap;
+}
+.ah-fileview__acts { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 4px; }
+.ah-fileview__acts .ah-seg { margin: 0 6px 0 0; }
+/* A long path truncates at its HEAD: the folder you are in is the end of the
+   string, and it is the end that identifies the file. `direction: rtl` is
+   what moves the ellipsis there — and the `<bdi>` inside is not optional,
+   because without an isolate the same rule also walks the leading `/` around
+   to the far end and prints a path that does not exist. */
+.ah-fileview__path {
+  grid-column: 1; grid-row: 2; margin: 0; min-width: 0;
+  color: var(--vf-text-faint); font-size: 10px; direction: rtl; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.ah-visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ── the body, and the states that are not a document ──────────────────── */
+
+.ah-fileview__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ah-fileview__scroll { flex: 1; min-height: 0; overflow: auto; }
+.ah-fileview__scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+.ah-fileview__scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent; border-radius: 999px;
+  background: var(--vf-hairline-strong); background-clip: content-box;
+}
+
+.ah-fileview__state {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 7px; padding: 30px 40px; text-align: center;
+}
+.ah-fileview__state b { color: var(--vf-text-secondary); font-size: 12.5px; font-weight: 500; }
+.ah-fileview__state span { max-width: 44ch; color: var(--vf-text-faint); font-size: 11px; line-height: 1.55; }
+/* A local read lands in single-digit milliseconds. Announcing it would be a
+   flash of text, so the wait only appears once it is long enough to be worth
+   a word — the loading veil's own rule (DESIGN.md §8 B4), one surface down. */
+.ah-fileview__state[data-waiting] { opacity: 0; animation: ah-fade-in 140ms ease 280ms forwards; }
+
+/* ── the code view ─────────────────────────────────────────────────────── */
+
+.ah-code {
+  padding: 8px 0 16px;
+  font-family: var(--vf-font-mono); font-size: 12.5px;
+  /* Must equal LINE_HEIGHT in CodeView.tsx, which the virtualizer scrolls by
+     and which therefore owns the number. */
+  --ah-code-line: 19px;
+  /* The gutter's digits come from the view (`--ah-code-digits`, widest line
+     number); the space around them is the stylesheet's. Adding them here
+     keeps `border-box` honest and keeps the sizer's own width in step. */
+  --ah-code-gutter: calc(var(--ah-code-digits, 3ch) + 30px);
+  --ah-code-trail: 24px;
+  line-height: var(--ah-code-line);
+  tab-size: 2;
+}
+.ah-code__sizer { position: relative; width: max-content; }
+.ah-code__line { position: absolute; top: 0; left: 0; display: flex; min-width: 100%; }
+.ah-code__num {
+  position: sticky; left: 0; z-index: 1; flex: none;
+  width: var(--ah-code-gutter); padding: 0 14px 0 16px; text-align: right;
+  background: var(--vf-chrome-solid);
+  color: var(--vf-text-faint); font-size: 11px; font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.ah-code__line code {
+  padding-right: var(--ah-code-trail); white-space: pre; color: var(--vf-text-secondary);
+}
+
+/* ── the syntax palette ────────────────────────────────────────────────────
+   DESIGN.md §2.6's curated eight, spent on a closed set of token kinds —
+   "these group and label; they never signal state", which is exactly what a
+   token kind does. Six of the eight; red and pink are left alone, because red
+   means failure everywhere else in this room.
+   
+   Only lightness moves between themes, the way `--tint-l` already does for
+   project identity: the same six hues in both, mixed toward the ground so
+   neither theme has to invent a colour. */
+.ah-fileview {
+  --ah-syn-keyword: color-mix(in oklab, var(--vf-accent-6) 88%, black);
+  --ah-syn-type: color-mix(in oklab, var(--vf-accent-4) 84%, black);
+  --ah-syn-function: color-mix(in oklab, var(--vf-accent-8) 92%, black);
+  --ah-syn-string: color-mix(in oklab, var(--vf-accent-3) 82%, black);
+  --ah-syn-value: color-mix(in oklab, var(--vf-accent-5) 88%, black);
+  --ah-syn-property: color-mix(in oklab, var(--vf-accent-1) 94%, black);
+}
+.dark .ah-fileview {
+  --ah-syn-keyword: color-mix(in oklab, var(--vf-accent-6) 72%, white);
+  --ah-syn-type: color-mix(in oklab, var(--vf-accent-4) 88%, white);
+  --ah-syn-function: color-mix(in oklab, var(--vf-accent-8) 74%, white);
+  --ah-syn-string: color-mix(in oklab, var(--vf-accent-3) 82%, white);
+  --ah-syn-value: color-mix(in oklab, var(--vf-accent-5) 76%, white);
+  --ah-syn-property: color-mix(in oklab, var(--vf-accent-1) 64%, white);
+}
+
+[data-t="comment"] { color: var(--vf-text-faint); font-style: italic; }
+[data-t="operator"] { color: var(--vf-text-tertiary); }
+[data-t="keyword"] { color: var(--ah-syn-keyword); }
+/* A markup tag is the keyword of its language, and an attribute is a
+   property. Two syntaxes, the same two roles — so the same two colours,
+   rather than a second palette for a reader to learn. */
+[data-t="tag"] { color: var(--ah-syn-keyword); }
+[data-t="type"] { color: var(--ah-syn-type); }
+[data-t="function"] { color: var(--ah-syn-function); }
+[data-t="string"] { color: var(--ah-syn-string); }
+/* Numbers and named literals are one idea — a value the language spells for
+   you — and they share an accent to say so. */
+[data-t="number"], [data-t="constant"] { color: var(--ah-syn-value); }
+[data-t="property"] { color: var(--ah-syn-property); }
+
+/* ── the markdown view ─────────────────────────────────────────────────── */
+
+.ah-md { padding: 4px 0 40px; }
+/* The transcript's own setting, one surface over: 68ch at 14px/1.55, declared
+   on the box that carries the font size, because `ch` resolves against the
+   element's own font (design record §10, delta 3's implementation note). */
+.ah-md__measure {
+  max-width: 68ch; margin: 0 auto; padding: 18px 28px 0;
+  color: var(--vf-text-secondary); font-size: 14px; line-height: 1.55;
+}
+.ah-md__measure > :first-child { margin-top: 0; }
+.ah-md__measure h1, .ah-md__measure h2, .ah-md__measure h3,
+.ah-md__measure h4, .ah-md__measure h5, .ah-md__measure h6 {
+  margin: 26px 0 9px; color: var(--vf-text-primary); font-weight: 600; line-height: 1.3;
+}
+.ah-md__measure h1 { font-size: 20px; }
+.ah-md__measure h2 { font-size: 16.5px; padding-bottom: 6px; border-bottom: 1px solid var(--vf-hairline); }
+.ah-md__measure h3 { font-size: 14.5px; }
+.ah-md__measure h4, .ah-md__measure h5, .ah-md__measure h6 {
+  font-size: 13px; color: var(--vf-text-secondary);
+}
+.ah-md__measure p { margin: 0 0 12px; }
+.ah-md__measure strong { color: var(--vf-text-primary); font-weight: 600; }
+.ah-md__measure s { color: var(--vf-text-faint); }
+.ah-md__measure a { color: var(--vf-cyan); text-decoration: none; }
+.ah-md__measure a:hover { text-decoration: underline; }
+.ah-md__measure code {
+  padding: 1px 4px; border-radius: 4px; background: var(--vf-fill);
+  font-family: var(--vf-font-mono); font-size: 12px; color: var(--vf-text-primary);
+}
+.ah-md__measure ul, .ah-md__measure ol { margin: 0 0 12px; padding-left: 22px; }
+.ah-md__measure li { margin-bottom: 5px; }
+.ah-md__measure li > ul, .ah-md__measure li > ol { margin: 5px 0 0; }
+/* A tight list is one the author wrote without blank lines, and it should
+   read as one block rather than as a column of paragraphs. */
+.ah-md__measure [data-tight] > li > p { margin: 0; }
+.ah-md__measure blockquote {
+  margin: 0 0 12px; padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--vf-hairline-strong); color: var(--vf-text-tertiary);
+}
+.ah-md__measure blockquote > :last-child { margin-bottom: 0; }
+.ah-md__measure hr { margin: 22px 0; border: 0; border-top: 1px solid var(--vf-hairline); }
+.ah-md__code {
+  margin: 0 0 14px; padding: 10px 13px; border-radius: 10px;
+  background: var(--vf-fill); overflow-x: auto;
+  font-family: var(--vf-font-mono); font-size: 12px; line-height: 1.5;
+  color: var(--vf-text-secondary);
+}
+.ah-md__code code { padding: 0; border-radius: 0; background: none; font-size: inherit; }
+/* A wide table scrolls inside its own box: the document's measure is a rule
+   about the prose, and a table is not allowed to overrule it. */
+.ah-md__tablebox { margin: 0 0 14px; overflow-x: auto; }
+.ah-md__measure table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.ah-md__measure th, .ah-md__measure td {
+  padding: 6px 10px; border-bottom: 1px solid var(--vf-hairline); text-align: left;
+  vertical-align: top;
+}
+.ah-md__measure th { color: var(--vf-text-primary); font-weight: 500; white-space: nowrap; }
+.ah-md__measure thead tr { border-bottom: 1px solid var(--vf-hairline-strong); }
+/* An embedded image is named, not fetched — see markdown/render.tsx. */
+.ah-md__image {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 7px; border: 1px dashed var(--vf-hairline-strong); border-radius: 6px;
+  color: var(--vf-text-faint); font-size: 11px;
+}
+.ah-md__image::before { content: "▨"; opacity: 0.6; }
+/* A link this viewer cannot follow keeps its text and loses its promise. */
+.ah-md__deadlink { color: var(--vf-text-tertiary); border-bottom: 1px dotted var(--vf-hairline-strong); }
+
+/* ── the image view ────────────────────────────────────────────────────── */
+
+.ah-image { position: relative; flex: 1; min-height: 0; display: flex; }
+.ah-image__frame { display: flex; align-items: center; justify-content: center; padding: 18px; }
+.ah-image img { display: block; border-radius: 4px; }
+.ah-image[data-mode="fit"] img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* At 1:1 a picture larger than the frame is scrolled from its top-left, the
+   way an image is read, rather than from its middle. */
+.ah-image[data-mode="actual"] .ah-image__frame { align-items: flex-start; justify-content: flex-start; }
+.ah-image[data-mode="actual"] img { max-width: none; max-height: none; }
+/* Over the frame, never inside its flow: as a sibling of the picture this
+   was laid out beside it and wrapped into the middle of a wide one. */
+.ah-image__facts {
+  position: absolute; left: 15px; bottom: 13px;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--vf-chrome-surface); backdrop-filter: blur(12px);
+  color: var(--vf-text-faint); font-size: 10px;
+}
+
+/* ── the hex view ──────────────────────────────────────────────────────── */
+
+.ah-hex {
+  padding: 0 0 20px;
+  font-family: var(--vf-font-mono); font-size: 11px; line-height: 1.65;
+}
+.ah-hex__note {
+  position: sticky; top: 0; z-index: 1; margin: 0 0 8px;
+  padding: 11px 18px; border-bottom: 1px solid var(--vf-hairline);
+  background: var(--vf-chrome-solid);
+  color: var(--vf-text-faint); font-family: var(--vf-font-sans); font-size: 11px;
+}
+.ah-hex__row { display: flex; gap: 16px; padding: 0 18px; white-space: pre; }
+.ah-hex__offset { color: var(--vf-text-faint); }
+.ah-hex__bytes { color: var(--vf-text-secondary); }
+.ah-hex__text { color: var(--vf-text-tertiary); }

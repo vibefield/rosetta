@@ -1,10 +1,14 @@
 // mille's shipped tree, mounted for real (design record §8) and read-only in
 // every direction: an empty command registry, no context menu, no drag. This
 // room reads history; it does not edit worktrees.
+//
+// Opening a file to READ it is not an exception to that — it is the same act
+// the room is for, one level down. So the tree gets one outward call, `onOpen`,
+// and the column above decides what to do with it.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import type { FileExplorer } from "@vibecook/mille";
+import type { Entry, FileExplorer } from "@vibecook/mille";
 import { FileTree, FileTreeProvider } from "@vibecook/mille-ui";
 import { createCommandRegistry } from "@vibecook/mille-ui/commands";
 import { vibefieldIconTheme } from "@vibecook/mille-ui/icons/vibefield";
@@ -15,6 +19,15 @@ export interface WorktreeFileTreeProps {
   /** The engine is still walking a root the room has moved on from, so the
    * tree is showing something true but stale. */
   readonly stale: boolean;
+  /** A file the reader asked to see. Double-click or Enter, the way every
+   * file tree has worked for thirty years — a single click still just
+   * selects, because a row that throws a modal on every click is a row you
+   * learn not to touch. */
+  readonly onOpen: (entry: Entry) => void;
+  /** The file the viewer currently has open, so the row wears the active
+   * fill. The design record left this binding open (§10 delta 4) because a
+   * reader with no open FILE had nothing to bind it to; now there is one. */
+  readonly openEntryId: number | null;
 }
 
 /**
@@ -85,7 +98,12 @@ function asTreeEngine(engine: WorktreeEngine): FileExplorer {
   return engine.fx as unknown as FileExplorer;
 }
 
-export function WorktreeFileTree({ engine, stale }: WorktreeFileTreeProps) {
+export function WorktreeFileTree({
+  engine,
+  stale,
+  onOpen,
+  openEntryId,
+}: WorktreeFileTreeProps) {
   // Read-only: the registry is empty, so no command can reach a file.
   const commands = useMemo(() => createCommandRegistry([]), []);
   const content = useContentHeight(engine.root);
@@ -109,6 +127,11 @@ export function WorktreeFileTree({ engine, stale }: WorktreeFileTreeProps) {
           iconTheme={vibefieldIconTheme}
           disableContextMenu
           disableDragDrop
+          onOpen={(entry) => onOpen(entry)}
+          // Marks the row without revealing it: `autoRevealActiveEntry`
+          // defaults to false, and the reader who just clicked a row does not
+          // need the tree to scroll it back under their cursor.
+          activeEntry={openEntryId}
           style={{ height: "100%" }}
         />
       </FileTreeProvider>

@@ -10,8 +10,11 @@
 // every switch), a MessagePort reaches the renderer through the preload, and
 // read-only git facts (branch, dirty count, worktrees) answer over IPC — the
 // renderer itself never touches node:fs or a shell.
+//
+// The file viewer adds exactly one act that leaves the app, and it is gated
+// here rather than there: see `ah-file-open-external`.
 import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, MessageChannelMain, app, ipcMain, shell, utilityProcess } from "electron";
@@ -163,6 +166,35 @@ app.whenReady().then(() => {
   ipcMain.handle("ah-worktree-git-facts", async (_evt, raw) => {
     if (typeof raw !== "string" || raw !== worktreeRoot) return null;
     return gitFacts(raw);
+  });
+
+  // The file viewer's one outward act: hand an HTML or SVG file to the
+  // browser. Four gates, in this order, because the renderer is showing
+  // content from a repository nobody here wrote and is therefore the process
+  // whose word on "open this" is worth least:
+  //
+  //   1. the extension is one the OS opens in a browser and never executes;
+  //   2. the real path — symlinks resolved — is inside the open worktree,
+  //      so a link in a repo cannot walk out of it;
+  //   3. it is a regular file;
+  //   4. `shell.openPath`, which respects the default handler and, for these
+  //      extensions, cannot launch anything.
+  //
+  // Anything else answers false, which the room reports to the reader. A
+  // silent no-op would read as a broken button.
+  ipcMain.handle("ah-file-open-external", (_evt, raw) => {
+    if (typeof raw !== "string" || raw === "" || worktreeRoot === null) return false;
+    if (!/\.(html?|svg)$/i.test(raw)) return false;
+    try {
+      const target = realpathSync(raw);
+      const root = realpathSync(worktreeRoot);
+      const inside = target === root || target.startsWith(root + path.sep);
+      if (!inside || !statSync(target).isFile()) return false;
+      void shell.openPath(target);
+      return true;
+    } catch {
+      return false;
+    }
   });
 
   const smokeAt = process.argv.indexOf("--smoke");

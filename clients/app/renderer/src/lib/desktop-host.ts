@@ -1,9 +1,13 @@
 // The room's one bridge out of the web world, as the renderer sees it.
 //
-// Everything here is read-only and answered by the Electron main process:
-// the home directory, the act of pointing the worktree engine at a project,
-// and read-only git facts for the root it is showing. A browser tab has no
-// bridge at all, which is a state the room states rather than papers over.
+// Everything here is answered by the Electron main process: the home
+// directory, the act of pointing the worktree engine at a project, read-only
+// git facts for the root it is showing, and handing one HTML file to the
+// browser. A browser tab has no bridge at all, which is a state the room
+// states rather than papers over.
+//
+// Nothing here writes to disk, and the one act that leaves the app is
+// validated on the far side rather than here — see `openInBrowser`.
 
 /** One checkout of the repository a root belongs to. */
 export interface GitWorktree {
@@ -30,6 +34,18 @@ export interface DesktopHost {
   /** Branch · dirty count · worktrees for the open root, or null when the
    * folder is not a repository. */
   gitFacts(root: string): Promise<GitFacts | null>;
+  /**
+   * Hand a file in the open worktree to the OS — for the one file kind this
+   * room will not render itself, HTML.
+   *
+   * The renderer ASKS; the shell decides. It re-derives the extension and
+   * re-checks the path against the root it forked the engine for, because a
+   * renderer showing untrusted repository content is exactly the process
+   * whose word on "which file should the system open" is worth least.
+   * Resolves false when it refuses, which the room reports rather than
+   * swallowing.
+   */
+  openInBrowser(path: string): Promise<boolean>;
 }
 
 interface HostWindow {

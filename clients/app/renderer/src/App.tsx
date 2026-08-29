@@ -313,6 +313,7 @@ export default function App() {
               projectRoot={projectRoot}
               tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
               homeDirectory={home}
+              onReceipt={showReceipt}
             />
             <TranscriptColumn
               session={session}

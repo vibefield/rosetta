@@ -1,6 +1,9 @@
-// The room's one bridge out of the web world, and it is read-only: git facts
-// for the open worktree root, the act of pointing the worktree column at a
-// project, and the engine MessagePort relay. Nothing here can write to disk.
+// The room's one bridge out of the web world: git facts for the open worktree
+// root, the act of pointing the worktree column at a project, the engine
+// MessagePort relay, and handing one HTML file to the browser. Nothing here
+// can write to disk, and nothing here decides anything — every argument is
+// re-validated by the main process, which is the only side that knows which
+// root is open.
 const { contextBridge, ipcRenderer } = require("electron");
 const os = require("node:os");
 
@@ -20,4 +23,8 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
   openWorktree: (root) => ipcRenderer.invoke("ah-worktree-open", root),
   /** Branch · dirty count · worktrees for the open worktree root, or null. */
   gitFacts: (root) => ipcRenderer.invoke("ah-worktree-git-facts", root),
+  /** Open one HTML file from the open worktree in the default browser.
+   * Resolves false whenever main refuses — a wrong extension, a path outside
+   * the root, a file that has since gone. */
+  openInBrowser: (path) => ipcRenderer.invoke("ah-file-open-external", path),
 });

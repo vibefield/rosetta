@@ -5,6 +5,7 @@ export { WorktreeColumn } from "./WorktreeColumn";
 export type { WorktreeColumnProps } from "./WorktreeColumn";
 export { formatGitFacts, WorktreeHeader } from "./WorktreeHeader";
 export type { WorktreeHeaderProps } from "./WorktreeHeader";
+export { createWorktreeFileSource, handleFor, isOpenable } from "./worktree-file-source";
 export { WorktreeFileTree } from "./WorktreeFileTree";
 export type { WorktreeFileTreeProps } from "./WorktreeFileTree";
 export { WorktreeList } from "./WorktreeList";

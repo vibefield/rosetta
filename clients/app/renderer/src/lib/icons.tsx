@@ -91,3 +91,56 @@ export function ChevronGlyph() {
     </svg>
   );
 }
+
+/** Copy — two sheets, the front one offset. */
+export function CopyGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="5.5" y="5.5" width="8" height="8" rx="2" />
+      <path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5" />
+    </svg>
+  );
+}
+
+/** Leaving the app — an arrow out of a frame that is deliberately open on the
+ * side it leaves by. */
+export function ExternalGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M13 9.5V13a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 13V4.5A1.5 1.5 0 0 1 3 3h3.5" />
+      <path d="M9.5 1.5h5v5" />
+      <path d="m14.5 1.5-6.5 6.5" />
+    </svg>
+  );
+}
+
+export function CloseGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="m4.5 4.5 7 7M11.5 4.5l-7 7" />
+    </svg>
+  );
+}
