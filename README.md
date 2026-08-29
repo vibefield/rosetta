@@ -17,7 +17,8 @@ Three layers, strictly separated:
 
 Current implementation status: all nine captured agents have ground-truth packs,
 runtime adapters, and CLI registration. The generic pipeline ingests adapter-selected
-JSONL transcripts and SQLite session databases, generation-stages rewrites, tails live
+JSONL transcripts, rewrite-in-place metadata documents, and SQLite session databases;
+it reconciles virtual membership and whole-source deletion, generation-stages rewrites, tails live
 changes with polling/audit recovery, and writes the canonical SQLite projection.
 Existing/live `ingest`, `watch`, and `serve` append source records to a checksummed raw
 ledger durably before visible projection commits. A first cold build uses a private
@@ -33,7 +34,9 @@ build/latency/filter/determinism gates, but it is not a production backend: rele
 product query weighting, storage acceptance, live repair, and crash recovery remain. Consumer
 migrations, a detached search worker, and the dedicated metrics stream remain.
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code.
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code. The 2026-08-28
+adapter and client-visibility closure is recorded in
+[docs/ADAPTER_AUDIT.md](docs/ADAPTER_AUDIT.md).
 
 ```sh
 # Verify the data/tool boundary and generated artifacts.

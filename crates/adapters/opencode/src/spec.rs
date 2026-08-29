@@ -85,7 +85,20 @@ mod tests {
                 .into_iter()
                 .collect()
         );
-        for part in ["text", "tool", "step-start", "step-finish"] {
+        for part in [
+            "text",
+            "subtask",
+            "reasoning",
+            "file",
+            "tool",
+            "step-start",
+            "step-finish",
+            "snapshot",
+            "patch",
+            "agent",
+            "retry",
+            "compaction",
+        ] {
             assert!(declared_part_types().contains(part), "missing {part}");
         }
         assert!(!declared_part_types().contains("thinking"));

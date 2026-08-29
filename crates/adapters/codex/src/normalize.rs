@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::rollout::{
-    ContentBlock, EventMsg, ResponseItem, RolloutLine, RolloutPayload, SessionMeta, TurnContext,
+    Compacted, ContentBlock, EventMsg, InterAgentCommunication, RealtimeItem, ResponseItem,
+    RolloutLine, RolloutPayload, SessionMeta, TurnContext,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
@@ -133,9 +134,53 @@ fn project(
             response_item(ctx, state, stream_id, item, &discriminator, ts, ops)
         }
         RolloutPayload::EventMsg(event) => event_msg(ctx, state, stream_id, event, ts, ops),
+        RolloutPayload::Compacted(item) => {
+            let Some(discriminator) = record_discriminator(record, ctx) else {
+                return hard_into(
+                    ctx,
+                    stream_id,
+                    "compacted",
+                    "missing_record_discriminator",
+                    ts,
+                    ops,
+                );
+            };
+            compacted(ctx, item, &discriminator, ts, ops);
+            LineStatus::Parsed
+        }
+        RolloutPayload::InterAgentCommunication(item) => {
+            let Some(discriminator) = record_discriminator(record, ctx) else {
+                return hard_into(
+                    ctx,
+                    stream_id,
+                    "inter_agent_communication",
+                    "missing_record_discriminator",
+                    ts,
+                    ops,
+                );
+            };
+            inter_agent_communication(ctx, item, &discriminator, ts, ops);
+            LineStatus::Parsed
+        }
+        RolloutPayload::RealtimeItem(item) => {
+            let Some(discriminator) = record_discriminator(record, ctx) else {
+                return hard_into(
+                    ctx,
+                    stream_id,
+                    "realtime_item",
+                    "missing_record_discriminator",
+                    ts,
+                    ops,
+                );
+            };
+            realtime_item(ctx, item, &discriminator, ts, ops);
+            LineStatus::Parsed
+        }
         // Declared and unprojected: the world-state snapshot is a full copy of
         // the prompt context, and its cwd is already carried by turn_context.
-        RolloutPayload::WorldState(_) => LineStatus::Parsed,
+        RolloutPayload::WorldState(_)
+        | RolloutPayload::InterAgentCommunicationMetadata(_)
+        | RolloutPayload::SecurityRiskScore(_) => LineStatus::Parsed,
     }
 }
 
@@ -220,6 +265,7 @@ fn turn_context(
     if let Some(effort) = settings
         .and_then(|settings| settings.get("reasoning_effort"))
         .and_then(Value::as_str)
+        .or_else(|| turn.effort.as_ref().and_then(Value::as_str))
     {
         state.effort = Some(effort.to_owned());
     }
@@ -259,7 +305,7 @@ fn response_item(
                 None => (MessageKind::System, None),
             };
             let mut row = row(ctx, discriminator, kind, ts);
-            row.subtype = subtype;
+            row.subtype = item.phase.clone().or(subtype);
             row.uuid = item.id.clone();
             row.content = block_text(item.content.as_deref());
             if kind == MessageKind::Agent {
@@ -269,16 +315,21 @@ fn response_item(
             ops.push(IngestOp::Message(Box::new(row)));
             LineStatus::Parsed
         }
-        // NOT fixture-backed at 0.149.1 — the canonical's `response-items` facet
-        // has no `reasoning` yet. Kept because the flattened taxonomy names the
-        // codex reasoning item as its thinking row (docs/canonical-model.html):
-        // when the corpus grows one, it projects instead of vanishing.
         "reasoning" => {
             let mut row = row(ctx, discriminator, MessageKind::Thinking, ts);
             row.uuid = item.id.clone();
-            row.content = block_text(item.content.as_deref()).or_else(|| summary_text(item));
+            row.content =
+                block_text(item.summary.as_deref()).or_else(|| block_text(item.content.as_deref()));
             stamp_model(&mut row, state);
             begin_response(state, &row.timeline_id);
+            ops.push(IngestOp::Message(Box::new(row)));
+            LineStatus::Parsed
+        }
+        "agent_message" => {
+            let mut row = row(ctx, discriminator, MessageKind::System, ts);
+            row.uuid = item.id.clone();
+            row.subtype = Some("agent_message".to_owned());
+            row.content = block_text(item.content.as_deref());
             ops.push(IngestOp::Message(Box::new(row)));
             LineStatus::Parsed
         }
@@ -359,6 +410,72 @@ fn response_item(
             });
             LineStatus::Parsed
         }
+        "tool_search_call" => {
+            let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
+            row.uuid = item.id.clone();
+            stamp_model(&mut row, state);
+            let mut input = serde_json::Map::new();
+            if let Some(execution) = item.execution.clone() {
+                input.insert("execution".to_owned(), Value::String(execution));
+            }
+            if let Some(arguments) = item.arguments.clone() {
+                input.insert("arguments".to_owned(), arguments);
+            }
+            row.tool = Some(ToolCall {
+                tool_id: item.call_id.clone().or_else(|| item.id.clone()),
+                name: "tool_search".to_owned(),
+                input: Value::Object(input),
+                result: None,
+                payload: None,
+                is_error: None,
+            });
+            begin_response(state, &row.timeline_id);
+            ops.push(IngestOp::Message(Box::new(row)));
+            LineStatus::Parsed
+        }
+        "tool_search_output" => {
+            let Some(tool_id) = item.call_id.clone() else {
+                // The current writer permits a missing call id. Keep the raw
+                // record, but do not fabricate a correlation key.
+                return LineStatus::Parsed;
+            };
+            let payload = item.tools.clone().map(Value::Array);
+            ops.push(IngestOp::ToolResult {
+                session_id: ctx.session_id.clone(),
+                tool_id,
+                payload,
+                result: None,
+                is_error: status_error(item.status.as_deref()),
+                at: ts,
+            });
+            LineStatus::Parsed
+        }
+        "local_shell_call" | "web_search_call" | "image_generation_call" => {
+            let name = match item.item_type.as_str() {
+                "local_shell_call" => "local_shell",
+                "web_search_call" => "web_search",
+                _ => "image_generation",
+            };
+            let input = item
+                .action
+                .clone()
+                .or_else(|| item.revised_prompt.clone().map(Value::String))
+                .unwrap_or(Value::Null);
+            let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
+            row.uuid = item.id.clone();
+            stamp_model(&mut row, state);
+            row.tool = Some(ToolCall {
+                tool_id: item.call_id.clone().or_else(|| item.id.clone()),
+                name: name.to_owned(),
+                input,
+                result: item.result.clone(),
+                payload: None,
+                is_error: status_error(item.status.as_deref()),
+            });
+            begin_response(state, &row.timeline_id);
+            ops.push(IngestOp::Message(Box::new(row)));
+            LineStatus::Parsed
+        }
         other => undeclared(
             ctx,
             stream_id,
@@ -368,6 +485,67 @@ fn response_item(
             ops,
         ),
     }
+}
+
+/// A top-level compaction checkpoint contributes exactly its replacement
+/// summary. Embedded `replacement_history` is a copy of earlier records and is
+/// intentionally not expanded.
+fn compacted(
+    ctx: &mut NormalizeCtx,
+    item: &Compacted,
+    discriminator: &str,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    if item.message.trim().is_empty() {
+        return;
+    }
+    let mut row = row(ctx, discriminator, MessageKind::Summary, ts);
+    row.subtype = Some("compacted".to_owned());
+    row.content = Some(item.message.clone());
+    ops.push(IngestOp::Message(Box::new(row)));
+}
+
+fn inter_agent_communication(
+    ctx: &mut NormalizeCtx,
+    item: &InterAgentCommunication,
+    discriminator: &str,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    if item.content.trim().is_empty() {
+        return;
+    }
+    let mut row = row(ctx, discriminator, MessageKind::System, ts);
+    row.uuid = item.id.clone();
+    row.subtype = Some("inter_agent_communication".to_owned());
+    row.content = Some(item.content.clone());
+    ops.push(IngestOp::Message(Box::new(row)));
+}
+
+fn realtime_item(
+    ctx: &mut NormalizeCtx,
+    item: &RealtimeItem,
+    discriminator: &str,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    if item.item_type != "transcript_segment" {
+        return;
+    }
+    let Some(content) = item.text.clone().filter(|text| !text.trim().is_empty()) else {
+        return;
+    };
+    let kind = match item.role.as_deref() {
+        Some("user") => MessageKind::User,
+        Some("assistant") => MessageKind::Agent,
+        _ => MessageKind::System,
+    };
+    let mut row = row(ctx, discriminator, kind, ts);
+    row.uuid = Some(item.id.clone());
+    row.subtype = Some("realtime_transcript".to_owned());
+    row.content = Some(content);
+    ops.push(IngestOp::Message(Box::new(row)));
 }
 
 /// Lifecycle and telemetry events. Only `token_count` projects.
@@ -513,19 +691,12 @@ fn block_text(blocks: Option<&[ContentBlock]>) -> Option<String> {
     (!joined.is_empty()).then_some(joined)
 }
 
-/// Reasoning items keep their visible text under `summary`, which the raw type
-/// does not declare (no fixture evidence) — so it is read out of the permissive
-/// flatten map instead, where an undeclared field legitimately lands.
-fn summary_text(item: &ResponseItem) -> Option<String> {
-    let joined = item
-        .unknown
-        .get("summary")?
-        .as_array()?
-        .iter()
-        .filter_map(|entry| entry["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!joined.is_empty()).then_some(joined)
+fn status_error(status: Option<&str>) -> Option<bool> {
+    match status {
+        Some("failed" | "error" | "incomplete") => Some(true),
+        Some("completed") => Some(false),
+        _ => None,
+    }
 }
 
 /// `arguments` is a JSON-encoded STRING (canonical: `function_call.arguments`).
@@ -803,6 +974,13 @@ fn record_kind(payload: &RolloutPayload) -> String {
         RolloutPayload::SessionMeta(_) => "session_meta".to_owned(),
         RolloutPayload::TurnContext(_) => "turn_context".to_owned(),
         RolloutPayload::WorldState(_) => "world_state".to_owned(),
+        RolloutPayload::Compacted(_) => "compacted".to_owned(),
+        RolloutPayload::InterAgentCommunication(_) => "inter_agent_communication".to_owned(),
+        RolloutPayload::InterAgentCommunicationMetadata(_) => {
+            "inter_agent_communication_metadata".to_owned()
+        }
+        RolloutPayload::SecurityRiskScore(_) => "security_risk_score".to_owned(),
+        RolloutPayload::RealtimeItem(_) => "realtime_item".to_owned(),
         RolloutPayload::EventMsg(event) => format!("event_msg/{}", event.event_type),
         RolloutPayload::ResponseItem(item) => format!("response_item/{}", item.item_type),
     }

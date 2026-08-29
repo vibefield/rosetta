@@ -58,5 +58,25 @@
     "agent_version": null,
     "src_cursor": 3,
     "src_offset": 487
+  },
+  {
+    "op": "message",
+    "timeline_id": "9855108283cdef584a0460621a6b4bd7602d141969000cc0055fdcf5bb0f6ec0",
+    "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
+    "ordinal": 3,
+    "kind": "summary",
+    "subtype": "title_fallback",
+    "uuid": null,
+    "parent_uuid": null,
+    "ts": 1787634643000,
+    "model": null,
+    "effort": null,
+    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+    "tool": null,
+    "branch_tool_id": null,
+    "usage": null,
+    "agent_version": null,
+    "src_cursor": 3,
+    "src_offset": 487
   }
 ]

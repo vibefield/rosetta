@@ -8,13 +8,11 @@
 //! permission.record_approval_result) stay UnknownType until a fixture writes
 //! them.
 //!
-//! Record types typed below: metadata, runtime.set_binding, profile.bind,
-//! permission.set_mode, turn.prompt, context.append_message,
-//! plugin.session_start, context.append_loop_event, llm.tools_snapshot,
-//! llm.request, usage.record, token_counting.measured, turn.ended,
-//! token_counting.turn_recorded. Nested `context.append_loop_event.event.type`
-//! is an OPEN vocabulary (observed: step.begin/end, content.part, tool.call,
-//! tool.result) — the event payload is a permissive all-optional struct.
+//! Record types typed below cover the complete 0.38.0 fixture/writer vocabulary
+//! plus the version-scoped organic vocabulary in the canonical census. Nested
+//! `context.append_loop_event.event.type` is an OPEN vocabulary (observed:
+//! step.begin/end, content.part, tool.call, tool.result) — the event payload is
+//! a permissive all-optional struct.
 //!
 //! `agentId` is required in the writer zod schema but optional in bytes:
 //! hermetic 0.38.0 always writes it; organic protocol-1.5 sessions usually
@@ -60,6 +58,15 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "token_counting.measured"
                 | "turn.ended"
                 | "token_counting.turn_recorded"
+                | "config.update"
+                | "context.apply_compaction"
+                | "full_compaction.begin"
+                | "full_compaction.complete"
+                | "interaction.request"
+                | "interaction.resolved"
+                | "permission.record_approval_result"
+                | "prompt.accepted"
+                | "tools.update_store"
         )
     );
     if known {
@@ -101,6 +108,24 @@ pub enum KnownRecord {
     TurnEnded(TurnEndedLine),
     #[serde(rename = "token_counting.turn_recorded")]
     TokenCountingTurnRecorded(TokenCountingTurnRecordedLine),
+    #[serde(rename = "config.update")]
+    ConfigUpdate(ConfigUpdateLine),
+    #[serde(rename = "context.apply_compaction")]
+    ContextApplyCompaction(ContextApplyCompactionLine),
+    #[serde(rename = "full_compaction.begin")]
+    FullCompactionBegin(FullCompactionBeginLine),
+    #[serde(rename = "full_compaction.complete")]
+    FullCompactionComplete(FullCompactionCompleteLine),
+    #[serde(rename = "interaction.request")]
+    InteractionRequest(InteractionRequestLine),
+    #[serde(rename = "interaction.resolved")]
+    InteractionResolved(InteractionResolvedLine),
+    #[serde(rename = "permission.record_approval_result")]
+    PermissionRecordApprovalResult(PermissionRecordApprovalResultLine),
+    #[serde(rename = "prompt.accepted")]
+    PromptAccepted(PromptAcceptedLine),
+    #[serde(rename = "tools.update_store")]
+    ToolsUpdateStore(ToolsUpdateStoreLine),
 }
 
 impl Drift for KnownRecord {
@@ -120,6 +145,27 @@ impl Drift for KnownRecord {
             KnownRecord::TokenCountingMeasured(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::TurnEnded(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::TokenCountingTurnRecorded(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::ConfigUpdate(l) => {
+                note_unknown(&l.unknown, prefix, out);
+                note_unknown(
+                    &l.environment_disclosure.unknown,
+                    &format!("{prefix}.environmentDisclosure"),
+                    out,
+                );
+            }
+            KnownRecord::ContextApplyCompaction(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::FullCompactionBegin(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::FullCompactionComplete(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::InteractionRequest(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::InteractionResolved(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::PermissionRecordApprovalResult(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::PromptAccepted(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::ToolsUpdateStore(l) => {
+                note_unknown(&l.unknown, prefix, out);
+                for (index, item) in l.value.iter().enumerate() {
+                    note_unknown(&item.unknown, &format!("{prefix}.value[{index}]"), out);
+                }
+            }
         }
     }
 }
@@ -522,6 +568,126 @@ pub struct TokenCountingTurnRecordedLine {
     pub length: u64,
     pub tokens: u64,
     pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// Organic protocol-1.5 records observed in the 0.38.0 census. They are
+/// version-scoped evidence: permissive unknown maps retain forward additions,
+/// while the fields that drive canonical projection stay explicitly typed.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigUpdateLine {
+    pub agents_md_paths: Value,
+    pub environment_disclosure: ConfigEnvironmentDisclosure,
+    pub profile_name: String,
+    pub system_prompt: String,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigEnvironmentDisclosure {
+    pub cwd: String,
+    pub date: Value,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextApplyCompactionLine {
+    pub compacted_count: u64,
+    pub context_summary: String,
+    pub kept_user_message_count: u64,
+    pub summary: String,
+    pub summary_output_tokens: u64,
+    pub tokens_after: u64,
+    pub tokens_before: u64,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullCompactionBeginLine {
+    pub source: String,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullCompactionCompleteLine {
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionRequestLine {
+    pub agent_id: String,
+    pub id: String,
+    pub kind: String,
+    pub request: Value,
+    pub tool_call_id: String,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionResolvedLine {
+    pub id: String,
+    pub response: Value,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRecordApprovalResultLine {
+    pub action: String,
+    pub result: Value,
+    pub session_approval_rule: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub turn_id: u64,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptAcceptedLine {
+    pub prompt_id: String,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsUpdateStoreLine {
+    pub key: String,
+    pub value: Vec<TodoItem>,
+    pub time: u64,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TodoItem {
+    pub status: String,
+    pub title: String,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

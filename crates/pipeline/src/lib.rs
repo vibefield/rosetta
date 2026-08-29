@@ -13,6 +13,7 @@
 
 pub mod checkpoint;
 pub mod discover;
+mod document;
 pub mod instrument;
 pub mod live;
 pub mod meta;
@@ -76,6 +77,10 @@ pub struct IngestOptions {
     /// Skim windows — the meta-phase promise is enforced by these bounds.
     pub skim_head_bytes: usize,
     pub skim_tail_bytes: usize,
+    /// Optional complete-record scan after the head, used only when an
+    /// adapter says a useful metadata fact is still missing.
+    pub skim_fallback_bytes: usize,
+    pub skim_fallback_records: usize,
     /// Walk cap per data root.
     pub max_files: usize,
     /// Framing bounds for the stream phase.
@@ -92,6 +97,8 @@ impl Default for IngestOptions {
         Self {
             skim_head_bytes: 64 * 1024,
             skim_tail_bytes: 16 * 1024,
+            skim_fallback_bytes: 128 * 1024,
+            skim_fallback_records: 256,
             max_files: 100_000,
             tail: TailConfig::json_lines(),
             max_retries: 3,

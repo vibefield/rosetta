@@ -42,6 +42,7 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "LIST_DIRECTORY"
                 | "VIEW_FILE"
                 | "ERROR_MESSAGE"
+                | "GENERIC"
         )
     );
     if known {
@@ -73,6 +74,8 @@ pub enum KnownRecord {
     ViewFile(ViewFileLine),
     #[serde(rename = "ERROR_MESSAGE")]
     ErrorMessage(ErrorMessageLine),
+    #[serde(rename = "GENERIC")]
+    Generic(GenericLine),
 }
 
 impl Drift for KnownRecord {
@@ -87,6 +90,7 @@ impl Drift for KnownRecord {
             KnownRecord::ListDirectory(line) => note_unknown(&line.unknown, prefix, out),
             KnownRecord::ViewFile(line) => note_unknown(&line.unknown, prefix, out),
             KnownRecord::ErrorMessage(line) => note_unknown(&line.unknown, prefix, out),
+            KnownRecord::Generic(line) => note_unknown(&line.unknown, prefix, out),
         }
     }
 }
@@ -163,6 +167,68 @@ pub struct CheckpointLine {
     pub unknown: Unknown,
 }
 
+/// Native checkpoints may carry a generated session-list fallback under this
+/// exact section. Keep the extraction narrow: other headings contain user
+/// requests, logs, or instructions and are not titles.
+pub(crate) const OBJECTIVE_TITLE_CHARS: usize = 80;
+
+pub(crate) fn checkpoint_objective(content: &str) -> Option<String> {
+    let mut in_objective = false;
+    let mut title = String::new();
+    let mut title_chars = 0_usize;
+    let mut truncated = false;
+
+    'section: for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if !in_objective {
+            if line == "# USER Objective:" {
+                in_objective = true;
+            }
+            continue;
+        }
+        if is_markdown_heading(line) {
+            break;
+        }
+        for word in line.split_whitespace() {
+            if !title.is_empty() {
+                if title_chars == OBJECTIVE_TITLE_CHARS {
+                    truncated = true;
+                    break 'section;
+                }
+                title.push(' ');
+                title_chars += 1;
+            }
+            for character in word.chars() {
+                if title_chars == OBJECTIVE_TITLE_CHARS {
+                    truncated = true;
+                    break 'section;
+                }
+                title.push(character);
+                title_chars += 1;
+            }
+        }
+    }
+
+    if title.is_empty() {
+        return None;
+    }
+    if truncated {
+        while title.chars().count() >= OBJECTIVE_TITLE_CHARS {
+            title.pop();
+        }
+        while title.ends_with(char::is_whitespace) {
+            title.pop();
+        }
+        title.push('…');
+    }
+    Some(title)
+}
+
+fn is_markdown_heading(line: &str) -> bool {
+    let rest = line.trim_start_matches('#');
+    rest.len() != line.len() && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
 /// Injected system notice (resume fixture: subagents stopped).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SystemMessageLine {
@@ -223,9 +289,25 @@ pub struct ErrorMessageLine {
     pub unknown: Unknown,
 }
 
+/// Generic model prose emitted by newer organic Antigravity writers. The
+/// structure-only census observes `source=MODEL`; keep the envelope open so a
+/// future source/status addition is drift rather than a parse outage.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GenericLine {
+    pub step_index: u64,
+    pub source: String,
+    pub status: String,
+    pub created_at: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated_fields: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{KnownRecord, ParsedLine, parse_line};
+    use super::{KnownRecord, OBJECTIVE_TITLE_CHARS, ParsedLine, checkpoint_objective, parse_line};
 
     #[test]
     fn census_only_types_parse() {
@@ -234,6 +316,7 @@ mod tests {
             r#"{"step_index":3,"source":"MODEL","type":"LIST_DIRECTORY","status":"DONE","created_at":"2026-08-12T21:44:01Z","content":"."}"#,
             r#"{"step_index":14,"source":"MODEL","type":"VIEW_FILE","status":"DONE","created_at":"2026-08-12T21:44:01Z","content":"ok"}"#,
             r#"{"step_index":8,"source":"MODEL","type":"ERROR_MESSAGE","status":"DONE","error":"denied","created_at":"2026-08-12T21:44:01Z","content":"denied"}"#,
+            r#"{"step_index":9,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-08-12T21:44:01Z","content":"finished","truncated_fields":["content"]}"#,
         ];
         for line in lines {
             match parse_line(line).unwrap() {
@@ -243,6 +326,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn objective_extraction_is_section_aware_normalized_and_unicode_bounded() {
+        assert_eq!(
+            checkpoint_objective(
+                "prefix\n# USER Objective:\n  Review   the codebase\ncarefully \n# User Requests\nignore me"
+            )
+            .as_deref(),
+            Some("Review the codebase carefully")
+        );
+        assert_eq!(
+            checkpoint_objective("# User Requests\nnot an objective"),
+            None
+        );
+        assert_eq!(checkpoint_objective("# USER Objective:\n\n# Next"), None);
+        assert_eq!(
+            checkpoint_objective("## USER Objective:\nwrong heading"),
+            None
+        );
+
+        let long = format!(
+            "# USER Objective:\n{}",
+            "界".repeat(OBJECTIVE_TITLE_CHARS + 5)
+        );
+        let title = checkpoint_objective(&long).unwrap();
+        assert_eq!(title.chars().count(), OBJECTIVE_TITLE_CHARS);
+        assert!(title.ends_with('…'));
     }
 
     #[test]

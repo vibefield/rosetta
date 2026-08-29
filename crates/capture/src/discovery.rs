@@ -2,7 +2,7 @@
 //! agents: it reports every regular file under a root; the pipeline filters
 //! against adapter layouts. Symlinks are never followed.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -146,6 +146,67 @@ pub fn first_record(
         payload.pop();
     }
     Ok((!payload.is_empty() && payload.len() <= max_record_bytes).then_some(payload))
+}
+
+/// A bounded run of complete delimiter-framed records plus the actual bytes
+/// pulled from the file. This is a metadata fallback, not a second tailer: it
+/// starts at a caller-chosen record boundary and never reads past either cap.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RecordScan {
+    pub records: Vec<Vec<u8>>,
+    pub bytes_read: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn scan_records(
+    path: &Path,
+    start_offset: u64,
+    byte_budget: usize,
+    record_budget: usize,
+    delimiter: u8,
+    max_record_bytes: usize,
+    normalize_crlf: bool,
+) -> Result<Option<RecordScan>, CaptureError> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error("opening", path, error)),
+    };
+    if byte_budget == 0 || record_budget == 0 {
+        return Ok(Some(RecordScan::default()));
+    }
+    file.seek(SeekFrom::Start(start_offset))
+        .map_err(|error| io_error("seeking in", path, error))?;
+
+    let limit = byte_budget as u64;
+    let mut reader = BufReader::new(file.take(limit));
+    let mut records = Vec::new();
+    while records.len() < record_budget {
+        let mut record = Vec::new();
+        let count = reader
+            .read_until(delimiter, &mut record)
+            .map_err(|error| io_error("scanning records from", path, error))?;
+        if count == 0 {
+            break;
+        }
+        // A budget- or EOF-truncated record is not a record. The stream phase
+        // will eventually parse it from byte zero; metadata never guesses.
+        if record.last() != Some(&delimiter) {
+            break;
+        }
+        record.pop();
+        if normalize_crlf && record.last() == Some(&b'\r') {
+            record.pop();
+        }
+        if record.len() <= max_record_bytes {
+            records.push(record);
+        }
+    }
+    let remaining = reader.into_inner().limit();
+    Ok(Some(RecordScan {
+        records,
+        bytes_read: limit - remaining,
+    }))
 }
 
 pub fn modified_ms(metadata: &std::fs::Metadata) -> i64 {
@@ -325,6 +386,41 @@ mod tests {
             head_tail(&root.path().join("missing"), 4, 4)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn record_scan_is_complete_and_strictly_bounded() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("s.jsonl");
+        std::fs::write(
+            &path,
+            b"partial-record\nalpha\r\nbeta\ngamma-without-newline",
+        )
+        .unwrap();
+
+        // The caller rewinds from a clipped head to the start of its crossing
+        // record. The unterminated EOF fragment is deliberately excluded.
+        let scan = scan_records(&path, 0, 64, 10, b'\n', 64, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            scan.records,
+            [
+                b"partial-record".to_vec(),
+                b"alpha".to_vec(),
+                b"beta".to_vec()
+            ]
+        );
+        assert!(scan.bytes_read <= 64);
+
+        let capped = scan_records(&path, 15, 5, 10, b'\n', 64, true)
+            .unwrap()
+            .unwrap();
+        assert!(capped.bytes_read <= 5);
+        assert!(
+            capped.records.is_empty(),
+            "the clipped record is not parsed"
         );
     }
 }

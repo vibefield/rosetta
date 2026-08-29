@@ -108,5 +108,33 @@
     "agent_version": null,
     "src_cursor": 7,
     "src_offset": 3
+  },
+  {
+    "op": "session_usage",
+    "session_id": "6c306d1aea82c7563fbb4977260b3f2d42e4554c1fa8fab2fb80599db0508bc7",
+    "key": "b3ba35874505411688cca21c58708ba4f6390b79a5a2ab3029a730a4c1539635",
+    "ts": 1787635893545,
+    "model": "mock-model",
+    "tokens": {
+      "input": 256,
+      "output": 64,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "6c306d1aea82c7563fbb4977260b3f2d42e4554c1fa8fab2fb80599db0508bc7",
+    "key": "166edfaba4809f94dcc4a4cb5bfe4cc0d69d66d9fda23bb5ad1ee4a566fbe4ec",
+    "ts": 1787635893401,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
   }
 ]

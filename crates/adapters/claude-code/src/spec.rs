@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use rosetta_adapter_support::GroundTruthDoc;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
+use serde_json::Value;
 
 const CANONICAL: &str = include_str!("../../../../groundtruth/claude-code/groundtruth.json");
 
@@ -46,6 +47,52 @@ pub fn declared_transcript_types() -> &'static BTreeSet<String> {
     })
 }
 
+/// Validate top-level keys on a declared-but-unprojected record against the
+/// union of both transcript censuses. These records remain permissive raw
+/// values, but canonical schema additions must still raise drift.
+pub fn unexpected_declared_fields(kind: &str, value: &Value) -> Vec<String> {
+    let Some(expected) = declared_field_sets().get(kind) else {
+        return Vec::new();
+    };
+    let Some(record) = value.as_object() else {
+        return vec![".<non-object>".to_owned()];
+    };
+    record
+        .keys()
+        .filter(|key| !expected.contains(*key))
+        .map(|key| format!(".{key}"))
+        .collect()
+}
+
+fn declared_field_sets() -> &'static BTreeMap<String, BTreeSet<String>> {
+    static FIELDS: OnceLock<BTreeMap<String, BTreeSet<String>>> = OnceLock::new();
+    FIELDS.get_or_init(|| {
+        let canonical: Value =
+            serde_json::from_str(CANONICAL).expect("embedded groundtruth.json is valid");
+        let mut by_kind = BTreeMap::<String, BTreeSet<String>>::new();
+        for stream in canonical["streams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|stream| {
+                stream["id"]
+                    .as_str()
+                    .is_some_and(|id| TRANSCRIPT_STREAMS.contains(&id))
+            })
+        {
+            for (kind, record) in stream["record_types"].as_object().into_iter().flatten() {
+                let fields = record["shape"]["fields"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(field, _)| field.clone());
+                by_kind.entry(kind.clone()).or_default().extend(fields);
+            }
+        }
+        by_kind
+    })
+}
+
 /// `GroundTruthDoc` keeps only the layout fields, so the record-type vocabulary
 /// is read through this second, private view of the same bytes.
 #[derive(Deserialize)]
@@ -63,7 +110,8 @@ struct StreamRecordTypes {
 
 #[cfg(test)]
 mod tests {
-    use super::{declared_transcript_types, doc};
+    use super::{declared_transcript_types, doc, unexpected_declared_fields};
+    use serde_json::json;
 
     #[test]
     fn embedded_canonical_describes_this_agent() {
@@ -86,5 +134,23 @@ mod tests {
         // Only the subagent stream's census saw this one.
         assert!(types.contains("fork-context-ref"));
         assert!(!types.contains("no-such-record-type"));
+    }
+
+    #[test]
+    fn declared_unprojected_records_still_detect_schema_additions() {
+        assert!(
+            unexpected_declared_fields(
+                "attachment",
+                &json!({"type":"attachment","attachment":{},"sessionId":"s"})
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            unexpected_declared_fields(
+                "attachment",
+                &json!({"type":"attachment","attachment":{},"sessionId":"s","new":1})
+            ),
+            [".new"]
+        );
     }
 }

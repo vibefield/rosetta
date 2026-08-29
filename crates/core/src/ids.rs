@@ -76,6 +76,10 @@ pub fn task_id(session_id: &str, native_key: &str) -> String {
     derive("rosetta/task", &[session_id, native_key])
 }
 
+pub fn usage_id(session_id: &str, native_key: &str) -> String {
+    derive("rosetta/usage", &[session_id, native_key])
+}
+
 /// Shape hash for drift aggregation: order-insensitive over field paths.
 pub fn shape_hash(paths: &[String]) -> String {
     let mut sorted: Vec<&str> = paths.iter().map(String::as_str).collect();
@@ -92,6 +96,7 @@ mod tests {
     fn deterministic_and_domain_separated() {
         assert_eq!(session_id("r", "s"), session_id("r", "s"));
         assert_ne!(session_id("r", "s"), timeline_id("r", "s"));
+        assert_ne!(task_id("r", "s"), usage_id("r", "s"));
         assert_ne!(session_id("r", "s"), session_id("r", "s2"));
         // Separator injection cannot collide: ("ab","c") != ("a","bc").
         assert_ne!(session_id("ab", "c"), session_id("a", "bc"));

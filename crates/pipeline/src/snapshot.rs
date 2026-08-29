@@ -69,6 +69,25 @@ pub(crate) fn stream_snapshot_sources(
         let db_path = root.join(db_relative);
         let Some(_) = rosetta_capture::db_stamp(&db_path)? else {
             report.files_missing += group.len() as u64 as usize;
+            if group.iter().all(|file| file.source_missing) {
+                for file in &group {
+                    let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
+                    let complete = apply_snapshot_records(
+                        adapter,
+                        runtime,
+                        store,
+                        file,
+                        &cursor,
+                        &[],
+                        "missing",
+                        ledger,
+                        instrument,
+                        report,
+                    )?;
+                    mark(file, complete, file_health, session_health);
+                }
+                continue;
+            }
             for file in &group {
                 mark(file, false, file_health, session_health);
             }
@@ -121,213 +140,233 @@ pub(crate) fn stream_snapshot_sources(
                 for row in instrument.time(Metric::ReadNanos, || {
                     snapshot.query_rows(&query.sql, Some(&file.native_session_id))
                 })? {
-                    records.push(format!("{{\"query\":{name},\"row\":{row}}}"));
+                    records.push(format!("{{\"query\":{name},\"row\":{row}}}").into_bytes());
                 }
             }
-            let mut hasher = blake3::Hasher::new();
-            for record in &records {
-                hasher.update(record.as_bytes());
-                hasher.update(b"\n");
-                instrument.add(Metric::BytesRead, record.len() as u64 + 1);
-            }
-            let revision = hasher.finalize().to_hex().to_string();
-
-            let checkpoint = PipeCheckpoint::decode(&cursor.checkpoint).filter(|checkpoint| {
-                checkpoint.session_id == file.session_id
-                    && checkpoint.stream_id == file.stream_id
-                    && checkpoint.normalizer_version == adapter.normalizer_version()
-            });
-            if let Some(previous) = &checkpoint
-                && previous.snapshot_revision.as_deref() == Some(revision.as_str())
-                && cursor.active_generation == previous.source_generation
-            {
-                // Same declared content: only refresh the diagnostic stamp.
-                if previous.snapshot_stamp.as_deref() != Some(stamp.as_str()) {
-                    let mut next = previous.clone();
-                    next.snapshot_stamp = Some(stamp.as_str().to_string());
-                    let applied = instrument.apply(
-                        store,
-                        &Batch {
-                            ops: vec![],
-                            checkpoints: vec![CheckpointUpdate {
-                                runtime_id: runtime.id.clone(),
-                                stream: file.stream_id.clone(),
-                                path: file.relative_path.clone(),
-                                session_id: file.session_id.clone(),
-                                expected: Some(cursor.checkpoint.clone()),
-                                next: next.encode(),
-                                updated_at: Some(file.modified_ms),
-                            }],
-                            source: None,
-                        },
-                    );
-                    match applied {
-                        Ok(stats) => {
-                            merge_stats(&mut report.stats, &stats);
-                            report.batches += 1;
-                        }
-                        Err(StoreError::CheckpointConflict { .. }) => {
-                            report.conflicts += 1;
-                            mark(file, false, file_health, session_health);
-                            continue;
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                mark(file, previous.generation_clean, file_health, session_health);
-                continue;
-            }
-
-            // Content changed (or first sight): an ordinary staged-generation
-            // swap, record by record through the adapter.
-            if cursor.active_generation > 0 {
-                report.generations_restarted += 1;
-            }
-            let generation = cursor
-                .highest_generation
-                .max(cursor.active_generation)
-                .checked_add(1)
-                .ok_or_else(|| {
-                    PipelineError::Config("snapshot generation overflowed".to_string())
-                })?;
-
-            if let Some(ledger) = ledger.as_deref_mut() {
-                instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
-                    let source = rosetta_capture::SourceDef {
-                        relative_path: file.relative_path.clone(),
-                        stream_id: file.stream_id.clone(),
-                        session_id: file.session_id.clone(),
-                        native_session_id: file.native_session_id.clone(),
-                        agent_version: file.agent_version.clone(),
-                    };
-                    if !records.is_empty() {
-                        ledger.append_raw(
-                            &source,
-                            generation,
-                            records
-                                .iter()
-                                .enumerate()
-                                .map(|(index, record)| (index as u64, record.as_bytes())),
-                        )?;
-                    }
-                    ledger.checkpoint()?;
-                    Ok(())
-                })?;
-            }
-
-            let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
-            ctx.agent_version = file.agent_version.clone();
-            ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
-            ctx.src_cursor = Some(cursor.id);
-
-            let mut generation_clean = true;
-            let mut next_sequence = 0_u64;
-            let mut prev_blob = cursor.checkpoint.clone();
-            let mut ops: Vec<IngestOp> = Vec::new();
-            let mut conflicted = false;
-            let total = records.len();
-            for (index, record) in records.iter().enumerate() {
-                report.records += 1;
-                instrument.add(Metric::RecordsFramed, 1);
-                ctx.src_offset = Some(index as i64);
-                let outcome = instrument.time(Metric::NormalizeNanos, || {
-                    adapter.ingest_line(&mut ctx, &file.stream_id, record.as_bytes())
-                });
-                match &outcome.status {
-                    LineStatus::Parsed => {
-                        report.parsed += 1;
-                        instrument.add(Metric::LinesParsed, 1);
-                    }
-                    LineStatus::UnknownType => {
-                        report.unknown += 1;
-                        instrument.add(Metric::LinesUnknown, 1);
-                    }
-                    LineStatus::HardError { .. } => {
-                        generation_clean = false;
-                        report.hard_errors += 1;
-                        instrument.add(Metric::LinesHardError, 1);
-                    }
-                }
-                ops.extend(outcome.ops);
-
-                let last = index + 1 == total;
-                if !last && ops.len() < CHUNK_OPS {
-                    continue;
-                }
-                if last {
-                    seal_generation(
-                        ledger,
-                        adapter,
-                        file,
-                        generation,
-                        generation_clean,
-                        instrument,
-                    )?;
-                }
-                if flush_chunk(
-                    adapter,
-                    runtime,
-                    store,
-                    file,
-                    &cursor,
-                    generation,
-                    &mut ops,
-                    &mut next_sequence,
-                    last,
-                    generation_clean,
-                    stamp.as_str(),
-                    &revision,
-                    &mut ctx,
-                    &mut prev_blob,
-                    instrument,
-                    report,
-                )? {
-                    conflicted = true;
-                    break;
-                }
-            }
-            if records.is_empty() && !conflicted {
-                // The session vanished from the database: an empty activation
-                // is a pure sweep of its old contribution.
-                seal_generation(
-                    ledger,
-                    adapter,
-                    file,
-                    generation,
-                    generation_clean,
-                    instrument,
-                )?;
-                conflicted = flush_chunk(
-                    adapter,
-                    runtime,
-                    store,
-                    file,
-                    &cursor,
-                    generation,
-                    &mut ops,
-                    &mut next_sequence,
-                    true,
-                    generation_clean,
-                    stamp.as_str(),
-                    &revision,
-                    &mut ctx,
-                    &mut prev_blob,
-                    instrument,
-                    report,
-                )?;
-            }
-            if conflicted {
-                report.conflicts += 1;
-                mark(file, false, file_health, session_health);
-                continue;
-            }
-            mark(file, generation_clean, file_health, session_health);
+            let complete = apply_snapshot_records(
+                adapter,
+                runtime,
+                store,
+                file,
+                &cursor,
+                &records,
+                stamp.as_str(),
+                ledger,
+                instrument,
+                report,
+            )?;
+            mark(file, complete, file_health, session_health);
         }
     }
     Ok(())
 }
 
-fn seal_generation(
+/// Project one stable record snapshot through the common staged-generation
+/// protocol. SQLite and whole-document sources deliberately meet here so
+/// revision checks, raw-ledger ordering, health, and sweeps cannot diverge.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_snapshot_records(
+    adapter: &dyn AgentAdapter,
+    runtime: &rosetta_core::rows::RuntimeRow,
+    store: &mut Store,
+    file: &SessionFile,
+    cursor: &queries::CursorState,
+    records: &[Vec<u8>],
+    stamp: &str,
+    ledger: &mut Option<&mut rosetta_capture::Ledger>,
+    instrument: &Instrument,
+    report: &mut StreamReport,
+) -> Result<bool, PipelineError> {
+    let mut hasher = blake3::Hasher::new();
+    for record in records {
+        hasher.update(record);
+        hasher.update(b"\n");
+        instrument.add(Metric::BytesRead, record.len() as u64 + 1);
+    }
+    let revision = hasher.finalize().to_hex().to_string();
+
+    let checkpoint = PipeCheckpoint::decode(&cursor.checkpoint).filter(|checkpoint| {
+        checkpoint.session_id == file.session_id
+            && checkpoint.stream_id == file.stream_id
+            && checkpoint.normalizer_version == adapter.normalizer_version()
+    });
+    if let Some(previous) = &checkpoint
+        && previous.snapshot_revision.as_deref() == Some(revision.as_str())
+        && cursor.active_generation == previous.source_generation
+    {
+        if previous.snapshot_stamp.as_deref() != Some(stamp) {
+            let mut next = previous.clone();
+            next.snapshot_stamp = Some(stamp.to_string());
+            let applied = instrument.apply(
+                store,
+                &Batch {
+                    ops: vec![],
+                    checkpoints: vec![CheckpointUpdate {
+                        runtime_id: runtime.id.clone(),
+                        stream: file.stream_id.clone(),
+                        path: file.relative_path.clone(),
+                        session_id: file.session_id.clone(),
+                        expected: Some(cursor.checkpoint.clone()),
+                        next: next.encode(),
+                        updated_at: Some(file.modified_ms),
+                    }],
+                    source: None,
+                },
+            );
+            match applied {
+                Ok(stats) => {
+                    merge_stats(&mut report.stats, &stats);
+                    report.batches += 1;
+                }
+                Err(StoreError::CheckpointConflict { .. }) => {
+                    report.conflicts += 1;
+                    return Ok(false);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        return Ok(previous.generation_clean);
+    }
+
+    if cursor.active_generation > 0 {
+        report.generations_restarted += 1;
+    }
+    let generation = cursor
+        .highest_generation
+        .max(cursor.active_generation)
+        .checked_add(1)
+        .ok_or_else(|| PipelineError::Config("snapshot generation overflowed".to_string()))?;
+
+    if let Some(raw_ledger) = ledger.as_deref_mut() {
+        instrument.ledger_write(raw_ledger, |raw_ledger| -> Result<(), PipelineError> {
+            let source = rosetta_capture::SourceDef {
+                relative_path: file.relative_path.clone(),
+                stream_id: file.stream_id.clone(),
+                session_id: file.session_id.clone(),
+                native_session_id: file.native_session_id.clone(),
+                agent_version: file.agent_version.clone(),
+            };
+            if !records.is_empty() {
+                raw_ledger.append_raw(
+                    &source,
+                    generation,
+                    records
+                        .iter()
+                        .enumerate()
+                        .map(|(index, record)| (index as u64, record.as_slice())),
+                )?;
+            }
+            raw_ledger.checkpoint()?;
+            Ok(())
+        })?;
+    }
+
+    let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
+    ctx.agent_version = file.agent_version.clone();
+    ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
+    ctx.src_cursor = Some(cursor.id);
+
+    let mut generation_clean = true;
+    let mut next_sequence = 0_u64;
+    let mut prev_blob = cursor.checkpoint.clone();
+    let mut ops: Vec<IngestOp> = Vec::new();
+    let mut conflicted = false;
+    for (index, record) in records.iter().enumerate() {
+        report.records += 1;
+        instrument.add(Metric::RecordsFramed, 1);
+        ctx.src_offset = Some(index as i64);
+        let outcome = instrument.time(Metric::NormalizeNanos, || {
+            adapter.ingest_line(&mut ctx, &file.stream_id, record)
+        });
+        match &outcome.status {
+            LineStatus::Parsed => {
+                report.parsed += 1;
+                instrument.add(Metric::LinesParsed, 1);
+            }
+            LineStatus::UnknownType => {
+                report.unknown += 1;
+                instrument.add(Metric::LinesUnknown, 1);
+            }
+            LineStatus::HardError { .. } => {
+                generation_clean = false;
+                report.hard_errors += 1;
+                instrument.add(Metric::LinesHardError, 1);
+            }
+        }
+        ops.extend(outcome.ops);
+
+        let last = index + 1 == records.len();
+        if !last && ops.len() < CHUNK_OPS {
+            continue;
+        }
+        if last {
+            seal_generation(
+                ledger,
+                adapter,
+                file,
+                generation,
+                generation_clean,
+                instrument,
+            )?;
+        }
+        if flush_chunk(
+            adapter,
+            runtime,
+            store,
+            file,
+            cursor,
+            generation,
+            &mut ops,
+            &mut next_sequence,
+            last,
+            generation_clean,
+            stamp,
+            &revision,
+            &mut ctx,
+            &mut prev_blob,
+            instrument,
+            report,
+        )? {
+            conflicted = true;
+            break;
+        }
+    }
+    if records.is_empty() && !conflicted {
+        seal_generation(
+            ledger,
+            adapter,
+            file,
+            generation,
+            generation_clean,
+            instrument,
+        )?;
+        conflicted = flush_chunk(
+            adapter,
+            runtime,
+            store,
+            file,
+            cursor,
+            generation,
+            &mut ops,
+            &mut next_sequence,
+            true,
+            generation_clean,
+            stamp,
+            &revision,
+            &mut ctx,
+            &mut prev_blob,
+            instrument,
+            report,
+        )?;
+    }
+    if conflicted {
+        report.conflicts += 1;
+        return Ok(false);
+    }
+    Ok(generation_clean)
+}
+
+pub(crate) fn seal_generation(
     ledger: &mut Option<&mut rosetta_capture::Ledger>,
     adapter: &dyn AgentAdapter,
     file: &SessionFile,
@@ -359,7 +398,7 @@ fn seal_generation(
 /// One staged chunk (or the activating final one). Returns true on a
 /// checkpoint conflict — another writer owns the cursor now.
 #[allow(clippy::too_many_arguments)]
-fn flush_chunk(
+pub(crate) fn flush_chunk(
     adapter: &dyn AgentAdapter,
     runtime: &rosetta_core::rows::RuntimeRow,
     store: &mut Store,
@@ -377,6 +416,7 @@ fn flush_chunk(
     instrument: &Instrument,
     report: &mut StreamReport,
 ) -> Result<bool, PipelineError> {
+    crate::project::enrich_workspace_ops(ops);
     let chunk = std::mem::take(ops);
     let first_sequence = *next_sequence;
     *next_sequence += chunk.len() as u64;

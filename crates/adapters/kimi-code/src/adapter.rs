@@ -5,7 +5,7 @@ use std::any::Any;
 use rosetta_adapter_support::{
     AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
 };
-use rosetta_core::rows::SessionRole;
+use rosetta_core::rows::{SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, KimiCodeState};
@@ -24,11 +24,15 @@ impl AgentAdapter for KimiCodeAdapter {
     }
 
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
-        (stream_id == spec::WIRE).then_some(StreamDriver::JsonLines)
+        match stream_id {
+            spec::WIRE => Some(StreamDriver::JsonLines),
+            spec::SESSION_STATE => Some(StreamDriver::DocumentSnapshot),
+            _ => None,
+        }
     }
 
     fn normalizer_version(&self) -> u32 {
-        2
+        4
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -63,7 +67,7 @@ impl AgentAdapter for KimiCodeAdapter {
     /// subpath `<root>/agents/<agent-id>` rather than the globally repeating
     /// presentation name `agent-0`.
     fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], tail: &[u8]) -> SkimResult {
-        if self.stream_driver(stream_id).is_none() {
+        if stream_id != spec::WIRE {
             return SkimResult::default();
         }
         let Some(identity) = wire_identity(&stat.relative_path) else {
@@ -92,12 +96,84 @@ impl AgentAdapter for KimiCodeAdapter {
             agent_version: None,
             // The mutable title lives only in non-driven state.json.
             title: None,
+            title_kind: None,
+            summary: None,
             started_at: facts.started_at,
+            updated_at: None,
         }
     }
 
+    fn document_sessions(
+        &self,
+        stream_id: &str,
+        _stat: &FileStat,
+        document: &[u8],
+    ) -> Vec<SkimResult> {
+        if stream_id != spec::SESSION_STATE {
+            return Vec::new();
+        }
+        let Ok(text) = std::str::from_utf8(document) else {
+            return Vec::new();
+        };
+        let Ok(state) = crate::raw::parse_session_state(text) else {
+            return Vec::new();
+        };
+        let root = state.id;
+        let cwd = (!state.cwd.is_empty()).then_some(state.cwd);
+        let started_at = epoch_ms(state.created_at);
+        let title = state.title.filter(|title| !title.is_empty());
+        let mut sessions = vec![SkimResult {
+            ops: Vec::new(),
+            session_id: Some(root.clone()),
+            parent_session_id: None,
+            root_session_id: None,
+            role: Some(SessionRole::Main),
+            cwd: cwd.clone(),
+            agent_version: None,
+            title_kind: title.as_ref().map(|_| TitleKind::Explicit),
+            title,
+            summary: None,
+            started_at,
+            updated_at: None,
+        }];
+        for (agent_id, agent) in state.agents {
+            if agent_id == "main" || agent.agent_type == "main" {
+                continue;
+            }
+            let parent_session_id = match agent.parent_agent_id.as_deref() {
+                Some("main") | None => root.clone(),
+                Some(parent) => format!("{root}/agents/{parent}"),
+            };
+            sessions.push(SkimResult {
+                ops: Vec::new(),
+                session_id: Some(format!("{root}/agents/{agent_id}")),
+                parent_session_id: Some(parent_session_id),
+                root_session_id: Some(root.clone()),
+                role: Some(SessionRole::Subagent),
+                cwd: cwd.clone(),
+                agent_version: None,
+                title: None,
+                title_kind: None,
+                summary: None,
+                started_at,
+                updated_at: None,
+            });
+        }
+        sessions
+    }
+
+    fn document_records(
+        &self,
+        stream_id: &str,
+        _native_session_id: &str,
+        _document: &[u8],
+    ) -> Vec<Vec<u8>> {
+        debug_assert_eq!(stream_id, spec::SESSION_STATE);
+        Vec::new()
+    }
+
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
-        if self.stream_driver(stream_id).is_none() {
+        if stream_id == spec::SESSION_STATE || self.stream_driver(stream_id).is_none() {
             return LineOutcome::parsed(Vec::new());
         }
         let mut state = take_state(ctx);
@@ -292,17 +368,60 @@ mod tests {
     }
 
     #[test]
-    fn non_driven_state_json_is_inventory_only() {
+    fn state_json_is_a_metadata_document() {
         let state = FileStat {
             relative_path: format!("sessions/wd_project/{ROOT}/state.json"),
             size: 2,
             modified_ms: 0,
         };
-        let result = KimiCodeAdapter.skim("session-state", &state, b"{}", b"{}");
+        let result = KimiCodeAdapter.skim(spec::SESSION_STATE, &state, b"{}", b"{}");
         assert!(result.session_id.is_none());
         assert!(result.ops.is_empty());
-        assert_eq!(KimiCodeAdapter.stream_driver("session-state"), None);
+        assert_eq!(
+            KimiCodeAdapter.stream_driver(spec::SESSION_STATE),
+            Some(rosetta_adapter_support::StreamDriver::DocumentSnapshot)
+        );
         assert_eq!(KimiCodeAdapter.stream_driver("session-index"), None);
+    }
+
+    #[test]
+    fn state_document_enumerates_root_and_nested_agents() {
+        let document = format!(
+            r#"{{
+                "id":"{ROOT}","version":2,"cwd":"/work/project",
+                "createdAt":1787636369409,"updatedAt":1787636369614,
+                "archived":false,"custom":{{}},"lastTurnReason":"completed",
+                "isCustomTitle":true,"title":"State title",
+                "agents":{{
+                    "main":{{"homedir":"/tmp/main","type":"main"}},
+                    "agent-0":{{"homedir":"/tmp/a0","type":"sub","parentAgentId":"main"}},
+                    "agent-1":{{"homedir":"/tmp/a1","type":"sub","parentAgentId":"agent-0"}}
+                }}
+            }}"#
+        );
+        let sessions = KimiCodeAdapter.document_sessions(
+            spec::SESSION_STATE,
+            &FileStat {
+                relative_path: format!("sessions/wd/{ROOT}/state.json"),
+                size: document.len() as u64,
+                modified_ms: 0,
+            },
+            document.as_bytes(),
+        );
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].session_id.as_deref(), Some(ROOT));
+        assert_eq!(sessions[0].title.as_deref(), Some("State title"));
+        assert_eq!(sessions[1].parent_session_id.as_deref(), Some(ROOT));
+        let nested_parent = format!("{ROOT}/agents/agent-0");
+        assert_eq!(
+            sessions[2].parent_session_id.as_deref(),
+            Some(nested_parent.as_str())
+        );
+        assert!(
+            sessions
+                .iter()
+                .all(|session| session.cwd.as_deref() == Some("/work/project"))
+        );
     }
 
     #[test]

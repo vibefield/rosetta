@@ -26,6 +26,29 @@ impl SessionRole {
     }
 }
 
+/// Confidence of one native session-title fact. This is deliberately about
+/// provenance, not arrival order: an explicit native display name must not be
+/// replaced by a prompt/checkpoint-derived fallback merely because that
+/// source was scanned later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum TitleKind {
+    Fallback,
+    Generated,
+    Explicit,
+}
+
+impl TitleKind {
+    pub fn rank(self) -> i64 {
+        match self {
+            Self::Fallback => 1,
+            Self::Generated => 2,
+            Self::Explicit => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -96,6 +119,8 @@ pub enum TaskStatus {
     Pending,
     InProgress,
     Completed,
+    Failed,
+    Cancelled,
 }
 
 impl TaskStatus {
@@ -104,6 +129,8 @@ impl TaskStatus {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
             Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -181,6 +208,18 @@ pub struct SessionRow {
     pub stream_state: StreamState,
 }
 
+/// One bounded meta-phase title candidate. The store retains the best answer
+/// by [`TitleKind`] and native timestamp; streamed singleton rows can refine
+/// the same public `session.title` with identical precedence rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionTitleRow {
+    pub session_id: String,
+    pub title: String,
+    pub kind: TitleKind,
+    pub at: Ms,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct MessageRow {
@@ -205,6 +244,21 @@ pub struct MessageRow {
     pub agent_version: Option<String>,
     pub src_cursor: Option<i64>,
     pub src_offset: Option<i64>,
+}
+
+/// Replacement-keyed usage reported for a whole native session/task rather
+/// than for one response row. These samples contribute tokens to usage
+/// buckets but deliberately do not manufacture timeline messages or counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsageRow {
+    pub session_id: String,
+    /// Stable native replacement key within the session (for example a model
+    /// or task id). Re-emitting this key replaces, rather than double-counts,
+    /// the prior snapshot.
+    pub key: String,
+    pub ts: Ms,
+    pub model: Option<String>,
+    pub tokens: TokenSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

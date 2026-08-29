@@ -1,0 +1,148 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "codex",
+  "agent_version": "0.149.1",
+  "evidence": "writer",
+  "generator": "writer-source openai/codex@rust-v0.150.1 codex-rs/history/src/{lib.rs,rollout_payload.rs} RolloutItem/CompactedItemWire; codex-rs/protocol/src/{models.rs,protocol.rs} ResponseItem/EventMsg/TurnContextItem; codex-rs/rollout/src/policy.rs persistence policy",
+  "data_root": "~/.codex",
+  "writer_version": "rust-v0.150.1",
+  "streams": [
+    {
+      "id": "rollout",
+      "glob": "sessions/*/*/*/rollout-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Pinned primary sources: https://github.com/openai/codex/tree/rust-v0.150.1/codex-rs/history, https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/models.rs, https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/protocol.rs, and https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/policy.rs. Compacted replacement_history repeats prior ResponseItems and is not a second conversation source. Legacy EventMsg variants are reader-compatible and can remain in older rollouts even when the current policy no longer writes them.",
+      "discriminator": "type",
+      "record_types": {
+        "compacted": {
+          "observed": 0,
+          "shape": { "kind": "object", "fields": {
+            "timestamp": { "shape": { "kind": "string" }, "required": true },
+            "ordinal": { "shape": { "kind": "number" }, "required": false },
+            "type": { "shape": { "kind": "string", "values": { "compacted": 0 } }, "required": true },
+            "payload": { "shape": { "kind": "object", "fields": {
+              "message": { "shape": { "kind": "string" }, "required": true },
+              "replacement_history": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": false },
+              "replacement_history_metadata": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": false },
+              "mcp_resource_origins": { "shape": { "kind": "object", "fields": {} }, "required": false },
+              "window_number": { "shape": { "kind": "number" }, "required": false },
+              "first_window_id": { "shape": { "kind": "string" }, "required": false },
+              "previous_window_id": { "shape": { "kind": "string" }, "required": false },
+              "window_id": { "shape": { "kind": "any_of", "variants": [{ "kind": "string" }, { "kind": "number" }] }, "required": false }
+            } }, "required": true }
+          } }
+        },
+        "inter_agent_communication": {
+          "observed": 0,
+          "shape": { "kind": "object", "fields": {
+            "timestamp": { "shape": { "kind": "string" }, "required": true },
+            "ordinal": { "shape": { "kind": "number" }, "required": false },
+            "type": { "shape": { "kind": "string", "values": { "inter_agent_communication": 0 } }, "required": true },
+            "payload": { "shape": { "kind": "object", "fields": {
+              "id": { "shape": { "kind": "string" }, "required": false },
+              "author": { "shape": { "kind": "string" }, "required": true },
+              "recipient": { "shape": { "kind": "string" }, "required": true },
+              "other_recipients": { "shape": { "kind": "array", "items": { "kind": "string" } }, "required": false },
+              "content": { "shape": { "kind": "string" }, "required": true },
+              "encrypted_content": { "shape": { "kind": "string" }, "required": false },
+              "internal_chat_message_metadata_passthrough": { "shape": { "kind": "object", "fields": {} }, "required": false },
+              "trigger_turn": { "shape": { "kind": "boolean" }, "required": true }
+            } }, "required": true }
+          } }
+        },
+        "inter_agent_communication_metadata": {
+          "observed": 0,
+          "shape": { "kind": "object", "fields": {
+            "timestamp": { "shape": { "kind": "string" }, "required": true },
+            "ordinal": { "shape": { "kind": "number" }, "required": false },
+            "type": { "shape": { "kind": "string", "values": { "inter_agent_communication_metadata": 0 } }, "required": true },
+            "payload": { "shape": { "kind": "object", "fields": { "trigger_turn": { "shape": { "kind": "boolean" }, "required": true } } }, "required": true }
+          } }
+        },
+        "security_risk_score": {
+          "observed": 0,
+          "shape": { "kind": "object", "fields": {
+            "timestamp": { "shape": { "kind": "string" }, "required": true },
+            "type": { "shape": { "kind": "string", "values": { "security_risk_score": 0 } }, "required": true },
+            "payload": { "shape": { "kind": "object", "fields": {
+              "scores": { "shape": { "kind": "object", "fields": {} }, "required": true },
+              "sampled_at": { "shape": { "kind": "string" }, "required": false }
+            } }, "required": true }
+          } }
+        },
+        "realtime_item": {
+          "observed": 0,
+          "shape": { "kind": "object", "fields": {
+            "timestamp": { "shape": { "kind": "string" }, "required": true },
+            "ordinal": { "shape": { "kind": "number" }, "required": false },
+            "type": { "shape": { "kind": "string", "values": { "realtime_item": 0 } }, "required": true },
+            "payload": { "shape": { "kind": "object", "fields": {
+              "id": { "shape": { "kind": "string" }, "required": true },
+              "realtime_session_id": { "shape": { "kind": "string" }, "required": true },
+              "type": { "shape": { "kind": "string" }, "required": true }
+            } }, "required": true }
+          } }
+        }
+      },
+      "facets": [
+        {
+          "id": "event-msg",
+          "path": "event_msg.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {
+            "agent_message": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "agent_message": 0 } }, "required": true }, "message": { "shape": { "kind": "string" }, "required": true }, "phase": { "shape": { "kind": "string" }, "required": false }, "memory_citation": { "shape": { "kind": "object", "fields": {} }, "required": false } } } },
+            "agent_reasoning": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "agent_reasoning": 0 } }, "required": true }, "text": { "shape": { "kind": "string" }, "required": true } } } },
+            "agent_reasoning_raw_content": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "agent_reasoning_raw_content": 0 } }, "required": true } } } },
+            "context_compacted": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "context_compacted": 0 } }, "required": true } } } },
+            "entered_review_mode": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "entered_review_mode": 0 } }, "required": true } } } },
+            "exec_command_end": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "exec_command_end": 0 } }, "required": true } } } },
+            "exited_review_mode": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "exited_review_mode": 0 } }, "required": true } } } },
+            "image_generation_end": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "image_generation_end": 0 } }, "required": true } } } },
+            "mcp_tool_call_end": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "mcp_tool_call_end": 0 } }, "required": true } } } },
+            "patch_apply_end": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "patch_apply_end": 0 } }, "required": true } } } },
+            "sub_agent_activity": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "sub_agent_activity": 0 } }, "required": true } } } },
+            "thread_goal_updated": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "thread_goal_updated": 0 } }, "required": true } } } },
+            "thread_rolled_back": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "thread_rolled_back": 0 } }, "required": true }, "num_turns": { "shape": { "kind": "number" }, "required": true } } } },
+            "turn_aborted": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "turn_aborted": 0 } }, "required": true }, "reason": { "shape": { "kind": "string" }, "required": true } } } },
+            "user_message": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "user_message": 0 } }, "required": true }, "message": { "shape": { "kind": "string" }, "required": true }, "images": { "shape": { "kind": "array", "items": { "kind": "string" } }, "required": true }, "local_images": { "shape": { "kind": "array", "items": { "kind": "string" } }, "required": true }, "text_elements": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": true } } } },
+            "web_search_end": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "web_search_end": 0 } }, "required": true } } } }
+          }
+        },
+        {
+          "id": "response-items",
+          "path": "response_item.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {
+            "agent_message": { "observed": 0, "shape": { "kind": "object", "fields": {
+              "type": { "shape": { "kind": "string", "values": { "agent_message": 0 } }, "required": true },
+              "id": { "shape": { "kind": "string" }, "required": false },
+              "author": { "shape": { "kind": "string" }, "required": true },
+              "recipient": { "shape": { "kind": "string" }, "required": true },
+              "content": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": true },
+              "internal_chat_message_metadata_passthrough": { "shape": { "kind": "object", "fields": {} }, "required": false }
+            } } },
+            "compaction": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "compaction": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "encrypted_content": { "shape": { "kind": "string" }, "required": true } } } },
+            "context_compaction": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "context_compaction": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "encrypted_content": { "shape": { "kind": "string" }, "required": false } } } },
+            "function_call": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "function_call": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "name": { "shape": { "kind": "string" }, "required": true }, "namespace": { "shape": { "kind": "string" }, "required": false }, "arguments": { "shape": { "kind": "string" }, "required": true }, "encrypted_function_args": { "shape": { "kind": "array", "items": { "kind": "string" } }, "required": false }, "call_id": { "shape": { "kind": "string" }, "required": true } } } },
+            "image_generation_call": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "image_generation_call": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "status": { "shape": { "kind": "string" }, "required": true }, "revised_prompt": { "shape": { "kind": "string" }, "required": false }, "result": { "shape": { "kind": "string" }, "required": true } } } },
+            "local_shell_call": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "local_shell_call": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "call_id": { "shape": { "kind": "string" }, "required": false }, "status": { "shape": { "kind": "string" }, "required": true }, "action": { "shape": { "kind": "object", "fields": {} }, "required": true } } } },
+            "message": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "message": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "role": { "shape": { "kind": "string" }, "required": true }, "content": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": true }, "phase": { "shape": { "kind": "string" }, "required": false } } } },
+            "reasoning": { "observed": 0, "shape": { "kind": "object", "fields": {
+              "type": { "shape": { "kind": "string", "values": { "reasoning": 0 } }, "required": true },
+              "id": { "shape": { "kind": "string" }, "required": false },
+              "summary": { "shape": { "kind": "array", "items": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "summary_text": 0 } }, "required": true }, "text": { "shape": { "kind": "string" }, "required": true } } } }, "required": true },
+              "content": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": false },
+              "encrypted_content": { "shape": { "kind": "string" }, "required": false },
+              "internal_chat_message_metadata_passthrough": { "shape": { "kind": "object", "fields": {} }, "required": false }
+            } } },
+            "tool_search_call": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "tool_search_call": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "call_id": { "shape": { "kind": "string" }, "required": false }, "status": { "shape": { "kind": "string" }, "required": false }, "execution": { "shape": { "kind": "string" }, "required": true }, "arguments": { "shape": { "kind": "unknown" }, "required": true } } } },
+            "tool_search_output": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "tool_search_output": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "call_id": { "shape": { "kind": "string" }, "required": false }, "status": { "shape": { "kind": "string" }, "required": true }, "execution": { "shape": { "kind": "string" }, "required": true }, "tools": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": true } } } },
+            "web_search_call": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "web_search_call": 0 } }, "required": true }, "id": { "shape": { "kind": "string" }, "required": false }, "status": { "shape": { "kind": "string" }, "required": false }, "action": { "shape": { "kind": "object", "fields": {} }, "required": false } } } }
+          }
+        }
+      ]
+    }
+  ]
+}

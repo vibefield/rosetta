@@ -3,7 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
-  "The pinned farm exercises 23 durable wire types; no pinned writer-type export yet covers the remaining durable variants.",
+  "The adapter types the pinned fixture plus version-scoped organic durable vocabulary; several organic-only variants still lack a pinned writer export or hermetic fixture.",
 ]
 
 [agent]

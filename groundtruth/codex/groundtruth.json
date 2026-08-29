@@ -15,11 +15,19 @@
       "writer_version": "rust-v0.149.1"
     },
     {
+      "generator": "writer-source openai/codex@rust-v0.150.1 codex-rs/history/src/{lib.rs,rollout_payload.rs} RolloutItem/CompactedItemWire; codex-rs/protocol/src/{models.rs,protocol.rs} ResponseItem/EventMsg/TurnContextItem; codex-rs/rollout/src/policy.rs persistence policy",
+      "agent_version": "0.149.1",
+      "evidence": "writer",
+      "path": "sources/0.150.1.writer.json",
+      "sha256": "2b48576ba2b0857abc5450f8752796a301f1ffd520c2251b26582359ee96e8c2",
+      "writer_version": "rust-v0.150.1"
+    },
+    {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "0.149.1",
       "evidence": "fixture",
       "path": "sources/0.149.1.fixtures.json",
-      "sha256": "5ec96182f5986558bc40859708ba408745e20cf39efe2eb9a6fd7b294c0af96c"
+      "sha256": "1a370297cf6553f137943591fe04542a40f99bd8f6ecc1f47b902593b3e9b2bd"
     }
   ],
   "streams": [
@@ -32,6 +40,109 @@
       "notes": "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg, response_item, world_state, turn_context. Pinned writer evidence adds custom_tool_call/custom_tool_call_output to the fixture-backed response items. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large.",
       "discriminator": "type",
       "record_types": {
+        "compacted": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "compacted": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "message": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "replacement_history": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {}
+                        }
+                      },
+                      "required": false
+                    },
+                    "replacement_history_metadata": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "object",
+                          "fields": {}
+                        }
+                      },
+                      "required": false
+                    },
+                    "mcp_resource_origins": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false
+                    },
+                    "window_number": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "first_window_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "previous_window_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "window_id": {
+                      "shape": {
+                        "kind": "any_of",
+                        "variants": [
+                          {
+                            "kind": "string"
+                          },
+                          {
+                            "kind": "number"
+                          }
+                        ]
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        },
         "event_msg": {
           "observed": 23,
           "shape": {
@@ -778,6 +889,196 @@
           },
           "evidence": "fixture"
         },
+        "inter_agent_communication": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "inter_agent_communication": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "author": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "recipient": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "other_recipients": {
+                      "shape": {
+                        "kind": "array",
+                        "items": {
+                          "kind": "string"
+                        }
+                      },
+                      "required": false
+                    },
+                    "content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "encrypted_content": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "internal_chat_message_metadata_passthrough": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false
+                    },
+                    "trigger_turn": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        },
+        "inter_agent_communication_metadata": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "inter_agent_communication_metadata": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "trigger_turn": {
+                      "shape": {
+                        "kind": "boolean"
+                      },
+                      "required": true
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        },
+        "realtime_item": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "realtime_item": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "realtime_session_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "type": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        },
         "response_item": {
           "observed": 16,
           "shape": {
@@ -931,6 +1232,51 @@
             }
           },
           "evidence": "fixture"
+        },
+        "security_risk_score": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "security_risk_score": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "scores": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": true
+                    },
+                    "sampled_at": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
         },
         "session_meta": {
           "observed": 3,
@@ -1800,6 +2146,175 @@
           "path": "event_msg.payload (by payload.type)",
           "discriminator": "type",
           "record_types": {
+            "agent_message": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "agent_message": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "message": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "phase": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "memory_citation": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {}
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "agent_reasoning": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "agent_reasoning": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "agent_reasoning_raw_content": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "agent_reasoning_raw_content": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "context_compacted": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "context_compacted": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "entered_review_mode": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "entered_review_mode": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "exec_command_end": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "exec_command_end": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "exited_review_mode": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "exited_review_mode": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "image_generation_end": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "image_generation_end": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
             "item_completed": {
               "observed": 9,
               "shape": {
@@ -2043,6 +2558,60 @@
               },
               "evidence": "fixture"
             },
+            "mcp_tool_call_end": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "mcp_tool_call_end": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "patch_apply_end": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "patch_apply_end": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "sub_agent_activity": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "sub_agent_activity": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
             "task_complete": {
               "observed": 4,
               "shape": {
@@ -2153,6 +2722,48 @@
                 }
               },
               "evidence": "fixture"
+            },
+            "thread_goal_updated": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "thread_goal_updated": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "thread_rolled_back": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "thread_rolled_back": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "num_turns": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
             },
             "thread_settings_applied": {
               "observed": 1,
@@ -2605,6 +3216,100 @@
                 }
               },
               "evidence": "fixture"
+            },
+            "turn_aborted": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "turn_aborted": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "reason": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "user_message": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "user_message": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "message": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "images": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "string"
+                      }
+                    },
+                    "required": true
+                  },
+                  "local_images": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "string"
+                      }
+                    },
+                    "required": true
+                  },
+                  "text_elements": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {}
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "web_search_end": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "web_search_end": 0
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
             }
           }
         },
@@ -2613,6 +3318,119 @@
           "path": "response_item.payload (by payload.type)",
           "discriminator": "type",
           "record_types": {
+            "agent_message": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "agent_message": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "author": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "recipient": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {}
+                      }
+                    },
+                    "required": true
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {}
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "compaction": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "compaction": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "encrypted_content": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "context_compaction": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "context_compaction": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "encrypted_content": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
             "custom_tool_call": {
               "observed": 0,
               "shape": {
@@ -2744,22 +3562,28 @@
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": true
                   },
                   "call_id": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": true
+                  },
+                  "encrypted_function_args": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "string"
+                      }
+                    },
+                    "required": false
                   },
                   "id": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": false
                   },
                   "internal_chat_message_metadata_passthrough": {
                     "shape": {
@@ -2774,15 +3598,20 @@
                         }
                       }
                     },
-                    "required": true,
+                    "required": false,
                     "observed": 1
                   },
                   "name": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": true
+                  },
+                  "namespace": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
                   },
                   "type": {
                     "shape": {
@@ -2791,12 +3620,11 @@
                         "function_call": 1
                       }
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": true
                   }
                 }
               },
-              "evidence": "fixture"
+              "evidence": "writer"
             },
             "function_call_output": {
               "observed": 1,
@@ -2861,6 +3689,91 @@
               },
               "evidence": "fixture"
             },
+            "image_generation_call": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "image_generation_call": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "status": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "revised_prompt": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "result": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "local_shell_call": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "local_shell_call": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "call_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "status": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "action": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {}
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
             "message": {
               "observed": 14,
               "shape": {
@@ -2876,7 +3789,7 @@
                             "shape": {
                               "kind": "string"
                             },
-                            "required": true,
+                            "required": false,
                             "observed": 17
                           },
                           "type": {
@@ -2887,21 +3800,19 @@
                                 "output_text": 4
                               }
                             },
-                            "required": true,
+                            "required": false,
                             "observed": 17
                           }
                         }
                       }
                     },
-                    "required": true,
-                    "observed": 14
+                    "required": true
                   },
                   "id": {
                     "shape": {
                       "kind": "string"
                     },
-                    "required": true,
-                    "observed": 14
+                    "required": false
                   },
                   "internal_chat_message_metadata_passthrough": {
                     "shape": {
@@ -2923,20 +3834,20 @@
                         }
                       }
                     },
-                    "required": true,
+                    "required": false,
                     "observed": 14
+                  },
+                  "phase": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
                   },
                   "role": {
                     "shape": {
-                      "kind": "string",
-                      "values": {
-                        "assistant": 4,
-                        "developer": 3,
-                        "user": 7
-                      }
+                      "kind": "string"
                     },
-                    "required": true,
-                    "observed": 14
+                    "required": true
                   },
                   "type": {
                     "shape": {
@@ -2945,12 +3856,221 @@
                         "message": 14
                       }
                     },
-                    "required": true,
-                    "observed": 14
+                    "required": true
                   }
                 }
               },
-              "evidence": "fixture"
+              "evidence": "writer"
+            },
+            "reasoning": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "reasoning": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "summary": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "summary_text": 0
+                              }
+                            },
+                            "required": true
+                          },
+                          "text": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "required": true
+                  },
+                  "content": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {}
+                      }
+                    },
+                    "required": false
+                  },
+                  "encrypted_content": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "internal_chat_message_metadata_passthrough": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {}
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "tool_search_call": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool_search_call": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "call_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "status": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "execution": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "arguments": {
+                    "shape": {
+                      "kind": "unknown"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "tool_search_output": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "tool_search_output": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "call_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "status": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "execution": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "tools": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "object",
+                        "fields": {}
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "web_search_call": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "web_search_call": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "status": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "action": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {}
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
             }
           }
         },
@@ -3261,575 +4381,14 @@
       ]
     },
     {
-      "id": "state-dbs",
-      "glob": "*.sqlite*",
+      "id": "state-db",
+      "glob": "state_*.sqlite*",
       "file_format": "sqlite",
       "discipline": "database",
       "evidence": "fixture",
-      "notes": "Version-suffixed WAL-mode SQLite stores created on first run at 0.149.1: goals_1, logs_2, memories_1, queue_1, state_5 (150 migrations), thread_history_1 (+ -wal/-shm). thread_history_1 is codex's OWN rollout->SQLite projection with per-thread byte-offset cursors (thread_history_projection_state.next_rollout_byte_offset) — rollouts stay the source of truth. state_5.threads holds session metadata; rollout_migration_state instruments the JSONL migration. Schema dump: sources/<version>.sqlite-schema.sql.",
+      "notes": "Versioned WAL-mode session metadata projection. The threads table supplies the complete current id/cwd/version/time/title inventory; optional generated name takes precedence over a bounded first-prompt fallback. Sidecars are watch hints only. Schema dump: sources/<version>.sqlite-schema.sql.",
       "discriminator": "table",
       "record_types": {
-        "goals_1.sqlite:_sqlx_migrations": {
-          "observed": 6,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "goals_1.sqlite:thread_goal_continuation_deferrals": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "goals_1.sqlite:thread_goals": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "created_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "goal_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "objective": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "status": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "time_used_seconds": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "token_budget": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "tokens_used": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "updated_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "logs_2.sqlite:_sqlx_migrations": {
-          "observed": 6,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "logs_2.sqlite:logs": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "estimated_bytes": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "feedback_log_body": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "file": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "id": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "level": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "line": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "module_path": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "process_uuid": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "target": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "ts": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "ts_nanos": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "memories_1.sqlite:_sqlx_migrations": {
-          "observed": 3,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "memories_1.sqlite:jobs": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "finished_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "input_watermark": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "job_key": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "kind": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "last_error": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "last_success_watermark": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "lease_until": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "ownership_token": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "retry_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "retry_remaining": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "started_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "status": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "worker_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "memories_1.sqlite:stage1_outputs": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "generated_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "last_usage": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "raw_memory": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "rollout_slug": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "rollout_summary": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "selected_for_phase2": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "selected_for_phase2_source_updated_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "source_updated_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "usage_count": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "queue_1.sqlite:_sqlx_migrations": {
-          "observed": 6,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "queue_1.sqlite:queued_items": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "created_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "payload_json": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "queue_order": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "updated_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
-        "queue_1.sqlite:queued_thread_revisions": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "revision": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              }
-            }
-          },
-          "evidence": "fixture"
-        },
         "state_5.sqlite:_sqlx_migrations": {
           "observed": 150,
           "shape": {
@@ -4620,6 +5179,578 @@
                   "kind": "number"
                 },
                 "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        }
+      }
+    },
+    {
+      "id": "state-dbs",
+      "glob": "*.sqlite*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Inventory for the remaining version-suffixed WAL-mode stores: goals_1, logs_2, memories_1, queue_1, thread_history_1 (+ -wal/-shm). thread_history_1 is Codex's own rollout projection with byte-offset cursors; rollouts remain timeline truth. The earlier state-db stream claims state_*.sqlite first.",
+      "discriminator": "table",
+      "record_types": {
+        "goals_1.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "goals_1.sqlite:thread_goal_continuation_deferrals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "goals_1.sqlite:thread_goals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "goal_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "objective": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_used_seconds": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "token_budget": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "tokens_used": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "logs_2.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "logs_2.sqlite:logs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "estimated_bytes": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "feedback_log_body": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "file": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "level": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "line": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "module_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "process_uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "target": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "ts": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "ts_nanos": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "memories_1.sqlite:_sqlx_migrations": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "memories_1.sqlite:jobs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "finished_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "input_watermark": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "job_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "kind": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "last_error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "last_success_watermark": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "lease_until": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "ownership_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "retry_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "retry_remaining": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "worker_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "memories_1.sqlite:stage1_outputs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "generated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_usage": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "raw_memory": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "rollout_slug": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "rollout_summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "selected_for_phase2": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "selected_for_phase2_source_updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "source_updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "usage_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "queue_1.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "queue_1.sqlite:queued_items": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "payload_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "queue_order": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "fixture"
+        },
+        "queue_1.sqlite:queued_thread_revisions": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "revision": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
               }
             }
           },

@@ -6,4 +6,5 @@ edition.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+time = { workspace = true }
 rosetta-core = { path = "../core" }

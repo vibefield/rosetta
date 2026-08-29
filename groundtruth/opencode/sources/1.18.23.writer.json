@@ -1,0 +1,107 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "opencode",
+  "agent_version": "1.18.22",
+  "evidence": "writer",
+  "generator": "writer-source anomalyco/opencode@v1.18.23 packages/schema/src/v1/session.ts Part, User, Assistant; packages/opencode/src/session/message-v2.ts persisted message/part hydration and consumption",
+  "data_root": "~/.local/share/opencode",
+  "writer_version": "v1.18.23",
+  "streams": [
+    {
+      "id": "opencode-db",
+      "glob": "opencode.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "writer",
+      "notes": "Current SQLite session store. Pinned primary sources: https://github.com/anomalyco/opencode/blob/v1.18.23/packages/schema/src/v1/session.ts and https://github.com/anomalyco/opencode/blob/v1.18.23/packages/opencode/src/session/message-v2.ts. MessageTable.data and PartTable.data omit relational id/session/message columns, which hydration restores. The declared Part union is text, subtask, reasoning, file, tool, step-start, step-finish, snapshot, patch, agent, retry, compaction.",
+      "discriminator": "table",
+      "record_types": {},
+      "facets": [
+        {
+          "id": "message-data",
+          "path": "message.data (by role)",
+          "discriminator": "role",
+          "record_types": {
+            "user": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "role": { "shape": { "kind": "string", "values": { "user": 0 } }, "required": true },
+                  "time": { "shape": { "kind": "object", "fields": { "created": { "shape": { "kind": "number" }, "required": true } } }, "required": true },
+                  "format": { "shape": { "kind": "object", "fields": {} }, "required": false },
+                  "summary": { "shape": { "kind": "object", "fields": { "title": { "shape": { "kind": "string" }, "required": false }, "body": { "shape": { "kind": "string" }, "required": false }, "diffs": { "shape": { "kind": "array", "items": { "kind": "object", "fields": {} } }, "required": true } } }, "required": false },
+                  "agent": { "shape": { "kind": "string" }, "required": true },
+                  "model": { "shape": { "kind": "object", "fields": { "providerID": { "shape": { "kind": "string" }, "required": true }, "modelID": { "shape": { "kind": "string" }, "required": true }, "variant": { "shape": { "kind": "string" }, "required": false } } }, "required": true },
+                  "system": { "shape": { "kind": "string" }, "required": false },
+                  "tools": { "shape": { "kind": "object", "fields": {} }, "required": false }
+                }
+              }
+            },
+            "assistant": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "role": { "shape": { "kind": "string", "values": { "assistant": 0 } }, "required": true },
+                  "time": { "shape": { "kind": "object", "fields": { "created": { "shape": { "kind": "number" }, "required": true }, "completed": { "shape": { "kind": "number" }, "required": false } } }, "required": true },
+                  "error": { "shape": { "kind": "object", "fields": {} }, "required": false },
+                  "parentID": { "shape": { "kind": "string" }, "required": true },
+                  "modelID": { "shape": { "kind": "string" }, "required": true },
+                  "providerID": { "shape": { "kind": "string" }, "required": true },
+                  "mode": { "shape": { "kind": "string" }, "required": true },
+                  "agent": { "shape": { "kind": "string" }, "required": true },
+                  "path": { "shape": { "kind": "object", "fields": { "cwd": { "shape": { "kind": "string" }, "required": true }, "root": { "shape": { "kind": "string" }, "required": true } } }, "required": true },
+                  "summary": { "shape": { "kind": "boolean" }, "required": false },
+                  "cost": { "shape": { "kind": "number" }, "required": true },
+                  "tokens": { "shape": { "kind": "object", "fields": { "total": { "shape": { "kind": "number" }, "required": false }, "input": { "shape": { "kind": "number" }, "required": true }, "output": { "shape": { "kind": "number" }, "required": true }, "reasoning": { "shape": { "kind": "number" }, "required": true }, "cache": { "shape": { "kind": "object", "fields": { "read": { "shape": { "kind": "number" }, "required": true }, "write": { "shape": { "kind": "number" }, "required": true } } }, "required": true } } }, "required": true },
+                  "structured": { "shape": { "kind": "unknown" }, "required": false },
+                  "variant": { "shape": { "kind": "string" }, "required": false },
+                  "finish": { "shape": { "kind": "string" }, "required": false }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "part-data",
+          "path": "part.data (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "text": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "text": 0 } }, "required": true }, "text": { "shape": { "kind": "string" }, "required": true }, "synthetic": { "shape": { "kind": "boolean" }, "required": false }, "ignored": { "shape": { "kind": "boolean" }, "required": false }, "time": { "shape": { "kind": "object", "fields": { "start": { "shape": { "kind": "number" }, "required": true }, "end": { "shape": { "kind": "number" }, "required": false } } }, "required": false }, "metadata": { "shape": { "kind": "object", "fields": {} }, "required": false } } } },
+            "subtask": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "subtask": 0 } }, "required": true }, "prompt": { "shape": { "kind": "string" }, "required": true }, "description": { "shape": { "kind": "string" }, "required": true }, "agent": { "shape": { "kind": "string" }, "required": true }, "model": { "shape": { "kind": "object", "fields": { "providerID": { "shape": { "kind": "string" }, "required": true }, "modelID": { "shape": { "kind": "string" }, "required": true } } }, "required": false }, "command": { "shape": { "kind": "string" }, "required": false } } } },
+            "reasoning": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "reasoning": 0 } }, "required": true }, "text": { "shape": { "kind": "string" }, "required": true }, "metadata": { "shape": { "kind": "object", "fields": {} }, "required": false }, "time": { "shape": { "kind": "object", "fields": { "start": { "shape": { "kind": "number" }, "required": true }, "end": { "shape": { "kind": "number" }, "required": false } } }, "required": true } } } },
+            "file": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "file": 0 } }, "required": true }, "mime": { "shape": { "kind": "string" }, "required": true }, "filename": { "shape": { "kind": "string" }, "required": false }, "url": { "shape": { "kind": "string" }, "required": true }, "source": { "shape": { "kind": "object", "fields": {} }, "required": false } } } },
+            "tool": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "tool": 0 } }, "required": true }, "callID": { "shape": { "kind": "string" }, "required": true }, "tool": { "shape": { "kind": "string" }, "required": true }, "state": { "shape": { "kind": "object", "fields": {} }, "required": true }, "metadata": { "shape": { "kind": "object", "fields": {} }, "required": false } } } },
+            "step-start": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "step-start": 0 } }, "required": true }, "snapshot": { "shape": { "kind": "string" }, "required": false } } } },
+            "step-finish": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "step-finish": 0 } }, "required": true }, "reason": { "shape": { "kind": "string" }, "required": true }, "snapshot": { "shape": { "kind": "string" }, "required": false }, "cost": { "shape": { "kind": "number" }, "required": true }, "tokens": { "shape": { "kind": "object", "fields": {} }, "required": true } } } },
+            "snapshot": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "snapshot": 0 } }, "required": true }, "snapshot": { "shape": { "kind": "string" }, "required": true } } } },
+            "patch": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "patch": 0 } }, "required": true }, "hash": { "shape": { "kind": "string" }, "required": true }, "files": { "shape": { "kind": "array", "items": { "kind": "string" } }, "required": true } } } },
+            "agent": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "agent": 0 } }, "required": true }, "name": { "shape": { "kind": "string" }, "required": true }, "source": { "shape": { "kind": "object", "fields": {} }, "required": false } } } },
+            "retry": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "retry": 0 } }, "required": true }, "attempt": { "shape": { "kind": "number" }, "required": true }, "error": { "shape": { "kind": "object", "fields": {} }, "required": true }, "time": { "shape": { "kind": "object", "fields": { "created": { "shape": { "kind": "number" }, "required": true } } }, "required": true } } } },
+            "compaction": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "compaction": 0 } }, "required": true }, "auto": { "shape": { "kind": "boolean" }, "required": true }, "overflow": { "shape": { "kind": "boolean" }, "required": false }, "tail_start_id": { "shape": { "kind": "string" }, "required": false } } } }
+          }
+        },
+        {
+          "id": "event-part",
+          "path": "event.data.part (by type)",
+          "discriminator": "type",
+          "record_types": {
+            "text": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "text": 0 } }, "required": true } } } },
+            "subtask": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "subtask": 0 } }, "required": true } } } },
+            "reasoning": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "reasoning": 0 } }, "required": true } } } },
+            "file": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "file": 0 } }, "required": true } } } },
+            "tool": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "tool": 0 } }, "required": true } } } },
+            "step-start": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "step-start": 0 } }, "required": true } } } },
+            "step-finish": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "step-finish": 0 } }, "required": true } } } },
+            "snapshot": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "snapshot": 0 } }, "required": true } } } },
+            "patch": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "patch": 0 } }, "required": true } } } },
+            "agent": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "agent": 0 } }, "required": true } } } },
+            "retry": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "retry": 0 } }, "required": true } } } },
+            "compaction": { "observed": 0, "shape": { "kind": "object", "fields": { "type": { "shape": { "kind": "string", "values": { "compaction": 0 } }, "required": true } } } }
+          }
+        }
+      ]
+    }
+  ]
+}

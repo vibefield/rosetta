@@ -71,7 +71,7 @@
     },
     {
       "path": "codex-home/state_5.sqlite",
-      "bytes": 4096
+      "bytes": 221184
     },
     {
       "path": "codex-home/state_5.sqlite-shm",
@@ -79,7 +79,7 @@
     },
     {
       "path": "codex-home/state_5.sqlite-wal",
-      "bytes": 2022952
+      "bytes": 0
     },
     {
       "path": "codex-home/thread-writer-locks/.coordination.lock",

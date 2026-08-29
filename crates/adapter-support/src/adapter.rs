@@ -10,7 +10,7 @@ use std::any::Any;
 
 use rosetta_core::IngestOp;
 use rosetta_core::fold::CumulativeUsage;
-use rosetta_core::rows::Ms;
+use rosetta_core::rows::{Ms, SessionRole, TitleKind};
 
 use crate::GroundTruthDoc;
 
@@ -20,6 +20,13 @@ use crate::GroundTruthDoc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamDriver {
     JsonLines,
+    /// A rewrite-in-place JSON, Markdown, TOML, or text document. The
+    /// pipeline reads one stable whole-file snapshot, asks the adapter which
+    /// native sessions it contains, and gives each session a virtual source
+    /// with ordinary generation/replay semantics. This is the metadata and
+    /// artifact counterpart to `SqliteSnapshot`; it must never be used for an
+    /// append-only transcript.
+    DocumentSnapshot,
     /// Rewrite-in-place SQLite databases (opencode, hermes). The pipeline
     /// snapshots the db, runs the adapter's DECLARED queries, and feeds each
     /// result row through `ingest_line` as a `{"query": name, "row": {...}}`
@@ -82,7 +89,11 @@ pub struct SkimResult {
     pub agent_version: Option<String>,
     /// Session title/summary when the head or tail happens to carry one.
     pub title: Option<String>,
+    /// Native confidence for `title`; absent whenever `title` is absent.
+    pub title_kind: Option<TitleKind>,
+    pub summary: Option<String>,
     pub started_at: Option<Ms>,
+    pub updated_at: Option<Ms>,
 }
 
 /// Outcome of ingesting one raw record in the stream phase.
@@ -181,6 +192,72 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Convert one `sessions_sql` result object into native session facts.
+    /// The default consumes the standardized aliases documented on
+    /// [`SnapshotPlan`]. Adapters whose stable compatibility query is
+    /// deliberately `SELECT *` can override this to handle optional columns
+    /// without interpolating schema-dependent SQL.
+    fn snapshot_session(&self, _stream_id: &str, row: &serde_json::Value) -> SkimResult {
+        let text = |key: &str| {
+            row.get(key)
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        };
+        let title = text("title");
+        SkimResult {
+            ops: Vec::new(),
+            session_id: text("native_session_id"),
+            parent_session_id: text("parent_native_session_id"),
+            root_session_id: text("root_native_session_id"),
+            role: match text("role").as_deref() {
+                Some("subagent") => Some(SessionRole::Subagent),
+                Some("team") => Some(SessionRole::Team),
+                Some("main") => Some(SessionRole::Main),
+                _ => None,
+            },
+            cwd: text("cwd"),
+            agent_version: text("agent_version"),
+            title_kind: title.as_ref().map(|_| TitleKind::Explicit),
+            title,
+            summary: text("summary"),
+            started_at: row.get("started_at").and_then(serde_json::Value::as_i64),
+            updated_at: row.get("updated_at").and_then(serde_json::Value::as_i64),
+        }
+    }
+
+    /// Enumerate the native sessions represented by a stable whole-document
+    /// snapshot. Most sidecars describe exactly one session, so the default
+    /// delegates to `skim` with the complete document as its head. Index files
+    /// containing several sessions override this method.
+    fn document_sessions(
+        &self,
+        stream_id: &str,
+        stat: &FileStat,
+        document: &[u8],
+    ) -> Vec<SkimResult> {
+        vec![self.skim(stream_id, stat, document, &[])]
+    }
+
+    /// Maximum stable document size this adapter is willing to inspect.
+    /// The pipeline-wide record limit remains the default; small metadata
+    /// formats can lower it without gaining file-system access themselves.
+    fn document_size_limit(&self, _stream_id: &str, pipeline_limit: usize) -> usize {
+        pipeline_limit
+    }
+
+    /// Frame a document snapshot for one enumerated native session. A
+    /// one-session sidecar is one record by default. Multi-session indexes can
+    /// return only the matching entry, and metadata-only documents may return
+    /// no records after their meta facts have been journaled.
+    fn document_records(
+        &self,
+        _stream_id: &str,
+        _native_session_id: &str,
+        document: &[u8],
+    ) -> Vec<Vec<u8>> {
+        vec![document.to_vec()]
+    }
+
     /// Adapter-private per-file state for [`NormalizeCtx::state`].
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
         None
@@ -219,6 +296,26 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Meta phase: bounded bytes in, session/project meta ops out.
     fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], tail: &[u8]) -> SkimResult;
+
+    /// Whether the ordinary head/tail skim is missing an optional fact worth
+    /// looking for in a bounded run of complete records immediately after the
+    /// head window. The pipeline owns all extra IO and its limits; adapters
+    /// only opt in after inspecting their already-bounded [`SkimResult`].
+    fn wants_skim_fallback(&self, _stream_id: &str, _skim: &SkimResult) -> bool {
+        false
+    }
+
+    /// Fold one complete record from the bounded fallback scan into `skim`.
+    /// Return `true` when the best possible answer has been found and the
+    /// pipeline may stop before exhausting its byte/record budget.
+    fn absorb_skim_fallback_record(
+        &self,
+        _stream_id: &str,
+        _record: &[u8],
+        _skim: &mut SkimResult,
+    ) -> bool {
+        true
+    }
 
     /// Stream phase: one raw record in, canonical ops out. Combines the pure
     /// parse and normalize stages; each adapter keeps its `parse_line` public

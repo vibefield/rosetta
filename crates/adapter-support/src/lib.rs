@@ -5,11 +5,13 @@
 //! pieces that production Rust parsers need.
 
 pub mod adapter;
+pub mod time;
 
 pub use adapter::{
     AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, SkimResult, SnapshotPlan,
     SnapshotQuery, StreamDriver,
 };
+pub use time::rfc3339_ms;
 
 use std::collections::BTreeMap;
 

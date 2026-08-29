@@ -9,7 +9,8 @@ use std::collections::BTreeSet;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, TokenSnapshot, ToolCall, WorkspaceObsRow,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, SessionUsageRow, TokenSnapshot,
+    ToolCall, WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
@@ -231,8 +232,29 @@ fn project(
                         .get("metadata")
                         .filter(|value| !value.is_null())
                         .cloned(),
-                    // No failed tool fixture establishes OpenCode's error rule.
-                    is_error: None,
+                    is_error: Some(false),
+                    at: tool
+                        .state
+                        .get("time")
+                        .and_then(|time| time.get("end"))
+                        .and_then(Value::as_u64)
+                        .and_then(|at| i64::try_from(at).ok())
+                        .or(Some(record.part_time_created)),
+                }),
+                Some("error") => ops.push(IngestOp::ToolResult {
+                    session_id: ctx.session_id.clone(),
+                    tool_id: tool.call_id.clone(),
+                    result: tool
+                        .state
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    payload: tool
+                        .state
+                        .get("metadata")
+                        .filter(|value| !value.is_null())
+                        .cloned(),
+                    is_error: Some(true),
                     at: tool
                         .state
                         .get("time")
@@ -261,9 +283,86 @@ fn project(
             }
             LineStatus::Parsed
         }
+        PartData::Reasoning(reasoning) => {
+            let MessageData::Assistant(_) = message else {
+                ops.push(drift(
+                    ctx,
+                    stream_id,
+                    "user/reasoning",
+                    "reasoning_on_user_message",
+                    &[],
+                    Some(record.part_time_created),
+                ));
+                return LineStatus::HardError {
+                    code: "reasoning_on_user_message".to_owned(),
+                };
+            };
+            let mut row = timeline_row(ctx, record, message, MessageKind::Thinking);
+            row.ts = i64::try_from(reasoning.time.start)
+                .ok()
+                .or(Some(record.part_time_created));
+            row.content = Some(reasoning.text.clone());
+            attach_usage(state, &record.message_id, message, &mut row);
+            ops.push(IngestOp::Message(Box::new(row)));
+            LineStatus::Parsed
+        }
+        PartData::Patch(patch) => {
+            for path in &patch.files {
+                ops.push(IngestOp::FileEdit(FileEditRow {
+                    session_id: ctx.session_id.clone(),
+                    message_timeline_id: None,
+                    path: path.clone(),
+                    kind: EditKind::Checkpoint,
+                    snapshot_ref: Some(patch.hash.clone()),
+                    lines_added: None,
+                    lines_removed: None,
+                    at: Some(record.part_time_created),
+                }));
+            }
+            LineStatus::Parsed
+        }
+        PartData::Retry(retry) => {
+            let mut row = timeline_row(ctx, record, message, MessageKind::System);
+            row.subtype = Some("retry".to_owned());
+            row.ts = i64::try_from(retry.time.created)
+                .ok()
+                .or(Some(record.part_time_created));
+            row.content = retry
+                .error
+                .get("data")
+                .and_then(|data| data.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| serde_json::to_string(&retry.error).ok());
+            attach_usage(state, &record.message_id, message, &mut row);
+            ops.push(IngestOp::Message(Box::new(row)));
+            LineStatus::Parsed
+        }
+        PartData::StepFinish(_) => {
+            // Error/empty assistant turns can end without a text, reasoning,
+            // or tool row. Preserve their exact response usage without
+            // manufacturing a visible message.
+            if let MessageData::Assistant(message) = message
+                && state.usage_messages.insert(record.message_id.clone())
+            {
+                ops.push(IngestOp::SessionUsage(SessionUsageRow {
+                    session_id: ctx.session_id.clone(),
+                    key: ids::usage_id(&ctx.session_id, &record.message_id),
+                    ts: record.part_time_created,
+                    model: Some(message.model_id.clone()),
+                    tokens: token_snapshot(&message.tokens),
+                }));
+            }
+            LineStatus::Parsed
+        }
         // Execution boundaries carry no canonical timeline content. Their
-        // usage duplicates the assistant message's per-response snapshot.
-        PartData::StepStart(_) | PartData::StepFinish(_) => LineStatus::Parsed,
+        // persisted fields have no lossless canonical projection.
+        PartData::File(_)
+        | PartData::Subtask(_)
+        | PartData::StepStart(_)
+        | PartData::Snapshot(_)
+        | PartData::Agent(_)
+        | PartData::Compaction(_) => LineStatus::Parsed,
     }
 }
 
@@ -312,14 +411,24 @@ fn attach_usage(
         return;
     };
     if state.usage_messages.insert(message_id.to_owned()) {
-        row.usage = Some(TokenSnapshot {
-            input: i64::try_from(message.tokens.input).ok(),
-            output: i64::try_from(message.tokens.output).ok(),
-            cache_read: i64::try_from(message.tokens.cache.read).ok(),
-            cache_write: i64::try_from(message.tokens.cache.write).ok(),
-            thinking: i64::try_from(message.tokens.reasoning).ok(),
-        });
+        row.usage = Some(token_snapshot(&message.tokens));
     }
+}
+
+fn token_snapshot(tokens: &crate::raw::payload::Tokens) -> TokenSnapshot {
+    TokenSnapshot {
+        input: exact_i64(&tokens.input),
+        output: exact_i64(&tokens.output),
+        cache_read: exact_i64(&tokens.cache.read),
+        cache_write: exact_i64(&tokens.cache.write),
+        thinking: exact_i64(&tokens.reasoning),
+    }
+}
+
+fn exact_i64(number: &serde_json::Number) -> Option<i64> {
+    number
+        .as_i64()
+        .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok()))
 }
 
 fn observe_workspace(
@@ -350,8 +459,16 @@ fn record_kind(message: &MessageData, part: &PartData) -> &'static str {
         (MessageData::User(_), PartData::Text(_)) => "user/text",
         (MessageData::Assistant(_), PartData::Text(_)) => "assistant/text",
         (_, PartData::Tool(_)) => "assistant/tool",
+        (_, PartData::Reasoning(_)) => "assistant/reasoning",
+        (_, PartData::File(_)) => "part/file",
+        (_, PartData::Subtask(_)) => "part/subtask",
         (_, PartData::StepStart(_)) => "assistant/step-start",
         (_, PartData::StepFinish(_)) => "assistant/step-finish",
+        (_, PartData::Snapshot(_)) => "part/snapshot",
+        (_, PartData::Patch(_)) => "part/patch",
+        (_, PartData::Agent(_)) => "part/agent",
+        (_, PartData::Retry(_)) => "assistant/retry",
+        (_, PartData::Compaction(_)) => "part/compaction",
     }
 }
 
@@ -465,5 +582,109 @@ mod tests {
             row.timeline_id,
             rosetta_core::ids::timeline_id("session", "part-1")
         );
+    }
+
+    #[test]
+    fn writer_backed_reasoning_projects_as_thinking() {
+        let message = json!({
+            "role": "assistant",
+            "agent": "build",
+            "cost": 0.125,
+            "mode": "build",
+            "modelID": "mock-model",
+            "parentID": "msg-user",
+            "path": {"cwd": "/workspace", "root": "/workspace"},
+            "providerID": "mock",
+            "time": {"created": 100},
+            "tokens": {
+                "input": 10,
+                "output": 4,
+                "reasoning": 3,
+                "cache": {"read": 2, "write": 1}
+            }
+        });
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        let mut state = OpenCodeState::default();
+        let outcome = ingest(
+            &mut ctx,
+            &mut state,
+            spec::DATABASE,
+            &line(
+                message,
+                json!({
+                    "type": "reasoning",
+                    "text": "considering the options",
+                    "metadata": {"provider": {"signature": "opaque"}},
+                    "time": {"start": 110}
+                }),
+            ),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        let message = outcome
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                IngestOp::Message(row) => Some(row),
+                _ => None,
+            })
+            .expect("thinking row");
+        assert_eq!(message.kind, MessageKind::Thinking);
+        assert_eq!(message.content.as_deref(), Some("considering the options"));
+        assert_eq!(message.ts, Some(110));
+        assert_eq!(message.usage.expect("usage").thinking, Some(3));
+    }
+
+    #[test]
+    fn writer_backed_tool_errors_merge_into_the_tool_row() {
+        let message = json!({
+            "role": "assistant",
+            "agent": "build",
+            "cost": 0,
+            "mode": "build",
+            "modelID": "mock-model",
+            "parentID": "msg-user",
+            "path": {"cwd": "/workspace", "root": "/workspace"},
+            "providerID": "mock",
+            "time": {"created": 100, "completed": 130},
+            "tokens": {
+                "total": 14,
+                "input": 10,
+                "output": 4,
+                "reasoning": 0,
+                "cache": {"read": 0, "write": 0}
+            },
+            "finish": "tool-calls"
+        });
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        let mut state = OpenCodeState::default();
+        let outcome = ingest(
+            &mut ctx,
+            &mut state,
+            spec::DATABASE,
+            &line(
+                message,
+                json!({
+                    "type": "tool",
+                    "callID": "call-1",
+                    "tool": "bash",
+                    "state": {
+                        "status": "error",
+                        "input": {"command": "false"},
+                        "error": "exit status 1",
+                        "time": {"start": 120, "end": 125}
+                    }
+                }),
+            ),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        assert!(matches!(
+            outcome.ops.as_slice(),
+            [IngestOp::WorkspaceObs(_), IngestOp::Message(_), IngestOp::ToolResult {
+                result: Some(result),
+                is_error: Some(true),
+                at: Some(125),
+                ..
+            }] if result == "exit status 1"
+        ));
     }
 }

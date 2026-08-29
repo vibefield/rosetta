@@ -7,7 +7,10 @@
 
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
-use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms, ToolCall, WorkspaceObsRow};
+use rosetta_core::rows::{
+    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, ToolCall,
+    WorkspaceObsRow,
+};
 use rosetta_core::{IngestOp, ids};
 use serde::Deserialize;
 use serde_json::Value;
@@ -166,13 +169,49 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
             ));
             LineStatus::UnknownType
         }
-        // Cumulative usage has no honest response-row attribution. State/meta
-        // rows are declared native facts with no canonical operation.
-        KnownRecord::SchemaVersion(_)
-        | KnownRecord::SessionModelUsage(_)
-        | KnownRecord::StateMeta(_) => LineStatus::Parsed,
+        KnownRecord::SessionModelUsage(row) => {
+            project_session_usage(ctx, row, &mut ops);
+            LineStatus::Parsed
+        }
+        KnownRecord::SchemaVersion(_) | KnownRecord::StateMeta(_) => LineStatus::Parsed,
     };
     LineOutcome { ops, status }
+}
+
+fn project_session_usage(
+    ctx: &NormalizeCtx,
+    row: &crate::raw::state::SessionModelUsageRow,
+    ops: &mut Vec<IngestOp>,
+) {
+    // The native composite key is the table's replacement identity. Hashing
+    // it keeps provider URLs (which can contain credentials) out of the
+    // projection while preserving exact replacement semantics.
+    let native_key = serde_json::to_string(&(
+        &row.model,
+        &row.billing_provider,
+        &row.billing_base_url,
+        &row.billing_mode,
+        &row.task,
+    ))
+    .expect("usage key serializes");
+    let ts = row
+        .last_seen
+        .or(row.first_seen)
+        .and_then(seconds_ms)
+        .unwrap_or(0);
+    ops.push(IngestOp::SessionUsage(SessionUsageRow {
+        session_id: ctx.session_id.clone(),
+        key: ids::usage_id(&ctx.session_id, &native_key),
+        ts,
+        model: Some(row.model.clone()),
+        tokens: TokenSnapshot {
+            input: Some(row.input_tokens),
+            output: Some(row.output_tokens),
+            cache_read: Some(row.cache_read_tokens),
+            cache_write: Some(row.cache_write_tokens),
+            thinking: Some(row.reasoning_tokens),
+        },
+    }));
 }
 
 fn schema_inventory(

@@ -6,7 +6,7 @@ use std::any::Any;
 use rosetta_adapter_support::{
     AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
 };
-use rosetta_core::rows::{Ms, SessionRole};
+use rosetta_core::rows::{Ms, SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, ClaudeCodeState};
@@ -29,7 +29,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        1
+        3
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -119,6 +119,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
             }
             _ => unreachable!("unsupported streams returned above"),
         };
+        let (title, title_kind) = match (skim.custom_title, skim.title) {
+            (Some(title), _) => (Some(title), Some(TitleKind::Explicit)),
+            (None, Some(title)) => (Some(title), Some(TitleKind::Generated)),
+            (None, None) => (None, None),
+        };
         SkimResult {
             ops: Vec::new(),
             session_id,
@@ -127,9 +132,48 @@ impl AgentAdapter for ClaudeCodeAdapter {
             role,
             cwd: skim.cwd,
             agent_version: skim.agent_version,
-            title: skim.title,
+            title,
+            title_kind,
+            summary: None,
             started_at: skim.started_at,
+            updated_at: None,
         }
+    }
+
+    fn wants_skim_fallback(&self, stream_id: &str, skim: &SkimResult) -> bool {
+        // Subagent transcripts do not own the parent session title. Main
+        // transcripts occasionally place every title record just outside both
+        // fixed windows, so only that missing optional fact earns extra IO.
+        stream_id == "transcript" && skim.title.is_none()
+    }
+
+    fn absorb_skim_fallback_record(
+        &self,
+        _stream_id: &str,
+        record: &[u8],
+        skim: &mut SkimResult,
+    ) -> bool {
+        let Ok(value) = serde_json::from_slice::<Value>(record) else {
+            return false;
+        };
+        if let Some(title) = value["customTitle"]
+            .as_str()
+            .filter(|title| !title.is_empty())
+        {
+            // An explicit title is the highest-priority answer. Stop here;
+            // later generated titles must never replace it.
+            skim.title = Some(title.to_owned());
+            skim.title_kind = Some(TitleKind::Explicit);
+            return true;
+        }
+        if skim.title.is_none()
+            && let Some(title) = value["aiTitle"].as_str().filter(|title| !title.is_empty())
+        {
+            // Keep scanning within the cap in case a custom title follows.
+            skim.title = Some(title.to_owned());
+            skim.title_kind = Some(TitleKind::Generated);
+        }
+        false
     }
 
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
@@ -147,6 +191,7 @@ struct Skim {
     cwd: Option<String>,
     agent_version: Option<String>,
     title: Option<String>,
+    custom_title: Option<String>,
     started_at: Option<Ms>,
 }
 
@@ -161,13 +206,14 @@ impl Skim {
         fill(&mut self.cwd, record["cwd"].as_str());
         fill(&mut self.agent_version, record["version"].as_str());
         fill(&mut self.title, record["aiTitle"].as_str());
+        fill(&mut self.custom_title, record["customTitle"].as_str());
     }
 
     fn is_complete(&self) -> bool {
         self.session_id.is_some()
             && self.cwd.is_some()
             && self.agent_version.is_some()
-            && self.title.is_some()
+            && (self.title.is_some() || self.custom_title.is_some())
             && self.started_at.is_some()
     }
 }
@@ -310,6 +356,21 @@ mod tests {
         // The head still owns the facts it answered for.
         assert_eq!(result.session_id.as_deref(), Some("from-record"));
         assert_eq!(result.started_at, Some(1_787_625_319_072));
+    }
+
+    #[test]
+    fn skim_prefers_an_explicit_custom_title() {
+        let tail = br#"cut-fragment"}
+{"type":"ai-title","aiTitle":"Generated title","sessionId":"from-tail"}
+{"type":"custom-title","customTitle":"My explicit title","sessionId":"from-tail"}
+"#;
+        let result = ClaudeCodeAdapter.skim(
+            "transcript",
+            &stat("projects/p/from-name.jsonl"),
+            HEAD,
+            tail,
+        );
+        assert_eq!(result.title.as_deref(), Some("My explicit title"));
     }
 
     #[test]

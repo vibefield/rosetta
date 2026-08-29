@@ -16,7 +16,8 @@ use std::time::Instant;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::rows::{
-    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, ProjectRow, TaskRow, WorkspaceObsRow,
+    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, ProjectRow, SessionUsageRow, TaskRow,
+    WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 
@@ -219,7 +220,8 @@ mod rows;
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
     BucketKey, OldRow, PendingGate, apply_message, apply_project, apply_runtime, apply_session,
-    apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending, rebuild_bucket,
+    apply_session_title, apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending,
+    rebuild_bucket, refresh_session_title, touch_session,
 };
 
 fn apply_workspace_obs(
@@ -258,6 +260,69 @@ fn apply_workspace_obs(
            AND (project_assigned_at IS NULL OR ?3 < project_assigned_at)",
     )?
     .execute(params![row.session_id, project_id, row.at])?;
+    Ok(())
+}
+
+fn apply_session_usage(
+    tx: &Transaction,
+    row: &SessionUsageRow,
+    src_cursor: Option<i64>,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+) -> Result<(), StoreError> {
+    let previous = tx
+        .prepare_cached(
+            "SELECT ts, model FROM session_usage
+             WHERE session_id = ?1 AND sample_key = ?2",
+        )?
+        .query_row(params![row.session_id, row.key], |record| {
+            Ok((record.get::<_, Ms>(0)?, record.get::<_, Option<String>>(1)?))
+        })
+        .optional()?;
+    if let Some((ts, model)) = previous {
+        mark_bucket(
+            dirty_buckets,
+            maintenance,
+            &row.session_id,
+            Some(ts),
+            model.as_deref(),
+        );
+    }
+    mark_bucket(
+        dirty_buckets,
+        maintenance,
+        &row.session_id,
+        Some(row.ts),
+        row.model.as_deref(),
+    );
+    tx.prepare_cached(
+        "INSERT INTO session_usage
+           (session_id, sample_key, ts, model, in_tokens, out_tokens,
+            cache_r_tokens, cache_w_tokens, think_tokens, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(session_id, sample_key) DO UPDATE SET
+           ts = excluded.ts, model = excluded.model,
+           in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
+           cache_r_tokens = excluded.cache_r_tokens,
+           cache_w_tokens = excluded.cache_w_tokens,
+           think_tokens = excluded.think_tokens,
+           src_cursor = excluded.src_cursor",
+    )?
+    .execute(params![
+        row.session_id,
+        row.key,
+        row.ts,
+        row.model,
+        row.tokens.input,
+        row.tokens.output,
+        row.tokens.cache_read,
+        row.tokens.cache_write,
+        row.tokens.thinking,
+        src_cursor,
+    ])?;
+    touch_session(tx, &row.session_id, Some(row.ts), stats)?;
+    stats.usage_applied += 1;
     Ok(())
 }
 
@@ -619,6 +684,7 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM task          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workspace_obs WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM pending_merge WHERE src_cursor = ?1 LIMIT 1)",
         )?
         .query_row(params![cursor_id], |row| row.get(0))?;
@@ -636,12 +702,41 @@ fn remove_cursor_projection(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
 ) -> Result<(), StoreError> {
+    let session_id: String = tx
+        .prepare_cached("SELECT session_id FROM ingest_cursor WHERE id = ?1")?
+        .query_row(params![cursor_id], |row| row.get(0))?;
+    if maintenance.buckets {
+        let old_samples = {
+            let mut statement = tx.prepare_cached(
+                "SELECT session_id, ts, model FROM session_usage WHERE src_cursor = ?1",
+            )?;
+            statement
+                .query_map(params![cursor_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Ms>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for (session_id, ts, model) in old_samples {
+            mark_bucket(
+                dirty_buckets,
+                maintenance,
+                &session_id,
+                Some(ts),
+                model.as_deref(),
+            );
+        }
+    }
     for sql in [
         "DELETE FROM file_edit WHERE src_cursor = ?1",
         "DELETE FROM git_commit WHERE src_cursor = ?1",
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
         "DELETE FROM workspace_obs WHERE src_cursor = ?1",
+        "DELETE FROM session_usage WHERE src_cursor = ?1",
         "DELETE FROM pending_merge WHERE src_cursor = ?1",
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
@@ -688,6 +783,7 @@ fn remove_cursor_projection(
     }
     tx.prepare_cached("DELETE FROM message WHERE src_cursor = ?1")?
         .execute(params![cursor_id])?;
+    refresh_session_title(tx, &session_id)?;
     Ok(())
 }
 
@@ -993,6 +1089,9 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
         IngestOp::SessionMeta(row) => {
             fx.touched_sessions.insert(row.id.clone());
         }
+        IngestOp::SessionTitle(row) => {
+            fx.touched_sessions.insert(row.session_id.clone());
+        }
         // These touch the session row (`updated_at`, and for workspace obs
         // the project link plus a possibly-new project row).
         IngestOp::Message(row) => {
@@ -1000,6 +1099,9 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
         }
         IngestOp::ToolResult { session_id, .. } | IngestOp::Usage { session_id, .. } => {
             fx.touched_sessions.insert(session_id.clone());
+        }
+        IngestOp::SessionUsage(row) => {
+            fx.touched_sessions.insert(row.session_id.clone());
         }
         IngestOp::WorkspaceObs(row) => {
             let cwd = ids::normalize_root(&row.cwd);
@@ -1034,6 +1136,7 @@ fn apply_op(
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
         IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,
+        IngestOp::SessionTitle(row) => profile_other(stats, || apply_session_title(tx, row))?,
         IngestOp::Message(row) => apply_message(
             tx,
             row,
@@ -1087,6 +1190,9 @@ fn apply_op(
             )? {
                 queue_pending(tx, op, src_cursor, stats, pending_gate)?;
             }
+        }
+        IngestOp::SessionUsage(row) => {
+            apply_session_usage(tx, row, src_cursor, stats, maintenance, dirty_buckets)?
         }
         IngestOp::WorkspaceObs(row) => {
             profile_other(stats, || apply_workspace_obs(tx, row, src_cursor))?

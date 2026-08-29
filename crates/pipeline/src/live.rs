@@ -163,21 +163,23 @@ impl<'a> LiveRunner<'a> {
             self.report.events += 1;
             match event {
                 SourceEvent::Changed(path) => {
-                    let database = self.snapshot_database_hint(&path);
-                    let hinted = database.as_deref().unwrap_or(&path);
+                    let snapshot = self.snapshot_hint(&path);
+                    let hinted = snapshot
+                        .as_ref()
+                        .map(|(path, _)| path.as_str())
+                        .unwrap_or(&path);
                     let children: Vec<String> = self
                         .files
                         .iter()
                         .filter(|file| {
                             file.relative_path == hinted
-                                || crate::snapshot::virtual_db_path(&file.relative_path)
-                                    == Some(hinted)
+                                || physical_snapshot_path(file) == Some(hinted)
                         })
                         .map(|file| file.relative_path.clone())
                         .collect();
                     if !children.is_empty() {
                         changed.extend(children);
-                        needs_admission |= database.is_some();
+                        needs_admission |= snapshot.is_some();
                     } else if self.claimed(&path) {
                         needs_admission = true;
                     } else {
@@ -233,7 +235,7 @@ impl<'a> LiveRunner<'a> {
             let audit_candidates: Vec<&SessionFile> = self
                 .files
                 .iter()
-                .filter(|file| file.driver != rosetta_adapter_support::StreamDriver::SqliteSnapshot)
+                .filter(|file| file.driver == rosetta_adapter_support::StreamDriver::JsonLines)
                 .collect();
             let picks = crate::stream::rotating_audit_paths(
                 store,
@@ -272,9 +274,12 @@ impl<'a> LiveRunner<'a> {
             .is_some_and(|stream| self.adapter.stream_driver(&stream.id).is_some())
     }
 
-    /// Normalize a main-db or SQLite sidecar hint to the physical database
-    /// path whose virtual membership and declared content must be reconciled.
-    fn snapshot_database_hint(&self, relative_path: &str) -> Option<String> {
+    /// Normalize a physical document/database hint to the source whose
+    /// virtual membership and content must be reconciled.
+    fn snapshot_hint(
+        &self,
+        relative_path: &str,
+    ) -> Option<(String, rosetta_adapter_support::StreamDriver)> {
         let base = ["-wal", "-shm", "-journal"]
             .iter()
             .find_map(|suffix| relative_path.strip_suffix(suffix))
@@ -284,9 +289,16 @@ impl<'a> LiveRunner<'a> {
             .layout()
             .matching_stream(relative_path)
             .or_else(|| self.adapter.layout().matching_stream(base))?;
-        (self.adapter.stream_driver(&stream.id)
-            == Some(rosetta_adapter_support::StreamDriver::SqliteSnapshot))
-        .then(|| base.to_string())
+        let driver = self.adapter.stream_driver(&stream.id)?;
+        match driver {
+            rosetta_adapter_support::StreamDriver::SqliteSnapshot => {
+                Some((base.to_string(), driver))
+            }
+            rosetta_adapter_support::StreamDriver::DocumentSnapshot => {
+                Some((relative_path.to_string(), driver))
+            }
+            rosetta_adapter_support::StreamDriver::JsonLines => None,
+        }
     }
 
     /// Stat scan: the fallback signal, and it must be self-healing — it
@@ -337,24 +349,46 @@ impl<'a> LiveRunner<'a> {
                     // A database file never appears in `files` itself — its
                     // sessions do, as virtual sources. Nominate them and let
                     // the snapshot pass's stamp check decide cheaply.
-                    let database = self.snapshot_database_hint(&walked.relative_path);
-                    let hinted = database.as_deref().unwrap_or(walked.relative_path.as_str());
+                    let snapshot = self.snapshot_hint(&walked.relative_path);
+                    let hinted = snapshot
+                        .as_ref()
+                        .map(|(path, _)| path.as_str())
+                        .unwrap_or(walked.relative_path.as_str());
                     let children: Vec<String> = self
                         .files
                         .iter()
-                        .filter(|file| {
-                            crate::snapshot::virtual_db_path(&file.relative_path) == Some(hinted)
-                        })
+                        .filter(|file| physical_snapshot_path(file) == Some(hinted))
                         .map(|file| file.relative_path.clone())
                         .collect();
                     if !children.is_empty() {
                         changed.extend(children);
-                        *needs_admission |= database.is_some();
+                        *needs_admission |= snapshot.is_some();
                     } else if self.claimed(&walked.relative_path) {
                         *needs_admission = true;
                     }
                 }
             }
+        }
+        let present: BTreeSet<&str> = walk
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+        let missing_snapshots: BTreeSet<String> = self
+            .files
+            .iter()
+            .filter_map(physical_snapshot_path)
+            .filter(|path| !present.contains(path))
+            .map(str::to_owned)
+            .collect();
+        for physical in missing_snapshots {
+            changed.extend(
+                self.files
+                    .iter()
+                    .filter(|file| physical_snapshot_path(file) == Some(physical.as_str()))
+                    .map(|file| file.relative_path.clone()),
+            );
+            *needs_admission = true;
         }
         Ok(())
     }
@@ -402,6 +436,18 @@ impl<'a> LiveRunner<'a> {
                 file.modified_ms = rosetta_capture::discovery::modified_ms(&metadata);
             }
         }
+    }
+}
+
+fn physical_snapshot_path(file: &SessionFile) -> Option<&str> {
+    match file.driver {
+        rosetta_adapter_support::StreamDriver::DocumentSnapshot => {
+            crate::document::virtual_document_path(&file.relative_path)
+        }
+        rosetta_adapter_support::StreamDriver::SqliteSnapshot => {
+            crate::snapshot::virtual_db_path(&file.relative_path)
+        }
+        rosetta_adapter_support::StreamDriver::JsonLines => None,
     }
 }
 

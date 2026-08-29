@@ -185,9 +185,11 @@
     crate seam per stage, and measurement infrastructure designed in from day one — every phase and
     every hot component owns a fixture and a bench, so each can be optimized in isolation.
     Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
-    <div class="callout"><b>Implementation checkpoint · 2026-08-27.</b> All nine captured-agent
-      adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, consistent
-      SQLite snapshots, serializable adapter checkpoints, generation-staged reconciliation,
+    <div class="callout"><b>Implementation checkpoint · 2026-08-28.</b> All nine captured-agent
+      adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, bounded
+      rewrite-in-place document snapshots, consistent SQLite snapshots, serializable adapter
+      checkpoints, authoritative virtual-session membership, whole-source deletion,
+      generation-staged reconciliation,
       SQLite/FTS and rollups, watch-before-scan live scheduling, polling plus rotating audits, the
       checksummed raw segment ledger, crash-safe staged cold-ledger publication, atomic
       whole-projection rebuild, the store hot tier, the
@@ -292,18 +294,24 @@
   <p class="h2-note">Everything modular hangs off two types. <code>IngestOp</code> is where all
   agent-specific weirdness ends; <code>AgentAdapter</code> is the one trait each agent implements.
   Note <code>skim</code>'s signature: bytes in, meta out — the meta-phase promise ("no transcript
-  body is ever fully read") is enforced by the type, because the adapter never sees a file handle.</p>
+  body is ever read without a declared bound") is enforced by the type, because the adapter never
+  sees a file handle.</p>
 
   <pre class="ddl"><span class="c">// crates/core — the central op type; adapters end here, the writer starts here</span>
 enum <b>IngestOp</b> {
     SessionMeta(SessionRow),          <span class="c">// meta-phase upsert</span>
+    SessionTitle(SessionTitleRow),    <span class="c">// bounded title fact: explicit &gt; generated &gt; fallback</span>
     Message(MessageRow),              <span class="c">// one flattened timeline row</span>
     ToolResult { tool_id: ToolId, result: String, payload: Value, is_error: bool },
                                       <span class="c">// a merge op, not a row — folds into its tool_use</span>
     Usage { response: TimelineId, ts: Ms, model: ModelId, tokens: TokenSnapshot },
                                       <span class="c">// replacement-keyed: the writer applies (new − old) to the hour bucket;</span>
                                       <span class="c">// absent components stay None — never coerced to zero</span>
+    SessionUsage { key: String, ts: Ms, model: ModelId, tokens: TokenSnapshot },
+                                      <span class="c">// native replacement-keyed total with no response; never invent a message</span>
     WorkspaceObs(WorkspaceObsRow),
+    Plan(PlanRow),
+    Task(TaskRow),
     FileEdit(FileEditRow),            <span class="c">// carries lines_added / lines_removed</span>
     Drift(DriftFact),                 <span class="c">// lands aggregated (drift_agg) — never one row per bad record</span>
 }
@@ -312,10 +320,44 @@ enum <b>IngestOp</b> {
 trait <b>AgentAdapter</b>: Send + Sync {
     fn kind(&amp;self) -&gt; AgentKind;
     fn layout(&amp;self) -&gt; &amp;SourceLayout;   <span class="c">// discovery probes with this; tests pin it to the L1 layout.toml</span>
-    fn skim(&amp;self, head: &amp;[u8], tail: &amp;[u8], stat: &amp;FileStat) -&gt; SkimResult;
-    fn parse(&amp;self, stream: &amp;StreamId, line: &amp;[u8]) -&gt; ParseOutcome;
-    fn normalize(&amp;self, rec: &amp;ParsedRecord, ctx: &amp;mut NormalizeCtx) -&gt; Vec&lt;IngestOp&gt;;
+    fn stream_driver(&amp;self, stream: &amp;StreamId) -&gt; Option&lt;StreamDriver&gt;;
+    fn snapshot_plan(&amp;self, stream: &amp;StreamId) -&gt; Option&lt;SnapshotPlan&gt;;
+    fn snapshot_session(&amp;self, stream: &amp;StreamId, row: &amp;Value) -&gt; SkimResult;
+    fn skim(&amp;self, stream: &amp;StreamId, stat: &amp;FileStat, head: &amp;[u8], tail: &amp;[u8]) -&gt; SkimResult;
+    fn wants_skim_fallback(&amp;self, stream: &amp;StreamId, skim: &amp;SkimResult) -&gt; bool;
+    fn absorb_skim_fallback_record(&amp;self, stream: &amp;StreamId, record: &amp;[u8], skim: &amp;mut SkimResult) -&gt; bool;
+    fn document_sessions(&amp;self, stream: &amp;StreamId, stat: &amp;FileStat, bytes: &amp;[u8]) -&gt; Vec&lt;SkimResult&gt;;
+    fn document_size_limit(&amp;self, stream: &amp;StreamId, pipeline_limit: usize) -&gt; usize;
+    fn document_records(&amp;self, stream: &amp;StreamId, native_session: &amp;str, bytes: &amp;[u8]) -&gt; Vec&lt;Vec&lt;u8&gt;&gt;;
+    fn ingest_line(&amp;self, ctx: &amp;mut NormalizeCtx, stream: &amp;StreamId, record: &amp;[u8]) -&gt; LineOutcome;
 }</pre>
+
+  <h3 class="spec">Three source drivers, one generation contract</h3>
+  <p>Adapters select a driver per canonical layout stream. <code>JsonLines</code> owns an
+  append/rewrite-aware byte checkpoint and emits complete records. <code>DocumentSnapshot</code>
+  reads one stable bounded JSON, YAML, Markdown, or text document, lets the adapter enumerate virtual
+  sessions, then extracts each member's records. An adapter may lower the pipeline document cap;
+  Copilot limits <code>workspace.yaml</code> to 64 KiB. <code>SqliteSnapshot</code> takes a consistent
+  native database snapshot and runs adapter-owned session/record queries; adapters can interpret a
+  compatibility <code>SELECT *</code> session row when optional columns vary by native schema. Document
+  and SQLite sources are both one-physical-to-many-virtual mappings; the physical path is never
+  treated as one fake conversation.</p>
+  <p class="spec-note"><b>Authoritative membership:</b> every re-enumeration compares the current
+  member set with persisted virtual cursors. Removed members receive an empty replacement generation.
+  If the physical document/database disappears, meta retains those cursors as source-missing
+  tombstones long enough to sweep every canonical row. Live file hints and polling both trigger the
+  same reconciliation, so deletion cannot leave a permanently searchable ghost session.</p>
+  <p class="spec-note"><b>Bounded metadata convergence:</b> ordinary JSONL metadata comes from a
+  64 KiB head plus 16 KiB tail. Only an adapter that still lacks an optional fact may request the
+  separately instrumented complete-record fallback, capped by the pipeline at 128 KiB and 256
+  records. Claude uses it only for missing main-session titles; Antigravity uses it only when no
+  complete checkpoint in the ordinary windows carries the exact <code>USER Objective</code> section.
+  Full streaming remains the repair path. Title facts are ranked by evidence—explicit native label,
+  agent-generated label, then prompt/checkpoint fallback—so a lower-confidence source can never win
+  merely by arriving later. Claude's <code>custom-title</code>/<code>ai-title</code> rows and
+  Antigravity's <code>title_fallback</code> row use those same ranks. Codex and Copilot obtain titles
+  from their native state SQLite and workspace document companions rather than guessing from
+  transcript prompts.</p>
 
   <!-- ================================================================ -->
   <h2>Crate responsibilities</h2>
@@ -335,8 +377,9 @@ trait <b>AgentAdapter</b>: Send + Sync {
 
     <div class="card">
       <header><h3>adapters/&lt;agent&gt;</h3><span class="hdr-tags"><span class="badge b-pure">pure</span><span class="badge b-bench">bench</span></span></header>
-      <p>The existing permissive raw parsers gain the <code>AgentAdapter</code> impl: skim + normalize
-      on top of <code>parse_line</code>. All nine crates exist; claude-code and codex go first.</p>
+      <p>Each permissive raw parser implements <code>AgentAdapter</code>: driver selection, bounded
+      metadata/session enumeration, checkpointable normalization, and canonical ops. All nine crates
+      ship under one cross-adapter contract matrix.</p>
       <div class="seams"><b>Tests:</b> replay suite extends with a golden-ops lane — fixture corpus →
       ops → committed JSON snapshot, pinning L2 semantics the way L1 pins schemas.
       <b>Benches:</b> parse throughput (lines/sec) per adapter.</div>
@@ -344,11 +387,14 @@ trait <b>AgentAdapter</b>: Send + Sync {
 
     <div class="card">
       <header><h3>capture</h3><span class="hdr-tags"><span class="badge b-io">io</span><span class="badge b-bench">bench</span></span></header>
-      <p>Three modules: <code>discovery</code> (walk layouts, stat, emit
-      <code>DiscoveredRuntime</code>), <code>watcher</code> (notify-based, behind a
+      <p>Discovery walks layouts and performs bounded head/tail and complete-record skim reads;
+      <code>tailer</code> handles
+      append/rewrite JSONL; <code>document</code> bounds rewrite-in-place documents;
+      <code>sqlite</code> captures WAL-consistent database snapshots; <code>watcher</code> is notify-based,
+      behind a
       <code>SourceEvents</code> trait — FS watching is the flakiest OS surface we touch, so tests
-      inject synthetic event streams), <code>ledger</code> (append-only raw segments; the durable
-      copy that survives agents GC-ing their own data — claude-code sweeps at 30 days).</p>
+      inject synthetic event streams. <code>ledger</code> owns append-only raw segments, the durable
+      copy that survives agents GC-ing their own data — claude-code sweeps at 30 days.</p>
       <div class="seams"><b>Ports:</b> spaghetti's append-delimited tailer — checkpoint = generation ·
       file identity · committed offset · boundary anchor · decoder version — plus its adversarial tests
       (partial tails, truncation, same-size rewrites, atomic replacement, corrupted cursors, bounded
@@ -365,7 +411,9 @@ trait <b>AgentAdapter</b>: Send + Sync {
       the file and checks the checkpoint anchor even when size+mtime are unchanged — a missed
       same-size rewrite must not stay invisible forever.</p>
       <div class="seams"><b>Seams:</b> phases take <code>&amp;dyn</code> deps, so integration tests run
-      whole phases against a temp-dir corpus and an in-memory store. The fold itself stays pure.</div>
+      whole phases against a temp-dir corpus and an in-memory store. Document and SQLite tests cover
+      membership changes, member removal, physical deletion, live hints, polling and ledger-only
+      rebuild. The fold itself stays pure.</div>
     </div>
 
     <div class="card">

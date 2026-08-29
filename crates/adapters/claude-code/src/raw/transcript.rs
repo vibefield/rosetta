@@ -6,8 +6,8 @@
 //! fixtures alone: a field is required here only if every observed record
 //! carries it.
 //!
-//! Record types typed below: user, assistant, system, ai-title, atis-latch,
-//! queue-operation, last-prompt, mode. The remaining canonical types
+//! Record types typed below: user, assistant, system, ai-title, custom-title,
+//! atis-latch, queue-operation, last-prompt, mode. The remaining canonical types
 //! (attachment, permission-mode, bridge-session, file-history-*) parse as
 //! `ParsedLine::UnknownType` (soft) until typed — the adapter treats a type the
 //! canonical declares as handled-but-unprojected, never as drift.
@@ -45,6 +45,7 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "assistant"
                 | "system"
                 | "ai-title"
+                | "custom-title"
                 | "atis-latch"
                 | "queue-operation"
                 | "last-prompt"
@@ -72,6 +73,8 @@ pub enum KnownRecord {
     System(SystemLine),
     #[serde(rename = "ai-title")]
     AiTitle(AiTitleLine),
+    #[serde(rename = "custom-title")]
+    CustomTitle(CustomTitleLine),
     #[serde(rename = "atis-latch")]
     AtisLatch(AtisLatchLine),
     #[serde(rename = "queue-operation")]
@@ -89,6 +92,7 @@ impl Drift for KnownRecord {
             KnownRecord::Assistant(l) => l.drift(prefix, out),
             KnownRecord::System(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::AiTitle(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::CustomTitle(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::AtisLatch(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::QueueOperation(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::LastPrompt(l) => note_unknown(&l.unknown, prefix, out),
@@ -569,6 +573,17 @@ pub struct SystemLine {
 #[serde(rename_all = "camelCase")]
 pub struct AiTitleLine {
     pub ai_title: String,
+    pub session_id: String,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// User-assigned session title. Like `ai-title`, this is a session singleton
+/// without timeline identity; it takes precedence during metadata skimming.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomTitleLine {
+    pub custom_title: String,
     pub session_id: String,
     #[serde(flatten)]
     pub unknown: Unknown,

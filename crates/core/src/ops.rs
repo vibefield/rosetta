@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rows::{
     DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, RuntimeRow,
-    SessionRow, TaskRow, TokenSnapshot, WorkspaceObsRow,
+    SessionRow, SessionTitleRow, SessionUsageRow, TaskRow, TokenSnapshot, WorkspaceObsRow,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -15,6 +15,8 @@ pub enum IngestOp {
     Project(ProjectRow),
     /// Meta-phase upsert; stream-phase ops for the same session refine it.
     SessionMeta(SessionRow),
+    /// Ranked title fact recovered during bounded metadata admission.
+    SessionTitle(SessionTitleRow),
     /// One flattened timeline row (upsert by timeline_id). Boxed: it is by
     /// far the largest variant and ops move through channels in bulk.
     Message(Box<MessageRow>),
@@ -39,6 +41,9 @@ pub enum IngestOp {
         model: Option<String>,
         tokens: TokenSnapshot,
     },
+    /// Usage that the native agent reports only at session/task granularity.
+    /// It is an additive canonical sample, not a synthetic response message.
+    SessionUsage(SessionUsageRow),
     WorkspaceObs(WorkspaceObsRow),
     FileEdit(FileEditRow),
     Plan(PlanRow),

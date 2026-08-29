@@ -14,6 +14,8 @@ const CANONICAL: &str = include_str!("../../../../groundtruth/codex/groundtruth.
 
 /// The one stream carrying timeline records: `sessions/*/*/*/rollout-*.jsonl`.
 pub const ROLLOUT: &str = "rollout";
+/// The versioned metadata database (`state_*.sqlite`, including sidecar hints).
+pub const STATE_DB: &str = "state-db";
 
 /// The layout view every adapter exposes through `AgentAdapter::layout`.
 pub fn doc() -> &'static GroundTruthDoc {
@@ -81,7 +83,7 @@ struct FacetView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ROLLOUT, declared_event_subtypes, declared_response_items, doc};
+    use super::{ROLLOUT, STATE_DB, declared_event_subtypes, declared_response_items, doc};
 
     #[test]
     fn embedded_canonical_describes_this_agent() {
@@ -89,6 +91,8 @@ mod tests {
         assert_eq!(doc().data_root, "~/.codex");
         let rollout = doc().stream(ROLLOUT).expect("rollout stream");
         assert_eq!(rollout.glob, "sessions/*/*/*/rollout-*.jsonl");
+        let state = doc().stream(STATE_DB).expect("state database stream");
+        assert_eq!(state.glob, "state_*.sqlite*");
     }
 
     #[test]

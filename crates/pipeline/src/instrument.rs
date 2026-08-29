@@ -25,6 +25,8 @@ pub enum Metric {
     CheckpointConflicts,
     WalkNanos,
     SkimNanos,
+    SkimFallbackBytes,
+    SkimFallbackNanos,
     ReadNanos,
     NormalizeNanos,
     ApplyNanos,
@@ -86,7 +88,7 @@ pub enum Metric {
     PublishNanos,
 }
 
-const METRIC_COUNT: usize = 74;
+const METRIC_COUNT: usize = 76;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -104,6 +106,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::CheckpointConflicts, "checkpoint conflicts"),
     (Metric::WalkNanos, "walk time"),
     (Metric::SkimNanos, "skim time"),
+    (Metric::SkimFallbackBytes, "skim fallback bytes"),
+    (Metric::SkimFallbackNanos, "skim fallback time"),
     (Metric::ReadNanos, "read time"),
     (Metric::NormalizeNanos, "normalize time"),
     (Metric::ApplyNanos, "apply time"),

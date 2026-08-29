@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::transcript::{
-    AiTitleLine, AssistantContentBlock, AssistantLine, KnownAssistantBlock, KnownRecord,
-    KnownUserBlock, RecordedUsage, SystemLine, UserContent, UserContentBlock, UserLine,
+    AiTitleLine, AssistantContentBlock, AssistantLine, CustomTitleLine, KnownAssistantBlock,
+    KnownRecord, KnownUserBlock, RecordedUsage, SystemLine, UserContent, UserContentBlock,
+    UserLine,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
@@ -85,7 +86,19 @@ pub fn ingest(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutco
             // most common record in the corpus (`attachment`) would raise the
             // alarm on every ingest.
             if spec::declared_transcript_types().contains(kind) {
-                return LineOutcome::parsed(Vec::new());
+                let paths = spec::unexpected_declared_fields(kind, &value);
+                if paths.is_empty() {
+                    return LineOutcome::parsed(Vec::new());
+                }
+                let mut emit = Emit::new(ctx, stream_id);
+                emit.drift(
+                    UNKNOWN_FIELDS,
+                    kind,
+                    paths,
+                    record_ts(&value),
+                    record_version(&value),
+                );
+                return LineOutcome::parsed(emit.ops);
             }
             let mut emit = Emit::new(ctx, stream_id);
             emit.drift(
@@ -120,6 +133,7 @@ fn normalize(ctx: &mut NormalizeCtx, stream_id: &str, record: &KnownRecord) -> L
         KnownRecord::Assistant(line) => assistant_line(&mut emit, line),
         KnownRecord::System(line) => system_line(&mut emit, line),
         KnownRecord::AiTitle(line) => ai_title_line(&mut emit, line),
+        KnownRecord::CustomTitle(line) => custom_title_line(&mut emit, line),
         // Session bookkeeping the canonical model has no row for: the resume
         // latch, the prompt queue, the last-prompt pointer, the mode marker.
         // None of them carries a uuid or a timestamp, so none could be placed
@@ -308,6 +322,21 @@ fn ai_title_line(emit: &mut Emit, line: &AiTitleLine) {
     let mut row = emit.row(&seed, MessageKind::Summary, "ai-title");
     row.subtype = Some("ai_title".to_owned());
     row.content = Some(line.ai_title.clone());
+    emit.push_row(row);
+}
+
+fn custom_title_line(emit: &mut Emit, line: &CustomTitleLine) {
+    let seed = Seed {
+        uuid: None,
+        parent_uuid: None,
+        ts: None,
+        version: None,
+        model: None,
+        effort: None,
+    };
+    let mut row = emit.row(&seed, MessageKind::Summary, "custom-title");
+    row.subtype = Some("custom_title".to_owned());
+    row.content = Some(line.custom_title.clone());
     emit.push_row(row);
 }
 
@@ -573,6 +602,7 @@ fn record_identity(record: &KnownRecord) -> (&'static str, Option<Ms>, Option<&s
             Some(line.version.as_str()),
         ),
         KnownRecord::AiTitle(_) => ("ai-title", None, None),
+        KnownRecord::CustomTitle(_) => ("custom-title", None, None),
         KnownRecord::AtisLatch(_) => ("atis-latch", None, None),
         KnownRecord::QueueOperation(line) => ("queue-operation", rfc3339_ms(&line.timestamp), None),
         KnownRecord::LastPrompt(_) => ("last-prompt", None, None),

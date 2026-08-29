@@ -425,11 +425,15 @@ pub struct Usage {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cost {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    pub total: u64,
+    /// Monetary values are fractional for real providers even though the
+    /// hermetic mock fixtures happen to report integer zeroes. Keeping these
+    /// as integers makes the surrounding untagged `AgentMessage` silently
+    /// fall back to `Other(Value)`, dropping the entire assistant turn.
+    pub input: serde_json::Number,
+    pub output: serde_json::Number,
+    pub cache_read: serde_json::Number,
+    pub cache_write: serde_json::Number,
+    pub total: serde_json::Number,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -552,4 +556,25 @@ pub struct LabelEntry {
     pub label: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentMessage, KnownMessage, ParsedLine, parse_line};
+
+    #[test]
+    fn fractional_provider_cost_keeps_assistant_message_typed() {
+        let line = r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-27T01:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"api":"anthropic-messages","provider":"anthropic","model":"model","usage":{"input":10,"output":2,"cacheRead":3,"cacheWrite":4,"totalTokens":19,"cost":{"input":0.00003,"output":0.00004,"cacheRead":0.000001,"cacheWrite":0.000002,"total":0.000073}},"stopReason":"stop","timestamp":1787792400000}}"#;
+
+        let ParsedLine::Known(record) = parse_line(line).expect("valid message") else {
+            panic!("message must be a known top-level record");
+        };
+        let super::KnownRecord::Message(entry) = *record else {
+            panic!("expected message record");
+        };
+        assert!(matches!(
+            entry.message,
+            AgentMessage::Known(KnownMessage::Assistant(_))
+        ));
+    }
 }

@@ -3,7 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
-  "Pinned writer evidence currently covers the custom-tool call/output gap; there is still no compaction fixture or exhaustive pinned writer-source export.",
+  "Compaction and the complete persisted rollout vocabulary are pinned from the 0.150.1 writer; an organic compaction fixture is still desirable for end-to-end replay coverage.",
 ]
 
 [agent]
@@ -15,13 +15,13 @@ tier = "A"
 [release]
 channel = "github-releases"              # openai/codex/releases.atom; npm @openai/codex secondary
 id = "openai/codex"
-surveyed = "0.149.1"                     # 2026-08-24; track `latest` only, ignore alphas
+surveyed = "0.150.1"                     # 2026-08-28; track `latest` only, ignore alphas
 pinned = "0.149.1"                       # fixtures + groundtruth doc committed (2026-08-25)
 changelog = "https://github.com/openai/codex/releases"
 
 [source]
 repo = "https://github.com/openai/codex"
-persistence_paths = ["codex-rs/core/src/rollout/"]   # RolloutRecorder; may move crates — re-pin per release
+persistence_paths = ["codex-rs/history/src/", "codex-rs/rollout/src/"]
 
 [fixture]
 headless = "codex exec <prompt> --json"

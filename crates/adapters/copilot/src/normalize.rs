@@ -5,20 +5,21 @@
 //! the request row by native `toolCallId`. Session shutdown metrics are real
 //! running counters and therefore pass through `NormalizeCtx::cumulative`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionRole, SessionRow, StreamState, TokenSnapshot,
-    ToolCall, WorkspaceObsRow,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
+    StreamState, TaskRow, TaskStatus, TokenSnapshot, ToolCall, WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::events::{
-    AssistantMessage, EventLine, EventPayload, SessionShutdown, ToolExecutionComplete, ToolRequest,
+    AssistantMessage, EventLine, EventPayload, SessionNotice, SessionShutdown, SubagentCompleted,
+    SubagentFailed, SubagentStarted, ToolExecutionComplete, ToolRequest,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
@@ -38,6 +39,8 @@ pub struct CopilotState {
     /// Tool requests and execution starts describe the same native call. This
     /// set ensures they produce one timeline row across checkpoint resumes.
     seen_tools: BTreeSet<String>,
+    #[serde(default)]
+    task_content: BTreeMap<String, String>,
     /// Most recent assistant-authored row, used as the replacement key for a
     /// later cumulative shutdown usage snapshot.
     response: Option<String>,
@@ -82,7 +85,18 @@ pub fn ingest_line(
         ParsedLine::UnknownType { rtype, value } => {
             let kind = rtype.as_deref().unwrap_or(NO_TYPE);
             if spec::declared_event_types().contains(kind) {
-                return LineOutcome::parsed(Vec::new());
+                let paths = spec::unexpected_declared_fields(kind, &value);
+                if paths.is_empty() {
+                    return LineOutcome::parsed(Vec::new());
+                }
+                return LineOutcome::parsed(vec![drift(
+                    ctx,
+                    stream_id,
+                    kind,
+                    UNKNOWN_FIELDS,
+                    &paths,
+                    record_ts(&value),
+                )]);
             }
             return LineOutcome {
                 ops: vec![drift(
@@ -124,6 +138,45 @@ fn project(
     ops: &mut Vec<IngestOp>,
 ) {
     match &record.payload {
+        EventPayload::Abort(abort) => {
+            system_row(ctx, record, "abort", abort.reason.clone(), ts, ops)
+        }
+        EventPayload::AssistantReasoning(reasoning) => {
+            let mut thinking = row(
+                ctx,
+                record,
+                &format!("event:{}#reasoning", record.id),
+                MessageKind::Thinking,
+                ts,
+            );
+            thinking.uuid = Some(reasoning.reasoning_id.clone());
+            thinking.model = state.model.clone();
+            thinking.effort = state.effort.clone();
+            thinking.content = Some(reasoning.content.clone());
+            state.response = Some(thinking.timeline_id.clone());
+            state.response_usage = TokenSnapshot::default();
+            ops.push(IngestOp::Message(Box::new(thinking)));
+        }
+        EventPayload::ExternalToolRequested(request) => {
+            if state.seen_tools.insert(request.tool_call_id.clone()) {
+                tool_event(
+                    ctx,
+                    state,
+                    record,
+                    ToolEvent {
+                        call_id: &request.tool_call_id,
+                        name: &request.tool_name,
+                        input: request.arguments.clone(),
+                        ts,
+                    },
+                    ops,
+                );
+            }
+            if let Some(cwd) = request.working_directory.as_deref() {
+                observe_workspace_parts(ctx, state, cwd, None, None, ts, ops);
+            }
+        }
+        EventPayload::ExternalToolCompleted(_) => {}
         EventPayload::SessionStart(start) => {
             ctx.agent_version = Some(start.copilot_version.clone());
             state.model = start.selected_model.clone();
@@ -249,9 +302,389 @@ fn project(
             }
             shutdown_usage(ctx, state, shutdown, ts, ops);
         }
+        EventPayload::SessionContextChanged(context) => observe_workspace_parts(
+            ctx,
+            state,
+            &context.cwd,
+            context.branch.as_deref(),
+            context
+                .repository
+                .as_deref()
+                .or(context.git_root.as_deref()),
+            ts,
+            ops,
+        ),
+        EventPayload::SessionContextCleared(cleared) => {
+            let content = cleared.initial_message.clone().unwrap_or_else(|| {
+                format!(
+                    "Cleared {} messages from context.",
+                    cleared.messages_cleared
+                )
+            });
+            summary_row(ctx, record, "context_cleared", content, ts, ops);
+        }
+        EventPayload::SessionCompactionComplete(compaction) => {
+            if let Some(summary) = compaction
+                .summary_content
+                .clone()
+                .filter(|summary| !summary.trim().is_empty())
+            {
+                summary_row(ctx, record, "compaction", summary, ts, ops);
+            } else if !compaction.success
+                && let Some(error) = compaction.error.clone()
+            {
+                system_row(ctx, record, "compaction_error", error, ts, ops);
+            }
+        }
+        EventPayload::SessionHandoff(handoff) => {
+            if let Some(content) = handoff
+                .summary
+                .clone()
+                .or_else(|| handoff.context.clone())
+                .filter(|content| !content.trim().is_empty())
+            {
+                summary_row(ctx, record, "handoff", content, ts, ops);
+            }
+        }
+        EventPayload::SessionInfo(notice) => notice_row(ctx, record, "info", notice, ts, ops),
+        EventPayload::SessionWarning(notice) => notice_row(ctx, record, "warning", notice, ts, ops),
+        EventPayload::SessionError(notice) => notice_row(ctx, record, "error", notice, ts, ops),
+        EventPayload::SessionTaskComplete(task) => {
+            let Some(native_id) = task.objective_id.map(|id| format!("objective:{id}")) else {
+                if let Some(summary) = task.summary.clone() {
+                    summary_row(ctx, record, "task_complete", summary, ts, ops);
+                }
+                return;
+            };
+            let content = task
+                .summary
+                .clone()
+                .or_else(|| task.reason.clone())
+                .or_else(|| task.outcome.clone())
+                .unwrap_or_else(|| "Autopilot objective".to_owned());
+            task_row(
+                ctx,
+                state,
+                TaskFact {
+                    native_id,
+                    content,
+                    status: if task.success == Some(false) {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Completed
+                    },
+                    created_at: None,
+                    updated_at: ts,
+                },
+                ops,
+            );
+        }
+        EventPayload::SessionScheduleCreated(schedule) => {
+            task_row(
+                ctx,
+                state,
+                TaskFact {
+                    native_id: format!("schedule:{}", schedule.id),
+                    content: schedule
+                        .display_prompt
+                        .clone()
+                        .unwrap_or_else(|| schedule.prompt.clone()),
+                    status: TaskStatus::Pending,
+                    created_at: ts,
+                    updated_at: ts,
+                },
+                ops,
+            );
+        }
+        EventPayload::SessionScheduleCancelled(schedule) => task_update(
+            ctx,
+            state,
+            &format!("schedule:{}", schedule.id),
+            TaskStatus::Cancelled,
+            ts,
+            ops,
+        ),
+        EventPayload::SessionScheduleRearmed(schedule) => task_update(
+            ctx,
+            state,
+            &format!("schedule:{}", schedule.id),
+            TaskStatus::Pending,
+            ts,
+            ops,
+        ),
+        EventPayload::SessionWorkspaceFileChanged(change) => {
+            ops.push(IngestOp::FileEdit(FileEditRow {
+                session_id: ctx.session_id.clone(),
+                message_timeline_id: None,
+                path: change.path.clone(),
+                kind: match change.operation.as_str() {
+                    "created" | "create" | "added" | "add" => EditKind::Write,
+                    _ => EditKind::Edit,
+                },
+                snapshot_ref: None,
+                lines_added: None,
+                lines_removed: None,
+                at: ts,
+            }));
+        }
+        EventPayload::SkillInvoked(skill) => system_row(
+            ctx,
+            record,
+            &format!("skill:{}", skill.name),
+            skill.content.clone(),
+            ts,
+            ops,
+        ),
+        EventPayload::SubagentStarted(subagent) => subagent_started(ctx, state, subagent, ts, ops),
+        EventPayload::SubagentCompleted(subagent) => {
+            subagent_completed(ctx, state, subagent, ts, ops)
+        }
+        EventPayload::SubagentFailed(subagent) => subagent_failed(ctx, state, subagent, ts, ops),
+        EventPayload::SystemNotification(notification) => system_row(
+            ctx,
+            record,
+            "notification",
+            notification.content.clone(),
+            ts,
+            ops,
+        ),
+        EventPayload::ToolUserRequested(request) => {
+            if state.seen_tools.insert(request.tool_call_id.clone()) {
+                tool_event(
+                    ctx,
+                    state,
+                    record,
+                    ToolEvent {
+                        call_id: &request.tool_call_id,
+                        name: &request.tool_name,
+                        input: request.arguments.clone(),
+                        ts,
+                    },
+                    ops,
+                );
+            }
+        }
+        EventPayload::SessionAutopilotObjectiveChanged(_)
+        | EventPayload::SessionUsageCheckpoint(_) => {}
         // Permission-mode changes are session settings, not timeline content.
         EventPayload::SessionPermissionsChanged(_) => {}
     }
+}
+
+fn system_row(
+    ctx: &mut NormalizeCtx,
+    record: &EventLine,
+    subtype: &str,
+    content: String,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let mut message = row(
+        ctx,
+        record,
+        &format!("event:{}#system", record.id),
+        MessageKind::System,
+        ts,
+    );
+    message.subtype = Some(subtype.to_owned());
+    message.content = Some(content);
+    ops.push(IngestOp::Message(Box::new(message)));
+}
+
+fn summary_row(
+    ctx: &mut NormalizeCtx,
+    record: &EventLine,
+    subtype: &str,
+    content: String,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let mut message = row(
+        ctx,
+        record,
+        &format!("event:{}#summary", record.id),
+        MessageKind::Summary,
+        ts,
+    );
+    message.subtype = Some(subtype.to_owned());
+    message.content = Some(content);
+    ops.push(IngestOp::Message(Box::new(message)));
+}
+
+fn notice_row(
+    ctx: &mut NormalizeCtx,
+    record: &EventLine,
+    class: &str,
+    notice: &SessionNotice,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let detail = notice
+        .info_type
+        .as_deref()
+        .or(notice.warning_type.as_deref())
+        .or(notice.error_type.as_deref());
+    let subtype = detail.map_or_else(|| class.to_owned(), |detail| format!("{class}:{detail}"));
+    system_row(ctx, record, &subtype, notice.message.clone(), ts, ops);
+}
+
+struct ToolEvent<'a> {
+    call_id: &'a str,
+    name: &'a str,
+    input: Option<Value>,
+    ts: Option<Ms>,
+}
+
+fn tool_event(
+    ctx: &mut NormalizeCtx,
+    state: &mut CopilotState,
+    record: &EventLine,
+    event: ToolEvent<'_>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let mut tool = row(
+        ctx,
+        record,
+        &tool_discriminator(event.call_id),
+        MessageKind::ToolUse,
+        event.ts,
+    );
+    tool.model = state.model.clone();
+    tool.effort = state.effort.clone();
+    tool.tool = Some(ToolCall {
+        tool_id: Some(event.call_id.to_owned()),
+        name: event.name.to_owned(),
+        input: event.input.unwrap_or(Value::Null),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    state.response = Some(tool.timeline_id.clone());
+    state.response_usage = TokenSnapshot::default();
+    ops.push(IngestOp::Message(Box::new(tool)));
+}
+
+struct TaskFact {
+    native_id: String,
+    content: String,
+    status: TaskStatus,
+    created_at: Option<Ms>,
+    updated_at: Option<Ms>,
+}
+
+fn task_row(ctx: &NormalizeCtx, state: &mut CopilotState, task: TaskFact, ops: &mut Vec<IngestOp>) {
+    state
+        .task_content
+        .insert(task.native_id.clone(), task.content.clone());
+    ops.push(IngestOp::Task(TaskRow {
+        id: ids::task_id(&ctx.session_id, &task.native_id),
+        session_id: ctx.session_id.clone(),
+        status: task.status,
+        content: task.content,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+    }));
+}
+
+fn task_update(
+    ctx: &NormalizeCtx,
+    state: &mut CopilotState,
+    native_id: &str,
+    status: TaskStatus,
+    updated_at: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let content = state
+        .task_content
+        .get(native_id)
+        .cloned()
+        .unwrap_or_else(|| native_id.to_owned());
+    task_row(
+        ctx,
+        state,
+        TaskFact {
+            native_id: native_id.to_owned(),
+            content,
+            status,
+            created_at: None,
+            updated_at,
+        },
+        ops,
+    );
+}
+
+fn subagent_started(
+    ctx: &NormalizeCtx,
+    state: &mut CopilotState,
+    subagent: &SubagentStarted,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let content = if subagent.agent_description.trim().is_empty() {
+        subagent.agent_display_name.clone()
+    } else {
+        subagent.agent_description.clone()
+    };
+    task_row(
+        ctx,
+        state,
+        TaskFact {
+            native_id: format!("subagent:{}", subagent.tool_call_id),
+            content,
+            status: TaskStatus::InProgress,
+            created_at: ts,
+            updated_at: ts,
+        },
+        ops,
+    );
+}
+
+fn subagent_completed(
+    ctx: &NormalizeCtx,
+    state: &mut CopilotState,
+    subagent: &SubagentCompleted,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    task_update(
+        ctx,
+        state,
+        &format!("subagent:{}", subagent.tool_call_id),
+        if subagent.cancelled == Some(true) {
+            TaskStatus::Cancelled
+        } else {
+            TaskStatus::Completed
+        },
+        ts,
+        ops,
+    );
+}
+
+fn subagent_failed(
+    ctx: &NormalizeCtx,
+    state: &mut CopilotState,
+    subagent: &SubagentFailed,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let native_id = format!("subagent:{}", subagent.tool_call_id);
+    let base = state
+        .task_content
+        .get(&native_id)
+        .cloned()
+        .unwrap_or_else(|| subagent.agent_display_name.clone());
+    task_row(
+        ctx,
+        state,
+        TaskFact {
+            native_id,
+            content: format!("{base}: {}", subagent.error),
+            status: TaskStatus::Failed,
+            created_at: None,
+            updated_at: ts,
+        },
+        ops,
+    );
 }
 
 fn assistant_message(
@@ -600,18 +1033,42 @@ fn tool_discriminator(tool_call_id: &str) -> String {
 
 fn record_kind(payload: &EventPayload) -> &'static str {
     match payload {
+        EventPayload::Abort(_) => "abort",
+        EventPayload::AssistantReasoning(_) => "assistant.reasoning",
+        EventPayload::ExternalToolCompleted(_) => "external_tool.completed",
+        EventPayload::ExternalToolRequested(_) => "external_tool.requested",
         EventPayload::SessionStart(_) => "session.start",
         EventPayload::SessionPermissionsChanged(_) => "session.permissions_changed",
         EventPayload::SessionModelChange(_) => "session.model_change",
         EventPayload::SessionResume(_) => "session.resume",
         EventPayload::SessionShutdown(_) => "session.shutdown",
+        EventPayload::SessionAutopilotObjectiveChanged(_) => "session.autopilot_objective_changed",
+        EventPayload::SessionCompactionComplete(_) => "session.compaction_complete",
+        EventPayload::SessionContextChanged(_) => "session.context_changed",
+        EventPayload::SessionContextCleared(_) => "session.context_cleared",
+        EventPayload::SessionHandoff(_) => "session.handoff",
+        EventPayload::SessionInfo(_) => "session.info",
+        EventPayload::SessionScheduleCancelled(_) => "session.schedule_cancelled",
+        EventPayload::SessionScheduleCreated(_) => "session.schedule_created",
+        EventPayload::SessionScheduleRearmed(_) => "session.schedule_rearmed",
+        EventPayload::SessionTaskComplete(_) => "session.task_complete",
+        EventPayload::SessionUsageCheckpoint(_) => "session.usage_checkpoint",
+        EventPayload::SessionWarning(_) => "session.warning",
+        EventPayload::SessionError(_) => "session.error",
+        EventPayload::SessionWorkspaceFileChanged(_) => "session.workspace_file_changed",
+        EventPayload::SkillInvoked(_) => "skill.invoked",
+        EventPayload::SubagentCompleted(_) => "subagent.completed",
+        EventPayload::SubagentFailed(_) => "subagent.failed",
+        EventPayload::SubagentStarted(_) => "subagent.started",
         EventPayload::SystemMessage(_) => "system.message",
+        EventPayload::SystemNotification(_) => "system.notification",
         EventPayload::UserMessage(_) => "user.message",
         EventPayload::AssistantTurnStart(_) => "assistant.turn_start",
         EventPayload::AssistantMessage(_) => "assistant.message",
         EventPayload::AssistantTurnEnd(_) => "assistant.turn_end",
         EventPayload::ToolExecutionStart(_) => "tool.execution_start",
         EventPayload::ToolExecutionComplete(_) => "tool.execution_complete",
+        EventPayload::ToolUserRequested(_) => "tool.user_requested",
     }
 }
 
@@ -675,7 +1132,7 @@ mod tests {
     };
     use rosetta_adapter_support::adapter::{LineStatus, NormalizeCtx};
     use rosetta_core::IngestOp;
-    use rosetta_core::rows::TokenSnapshot;
+    use rosetta_core::rows::{MessageKind, TaskStatus, TokenSnapshot};
     use serde_json::json;
 
     fn context() -> NormalizeCtx {
@@ -751,6 +1208,68 @@ mod tests {
         );
         assert_eq!(outcome.status, LineStatus::Parsed);
         assert!(outcome.ops.is_empty());
+    }
+
+    #[test]
+    fn declared_fallback_reports_only_schema_additions() {
+        let mut ctx = context();
+        let mut state = CopilotState::default();
+        let outcome = ingest_line(
+            &mut ctx,
+            &mut state,
+            "events",
+            br#"{"id":"1","timestamp":"2026-08-25T00:00:00Z","parentId":null,"type":"session.plan_changed","data":{"operation":"created","newField":true}}"#,
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+    }
+
+    #[test]
+    fn reasoning_and_subagent_lifecycle_project_to_canonical_rows() {
+        let mut ctx = context();
+        let mut state = CopilotState::default();
+        let reasoning = ingest_line(
+            &mut ctx,
+            &mut state,
+            "events",
+            br#"{"id":"r1","timestamp":"2026-08-25T00:00:00Z","parentId":null,"type":"assistant.reasoning","data":{"content":"Check the tree.","reasoningId":"reasoning-1"}}"#,
+        );
+        match reasoning.ops.as_slice() {
+            [IngestOp::Message(row)] => {
+                assert_eq!(row.kind, MessageKind::Thinking);
+                assert_eq!(row.content.as_deref(), Some("Check the tree."));
+            }
+            other => panic!("expected a thinking row, got {other:?}"),
+        }
+
+        let started = ingest_line(
+            &mut ctx,
+            &mut state,
+            "events",
+            br#"{"id":"s1","timestamp":"2026-08-25T00:00:01Z","parentId":"r1","type":"subagent.started","data":{"agentDescription":"Audit tests","agentDisplayName":"Worker","agentName":"worker","toolCallId":"call-1"}}"#,
+        );
+        match started.ops.as_slice() {
+            [IngestOp::Task(task)] => {
+                assert_eq!(task.status, TaskStatus::InProgress);
+                assert_eq!(task.content, "Audit tests");
+            }
+            other => panic!("expected an in-progress task, got {other:?}"),
+        }
+
+        let failed = ingest_line(
+            &mut ctx,
+            &mut state,
+            "events",
+            br#"{"id":"s2","timestamp":"2026-08-25T00:00:02Z","parentId":"s1","type":"subagent.failed","data":{"agentDisplayName":"Worker","agentName":"worker","error":"timed out","toolCallId":"call-1"}}"#,
+        );
+        match failed.ops.as_slice() {
+            [IngestOp::Task(task)] => {
+                assert_eq!(task.status, TaskStatus::Failed);
+                assert!(task.content.contains("Audit tests"));
+                assert!(task.content.contains("timed out"));
+            }
+            other => panic!("expected a failed task, got {other:?}"),
+        }
     }
 
     #[test]

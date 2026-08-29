@@ -9,6 +9,7 @@ use serde_json::Value;
 const CANONICAL: &str = include_str!("../../../../groundtruth/kimi-code/groundtruth.json");
 
 pub const WIRE: &str = "wire";
+pub const SESSION_STATE: &str = "session-state";
 
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
@@ -80,7 +81,8 @@ fn wire_stream() -> Option<&'static Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WIRE, declared_content_part_types, declared_loop_event_types, declared_wire_types, doc,
+        SESSION_STATE, WIRE, declared_content_part_types, declared_loop_event_types,
+        declared_wire_types, doc,
     };
 
     #[test]
@@ -91,6 +93,7 @@ mod tests {
             doc().stream(WIRE).expect("wire stream").glob,
             "sessions/*/*/agents/*/wire.jsonl"
         );
+        assert!(doc().stream(SESSION_STATE).is_some());
     }
 
     #[test]

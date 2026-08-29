@@ -1,13 +1,19 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use rosetta_adapter_antigravity::AntigravityAdapter;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
+use rosetta_adapter_copilot::CopilotAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
+use rosetta_capture::Ledger;
 use rosetta_core::ids;
 use rosetta_core::rows::{RuntimeRow, SessionRole, StreamState};
-use rosetta_pipeline::{IngestOptions, Instrument, meta_ingest, stream_backfill};
+use rosetta_pipeline::{
+    IngestOptions, Instrument, Metric, meta_ingest, meta_ingest_into, rebuild_runtime,
+    stream_backfill, stream_backfill_into,
+};
 use rosetta_store::{Store, queries};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -165,6 +171,614 @@ fn codex_large_opening_record_gets_a_bounded_identity_retry() {
     assert_eq!(meta.files_unidentified, 0);
     assert_eq!(meta.sessions, 1);
     assert_eq!(files.len(), 1);
+}
+
+#[test]
+fn codex_state_titles_merge_with_rollouts_and_update_incrementally() {
+    let root = TempDir::new().unwrap();
+    let native = "01a036c5-6e18-73f3-8c07-d4430763840b";
+    write_lines(
+        &root
+            .path()
+            .join("sessions/2026/08/25/rollout-session.jsonl"),
+        &[json!({
+            "timestamp": "2026-08-25T02:35:03.577Z",
+            "type": "session_meta",
+            "payload": {
+                "id": native,
+                "timestamp": "2026-08-25T02:35:03.577Z",
+                "cwd": "/w/project",
+                "originator": "codex_exec",
+                "cli_version": "0.150.1",
+                "source": "exec",
+                "model_provider": "openai"
+            }
+        })],
+    );
+    let db = rusqlite::Connection::open(root.path().join("state_5.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE threads (
+           id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL,
+           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+           source TEXT NOT NULL, cwd TEXT NOT NULL, title TEXT NOT NULL,
+           cli_version TEXT NOT NULL DEFAULT '', name TEXT
+         );",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads
+           (id, rollout_path, created_at, updated_at, source, cwd, title, cli_version, name)
+         VALUES (?1, 'rollout', 10, 11, 'exec', '/w/project', ?2, '0.150.1', ?3)",
+        rusqlite::params![
+            native,
+            "a very long first prompt that is only a fallback",
+            "Review Rosetta codebase"
+        ],
+    )
+    .unwrap();
+    drop(db);
+
+    let runtime = runtime(&CodexAdapter);
+    let options = opts();
+    let mut store = Store::open_in_memory().unwrap();
+    let (meta, files) = meta_ingest(
+        &CodexAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(meta.sessions, 1, "database and rollout share one native id");
+    assert_eq!(files.len(), 2, "one rollout plus one virtual state source");
+    let session_id = ids::session_id(&runtime.id, native);
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Review Rosetta codebase")
+    );
+
+    // Rollout normalization emits a title-less SessionMeta. It must not
+    // regress the richer state-database metadata.
+    stream_backfill(
+        &CodexAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Review Rosetta codebase")
+    );
+
+    let db = rusqlite::Connection::open(root.path().join("state_5.sqlite")).unwrap();
+    db.execute(
+        "UPDATE threads SET name = 'Onboard to Rosetta codebase', updated_at = 12 WHERE id = ?1",
+        [native],
+    )
+    .unwrap();
+    drop(db);
+    let (_, updated_files) = meta_ingest(
+        &CodexAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let codex_title_meta: (Option<String>, i64) = store
+        .conn()
+        .query_row(
+            "SELECT meta_title, meta_title_rank FROM session WHERE id = ?1",
+            [&session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        codex_title_meta,
+        (Some("Onboard to Rosetta codebase".into()), 3)
+    );
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Onboard to Rosetta codebase")
+    );
+    stream_backfill(
+        &CodexAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &updated_files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn copilot_workspace_title_merges_updates_and_survives_events() {
+    let root = TempDir::new().unwrap();
+    let native = "79e2bd43-58b9-43ef-8e18-664897f8f0a9";
+    let session_root = root.path().join("session-state").join(native);
+    write_lines(
+        &session_root.join("events.jsonl"),
+        &[json!({
+            "id": "event-1",
+            "timestamp": "2026-08-25T05:27:58.278Z",
+            "parentId": null,
+            "type": "session.start",
+            "data": {
+                "sessionId": native,
+                "version": 1,
+                "producer": "copilot-agent",
+                "copilotVersion": "1.0.80",
+                "startTime": "2026-08-25T05:27:58.248Z",
+                "context": {"cwd": "/w/project"}
+            }
+        })],
+    );
+    std::fs::write(
+        session_root.join("workspace.yaml"),
+        format!(
+            "id: {native}\ncwd: /w/project\nname: Codebase Overview Session\n\
+             user_named: false\ncreated_at: 2026-08-25T05:27:58.262Z\n\
+             updated_at: 2026-08-25T05:27:58.417Z\n"
+        ),
+    )
+    .unwrap();
+
+    let runtime = runtime(&CopilotAdapter);
+    let options = opts();
+    let mut store = Store::open_in_memory().unwrap();
+    let (meta, files) = meta_ingest(
+        &CopilotAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(meta.sessions, 1);
+    assert_eq!(files.len(), 2);
+    let session_id = ids::session_id(&runtime.id, native);
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Codebase Overview Session")
+    );
+
+    stream_backfill(
+        &CopilotAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Codebase Overview Session")
+    );
+
+    std::fs::write(
+        session_root.join("workspace.yaml"),
+        format!(
+            "id: {native}\ncwd: /w/project\nname: Explicit renamed session\n\
+             user_named: true\nupdated_at: 2026-08-25T05:28:58.417Z\n"
+        ),
+    )
+    .unwrap();
+    let (_, updated_files) = meta_ingest(
+        &CopilotAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let copilot_title_meta: (Option<String>, i64) = store
+        .conn()
+        .query_row(
+            "SELECT meta_title, meta_title_rank FROM session WHERE id = ?1",
+            [&session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        copilot_title_meta,
+        (Some("Explicit renamed session".into()), 3)
+    );
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit renamed session")
+    );
+    stream_backfill(
+        &CopilotAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &updated_files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+
+    // A partially written companion is unidentified, but cannot erase the
+    // last committed title or make the title-less event source authoritative.
+    std::fs::write(session_root.join("workspace.yaml"), "id: '").unwrap();
+    let (malformed, _) = meta_ingest(
+        &CopilotAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(malformed.files_unidentified, 1);
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit renamed session")
+    );
+}
+
+#[test]
+fn antigravity_checkpoint_title_is_bounded_ranked_and_replay_stable() {
+    let root = TempDir::new().unwrap();
+    let native = "3d4449c2-023a-41bf-9c73-5ef10ffab9b6";
+    let transcript = root
+        .path()
+        .join("brain")
+        .join(native)
+        .join(".system_generated/logs/transcript.jsonl");
+    let checkpoint = |step: u64, objective: &str| {
+        json!({
+            "step_index": step,
+            "source": "SYSTEM",
+            "type": "CHECKPOINT",
+            "status": "DONE",
+            "created_at": format!("2026-08-25T05:10:{step:02}Z"),
+            "content": format!(
+                "{{{{ CHECKPOINT {step} }}}}\n# USER Objective:\n{objective}\n\n# User Requests\nnot a title"
+            )
+        })
+    };
+    write_lines(
+        &transcript,
+        &[
+            json!({
+                "step_index": 0,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "created_at": "2026-08-25T05:10:00Z",
+                "content": "x".repeat(66_000)
+            }),
+            checkpoint(1, "First generated objective"),
+            checkpoint(2, "Latest generated objective"),
+            json!({
+                "step_index": 3,
+                "source": "MODEL",
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-08-25T05:10:03Z",
+                "content": "y".repeat(20_000)
+            }),
+        ],
+    );
+
+    let db_path = root.path().join("conversation_summaries.db");
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE conversation_summaries (
+           conversation_id TEXT PRIMARY KEY,
+           title TEXT NOT NULL,
+           preview TEXT NOT NULL,
+           last_modified_time TEXT NOT NULL,
+           workspace_uris TEXT NOT NULL,
+           parent_conversation_id TEXT NOT NULL
+         );",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO conversation_summaries VALUES
+           (?1, '', 'Preview stays summary', '2026-08-25 05:10:02+00:00',
+            'file:///w/project', '')",
+        [native],
+    )
+    .unwrap();
+    drop(db);
+
+    let runtime = runtime(&AntigravityAdapter);
+    let options = opts();
+
+    // Both objectives sit after the 64 KiB head and before the 16 KiB tail.
+    // With fallback disabled meta remains honest, and complete streaming still
+    // repairs the title.
+    let mut no_fallback = options.clone();
+    no_fallback.skim_fallback_bytes = 0;
+    let mut stream_repairs = Store::open_in_memory().unwrap();
+    let (_, repair_files) = meta_ingest(
+        &AntigravityAdapter,
+        &runtime,
+        root.path(),
+        &mut stream_repairs,
+        &no_fallback,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let session_id = ids::session_id(&runtime.id, native);
+    assert_eq!(
+        queries::session(stream_repairs.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title,
+        None
+    );
+    stream_backfill(
+        &AntigravityAdapter,
+        &runtime,
+        root.path(),
+        &mut stream_repairs,
+        &repair_files,
+        &no_fallback,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(stream_repairs.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Latest generated objective")
+    );
+
+    let instrument = Instrument::new();
+    let ledger_dir = root.path().join("ledger");
+    let mut ledger = Ledger::open(&ledger_dir).unwrap();
+    let mut store = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest_into(
+        &AntigravityAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    let session = queries::session(store.conn(), &session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.title.as_deref(), Some("Latest generated objective"));
+    assert_eq!(session.summary.as_deref(), Some("Preview stays summary"));
+    assert!(instrument.get(Metric::SkimFallbackBytes) > 0);
+    assert!(instrument.get(Metric::SkimFallbackBytes) <= options.skim_fallback_bytes as u64);
+
+    stream_backfill_into(
+        &AntigravityAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &files,
+        &options,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Latest generated objective")
+    );
+
+    // The sparse summary index's explicit title is stronger than any
+    // checkpoint fallback, even when a newer checkpoint arrives later.
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute(
+        "UPDATE conversation_summaries
+         SET title = 'Explicit summary title',
+             last_modified_time = '2026-08-25 05:10:03+00:00'
+         WHERE conversation_id = ?1",
+        [native],
+    )
+    .unwrap();
+    drop(db);
+    let (_, updated_files) = meta_ingest_into(
+        &AntigravityAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit summary title")
+    );
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    writeln!(
+        file,
+        "{}",
+        checkpoint(4, "Newest but lower-confidence objective")
+    )
+    .unwrap();
+    stream_backfill_into(
+        &AntigravityAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &updated_files,
+        &options,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), &session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit summary title")
+    );
+
+    drop(ledger);
+    let mut rebuilt = Store::open_in_memory().unwrap();
+    let report = rebuild_runtime(
+        &AntigravityAdapter,
+        &runtime,
+        &ledger_dir,
+        &mut rebuilt,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(report.hard_errors, 0);
+    let replayed = queries::session(rebuilt.conn(), &session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(replayed.title.as_deref(), Some("Explicit summary title"));
+    assert_eq!(replayed.summary.as_deref(), Some("Preview stays summary"));
+}
+
+#[test]
+fn claude_title_between_skim_windows_is_bounded_then_stream_reconciled() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("projects/p/session-1.jsonl");
+    write_lines(
+        &path,
+        &[
+            claude_user("session-1", "opening", &"x".repeat(66_000), "/w/project"),
+            json!({
+                "type": "custom-title",
+                "customTitle": "Explicit boundary title",
+                "sessionId": "session-1"
+            }),
+            json!({
+                "type": "ai-title",
+                "aiTitle": "Later generated title",
+                "sessionId": "session-1"
+            }),
+            claude_user("session-1", "trailing", &"y".repeat(20_000), "/w/project"),
+        ],
+    );
+
+    // The first title is beyond 64 KiB and the final title is more than
+    // 16 KiB from EOF. The opt-in record scan recovers it without reading the
+    // transcript body without limit, and custom outranks generated.
+    let runtime = runtime(&ClaudeCodeAdapter);
+    let options = opts();
+    let instrument = Instrument::new();
+    let mut meta_store = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut meta_store,
+        &options,
+        &instrument,
+    )
+    .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        queries::session(meta_store.conn(), &files[0].session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit boundary title")
+    );
+    assert!(instrument.get(Metric::SkimFallbackBytes) > 0);
+    assert!(instrument.get(Metric::SkimFallbackBytes) <= options.skim_fallback_bytes as u64);
+
+    // Bounded metadata is best-effort. Deliberately disable the fallback and
+    // prove that complete streaming still converges on the same title.
+    let mut no_fallback = options.clone();
+    no_fallback.skim_fallback_bytes = 0;
+    let mut stream_store = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut stream_store,
+        &no_fallback,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(stream_store.conn(), &files[0].session_id)
+            .unwrap()
+            .unwrap()
+            .title,
+        None
+    );
+    stream_backfill(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut stream_store,
+        &files,
+        &no_fallback,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(stream_store.conn(), &files[0].session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit boundary title")
+    );
 }
 
 #[test]

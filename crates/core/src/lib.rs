@@ -11,6 +11,6 @@ pub mod rows;
 pub use ops::IngestOp;
 pub use rows::{
     DriftFact, EditKind, FileEditRow, GitCommitRow, MessageKind, MessageRow, Ms, PlanRow,
-    ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, TaskRow, TaskStatus,
-    TokenSnapshot, ToolCall, WorkspaceObsRow,
+    ProjectRow, RuntimeRow, SessionRole, SessionRow, SessionTitleRow, SessionUsageRow, StreamState,
+    TaskRow, TaskStatus, TitleKind, TokenSnapshot, ToolCall, WorkspaceObsRow,
 };

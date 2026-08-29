@@ -7,15 +7,17 @@
 
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, TokenSnapshot, ToolCall, WorkspaceObsRow,
+    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot, ToolCall,
+    WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::wire::{
-    ContentBlock, ContextAppendLoopEventLine, ContextAppendMessageLine, KnownRecord,
-    ProfileBindLine, RecordedUsage, ToolResultBody, UsageRecordLine,
+    ConfigUpdateLine, ContentBlock, ContextAppendLoopEventLine, ContextAppendMessageLine,
+    ContextApplyCompactionLine, KnownRecord, ProfileBindLine, RecordedUsage, ToolResultBody,
+    ToolsUpdateStoreLine, UsageRecordLine,
 };
 use crate::raw::{ParsedLine, parse_wire_line};
 use crate::spec;
@@ -121,9 +123,14 @@ fn project(
             LineStatus::Parsed
         }
         KnownRecord::UsageRecord(line) => usage_record(ctx, state, stream_id, line, ops),
+        KnownRecord::ConfigUpdate(line) => config_update(ctx, state, stream_id, line, ops),
+        KnownRecord::ContextApplyCompaction(line) => context_compaction(ctx, stream_id, line, ops),
+        KnownRecord::ToolsUpdateStore(line) => tools_update_store(ctx, stream_id, line, ops),
         // Declared bookkeeping. `turn.prompt` duplicates the subsequently
         // appended context message; step usage is handled inside the loop-event
-        // router and duplicates the preceding usage.record.
+        // router and duplicates the preceding usage.record. Prompt acceptance,
+        // approval interaction, and compaction lifecycle records carry no
+        // additional canonical content beyond the typed records above.
         KnownRecord::Metadata(_)
         | KnownRecord::RuntimeSetBinding(_)
         | KnownRecord::PermissionSetMode(_)
@@ -132,7 +139,13 @@ fn project(
         | KnownRecord::LlmToolsSnapshot(_)
         | KnownRecord::TokenCountingMeasured(_)
         | KnownRecord::TurnEnded(_)
-        | KnownRecord::TokenCountingTurnRecorded(_) => LineStatus::Parsed,
+        | KnownRecord::TokenCountingTurnRecorded(_)
+        | KnownRecord::FullCompactionBegin(_)
+        | KnownRecord::FullCompactionComplete(_)
+        | KnownRecord::InteractionRequest(_)
+        | KnownRecord::InteractionResolved(_)
+        | KnownRecord::PermissionRecordApprovalResult(_)
+        | KnownRecord::PromptAccepted(_) => LineStatus::Parsed,
     }
 }
 
@@ -176,6 +189,152 @@ fn profile_bind(
         }));
     }
     LineStatus::Parsed
+}
+
+fn config_update(
+    ctx: &NormalizeCtx,
+    state: &mut KimiCodeState,
+    stream_id: &str,
+    line: &ConfigUpdateLine,
+    ops: &mut Vec<IngestOp>,
+) -> LineStatus {
+    let Some(at) = epoch_ms(line.time) else {
+        return hard_into(
+            ctx,
+            stream_id,
+            "config.update",
+            "timestamp_out_of_range",
+            None,
+            ops,
+        );
+    };
+    let cwd = line.environment_disclosure.cwd.trim();
+    if cwd.is_empty() {
+        return hard_into(
+            ctx,
+            stream_id,
+            "config.update",
+            "missing_cwd",
+            Some(at),
+            ops,
+        );
+    }
+    if state.workspace.as_deref() != Some(cwd) {
+        state.workspace = Some(cwd.to_owned());
+        ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
+            session_id: ctx.session_id.clone(),
+            at,
+            cwd: cwd.to_owned(),
+            git_branch: None,
+            git_repo: None,
+        }));
+    }
+    LineStatus::Parsed
+}
+
+fn context_compaction(
+    ctx: &mut NormalizeCtx,
+    stream_id: &str,
+    line: &ContextApplyCompactionLine,
+    ops: &mut Vec<IngestOp>,
+) -> LineStatus {
+    let Some(ts) = epoch_ms(line.time) else {
+        return hard_into(
+            ctx,
+            stream_id,
+            "context.apply_compaction",
+            "timestamp_out_of_range",
+            None,
+            ops,
+        );
+    };
+    let content = if line.context_summary.trim().is_empty() {
+        line.summary.trim()
+    } else {
+        line.context_summary.trim()
+    };
+    if content.is_empty() {
+        return hard_into(
+            ctx,
+            stream_id,
+            "context.apply_compaction",
+            "missing_summary",
+            Some(ts),
+            ops,
+        );
+    }
+    let discriminator = source_discriminator(ctx, "context.apply_compaction");
+    let mut summary = row(ctx, &discriminator, MessageKind::Summary, Some(ts));
+    summary.subtype = Some("context.apply_compaction".to_owned());
+    summary.content = Some(content.to_owned());
+    ops.push(IngestOp::Message(Box::new(summary)));
+    LineStatus::Parsed
+}
+
+fn tools_update_store(
+    ctx: &NormalizeCtx,
+    stream_id: &str,
+    line: &ToolsUpdateStoreLine,
+    ops: &mut Vec<IngestOp>,
+) -> LineStatus {
+    let Some(at) = epoch_ms(line.time) else {
+        return hard_into(
+            ctx,
+            stream_id,
+            "tools.update_store",
+            "timestamp_out_of_range",
+            None,
+            ops,
+        );
+    };
+    let mut status = LineStatus::Parsed;
+    for (index, item) in line.value.iter().enumerate() {
+        let task_status = match item.status.as_str() {
+            "pending" => TaskStatus::Pending,
+            "in_progress" => TaskStatus::InProgress,
+            "done" | "completed" => TaskStatus::Completed,
+            other => {
+                ops.push(drift(
+                    ctx,
+                    stream_id,
+                    &format!("tools.update_store/status/{other}"),
+                    UNKNOWN_SUBTYPE,
+                    &[],
+                    Some(at),
+                ));
+                status = LineStatus::UnknownType;
+                TaskStatus::Pending
+            }
+        };
+        let title = item.title.trim();
+        if title.is_empty() {
+            return hard_into(
+                ctx,
+                stream_id,
+                "tools.update_store",
+                "missing_task_title",
+                Some(at),
+                ops,
+            );
+        }
+        // Kimi exposes no native todo id. The store key and title are the
+        // stable facts; the ordinal only disambiguates duplicate titles in a
+        // single snapshot.
+        let duplicate = line.value[..index]
+            .iter()
+            .filter(|prior| prior.title.trim() == title)
+            .count();
+        let native_id = format!("{}:{title}:{duplicate}", line.key);
+        ops.push(IngestOp::Task(TaskRow {
+            id: ids::task_id(&ctx.session_id, &native_id),
+            session_id: ctx.session_id.clone(),
+            status: task_status,
+            content: title.to_owned(),
+            created_at: None,
+            updated_at: Some(at),
+        }));
+    }
+    status
 }
 
 fn context_message(
@@ -741,6 +900,15 @@ fn record_kind(record: &KnownRecord) -> &'static str {
         KnownRecord::TokenCountingMeasured(_) => "token_counting.measured",
         KnownRecord::TurnEnded(_) => "turn.ended",
         KnownRecord::TokenCountingTurnRecorded(_) => "token_counting.turn_recorded",
+        KnownRecord::ConfigUpdate(_) => "config.update",
+        KnownRecord::ContextApplyCompaction(_) => "context.apply_compaction",
+        KnownRecord::FullCompactionBegin(_) => "full_compaction.begin",
+        KnownRecord::FullCompactionComplete(_) => "full_compaction.complete",
+        KnownRecord::InteractionRequest(_) => "interaction.request",
+        KnownRecord::InteractionResolved(_) => "interaction.resolved",
+        KnownRecord::PermissionRecordApprovalResult(_) => "permission.record_approval_result",
+        KnownRecord::PromptAccepted(_) => "prompt.accepted",
+        KnownRecord::ToolsUpdateStore(_) => "tools.update_store",
     }
 }
 
@@ -760,6 +928,15 @@ fn record_time(record: &KnownRecord) -> Option<Ms> {
         KnownRecord::TokenCountingMeasured(line) => line.time,
         KnownRecord::TurnEnded(line) => line.time,
         KnownRecord::TokenCountingTurnRecorded(line) => line.time,
+        KnownRecord::ConfigUpdate(line) => line.time,
+        KnownRecord::ContextApplyCompaction(line) => line.time,
+        KnownRecord::FullCompactionBegin(line) => line.time,
+        KnownRecord::FullCompactionComplete(line) => line.time,
+        KnownRecord::InteractionRequest(line) => line.time,
+        KnownRecord::InteractionResolved(line) => line.time,
+        KnownRecord::PermissionRecordApprovalResult(line) => line.time,
+        KnownRecord::PromptAccepted(line) => line.time,
+        KnownRecord::ToolsUpdateStore(line) => line.time,
     };
     epoch_ms(time)
 }

@@ -9,7 +9,9 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::IngestOp;
 use rosetta_core::fold::{HOUR_MS, hour_bucket};
-use rosetta_core::rows::{MessageRow, Ms, ProjectRow, RuntimeRow, SessionRow, TokenSnapshot};
+use rosetta_core::rows::{
+    MessageRow, Ms, ProjectRow, RuntimeRow, SessionRow, SessionTitleRow, TitleKind, TokenSnapshot,
+};
 
 use crate::StoreError;
 use crate::hot::{Effects, Mutation};
@@ -258,12 +260,24 @@ pub(super) fn rebuild_bucket(
     let aggregate = tx
         .prepare_cached(
             "SELECT SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
-                    SUM(cache_w_tokens), SUM(think_tokens), COUNT(*),
-                    SUM(CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END)
-             FROM message
-             WHERE session_id = ?1
-               AND COALESCE(ts, 0) >= ?2 AND COALESCE(ts, 0) < ?2 + ?4
-               AND COALESCE(model, 'unknown') = ?3",
+                    SUM(cache_w_tokens), SUM(think_tokens), SUM(message_count),
+                    SUM(tool_call_count), COUNT(*)
+             FROM (
+               SELECT in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
+                      think_tokens, 1 AS message_count,
+                      CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END AS tool_call_count
+               FROM message
+               WHERE session_id = ?1
+                 AND COALESCE(ts, 0) >= ?2 AND COALESCE(ts, 0) < ?2 + ?4
+                 AND COALESCE(model, 'unknown') = ?3
+               UNION ALL
+               SELECT in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
+                      think_tokens, 0 AS message_count, 0 AS tool_call_count
+               FROM session_usage
+               WHERE session_id = ?1
+                 AND ts >= ?2 AND ts < ?2 + ?4
+                 AND COALESCE(model, 'unknown') = ?3
+             )",
         )?
         .query_row(params![session_id, hour_ts, model, HOUR_MS], |row| {
             Ok((
@@ -274,12 +288,13 @@ pub(super) fn rebuild_bucket(
                     cache_write: row.get(3)?,
                     thinking: row.get(4)?,
                 },
-                row.get::<_, i64>(5)?,
+                row.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                row.get::<_, i64>(7)?,
             ))
         })?;
-    let (tokens, messages, tools) = aggregate;
-    if messages == 0 {
+    let (tokens, messages, tools, contributors) = aggregate;
+    if contributors == 0 {
         tx.prepare_cached(
             "DELETE FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
         )?
@@ -314,7 +329,7 @@ pub(super) fn rebuild_bucket(
     Ok(())
 }
 
-fn touch_session(
+pub(super) fn touch_session(
     tx: &Transaction,
     session_id: &str,
     ts: Option<Ms>,
@@ -397,13 +412,15 @@ pub(super) fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), St
 }
 
 pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), StoreError> {
+    let title_rank = row.title.as_ref().map_or(0, |_| TitleKind::Explicit.rank());
+    let title_at = row.title.as_ref().map(|_| row.updated_at);
     tx.prepare_cached(
         "INSERT INTO session
            (id, native_session_id, runtime_id, project_id, parent_session_id,
-            root_session_id, role, title, summary, started_at, updated_at, stream_state,
-            project_assigned_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                 CASE WHEN ?4 IS NULL THEN NULL ELSE ?10 END)
+            root_session_id, role, title, meta_title, meta_title_rank, meta_title_at,
+            summary, started_at, updated_at, stream_state, project_assigned_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 CASE WHEN ?4 IS NULL THEN NULL ELSE ?12 END)
          ON CONFLICT(id) DO UPDATE SET
            project_id = CASE
              WHEN excluded.project_id IS NULL THEN session.project_id
@@ -421,6 +438,18 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
            root_session_id = excluded.root_session_id,
            role = excluded.role,
            title = COALESCE(excluded.title, session.title),
+           meta_title = CASE
+             WHEN excluded.meta_title IS NOT NULL AND
+               excluded.meta_title_rank >= session.meta_title_rank
+             THEN excluded.meta_title ELSE session.meta_title END,
+           meta_title_rank = CASE
+             WHEN excluded.meta_title IS NOT NULL AND
+               excluded.meta_title_rank >= session.meta_title_rank
+             THEN excluded.meta_title_rank ELSE session.meta_title_rank END,
+           meta_title_at = CASE
+             WHEN excluded.meta_title IS NOT NULL AND
+               excluded.meta_title_rank >= session.meta_title_rank
+             THEN excluded.meta_title_at ELSE session.meta_title_at END,
            summary = COALESCE(excluded.summary, session.summary),
            started_at = MIN(session.started_at, excluded.started_at),
            updated_at = MAX(session.updated_at, excluded.updated_at),
@@ -435,11 +464,74 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
         row.root_session_id,
         row.role.as_str(),
         row.title,
+        title_rank,
+        title_at,
         row.summary,
         row.started_at,
         row.updated_at,
         row.stream_state.as_str(),
     ])?;
+    refresh_session_title(tx, &row.id)?;
+    Ok(())
+}
+
+pub(super) fn apply_session_title(
+    tx: &Transaction,
+    row: &SessionTitleRow,
+) -> Result<(), StoreError> {
+    tx.prepare_cached(
+        "UPDATE session
+         SET meta_title = ?2, meta_title_rank = ?3, meta_title_at = ?4
+         WHERE id = ?1 AND
+           ?3 >= meta_title_rank",
+    )?
+    .execute(params![row.session_id, row.title, row.kind.rank(), row.at])?;
+    refresh_session_title(tx, &row.session_id)?;
+    Ok(())
+}
+
+/// Reconcile the public session title from source-owned singleton rows.
+/// Explicit custom titles outrank generated titles, which outrank derived
+/// fallbacks, independent of record order, batching, replay, or generation
+/// replacement. Stream and bounded-meta candidates use the same ranks.
+pub(super) fn refresh_session_title(tx: &Transaction, session_id: &str) -> Result<(), StoreError> {
+    let streamed = tx
+        .prepare_cached(
+            "SELECT content,
+                    CASE subtype
+                      WHEN 'custom_title' THEN 3
+                      WHEN 'ai_title' THEN 2
+                      WHEN 'title_fallback' THEN 1
+                    END AS title_rank
+             FROM message
+             WHERE session_id = ?1 AND type = 'summary'
+               AND subtype IN ('custom_title', 'ai_title', 'title_fallback')
+               AND content IS NOT NULL AND content != ''
+             ORDER BY title_rank DESC, ts DESC, ordinal DESC, id DESC
+             LIMIT 1",
+        )?
+        .query_row(params![session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()?;
+    let meta = tx
+        .prepare_cached("SELECT meta_title, meta_title_rank FROM session WHERE id = ?1")?
+        .query_row(params![session_id], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()?;
+    let title = match (streamed, meta) {
+        (Some((streamed, streamed_rank)), Some((_meta, meta_rank)))
+            if streamed_rank >= meta_rank =>
+        {
+            Some(streamed)
+        }
+        (_, Some((meta, _))) => meta,
+        (Some((streamed, _)), None) => Some(streamed),
+        (None, None) => None,
+    };
+    tx.prepare_cached("UPDATE session SET title = ?2 WHERE id = ?1")?
+        .execute(params![session_id, title])?;
     Ok(())
 }
 
@@ -594,6 +686,12 @@ pub(super) fn apply_message(
     })();
     stats.profile.message_write_nanos += elapsed_nanos(started);
     written?;
+    if matches!(
+        row.subtype.as_deref(),
+        Some("ai_title" | "custom_title" | "title_fallback")
+    ) {
+        refresh_session_title(tx, &row.session_id)?;
+    }
     touch_session(tx, &row.session_id, row.ts, stats)?;
     if let Some(fx) = effects.as_deref_mut() {
         fx.push(Mutation::Message(Box::new(row.clone())));

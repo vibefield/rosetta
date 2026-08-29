@@ -7,11 +7,14 @@ use std::sync::OnceLock;
 use rosetta_adapter_support::GroundTruthDoc;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
+use serde_json::Value;
 
 const CANONICAL: &str = include_str!("../../../../groundtruth/copilot/groundtruth.json");
 
 /// The sole append-only transcript stream.
 pub const EVENTS: &str = "events";
+/// Per-session title/workspace metadata document.
+pub const SESSION_WORKSPACE: &str = "session-workspace";
 
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
@@ -37,6 +40,85 @@ pub fn declared_event_types() -> &'static BTreeSet<String> {
     })
 }
 
+/// Validate the envelope and `data` keys of a declared-but-unprojected event
+/// against the embedded writer schema. This keeps the permissive raw fallback
+/// without turning declared event types into a blind spot for added fields.
+pub fn unexpected_declared_fields(kind: &str, value: &Value) -> Vec<String> {
+    let Some(shape) = event_shapes().get(kind) else {
+        return Vec::new();
+    };
+    let Some(record) = value.as_object() else {
+        return vec![".<non-object>".to_owned()];
+    };
+    let top = object_fields(shape);
+    let mut unexpected = record
+        .keys()
+        .filter(|key| !top.contains(*key))
+        .map(|key| format!(".{key}"))
+        .collect::<Vec<_>>();
+
+    if let Some(data) = record.get("data").and_then(Value::as_object)
+        && let Some(data_shape) = field_shape(shape, "data")
+    {
+        let expected = object_fields(data_shape);
+        unexpected.extend(
+            data.keys()
+                .filter(|key| !expected.contains(*key))
+                .map(|key| format!(".data.{key}")),
+        );
+    }
+    unexpected.sort();
+    unexpected
+}
+
+fn event_shapes() -> &'static BTreeMap<String, Value> {
+    static SHAPES: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
+    SHAPES.get_or_init(|| {
+        let document: Value =
+            serde_json::from_str(CANONICAL).expect("embedded groundtruth.json is valid");
+        document["streams"]
+            .as_array()
+            .and_then(|streams| streams.iter().find(|stream| stream["id"] == EVENTS))
+            .and_then(|stream| stream["record_types"].as_object())
+            .into_iter()
+            .flatten()
+            .filter_map(|(kind, record)| {
+                record
+                    .get("shape")
+                    .cloned()
+                    .map(|shape| (kind.clone(), shape))
+            })
+            .collect()
+    })
+}
+
+fn object_fields(shape: &Value) -> BTreeSet<String> {
+    if shape["kind"] == "object" {
+        return shape["fields"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(field, _)| field.clone())
+            .collect();
+    }
+    shape["variants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(object_fields)
+        .collect()
+}
+
+fn field_shape<'a>(shape: &'a Value, field: &str) -> Option<&'a Value> {
+    if shape["kind"] == "object" {
+        return shape["fields"][field].get("shape");
+    }
+    shape["variants"]
+        .as_array()?
+        .iter()
+        .find_map(|variant| field_shape(variant, field))
+}
+
 #[derive(Deserialize)]
 struct RecordTypesView {
     streams: Vec<StreamRecordTypes>,
@@ -51,7 +133,8 @@ struct StreamRecordTypes {
 
 #[cfg(test)]
 mod tests {
-    use super::{EVENTS, declared_event_types, doc};
+    use super::{EVENTS, SESSION_WORKSPACE, declared_event_types, doc, unexpected_declared_fields};
+    use serde_json::json;
 
     #[test]
     fn embedded_canonical_describes_copilot() {
@@ -59,6 +142,10 @@ mod tests {
         assert_eq!(doc().data_root, "~/.copilot");
         let events = doc().stream(EVENTS).expect("events stream");
         assert_eq!(events.glob, "session-state/*/events.jsonl");
+        let workspace = doc()
+            .stream(SESSION_WORKSPACE)
+            .expect("session workspace stream");
+        assert_eq!(workspace.glob, "session-state/*/workspace.yaml");
     }
 
     #[test]
@@ -73,5 +160,24 @@ mod tests {
             assert!(types.contains(name), "{name} missing from the canonical");
         }
         assert!(!types.contains("no-such-event"));
+    }
+
+    #[test]
+    fn declared_fallbacks_still_detect_new_fields() {
+        let value = json!({
+            "id": "event",
+            "timestamp": "2026-08-28T00:00:00Z",
+            "parentId": null,
+            "type": "permission.completed",
+            "data": {"requestId": "request", "result": {}, "toolCallId": "call"},
+        });
+        assert!(unexpected_declared_fields("permission.completed", &value).is_empty());
+
+        let mut changed = value;
+        changed["data"]["newPolicyField"] = json!(true);
+        assert_eq!(
+            unexpected_declared_fields("permission.completed", &changed),
+            [".data.newPolicyField"]
+        );
     }
 }

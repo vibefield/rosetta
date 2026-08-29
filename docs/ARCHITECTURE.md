@@ -12,9 +12,11 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
-> **Implementation checkpoint (2026-08-27).** This document describes the target
+> **Implementation checkpoint (2026-08-28).** This document describes the target
 > architecture. Nine ground-truth/runtime-adapter packs are registered. The generic
-> runtime handles adapter-selected JSONL and SQLite sources, generation-staged
+> runtime handles adapter-selected JSONL, bounded rewrite-in-place document snapshots,
+> and SQLite snapshots, including virtual-session membership and whole-source deletion;
+> generation-staged
 > reconciliation, deterministic adapter checkpoints, FTS and rollups, live watching
 > with polling/audit recovery, a checksummed append-only raw ledger, and validated
 > whole-projection rebuild with atomic installation. Fresh backfill and explicit rebuild
@@ -28,7 +30,10 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > package, and `SearchBackend` seam with synchronous FTS5 as its reference are implemented.
 > Consumer migrations, a detached search worker, and the dedicated metrics stream remain.
 > Unknown projection schemas fail closed on ordinary open and are replaced only through
-> the explicit ledger rebuild command.
+> the explicit ledger rebuild command. Projection schema 6 adds replacement-keyed
+> `session_usage` for native totals that cannot honestly be attached to a response row.
+> The complete adapter-gap and client-visibility closure is recorded in
+> [`docs/ADAPTER_AUDIT.md`](ADAPTER_AUDIT.md).
 >
 > Organic Claude Code, Codex, and Grok validation on 2026-08-26 established the first
 > measured performance baseline. On the final Codex cold run, FTS5 construction was
@@ -213,6 +218,11 @@ version release":
   never breaks parsing — it lands in `unknown` and emits a `DriftObserved` fact with
   the field path and a sample. (`deny_unknown_fields` is banned: it turns every agent
   release into an outage.)
+- A declared record may intentionally be a canonical no-op because it is bookkeeping or
+  duplicates an authoritative rail. That does **not** exempt it from schema checks:
+  typed variants retain flatten-unknown paths, while declared raw fallbacks compare their
+  keys with the embedded canonical shape. Undeclared variants are soft drift; malformed
+  known variants are hard drift.
 - Where formats self-stamp, version detection is **per record** — Claude Code transcript
   lines carry a `version` field; Codex rollout files stamp theirs. Where they don't,
   `detect.rs` falls back to structural heuristics. Detected version is recorded on every
@@ -256,6 +266,25 @@ capture contract explicit.
   The head hash detects rewrite/truncation (Claude Code rewrites files on compaction);
   on mismatch, the file re-ingests under a new **epoch**. Partial trailing lines are
   buffered, never half-parsed.
+- **Bounded metadata fallback**: the ordinary 64 KiB head + 16 KiB tail skim remains
+  the default. An adapter may opt a source into a separately metered scan of complete
+  records when one optional fact is still missing; the generic 128 KiB / 256-record
+  ceilings remain owned by the pipeline. Claude Code uses this only for a missing main-
+  session title; Antigravity uses it only when no complete checkpoint in the ordinary
+  windows exposes the exact `USER Objective` section. Complete streaming remains the
+  eventual convergence path for both.
+- **Snapshot drivers**: `SqliteSnapshot` opens a consistent native database view;
+  `DocumentSnapshot` reads one stable, bounded rewrite-in-place JSON, YAML, Markdown, or
+  text document. Adapters may lower the pipeline document limit for a small native format
+  (Copilot caps `workspace.yaml` at 64 KiB). Both drivers may enumerate multiple virtual
+  sessions from one physical source. Membership is authoritative:
+  rewrites tombstone removed members, and deletion of the whole physical source runs an
+  empty generation for every retained virtual cursor before removing stale projection rows.
+- **Title reconciliation**: bounded metadata emits a ranked `SessionTitle` fact instead
+  of relying on file-walk order. Explicit native labels outrank generated labels, which
+  outrank prompt/checkpoint-derived fallbacks; same-rank replacements preserve native
+  rename behavior. Streamed title singleton rows use the same precedence and fall back
+  to the retained metadata answer after a source-generation sweep.
 - **Raw ledger**: every complete raw record is appended with source/generation metadata
   to size-rotated segment files, checksummed with blake3, and durably flushed before the
   corresponding projection transaction. By default `rosettad` stores one runtime
@@ -279,7 +308,7 @@ capture contract explicit.
 > model was designed from Claude Code alone and every later adapter had to contort to
 > fit it — rosetta does not repeat that.
 >
-> The current detailed hypothesis — ten entities, the flattened message-row taxonomy,
+> The current detailed hypothesis — eleven entities, the flattened message-row taxonomy,
 > the discover/meta/stream ingest phasing, and the concrete SQLite DDL, ratified
 > against 9 of 11 ground-truth packs — lives in
 > [`docs/canonical-model.html`](canonical-model.html) (rendered design doc, 2026-08-26).
@@ -431,13 +460,13 @@ committed canonical-op goldens and restart tests currently establish this matrix
 
 | adapter | driven source | tool-result merge | usage representation in fixtures | restart proof |
 |---|---|---:|---|---|
-| Antigravity | 1 JSONL | yes | none observed | split at every fixture line |
+| Antigravity | 1 JSONL + metadata SQLite snapshot | yes | none observed | split/resume + ranked-title ledger/snapshot replay |
 | Claude Code | 2 JSONL streams | yes | inline on messages | split at every fixture line |
-| Codex | 1 JSONL | yes | separate `Usage` merge | pipeline split/resume projection equality |
-| Copilot | 1 JSONL | yes | inline + separate `Usage` merge | split/resume state test |
-| Grok | 1 JSONL | yes | separate `Usage` merge | checkpoint/one-shot equality |
+| Codex | 1 JSONL + metadata SQLite snapshot | yes | separate `Usage` merge | split/resume + native-title snapshot replay |
+| Copilot | 1 JSONL + metadata document snapshot | yes | inline + separate `Usage` merge | split/resume + workspace rename replay |
+| Grok | 1 JSONL + metadata document snapshot | yes | separate `Usage` merge | checkpoint/one-shot + document replay |
 | Hermes | 1 SQLite snapshot | yes | none observed | stateless snapshot replay equality |
-| Kimi Code | 1 JSONL | yes | inline on messages | split/resume state test |
+| Kimi Code | 1 JSONL + metadata document snapshot | yes | inline on messages | split/resume + document replay |
 | OpenCode | 1 SQLite snapshot | yes | inline on messages | split at every snapshot record |
 | Pi | 1 JSONL | yes | inline on messages | split/resume state test |
 
@@ -460,7 +489,11 @@ those results have a call only in their parent/root session, so cross-session co
 is not yet closed. The stream also retained 195,484 unknown-type/no-op outcomes plus
 parsed-record unknown-field drift; the newer snapshot retained 195,959 unknown outcomes.
 Zero hard errors means preservation succeeded, not that every current native shape has
-canonical semantics.
+canonical semantics. This paragraph is the retained pre-closure performance baseline;
+the 2026-08-28 semantic audit subsequently closed document metadata admission, current
+writer/type vocabularies, session-scoped usage, project identity, and client visibility.
+Evidence-blocked and intentionally non-canonical rails are listed in
+[`docs/ADAPTER_AUDIT.md`](ADAPTER_AUDIT.md), rather than being implied by a raw unknown count.
 
 This makes the optimization boundary explicit:
 

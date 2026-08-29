@@ -78,9 +78,16 @@ pub fn stream_backfill_into(
     let tailer = Tailer::new(opts.tail.clone())?;
     // Snapshot-driven virtual sources take their own path: no tailing, no
     // audit lane (every pass hashes full content — audit by construction).
-    let (snapshot_files, tail_files): (Vec<&SessionFile>, Vec<&SessionFile>) = files
-        .iter()
-        .partition(|file| file.driver == rosetta_adapter_support::StreamDriver::SqliteSnapshot);
+    let mut document_files = Vec::new();
+    let mut snapshot_files = Vec::new();
+    let mut tail_files = Vec::new();
+    for file in files {
+        match file.driver {
+            rosetta_adapter_support::StreamDriver::DocumentSnapshot => document_files.push(file),
+            rosetta_adapter_support::StreamDriver::SqliteSnapshot => snapshot_files.push(file),
+            rosetta_adapter_support::StreamDriver::JsonLines => tail_files.push(file),
+        }
+    }
     let audit_paths =
         rotating_audit_paths(store, &runtime.id, &tail_files, opts.audit_files_per_run)?;
     let audit_set: BTreeSet<&str> = audit_paths.iter().map(String::as_str).collect();
@@ -170,6 +177,20 @@ pub fn stream_backfill_into(
             report.files_incomplete += 1;
         }
     }
+
+    crate::document::stream_document_sources(
+        adapter,
+        runtime,
+        root,
+        store,
+        &document_files,
+        opts,
+        instrument,
+        &mut ledger,
+        &mut report,
+        &mut file_health,
+        &mut session_health,
+    )?;
 
     crate::snapshot::stream_snapshot_sources(
         adapter,

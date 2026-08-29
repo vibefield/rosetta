@@ -4,7 +4,7 @@
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole,
-    SessionRow, StreamState, TokenSnapshot, ToolCall,
+    SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot, ToolCall,
 };
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
 
@@ -80,6 +80,119 @@ fn base_batch() -> Batch {
         checkpoints: vec![],
         source: None,
     }
+}
+
+#[test]
+fn streamed_title_singletons_refine_meta_with_custom_precedence() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionTitle(SessionTitleRow {
+                session_id: "s1".into(),
+                title: "bounded meta title".into(),
+                kind: TitleKind::Generated,
+                at: 9_000,
+            })],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    let mut generated = message("generated-title", 0, MessageKind::Summary);
+    generated.subtype = Some("ai_title".into());
+    generated.content = Some("generated stream title".into());
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(generated.clone()))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("generated stream title")
+    );
+
+    let mut custom = message("custom-title", 1, MessageKind::Summary);
+    custom.subtype = Some("custom_title".into());
+    custom.content = Some("explicit title".into());
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(custom))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    // A later generated-title replacement cannot beat the custom singleton.
+    generated.content = Some("later generated title".into());
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(generated))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("explicit title")
+    );
+}
+
+#[test]
+fn explicit_meta_title_outranks_a_newer_stream_fallback() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::SessionTitle(SessionTitleRow {
+                    session_id: "s1".into(),
+                    title: "Checkpoint objective".into(),
+                    kind: TitleKind::Fallback,
+                    at: 11_000,
+                }),
+                IngestOp::SessionTitle(SessionTitleRow {
+                    session_id: "s1".into(),
+                    title: "Explicit native title".into(),
+                    kind: TitleKind::Explicit,
+                    at: 10_000,
+                }),
+            ],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    let mut fallback = message("checkpoint-title", 4, MessageKind::Summary);
+    fallback.subtype = Some("title_fallback".into());
+    fallback.content = Some("Newer checkpoint objective".into());
+    fallback.ts = Some(12_000);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(fallback))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Explicit native title")
+    );
 }
 
 #[test]
@@ -725,6 +838,83 @@ fn reingesting_the_same_message_is_idempotent() {
 }
 
 #[test]
+fn session_usage_replaces_exactly_and_does_not_invent_messages() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let mut sample = SessionUsageRow {
+        session_id: "s1".into(),
+        key: "native-model-task".into(),
+        ts: 3_600_000,
+        model: Some("model-a".into()),
+        tokens: TokenSnapshot {
+            input: Some(40),
+            output: Some(10),
+            ..Default::default()
+        },
+    };
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionUsage(sample.clone())],
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionUsage(sample.clone())],
+            ..Batch::default()
+        })
+        .unwrap();
+    let first: (i64, i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT in_tokens, message_count, tool_call_count FROM usage_bucket
+             WHERE session_id = 's1' AND model = 'model-a'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(first, (40, 0, 0));
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+
+    sample.ts = 7_200_000;
+    sample.model = Some("model-b".into());
+    sample.tokens.input = Some(7);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionUsage(sample)],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM usage_bucket WHERE model = 'model-a'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    let replacement: (i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT in_tokens, out_tokens FROM usage_bucket WHERE model = 'model-b'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(replacement, (7, 10));
+}
+
+#[test]
 fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
@@ -839,7 +1029,7 @@ fn schema_mismatch_fails_closed_without_dropping_existing_data() {
 #[test]
 fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     use rosetta_core::rows::{
-        EditKind, FileEditRow, PlanRow, TaskRow, TaskStatus, WorkspaceObsRow,
+        EditKind, FileEditRow, PlanRow, SessionUsageRow, TaskRow, TaskStatus, WorkspaceObsRow,
     };
 
     let mut store = Store::open_in_memory().unwrap();
@@ -936,6 +1126,17 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
             created_at: Some(3_600_000),
             updated_at: Some(3_600_500),
         }),
+        IngestOp::SessionUsage(SessionUsageRow {
+            session_id: "s1".into(),
+            key: "g1-usage".into(),
+            ts: 3_600_000,
+            model: Some("claude-opus-5".into()),
+            tokens: TokenSnapshot {
+                input: Some(100),
+                output: Some(20),
+                ..Default::default()
+            },
+        }),
     ];
     let staged = gen1.len() as u64;
     store
@@ -974,6 +1175,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 1);
     assert_eq!(queries::search(store.conn(), "alpha", 5).unwrap().len(), 1);
 
     // Generation 2 rewrite: a single, different message. Everything from
@@ -1022,6 +1224,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 0);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 0);
     assert_eq!(queries::search(store.conn(), "alpha", 5).unwrap().len(), 0);
     assert_eq!(queries::search(store.conn(), "omega", 5).unwrap().len(), 1);
     let (buckets, tokens): (i64, i64) = store

@@ -384,6 +384,22 @@ fn every_ai_title_folds_onto_one_summary_row() {
 }
 
 #[test]
+fn explicit_custom_title_is_a_distinct_session_singleton() {
+    let (ops, statuses) = run(&[json!({
+        "type": "custom-title",
+        "customTitle": "Keep this exact title",
+        "sessionId": "session-under-test"
+    })]);
+    assert_eq!(statuses, [LineStatus::Parsed]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, MessageKind::Summary);
+    assert_eq!(rows[0].subtype.as_deref(), Some("custom_title"));
+    assert_eq!(rows[0].content.as_deref(), Some("Keep this exact title"));
+    assert!(drift(&ops).is_empty());
+}
+
+#[test]
 fn workspace_observations_record_transitions_only() {
     let elsewhere = {
         let mut line = assistant(json!([{"type": "text", "text": "x"}]), None);
@@ -419,6 +435,22 @@ fn a_type_the_canonical_declares_is_handled_not_drift() {
     })]);
     assert_eq!(statuses, [LineStatus::Parsed]);
     assert!(ops.is_empty());
+}
+
+#[test]
+fn a_declared_unprojected_type_still_reports_new_fields() {
+    let (ops, statuses) = run(&[json!({
+        "type": "attachment",
+        "attachment": {"type": "file"},
+        "uuid": "44444444-4444-4444-4444-444444444444",
+        "sessionId": "session-under-test",
+        "futureField": true,
+    })]);
+    assert_eq!(statuses, [LineStatus::Parsed]);
+    let facts = drift(&ops);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].error_code, "unknown_fields");
+    assert_eq!(facts[0].record_kind, "attachment");
 }
 
 #[test]

@@ -6,6 +6,7 @@ use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
     AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
 };
+use rosetta_core::rows::TitleKind;
 use serde_json::Value;
 
 use crate::normalize::{self, GrokState};
@@ -22,16 +23,22 @@ impl AgentAdapter for GrokAdapter {
         spec::doc()
     }
 
-    /// `updates` alone owns canonical conversation rows. `chat-history`
+    /// `updates` alone owns canonical conversation rows. `summary` is a
+    /// metadata-only document snapshot that admits summary-only sessions and
+    /// enriches transcript sessions without duplicating messages. `chat-history`
     /// repeats the raw model messages, and `events` repeats turn/tool
     /// telemetry; admitting either would make duplicate logical events
     /// possible. JSON sidecars and text files remain inventory as well.
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
-        (stream_id == spec::UPDATES).then_some(StreamDriver::JsonLines)
+        match stream_id {
+            spec::UPDATES => Some(StreamDriver::JsonLines),
+            spec::SUMMARY => Some(StreamDriver::DocumentSnapshot),
+            _ => None,
+        }
     }
 
     fn normalizer_version(&self) -> u32 {
-        2
+        3
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -64,11 +71,34 @@ impl AgentAdapter for GrokAdapter {
     /// second wildcard is the same UUID in every committed fixture and whose
     /// meaning is stated by the canonical session path.
     ///
-    /// Cwd, title, creation time, and parent/child role live in `summary.json`,
-    /// which is rewrite-in-place inventory this wave. They are left unknown
-    /// rather than inferred from URL-encoded path components or late records.
     fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], tail: &[u8]) -> SkimResult {
-        if self.stream_driver(stream_id).is_none() {
+        if stream_id == spec::SUMMARY {
+            let Ok(text) = std::str::from_utf8(head) else {
+                return SkimResult::default();
+            };
+            let Ok(summary) = crate::raw::parse_summary(text) else {
+                return SkimResult::default();
+            };
+            let parent_session_id = summary.parent_session_id.filter(|value| !value.is_empty());
+            let title = summary.generated_title.filter(|value| !value.is_empty());
+            return SkimResult {
+                ops: Vec::new(),
+                session_id: Some(summary.info.id),
+                root_session_id: None,
+                role: parent_session_id
+                    .as_ref()
+                    .map(|_| rosetta_core::rows::SessionRole::Subagent),
+                parent_session_id,
+                cwd: (!summary.info.cwd.is_empty()).then_some(summary.info.cwd),
+                agent_version: None,
+                title_kind: title.as_ref().map(|_| TitleKind::Generated),
+                title,
+                summary: (!summary.session_summary.is_empty()).then_some(summary.session_summary),
+                started_at: rosetta_adapter_support::rfc3339_ms(&summary.created_at),
+                updated_at: None,
+            };
+        }
+        if stream_id != spec::UPDATES {
             return SkimResult::default();
         }
 
@@ -90,14 +120,27 @@ impl AgentAdapter for GrokAdapter {
             cwd: None,
             agent_version: None,
             title: None,
+            title_kind: None,
+            summary: None,
             started_at: None,
+            updated_at: None,
         }
+    }
+
+    fn document_records(
+        &self,
+        stream_id: &str,
+        _native_session_id: &str,
+        _document: &[u8],
+    ) -> Vec<Vec<u8>> {
+        debug_assert_eq!(stream_id, spec::SUMMARY);
+        Vec::new()
     }
 
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
         // Admission control is authoritative even for direct callers: an
         // inventory rail can never accidentally emit overlapping messages.
-        if self.stream_driver(stream_id).is_none() {
+        if stream_id == spec::SUMMARY || self.stream_driver(stream_id).is_none() {
             return LineOutcome::parsed(Vec::new());
         }
 
@@ -205,8 +248,45 @@ mod tests {
             GrokAdapter.stream_driver(spec::UPDATES),
             Some(rosetta_adapter_support::StreamDriver::JsonLines)
         );
-        for inventory in [spec::CHAT_HISTORY, spec::EVENTS, "summary"] {
+        assert_eq!(
+            GrokAdapter.stream_driver(spec::SUMMARY),
+            Some(rosetta_adapter_support::StreamDriver::DocumentSnapshot)
+        );
+        for inventory in [spec::CHAT_HISTORY, spec::EVENTS] {
             assert!(GrokAdapter.stream_driver(inventory).is_none());
         }
+    }
+
+    #[test]
+    fn summary_document_supplies_session_metadata() {
+        let path = "sessions/%2Fw%2Fproject/session-from-path/summary.json";
+        let document = br#"{
+            "info":{"id":"child","cwd":"/work/project"},
+            "session_summary":"Investigate the parser",
+            "created_at":"2026-08-25T05:09:30.810488Z",
+            "updated_at":"2026-08-25T05:09:31Z",
+            "num_messages":3,"num_chat_messages":4,
+            "current_model_id":"grok","next_trace_turn":1,
+            "chat_format_version":1,"grok_home":"/tmp/grok",
+            "agent_name":"grok-build","generated_title":"Parser audit",
+            "parent_session_id":"parent"
+        }"#;
+        let result = GrokAdapter.skim(
+            spec::SUMMARY,
+            &FileStat {
+                relative_path: path.to_owned(),
+                size: document.len() as u64,
+                modified_ms: 0,
+            },
+            document,
+            &[],
+        );
+        assert_eq!(result.session_id.as_deref(), Some("child"));
+        assert_eq!(result.parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(result.cwd.as_deref(), Some("/work/project"));
+        assert_eq!(result.title.as_deref(), Some("Parser audit"));
+        assert_eq!(result.summary.as_deref(), Some("Investigate the parser"));
+        assert_eq!(result.started_at, Some(1_787_634_570_810));
+        assert_eq!(result.role, Some(rosetta_core::rows::SessionRole::Subagent));
     }
 }

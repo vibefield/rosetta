@@ -12,7 +12,7 @@
       "file_format": "jsonl",
       "discipline": "append_only",
       "evidence": "fixture",
-      "notes": "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg (task_started/item_completed/token_count/task_complete), response_item (message/function_call/function_call_output), world_state, turn_context. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large.",
+      "notes": "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg, response_item, world_state, turn_context. Pinned writer evidence adds custom_tool_call/custom_tool_call_output to the fixture-backed response items. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large.",
       "discriminator": "type",
       "record_types": {
         "event_msg": {
@@ -3105,564 +3105,14 @@
       ]
     },
     {
-      "id": "state-dbs",
-      "glob": "*.sqlite*",
+      "id": "state-db",
+      "glob": "state_*.sqlite*",
       "file_format": "sqlite",
       "discipline": "database",
       "evidence": "fixture",
-      "notes": "Version-suffixed WAL-mode SQLite stores created on first run at 0.149.1: goals_1, logs_2, memories_1, queue_1, state_5 (150 migrations), thread_history_1 (+ -wal/-shm). thread_history_1 is codex's OWN rollout->SQLite projection with per-thread byte-offset cursors (thread_history_projection_state.next_rollout_byte_offset) — rollouts stay the source of truth. state_5.threads holds session metadata; rollout_migration_state instruments the JSONL migration. Schema dump: sources/<version>.sqlite-schema.sql.",
+      "notes": "Versioned WAL-mode session metadata projection. The threads table supplies the complete current id/cwd/version/time/title inventory; optional generated name takes precedence over a bounded first-prompt fallback. Sidecars are watch hints only. Schema dump: sources/<version>.sqlite-schema.sql.",
       "discriminator": "table",
       "record_types": {
-        "goals_1.sqlite:_sqlx_migrations": {
-          "observed": 6,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "goals_1.sqlite:thread_goal_continuation_deferrals": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "goals_1.sqlite:thread_goals": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "created_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "goal_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "objective": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "status": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "time_used_seconds": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "token_budget": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "tokens_used": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "updated_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "logs_2.sqlite:_sqlx_migrations": {
-          "observed": 6,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "logs_2.sqlite:logs": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "estimated_bytes": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "feedback_log_body": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "file": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "id": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "level": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "line": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "module_path": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "process_uuid": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "target": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "ts": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "ts_nanos": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "memories_1.sqlite:_sqlx_migrations": {
-          "observed": 3,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "memories_1.sqlite:jobs": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "finished_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "input_watermark": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "job_key": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "kind": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "last_error": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "last_success_watermark": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "lease_until": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "ownership_token": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "retry_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "retry_remaining": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "started_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "status": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "worker_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              }
-            }
-          }
-        },
-        "memories_1.sqlite:stage1_outputs": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "generated_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "last_usage": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "raw_memory": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "rollout_slug": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": false
-              },
-              "rollout_summary": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "selected_for_phase2": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "selected_for_phase2_source_updated_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              },
-              "source_updated_at": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "usage_count": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": false
-              }
-            }
-          }
-        },
-        "queue_1.sqlite:_sqlx_migrations": {
-          "observed": 6,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "checksum": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "description": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "execution_time": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "installed_on": {
-                "shape": {
-                  "kind": "unknown"
-                },
-                "required": true
-              },
-              "success": {
-                "shape": {
-                  "kind": "boolean"
-                },
-                "required": true
-              },
-              "version": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "queue_1.sqlite:queued_items": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "created_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "payload_json": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "queue_order": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              },
-              "updated_at_ms": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              }
-            }
-          }
-        },
-        "queue_1.sqlite:queued_thread_revisions": {
-          "observed": 0,
-          "shape": {
-            "kind": "object",
-            "fields": {
-              "revision": {
-                "shape": {
-                  "kind": "number"
-                },
-                "required": true
-              },
-              "thread_id": {
-                "shape": {
-                  "kind": "string"
-                },
-                "required": true
-              }
-            }
-          }
-        },
         "state_5.sqlite:_sqlx_migrations": {
           "observed": 150,
           "shape": {
@@ -4441,6 +3891,567 @@
                   "kind": "number"
                 },
                 "required": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "state-dbs",
+      "glob": "*.sqlite*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "fixture",
+      "notes": "Inventory for the remaining version-suffixed WAL-mode stores: goals_1, logs_2, memories_1, queue_1, thread_history_1 (+ -wal/-shm). thread_history_1 is Codex's own rollout projection with byte-offset cursors; rollouts remain timeline truth. The earlier state-db stream claims state_*.sqlite first.",
+      "discriminator": "table",
+      "record_types": {
+        "goals_1.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "goals_1.sqlite:thread_goal_continuation_deferrals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "goals_1.sqlite:thread_goals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "goal_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "objective": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_used_seconds": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "token_budget": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "tokens_used": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "logs_2.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "logs_2.sqlite:logs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "estimated_bytes": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "feedback_log_body": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "file": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "level": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "line": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "module_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "process_uuid": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "target": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "ts": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "ts_nanos": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "memories_1.sqlite:_sqlx_migrations": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "memories_1.sqlite:jobs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "finished_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "input_watermark": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "job_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "kind": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "last_error": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "last_success_watermark": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "lease_until": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "ownership_token": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "retry_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "retry_remaining": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "started_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "worker_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "memories_1.sqlite:stage1_outputs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "generated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "last_usage": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "raw_memory": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "rollout_slug": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "rollout_summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "selected_for_phase2": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "selected_for_phase2_source_updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "source_updated_at": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "usage_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          }
+        },
+        "queue_1.sqlite:_sqlx_migrations": {
+          "observed": 6,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checksum": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "execution_time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "installed_on": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "success": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "queue_1.sqlite:queued_items": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "payload_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "queue_order": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "queue_1.sqlite:queued_thread_revisions": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "revision": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "thread_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
               }
             }
           }

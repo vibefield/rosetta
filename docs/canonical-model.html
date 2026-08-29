@@ -194,23 +194,25 @@
   <div class="narrow">
     <div class="eyebrow">rosetta · phase 2 · hypothesis</div>
     <h1>Rosetta Canonical Model</h1>
-    <p class="sub">One canonical projection over every agent's ground truth — ten entities, checked
+    <p class="sub">One canonical projection over every agent's ground truth — eleven entities, checked
     against the nine captured <span style="font-family:'JetBrains Mono',monospace;font-size:.88em">groundtruth.json</span>
     packs (gemini and cursor pending). Sessions group under projects, transcripts flatten into typed
     timeline rows, and heavy aggregates live in materialized caches updated at ingest.</p>
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
-      <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 tables)&nbsp;&nbsp;→&nbsp;&nbsp;FTS · agent-view</div>
-    <div class="status"><b>Implementation checkpoint · 2026-08-26.</b> This is the target
-      model, not a claim that every box is shipped. All nine captured-agent adapters are registered;
-      the runtime drives their selected JSONL transcript and SQLite snapshot streams. Its SQLite DDL
+      <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;FTS · agent-view</div>
+    <div class="status"><b>Implementation checkpoint · 2026-08-28.</b> All eleven logical entities
+      are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
+      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 6 adds
+      replacement-keyed <code>session_usage</code> for native totals that cannot be attributed to one
+      response. Its SQLite DDL
       includes generation-scoped <code>source_op</code> replacement staging and differs from the
       illustrative DDL below; first generations project directly only inside unpublished cold
       databases. A separate checksummed raw ledger is flushed before projection commits, watch/live adds
       polling plus rotating audits, and whole-projection rebuild validates into a private database
       before atomic installation. Ordinary schema mismatches fail closed so rebuild stays explicit.
-      The in-process hot tier and subscription hub exist; HTTP/WebSocket transport and generated
-      clients remain pending.</div>
+      The in-process hot tier, subscription hub, HTTP/WebSocket transport and generated clients exist.
+      The full adapter/visibility audit is in <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
   </div>
 
   <div class="legend">
@@ -230,7 +232,7 @@
 
   <figure class="er">
     <div class="er-scroll">
-    <svg viewBox="0 0 1160 660" role="img" aria-label="Entity-relationship diagram: agent_runtime and project each own many sessions; sessions own ordered message rows, workspace observations, plans and tasks; sessions recurse via parent_session for subagents, anchored by a tool_use message; file edits and git commits are derived from tool_use rows; usage buckets accumulate from message usage at ingest; workspace observations derive the project assignment.">
+    <svg viewBox="0 0 1160 660" role="img" aria-label="Entity-relationship diagram: agent_runtime and project each own many sessions; sessions own ordered message rows, workspace observations, plans, tasks, and replacement-keyed session usage; sessions recurse via parent_session for subagents, anchored by a tool_use message; file edits and git commits are derived from tool_use rows; usage buckets accumulate from message and session usage at ingest; workspace observations derive the project assignment.">
       <defs>
         <marker id="arrInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
           <polygon points="0,0 10,5 0,10" fill="currentColor"/>
@@ -289,6 +291,10 @@
       <!-- message -> usage_rollup (accumulate) -->
       <polyline points="770,410 1000,410 1000,514" fill="none" stroke="var(--teal)" stroke-width="2.25" marker-end="url(#arrTeal)"/>
       <text x="790" y="401" font-size="11" text-anchor="start" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">accumulate deltas · normalized at ingest</text>
+
+      <!-- session -> session_usage -> usage_rollup -->
+      <polyline points="725,156 800,156 800,514" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
+      <line x1="860" y1="575" x2="874" y2="575" stroke="var(--teal)" stroke-width="2.25" marker-end="url(#arrTeal)"/>
 
       <!-- ================= entity boxes ================= -->
       <!-- agent_runtime -->
@@ -394,6 +400,14 @@
 
       <!-- usage_rollup -->
       <g>
+        <rect x="680" y="520" width="180" height="110" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
+        <text x="696" y="544" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">session_usage</text>
+        <text x="696" y="566" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · sample_key</text>
+        <text x="696" y="584" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">ts · model · tokens</text>
+        <text x="696" y="604" font-size="10.5" fill="var(--muted)" font-style="italic" font-family="'Source Sans 3',sans-serif">replace exactly; no fake message</text>
+      </g>
+
+      <g>
         <rect x="880" y="520" width="240" height="110" rx="6" fill="var(--card)" stroke="var(--teal)" stroke-width="1.25"/>
         <text x="896" y="544" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">usage_bucket</text>
         <text x="1104" y="542" font-size="9.5" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">CACHE</text>
@@ -405,7 +419,7 @@
     </svg>
     </div>
     <figcaption>The canonical projection. Solid edges are ownership; dashed copper edges are computed
-    once at ingest; the teal edge is the incremental accumulation that keeps rollups cheap to read.
+    once at ingest; teal edges are the incremental accumulation that keeps rollups cheap to read.
     <span style="font-family:'JetBrains Mono',monospace;font-size:.92em">project</span> is rosetta's own
     abstraction — sessions are assigned to it from workspace observations, not from any single agent's layout.</figcaption>
   </figure>
@@ -463,15 +477,22 @@
         <span class="f cu">parent_session_id</span><span class="n">nullable, recursive — one entity covers subagents and teams</span>
         <span class="f cu">root_session_id</span><span class="n">denormalized root of the subagent tree (= id for top-level sessions); contribution rolls up here</span>
         <span class="f">role</span><span class="n">main | subagent | team-member</span>
-        <span class="f">title · summary</span><span class="n">meta sidecars / first + last lines</span>
+        <span class="f">title · summary</span><span class="n">ranked bounded evidence + native sidecars/databases</span>
         <span class="f">started_at · updated_at</span><span class="n">filenames + mtime; updated_at tracked live</span>
       </div>
       <div class="evidence"><b>Ratification:</b> parent links are native everywhere they matter —
       claude-code <span class="f">agentId/isSidechain</span>, kimi <span class="f">parentAgentId</span>,
       copilot spawning-parent session id, antigravity <span class="f">parent_conversation_id</span>. No
       separate "subagent session" type: it duplicated every field. <b>Meta-ingest guarantee:</b> every
-      field above is readable without parsing a transcript body — filenames, mtimes, first/last lines,
-      sidecar files.</div>
+      field above is readable without an unbounded transcript read — filenames, mtimes, bounded
+      head/tail and complete-record windows, document sidecars, or metadata SQLite snapshots.
+      Codex titles come from <span class="f">state_*.sqlite</span>; Copilot titles come from
+      <span class="f">workspace.yaml</span>. Every title candidate carries an evidence rank:
+      explicit native label &gt; agent-generated label &gt; prompt/checkpoint fallback. Claude's
+      source-owned <span class="f">custom_title</span>/<span class="f">ai_title</span> rows and
+      Antigravity's exact <span class="f">USER Objective</span> checkpoint fallback use the same
+      ordering. Same-rank metadata replacements follow deterministic source/ingest order, so native
+      renames work while lower-confidence evidence cannot win merely by arriving later.</div>
       <div class="consumers-line"><span class="cchip">agent-view</span></div>
     </div>
 
@@ -513,6 +534,20 @@
     </div>
 
     <div class="card">
+      <header><h3>session_usage</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="ph ph-live">live</span></span></header>
+      <div class="fields">
+        <span class="f">session_id · sample_key</span><span class="n">stable native replacement identity within a session</span>
+        <span class="f">ts · model</span><span class="n">the native sample's own attribution</span>
+        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · thinking, all nullable</span>
+      </div>
+      <div class="evidence"><b>No fabricated timeline rows:</b> some agents report a task/session/model
+      total without naming one response. Re-emitting the same sample key replaces the prior fact and
+      corrects its old/new hour buckets in the same transaction. Hermes
+      <span class="f">session_model_usage</span> is the first producer.</div>
+      <div class="consumers-line"><span class="cchip">usage buckets</span><span class="cchip">agent-view totals</span></div>
+    </div>
+
+    <div class="card">
       <header><h3>usage_bucket</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="ph ph-live">live</span><span class="badge b-cache">cache</span></span></header>
       <div class="fields">
         <span class="f">session_id · hour_ts</span><span class="n">hourly buckets, UTC — day/timezone grouping happens at query time (the GitHub-heatmap scar)</span>
@@ -524,9 +559,9 @@
       sums through <span class="f">session</span> — nothing to invalidate when a session is reassigned to
       another project. <b>Trap:</b> codex token counters are cumulative, claude-code's are per-message —
       normalize to deltas once, at ingest, or the cache double-counts. <b>Replacement-aware:</b> usage
-      keys to its response row; a re-reported snapshot applies (new − old) in the same tx, so re-ingest
-      is idempotent. <b>Precedent:</b> hermes keeps a
-      <span class="f">session_model_usage</span> table and claude-code caches <span class="f">modelUsage</span> by model.</div>
+      keys either to its response row or to a <span class="f">session_usage.sample_key</span>; a
+      re-reported snapshot applies (new − old) in the same tx, so re-ingest is idempotent.
+      Claude Code also caches <span class="f">modelUsage</span> by model.</div>
       <div class="consumers-line"><span class="cchip">activity heatmap</span><span class="cchip">contribution board</span><span class="cchip">agent-view totals</span></div>
     </div>
 
@@ -547,7 +582,7 @@
       <header><h3>task</h3><span class="hdr-tags"><span class="ph ph-1">meta</span></span></header>
       <div class="fields">
         <span class="f">session_id</span><span class="n">→ session</span>
-        <span class="f">status</span><span class="n">pending | in_progress | completed</span>
+        <span class="f">status</span><span class="n">pending | in_progress | completed | failed | cancelled</span>
         <span class="f">content · timestamps</span><span class="n">&nbsp;</span>
       </div>
       <div class="evidence"><b>Ratification:</b> claude-code <span class="f">todos</span> +
@@ -787,6 +822,9 @@ CREATE TABLE <b>session</b> (
   root_session_id   TEXT NOT NULL REFERENCES session(id),  <span class="c">-- = id for roots; parents never change, set once</span>
   role              TEXT NOT NULL DEFAULT 'main', <span class="c">-- 'main' | 'subagent' | 'team'</span>
   title             TEXT,
+  meta_title        TEXT,                         <span class="c">-- best bounded/native title fact</span>
+  meta_title_rank   INTEGER NOT NULL DEFAULT 0,  <span class="c">-- 3 explicit · 2 generated · 1 fallback</span>
+  meta_title_at     INTEGER,                      <span class="c">-- source evidence time; not a cross-source clock</span>
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
@@ -820,7 +858,7 @@ CREATE INDEX plan_src ON plan(src_cursor);
 CREATE TABLE <b>task</b> (
   id         TEXT PRIMARY KEY,              <span class="c">-- blake3(session · native key)</span>
   session_id TEXT NOT NULL REFERENCES session(id),
-  status     TEXT NOT NULL,                 <span class="c">-- 'pending' | 'in_progress' | 'completed'</span>
+  status     TEXT NOT NULL,                 <span class="c">-- 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'</span>
   content    TEXT NOT NULL,
   created_at INTEGER,
   updated_at INTEGER,
@@ -932,6 +970,24 @@ CREATE TABLE <b>drift_agg</b> (               <span class="c">-- aggregated drif
 <span class="c">-- spaghetti scar: one replay persisted 457,311 permanent error rows (95% of grok records).
 -- a complete malformed record advances the cursor; an incomplete trailing record does not.</span>
 
+CREATE TABLE <b>session_usage</b> (          <span class="c">-- canonical native usage with no response identity</span>
+  session_id     TEXT NOT NULL REFERENCES session(id),
+  sample_key     TEXT NOT NULL,             <span class="c">-- stable native replacement key</span>
+  ts             INTEGER NOT NULL,
+  model          TEXT,
+  in_tokens      INTEGER,
+  out_tokens     INTEGER,
+  cache_r_tokens INTEGER,
+  cache_w_tokens INTEGER,
+  think_tokens   INTEGER,
+  src_cursor     INTEGER REFERENCES ingest_cursor(id),
+  PRIMARY KEY (session_id, sample_key)
+) WITHOUT ROWID;
+CREATE INDEX session_usage_src ON session_usage(src_cursor);
+CREATE INDEX session_usage_bucket_key ON session_usage(
+  session_id, COALESCE(model, 'unknown'), ts
+);
+
 CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized cache; session grain × hour × model</span>
   session_id      TEXT NOT NULL REFERENCES session(id),
   hour_ts         INTEGER NOT NULL,         <span class="c">-- bucket start, unix ms UTC — day/timezone grouping at query time</span>
@@ -948,7 +1004,7 @@ CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized ca
 CREATE INDEX usage_bucket_hour ON usage_bucket(hour_ts);
 <span class="c">-- session grain ONLY: project / runtime / all-time totals are query-time sums
 -- through session — nothing to invalidate when a session is reassigned.
--- replacement-aware: usage keys to its response row; a re-reported snapshot
+-- replacement-aware: usage keys to its response row or session_usage.sample_key; a re-reported snapshot
 -- applies (new − old) to the bucket in the same tx as the row update</span>
 
 CREATE VIEW <b>session_contribution</b> AS    <span class="c">-- one row per ROOT session: subagent trees fold in</span>
@@ -972,7 +1028,7 @@ LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
            GROUP BY rid) f ON f.rid = r.id
 WHERE r.id = r.root_session_id;</pre>
 
-  <p class="h2-note" style="margin-top:14px">Thirteen tables — twelve real plus the external-content FTS
+  <p class="h2-note" style="margin-top:14px">Fourteen tables — thirteen real plus the external-content FTS
   index — and one reporting view, against the ~15 budget. Live-lane updates touch
   <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">message</span>,
   <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">session.updated_at</span>, and the

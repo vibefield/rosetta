@@ -168,24 +168,27 @@ fn op_evidence(kind: &str) -> OpEvidence {
 #[test]
 fn every_driver_matches_its_declared_storage_contract() {
     let expected = [
-        ("antigravity", 1, 0),
-        ("claude-code", 2, 0),
-        ("codex", 1, 0),
-        ("copilot", 1, 0),
-        ("grok", 1, 0),
-        ("hermes", 0, 1),
-        ("kimi-code", 1, 0),
-        ("opencode", 0, 1),
-        ("pi", 1, 0),
+        ("antigravity", 1, 0, 1),
+        ("claude-code", 2, 0, 0),
+        ("codex", 1, 0, 1),
+        ("copilot", 1, 1, 0),
+        ("grok", 1, 1, 0),
+        ("hermes", 0, 0, 1),
+        ("kimi-code", 1, 1, 0),
+        ("opencode", 0, 0, 1),
+        ("pi", 1, 0, 0),
     ];
 
-    for (adapter, (kind, expected_jsonl, expected_sqlite)) in adapters().into_iter().zip(expected) {
+    for (adapter, (kind, expected_jsonl, expected_document, expected_sqlite)) in
+        adapters().into_iter().zip(expected)
+    {
         assert_eq!(adapter.kind(), kind);
         assert_eq!(adapter.layout().agent, kind);
         assert!(adapter.normalizer_version() > 0, "{kind}");
         assert!(adapter.stream_driver("<not-a-stream>").is_none(), "{kind}");
 
         let mut jsonl = 0;
+        let mut document = 0;
         let mut sqlite = 0;
         for stream in &adapter.layout().streams {
             match adapter.stream_driver(&stream.id) {
@@ -209,6 +212,31 @@ fn every_driver_matches_its_declared_storage_contract() {
                         stream.id
                     );
                 }
+                Some(StreamDriver::DocumentSnapshot) => {
+                    document += 1;
+                    assert!(
+                        matches!(
+                            stream.file_format,
+                            FileFormat::Json
+                                | FileFormat::Toml
+                                | FileFormat::Markdown
+                                | FileFormat::Text
+                        ),
+                        "{kind}/{}",
+                        stream.id
+                    );
+                    assert_eq!(
+                        stream.discipline,
+                        FileDiscipline::RewriteInPlace,
+                        "{kind}/{}",
+                        stream.id
+                    );
+                    assert!(
+                        adapter.snapshot_plan(&stream.id).is_none(),
+                        "document stream {kind}/{} exposed a SQLite snapshot plan",
+                        stream.id
+                    );
+                }
                 Some(StreamDriver::SqliteSnapshot) => {
                     sqlite += 1;
                     assert_eq!(
@@ -227,7 +255,9 @@ fn every_driver_matches_its_declared_storage_contract() {
                         panic!("SQLite stream {kind}/{} has no snapshot plan", stream.id)
                     });
                     assert!(!plan.sessions_sql.trim().is_empty(), "{kind}/{}", stream.id);
-                    assert!(!plan.record_queries.is_empty(), "{kind}/{}", stream.id);
+                    // A snapshot may be metadata-only (Antigravity's summary
+                    // database or Codex's state database) and therefore have
+                    // no timeline queries.
                     assert!(
                         plan.record_queries.iter().all(|query| {
                             !query.name.is_empty() && !query.sql.trim().is_empty()
@@ -245,7 +275,11 @@ fn every_driver_matches_its_declared_storage_contract() {
                 }
             }
         }
-        assert_eq!((jsonl, sqlite), (expected_jsonl, expected_sqlite), "{kind}");
+        assert_eq!(
+            (jsonl, document, sqlite),
+            (expected_jsonl, expected_document, expected_sqlite),
+            "{kind}"
+        );
     }
 }
 

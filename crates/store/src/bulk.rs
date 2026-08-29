@@ -69,8 +69,8 @@ pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<BulkLoadStats, StoreError
             cache_w_tokens, think_tokens, message_count, tool_call_count)
          SELECT session_id, hour_ts, model,
                 SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
-                SUM(cache_w_tokens), SUM(think_tokens), COUNT(*),
-                SUM(CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END)
+                SUM(cache_w_tokens), SUM(think_tokens), SUM(message_count),
+                SUM(tool_call_count)
          FROM (
            SELECT session_id,
                   CASE WHEN COALESCE(ts, 0) >= 0
@@ -79,8 +79,19 @@ pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<BulkLoadStats, StoreError
                   END AS hour_ts,
                   COALESCE(model, 'unknown') AS model,
                   in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
-                  think_tokens, type
+                  think_tokens, 1 AS message_count,
+                  CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END AS tool_call_count
            FROM message
+           UNION ALL
+           SELECT session_id,
+                  CASE WHEN ts >= 0
+                    THEN (ts / ?1) * ?1
+                    ELSE - ((-ts + ?1 - 1) / ?1) * ?1
+                  END AS hour_ts,
+                  COALESCE(model, 'unknown') AS model,
+                  in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
+                  think_tokens, 0 AS message_count, 0 AS tool_call_count
+           FROM session_usage
          )
          GROUP BY session_id, hour_ts, model",
         params![HOUR_MS],

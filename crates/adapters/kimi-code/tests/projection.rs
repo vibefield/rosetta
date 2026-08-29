@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, FileStat, LineStatus, NormalizeCtx};
-use rosetta_core::rows::{MessageKind, MessageRow, SessionRole};
+use rosetta_core::rows::{MessageKind, MessageRow, SessionRole, TaskStatus};
 use rosetta_core::{IngestOp, ids};
 use serde_json::json;
 
@@ -407,17 +407,28 @@ fn synthetic_context() -> NormalizeCtx {
 }
 
 #[test]
-fn undeclared_types_drift_and_declared_unprojected_types_are_silent() {
+fn undeclared_types_drift_and_declared_bookkeeping_is_schema_checked() {
     let mut ctx = synthetic_context();
     let outcome =
         KimiCodeAdapter.ingest_line(&mut ctx, "wire", br#"{"type":"wormhole.opened","time":1}"#);
     assert_eq!(outcome.status, LineStatus::UnknownType);
     assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
 
-    let outcome =
-        KimiCodeAdapter.ingest_line(&mut ctx, "wire", br#"{"type":"context.apply_compaction"}"#);
+    let outcome = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"full_compaction.complete","time":1}"#,
+    );
     assert_eq!(outcome.status, LineStatus::Parsed);
     assert!(outcome.ops.is_empty());
+
+    let outcome = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"full_compaction.complete","time":1,"newField":true}"#,
+    );
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
 
     let outcome = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -426,6 +437,51 @@ fn undeclared_types_drift_and_declared_unprojected_types_are_silent() {
     );
     assert_eq!(outcome.status, LineStatus::UnknownType);
     assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+}
+
+#[test]
+fn organic_config_compaction_and_todos_project_canonical_facts() {
+    let mut ctx = synthetic_context();
+    let config = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"config.update","agentsMdPaths":[],"environmentDisclosure":{"cwd":"/work/kimi","date":{"disclosed":true,"value":{"localDate":"2026-08-26","timeZone":"UTC"}}},"profileName":"default","systemPrompt":"prompt","time":1}"#,
+    );
+    assert_eq!(config.status, LineStatus::Parsed);
+    let [IngestOp::WorkspaceObs(workspace)] = config.ops.as_slice() else {
+        panic!("expected workspace observation, got {:?}", config.ops);
+    };
+    assert_eq!(workspace.cwd, "/work/kimi");
+
+    let compaction = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.apply_compaction","compactedCount":4,"contextSummary":"preserved context","keptUserMessageCount":1,"summary":"short summary","summaryOutputTokens":12,"tokensAfter":20,"tokensBefore":100,"time":2}"#,
+    );
+    assert_eq!(compaction.status, LineStatus::Parsed);
+    let [IngestOp::Message(summary)] = compaction.ops.as_slice() else {
+        panic!("expected compaction summary, got {:?}", compaction.ops);
+    };
+    assert_eq!(summary.kind, MessageKind::Summary);
+    assert_eq!(summary.content.as_deref(), Some("preserved context"));
+
+    let todos = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"tools.update_store","key":"todo","value":[{"status":"in_progress","title":"Audit adapters"},{"status":"done","title":"Fix snapshots"}],"time":3}"#,
+    );
+    assert_eq!(todos.status, LineStatus::Parsed);
+    let tasks = todos
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::Task(task) => Some(task),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].status, TaskStatus::InProgress);
+    assert_eq!(tasks[1].status, TaskStatus::Completed);
 }
 
 #[test]

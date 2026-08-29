@@ -132,11 +132,29 @@ fn normalize(
             row.subtype = Some("CHECKPOINT".to_owned());
             row.content = Some(line.content.clone());
             emit.message(row);
+            if let Some(title) = crate::raw::transcript::checkpoint_objective(&line.content) {
+                let mut row = emit.row(line.step_index, "title-fallback", MessageKind::Summary, at);
+                row.subtype = Some("title_fallback".to_owned());
+                row.content = Some(title);
+                emit.message(row);
+            }
             LineStatus::Parsed
         }
         KnownRecord::SystemMessage(line) => {
             let mut row = emit.row(line.step_index, "system", MessageKind::System, at);
             row.subtype = Some("SYSTEM_MESSAGE".to_owned());
+            row.content = Some(line.content.clone());
+            emit.message(row);
+            LineStatus::Parsed
+        }
+        KnownRecord::Generic(line) => {
+            let message_kind = match line.source.as_str() {
+                "MODEL" => MessageKind::Agent,
+                "USER" => MessageKind::User,
+                _ => MessageKind::System,
+            };
+            let mut row = emit.row(line.step_index, "generic", message_kind, at);
+            row.subtype = Some("GENERIC".to_owned());
             row.content = Some(line.content.clone());
             emit.message(row);
             LineStatus::Parsed
@@ -435,6 +453,7 @@ fn record_identity(record: &KnownRecord) -> (&'static str, Option<Ms>) {
         KnownRecord::ListDirectory(line) => ("LIST_DIRECTORY", rfc3339_ms(&line.created_at)),
         KnownRecord::ViewFile(line) => ("VIEW_FILE", rfc3339_ms(&line.created_at)),
         KnownRecord::ErrorMessage(line) => ("ERROR_MESSAGE", rfc3339_ms(&line.created_at)),
+        KnownRecord::Generic(line) => ("GENERIC", rfc3339_ms(&line.created_at)),
     }
 }
 
@@ -522,6 +541,64 @@ mod tests {
                 assert_eq!(*is_error, Some(false));
             }
             other => panic!("expected one tool result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_model_record_projects_as_agent_prose() {
+        let mut ctx = context();
+        let outcome = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 9,
+                "source": "MODEL",
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-08-27T01:00:00Z",
+                "content": "finished",
+                "truncated_fields": ["content"]
+            }),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        match outcome.ops.as_slice() {
+            [IngestOp::Message(row)] => {
+                assert_eq!(row.kind, MessageKind::Agent);
+                assert_eq!(row.subtype.as_deref(), Some("GENERIC"));
+                assert_eq!(row.content.as_deref(), Some("finished"));
+            }
+            other => panic!("expected one agent message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn checkpoint_keeps_its_summary_and_emits_a_bounded_title_fallback() {
+        let mut ctx = context();
+        let outcome = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 4,
+                "source": "SYSTEM",
+                "type": "CHECKPOINT",
+                "status": "DONE",
+                "created_at": "2026-08-27T01:00:00Z",
+                "content": "{{ CHECKPOINT }}\n# USER Objective:\n  Map   the system\ncarefully\n# User Requests\nignore"
+            }),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        match outcome.ops.as_slice() {
+            [IngestOp::Message(summary), IngestOp::Message(title)] => {
+                assert_eq!(summary.subtype.as_deref(), Some("CHECKPOINT"));
+                assert!(
+                    summary
+                        .content
+                        .as_deref()
+                        .unwrap()
+                        .contains("User Requests")
+                );
+                assert_eq!(title.subtype.as_deref(), Some("title_fallback"));
+                assert_eq!(title.content.as_deref(), Some("Map the system carefully"));
+            }
+            other => panic!("expected checkpoint plus title fallback, got {other:?}"),
         }
     }
 

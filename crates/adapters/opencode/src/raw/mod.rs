@@ -1,6 +1,6 @@
 //! Versioned raw schemas — the parseable ground truth of what OpenCode writes.
-//! Every field here is backed by the committed fixture corpus (see
-//! `fixtures/<version>/`); do not add fields without fixture evidence.
+//! Every field here is backed by the canonical fixture or pinned writer
+//! evidence; do not add fields without one of those sources.
 
 pub mod event;
 pub mod payload;

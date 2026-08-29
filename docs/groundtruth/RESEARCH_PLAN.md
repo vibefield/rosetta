@@ -233,8 +233,8 @@ old URL redirects). Current `v0.84.3`; weekly-to-biweekly cadence.
   `groundtruth/pi/sources/0.84.3.writer.json` (session-manager.ts + messages.ts +
   pi-ai types). Fixtures: basic-chat (`session_info` via `--name`), tool-use
   (bash), resume, fork (`parentSession`), error (`stopReason=error`). Auto-compaction
-  did not fire under a 1024-token mock window — `compaction` stays research until
-  a scenario writes it. Docs mention `retainedTail`; the 0.84.3 TypeScript
+  did not fire under the original 1024-token mock window; a subsequent pinned
+  scenario captured compaction. Docs mention `retainedTail`; the 0.84.3 TypeScript
   `CompactionEntry` does not (channel-1 wins). Interactive-only types
   (`bashExecution`, `/tree` `branch_summary`, labels, abort) remain research.
 
@@ -242,7 +242,8 @@ old URL redirects). Current `v0.84.3`; weekly-to-biweekly cadence.
 
 Terminal agent (TUI + CLI + client/server), MIT, OSS. Originally SST, now developed
 by **Anomaly Co** ([repo](https://github.com/anomalyco/opencode) — `sst/opencode`
-redirects). Near-daily releases (current `v1.18.22`).
+redirects). Near-daily releases (surveyed `v1.18.23`; fixtures remain pinned at
+`v1.18.22`).
 
 - **Track:** npm registry `opencode-ai` `latest` dist-tag (GitHub `releases.atom`
   equivalent and carries changelog notes).
@@ -262,6 +263,11 @@ redirects). Near-daily releases (current `v1.18.22`).
 - **Source pointers:** `packages/opencode/src/storage/storage.ts` and
   `storage/schema.ts` (branch `dev`); session domain under
   `packages/opencode/src/session/`.
+- **Writer closure (2026-08-28):** the 1.18.23 writer/schema export is committed as
+  `groundtruth/opencode/sources/1.18.23.writer.json`. It covers the current SQLite
+  tables and message/part unions, including reasoning, patch, retry, tool status/result
+  and usage fields. This strengthens the 1.18.22 fixture corpus; it does not manufacture
+  legacy pre-1.2 JSON evidence or external tool-output bodies.
 - **Fixtures:** `opencode run "prompt" -m mock/mock-model --format json --auto`
   (json = raw event stream; `--auto` auto-approves; `-s`/`-c` resume; `--attach` to a
   running `opencode serve`). Endpoint override is first-class: declare a provider
@@ -323,6 +329,13 @@ wound down; `kimi migrate` imports old data). MIT, OSS
   product with two data dirs (`~/.kimi` vs `~/.kimi-code`); three doc mirrors that
   disagree — treat kimi.com/code as canonical; headless auto-approval demands
   container isolation; OAuth vs API-key paths behave differently.
+- **Adapter closure (2026-08-28):** `state.json` is now a first-class document snapshot
+  that enumerates root and nested agents. The complete 0.38.0 fixture plus organic
+  durable vocabulary is typed; `config.update` supplies workspace observations,
+  `context.apply_compaction` supplies summary rows, and `tools.update_store` supplies
+  tasks. Approval and lifecycle bookkeeping is intentionally a typed canonical no-op,
+  so new fields still drift. Several organic-only variants still need writer-export or
+  hermetic-fixture promotion.
 
 ### 5.5 Cursor CLI (Anysphere) — **Tier C**
 
@@ -350,6 +363,9 @@ Cursor's terminal agent. **Closed source**; binary renamed `cursor-agent` → `a
   decays every release; no confirmed way to install a pinned old version (fixtures
   are capture-when-current, irreplaceable later — archive aggressively); date-based
   versioning and the binary rename complicate version parsing.
+- **Current gate:** the pack remains `blocked`, not “partially supported.” Until a funded,
+  credentialed capture lane exists, Rosetta ships no Cursor adapter and does not substitute
+  the unrelated IDE `state.vscdb` as evidence.
 
 ### 5.6 Claude Code (Anthropic) — **Tier B**
 
@@ -387,6 +403,15 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   its keep here; some record types (`summary`, `file-history-snapshot`) only appear
   under interactive behaviors, so the scenario suite needs resume/compaction flows to
   exercise them; closed source means fixtures are the *only* reliable signal.
+- **Organic census (2026-08-28):** 1,228,589 current transcript records were merged into
+  the version-scoped canonical source. Custom-title records now participate in skim and
+  summary projection. Metadata variants that intentionally emit no canonical row are
+  still checked against their canonical top-level field sets, so declared no-ops no
+  longer hide schema additions. Titles are not guaranteed to occur in the ordinary head
+  or tail windows: the adapter may request a separately metered scan of complete records,
+  capped at 128 KiB / 256 records, only while a main-session title is missing. Full
+  streaming remains authoritative and reconciles generated and explicit title records;
+  explicit titles win independently of source order or batch boundaries.
 
 ### 5.7 Codex CLI (OpenAI) — **Tier A**
 
@@ -402,20 +427,34 @@ rolling alphas; track `latest` only.
   `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`** — complete event
   stream: prompts, responses, tool calls/results, approval decisions, token usage.
   Config `config.toml`; prompt history `history.jsonl` (`history.persistence`,
-  `history.max_bytes`). **Churn signal: a JSONL→SQLite migration appears underway**
-  (config reference now describes session/history state in a SQLite DB rooted at
-  `sqlite_home`, exact filename UNVERIFIED) — watch every release for it.
-- **Source pointers:** rollout persistence in **`codex-rs/core/src/rollout/`**
-  (`RolloutRecorder` in `recorder.rs`; may be extracted to its own crate — re-pin
-  `persistence_paths` per release); serialized types (RolloutItem/EventMsg) in the
-  protocol crate under `codex-rs/`.
+  `history.max_bytes`). Current installs also maintain **`state_*.sqlite`** under the
+  data root. Its `threads` table is the native session-list metadata companion: `name`
+  is the generated/user display name, while `title` is a prompt-like fallback; rollout
+  headers themselves deliberately carry no display title. Rosetta therefore drives the
+  rollout as JSONL and the state database as a metadata-only SQLite snapshot joined by
+  native thread id. State schemas vary across releases, so the adapter interprets
+  optional columns from `SELECT *` instead of hard-coding a query that mentions them.
+- **Source pointers:** the current writer is split across
+  `codex-rs/history/src/lib.rs`, `history/src/rollout_payload.rs`,
+  `protocol/src/models.rs`, `protocol/src/protocol.rs`, and
+  `rollout/src/policy.rs`; re-pin these paths when the crates move.
+- **Writer closure (2026-08-28):** `openai/codex` tag `rust-v0.150.1` is committed as
+  `groundtruth/codex/sources/0.150.1.writer.json`. The adapter covers the complete
+  persisted top-level, response-item and event vocabulary, including compacted history,
+  reasoning summaries/content, agent communication, realtime transcripts, tool search,
+  web/image/local-shell records and current turn context. Fixtures remain pinned at
+  0.149.1; an organic compaction replay is still desirable. The canonical layout admits
+  `state_*.sqlite*` before the broader database inventory. Metadata projection prefers a
+  normalized non-empty `name`, otherwise uses a whitespace-normalized `title` capped to
+  36 Unicode scalar values, and leaves a genuinely blank title null.
 - **Fixtures:** `codex exec "prompt" --json` (stdout = JSONL event stream). Mock via
   `[model_providers.mock]` in config.toml: `base_url` → mockmodel, `env_key` naming a
   dummy env var, **`wire_api = "responses"`** — the mock must speak the OpenAI
   Responses API, not chat-completions. No OAuth wall on this path.
-- **Risks:** the SQLite migration could swap the ground-truth artifact entirely
-  mid-pipeline; rollouts embed compaction history and can reach GBs — the scenario
-  suite must include compaction; crate reorgs move the files `watch.toml` points at.
+- **Risks:** the JSONL/SQLite hybrid may move more authoritative state into the database
+  mid-release; rollouts embed compaction history and can reach GBs — the scenario suite
+  must include compaction; optional state columns and crate reorgs require the schema and
+  `watch.toml` evidence to be refreshed together.
 
 ### 5.8 Grok Build (xAI) — **Tier A**
 
@@ -504,6 +543,18 @@ the **CLI**. The IDE stays a separate survey-and-monitor lane.
   Print-mode farm does not write `history.jsonl` or `implicit/*.pb`; those are
   observed/research. Organic census (2026-08-25) is the evidence for
   CONVERSATION_HISTORY / LIST_DIRECTORY / VIEW_FILE / ERROR_MESSAGE.
+- **Metadata/title closure (2026-08-28):** `conversation_summaries.title` is an
+  explicit display label and `preview` remains semantically distinct summary data.
+  When that database is sparse, a complete checkpoint may supply only the exact
+  `# USER Objective:` section as a lowest-confidence fallback: stop at the next
+  Markdown heading, normalize whitespace, reject blank/malformed sections, and cap
+  the display value to 80 Unicode scalar values including an ellipsis. Meta skim
+  chooses the greatest visible `step_index` from the head/tail records and may use
+  the shared 128 KiB / 256-record bounded fallback only while the title is absent;
+  full streaming emits the same source-owned fallback and therefore repairs deeper
+  objectives. Explicit database titles always outrank checkpoint fallbacks, while
+  preview-only sessions stay untitled. Normalizer 4, canonical-op goldens, parser
+  unit tests, and pipeline replay/incremental tests freeze those rules.
 
 ### 5.10 GitHub Copilot CLI — **Tier B**
 
@@ -516,7 +567,9 @@ diff. Multiple releases per month.
 - **On-disk ground truth (macOS):** everything under `~/.copilot` (**`COPILOT_HOME`
   override** — harvest isolation), and unusually, **officially documented**:
   `session-state/<session-id>/` with **`events.jsonl`** (prompts, responses, tool
-  invocations, file modifications) plus plans/checkpoints; `session-store.db` is a
+  invocations, file modifications), a small flat **`workspace.yaml`** carrying the native
+  session id, cwd, generated/user name and timestamps, plus plans/checkpoints;
+  `session-store.db` is a
   **derived, rebuildable SQLite index** (`/chronicle reindex`) — exclude it from
   ground truth; `settings.json` (JSONC), `config.json`, `permissions-config.json`,
   `mcp-config.json`, `logs/`, `agents/`, `skills/`, `hooks/`. Field-level
@@ -537,6 +590,11 @@ diff. Multiple releases per month.
   the loop. Keep one scheduled credentialed run against GitHub-hosted models to
   check BYOK/hosted parity of the event stream. Field-level on-disk schema is the
   merge of that writer schema with fixtures — not either source alone.
+- **Metadata closure (2026-08-28):** `events.jsonl` remains the only timeline rail;
+  `workspace.yaml` is a metadata-only `DocumentSnapshot` capped at 64 KiB. The parser
+  accepts only the writer's flat scalar form, rejects a body/path session-id mismatch,
+  and preserves the previous projection on malformed partial rewrites. Rename updates
+  replace the native title without consulting the derived `session-store.db`.
 - **Risks:** `events.jsonl` schema undocumented and only inferable from fixtures;
   native binaries preclude static inspection; BYOK runs may not be byte-identical to
   hosted-model runs (sandbox/custom-agent features touch the event stream) — hence

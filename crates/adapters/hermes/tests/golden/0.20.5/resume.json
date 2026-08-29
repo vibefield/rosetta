@@ -106,5 +106,33 @@
     "agent_version": null,
     "src_cursor": 7,
     "src_offset": 3
+  },
+  {
+    "op": "session_usage",
+    "session_id": "06cd3a4dc75f421324afa2e87c6147cf366efa3cfdad33c80f6444cc94bc0215",
+    "key": "ee0e7f322443e1da0c82f97e4b568dbd11ce712be15a2e1c172dfccb4d44c95b",
+    "ts": 1787635899478,
+    "model": "mock-model",
+    "tokens": {
+      "input": 256,
+      "output": 64,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "06cd3a4dc75f421324afa2e87c6147cf366efa3cfdad33c80f6444cc94bc0215",
+    "key": "e5494c6e4e8cc664c1605c12260d3334f108df376da85c7f061cd80f3ff49710",
+    "ts": 1787635897844,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
   }
 ]

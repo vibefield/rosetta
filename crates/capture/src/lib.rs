@@ -5,14 +5,17 @@
 //! filesystem notification hints, and the append-only raw ledger.
 
 pub mod discovery;
+pub mod document;
 pub mod ledger;
 pub mod sqlite;
 pub mod tailer;
 pub mod watch;
 
 pub use discovery::{
-    HeadTail, ScannedFile, WalkReport, first_record, head_tail, walk, walk_filtered,
+    HeadTail, RecordScan, ScannedFile, WalkReport, first_record, head_tail, scan_records, walk,
+    walk_filtered,
 };
+pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{
     Ledger, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef, scan as scan_ledger,
     visit as visit_ledger,

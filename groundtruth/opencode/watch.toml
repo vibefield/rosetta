@@ -15,8 +15,8 @@ tier = "A"
 [release]
 channel = "npm"                          # near-daily releases — batch into weekly roll-up PRs
 id = "opencode-ai"
-surveyed = "1.18.22"                     # 2026-08-24
-pinned = "1.18.22"                       # fixtures + groundtruth doc committed (2026-08-25)
+surveyed = "1.18.23"                     # 2026-08-28
+pinned = "1.18.22"                       # fixtures; 1.18.23 writer schema also merged
 changelog = "https://github.com/anomalyco/opencode/releases"
 
 [source]

@@ -21,9 +21,12 @@ pub(crate) fn enrich_workspace_ops(ops: &mut [IngestOp]) {
             continue;
         };
         row.cwd = ids::normalize_root(&row.cwd);
-        if row.git_repo.is_none() {
-            row.git_repo = git_identity(&row.cwd);
-        }
+        // A native adapter may report a shorthand such as `owner/repo`, while
+        // another reports the remote URL. Prefer the local repository's
+        // sanitized origin whenever it is available so both observations fold
+        // to one project identity. Sanitize the native fallback as well.
+        let reported = row.git_repo.take().map(|value| sanitize_remote(&value));
+        row.git_repo = git_identity(&row.cwd).or(reported);
     }
 }
 
@@ -152,5 +155,30 @@ mod tests {
             sanitize_remote("git@example.com:acme/repo.git"),
             "example.com:acme/repo"
         );
+    }
+
+    #[test]
+    fn workspace_observation_prefers_local_canonical_remote() {
+        let root = TempDir::new().unwrap();
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        std::fs::write(
+            root.path().join(".git/config"),
+            "[remote \"origin\"]\n  url = git@example.com:acme/repo.git\n",
+        )
+        .unwrap();
+        let mut ops = vec![IngestOp::WorkspaceObs(
+            rosetta_core::rows::WorkspaceObsRow {
+                session_id: "s".to_owned(),
+                at: 0,
+                cwd: root.path().to_string_lossy().into_owned(),
+                git_branch: None,
+                git_repo: Some("acme/repo".to_owned()),
+            },
+        )];
+        enrich_workspace_ops(&mut ops);
+        let IngestOp::WorkspaceObs(row) = &ops[0] else {
+            unreachable!()
+        };
+        assert_eq!(row.git_repo.as_deref(), Some("example.com:acme/repo"));
     }
 }

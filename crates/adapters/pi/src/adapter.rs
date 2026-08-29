@@ -6,7 +6,7 @@ use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
     AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
 };
-use rosetta_core::rows::SessionRole;
+use rosetta_core::rows::{SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, PiState};
@@ -31,7 +31,7 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        1
+        2
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -92,6 +92,7 @@ impl AgentAdapter for PiAdapter {
             return SkimResult {
                 session_id: path_id,
                 role: Some(SessionRole::Main),
+                title_kind: title.as_ref().map(|_| TitleKind::Explicit),
                 title,
                 ..SkimResult::default()
             };
@@ -111,8 +112,11 @@ impl AgentAdapter for PiAdapter {
             cwd: (!header.cwd.is_empty()).then_some(header.cwd),
             // `version` is Pi's SESSION FORMAT version, not the agent release.
             agent_version: None,
+            title_kind: title.as_ref().map(|_| TitleKind::Explicit),
             title,
+            summary: None,
             started_at: rfc3339_ms(&header.timestamp),
+            updated_at: None,
         }
     }
 

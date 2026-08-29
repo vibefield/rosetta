@@ -72,7 +72,7 @@
       "output": "rosetta-mock\n",
       "truncated": false
     },
-    "is_error": null,
+    "is_error": false,
     "at": 1787635539737
   },
   {

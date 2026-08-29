@@ -94,6 +94,21 @@ fn basic_chat_projects_system_workspace_and_flat_timeline() {
         [0, 1, 2]
     );
     assert!(rows.iter().all(|row| row.usage.is_none()));
+    let usage: Vec<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::SessionUsage(row) => Some(row),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usage.len(), 2);
+    assert_eq!(
+        usage
+            .iter()
+            .map(|row| row.tokens.input)
+            .sum::<Option<i64>>(),
+        Some(256)
+    );
     assert!(!ops.iter().any(|op| matches!(op, IngestOp::Drift(_))));
 }
 

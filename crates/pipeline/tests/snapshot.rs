@@ -457,6 +457,134 @@ fn live_database_hint_reenumerates_virtual_session_membership() {
 }
 
 #[test]
+fn deleted_database_sweeps_every_virtual_member() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    stream_backfill_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        queries::search(h.store.conn(), "ometeotl", 5)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    std::fs::remove_file(&h.db).unwrap();
+    let (_, tombstones) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert_eq!(tombstones.len(), 2);
+    assert!(tombstones.iter().all(|file| file.source_missing));
+    let swept = stream_backfill_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &tombstones,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert!(swept.generations_restarted >= 2);
+    assert!(
+        queries::search(h.store.conn(), "ometeotl", 5)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        queries::search(h.store.conn(), "xolotl", 5)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn live_database_delete_hint_reconciles_membership() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    stream_backfill_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+
+    let mut events = ScriptedEvents::default();
+    events.push_changed("agent.db");
+    let mut runner = LiveRunner::start(
+        adapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::new(events),
+        &mut h.store,
+        h.opts.clone(),
+        LiveOptions {
+            tick: Duration::ZERO,
+            poll_interval: Duration::from_secs(3600),
+            max_coalesced: 8,
+        },
+        &h.instrument,
+    )
+    .unwrap();
+    std::fs::remove_file(&h.db).unwrap();
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+
+    assert_eq!(runner.report().admissions, 1);
+    assert!(
+        queries::search(h.store.conn(), "ometeotl", 5)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        queries::search(h.store.conn(), "xolotl", 5)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn repeated_hard_snapshot_generations_are_abandoned_without_staging_growth() {
     let adapter = &FakeDbAgent;
     let mut h = harness();

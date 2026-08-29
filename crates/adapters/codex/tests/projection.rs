@@ -187,17 +187,90 @@ fn codex_input_counter_is_split_by_subtraction() {
 }
 
 #[test]
-fn an_unknown_record_type_is_soft_drift() {
-    // A type from a later release must never fail a line: it reports as
-    // UnknownType, which the pipeline does not count against stream health.
+fn compacted_projects_only_the_checkpoint_summary() {
     let mut ctx = context();
-    let outcome = ingest(&mut ctx, 1, "compacted", json!({"message": "…"}));
+    let outcome = ingest(
+        &mut ctx,
+        1,
+        "compacted",
+        json!({
+            "message": "Earlier work, compacted.",
+            "replacement_history": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "do not duplicate me"}],
+            }],
+            "window_number": 1,
+        }),
+    );
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    assert!(drifts(&outcome.ops).is_empty());
+    match outcome.ops.as_slice() {
+        [IngestOp::Message(row)] => {
+            assert_eq!(row.kind, MessageKind::Summary);
+            assert_eq!(row.subtype.as_deref(), Some("compacted"));
+            assert_eq!(row.content.as_deref(), Some("Earlier work, compacted."));
+        }
+        other => panic!("expected only one summary row, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_truly_unknown_top_level_record_is_soft_drift() {
+    let mut ctx = context();
+    let outcome = ingest(&mut ctx, 1, "wormhole", json!({"message": "…"}));
     assert_eq!(outcome.status, LineStatus::UnknownType);
     let drift = drifts(&outcome.ops);
     assert_eq!(drift.len(), 1);
     assert_eq!(drift[0].error_code, "unknown_type");
-    assert_eq!(drift[0].record_kind, "compacted");
-    assert_eq!(drift[0].stream, "rollout");
+    assert_eq!(drift[0].record_kind, "wormhole");
+}
+
+#[test]
+fn current_reasoning_and_agent_message_shapes_are_visible_without_drift() {
+    let mut ctx = context();
+    let reasoning = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [{"type": "summary_text", "text": "Checked the evidence."}],
+            "encrypted_content": "opaque",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn"},
+        }),
+    );
+    assert!(drifts(&reasoning.ops).is_empty());
+    match reasoning.ops.as_slice() {
+        [IngestOp::Message(row)] => {
+            assert_eq!(row.kind, MessageKind::Thinking);
+            assert_eq!(row.content.as_deref(), Some("Checked the evidence."));
+        }
+        other => panic!("expected one thinking row, got {other:?}"),
+    }
+
+    let delivery = ingest(
+        &mut ctx,
+        2,
+        "response_item",
+        json!({
+            "type": "agent_message",
+            "id": "amsg_1",
+            "author": "/root/worker",
+            "recipient": "/root",
+            "content": [{"type": "input_text", "text": "Work complete."}],
+        }),
+    );
+    assert!(drifts(&delivery.ops).is_empty());
+    match delivery.ops.as_slice() {
+        [IngestOp::Message(row)] => {
+            assert_eq!(row.kind, MessageKind::System);
+            assert_eq!(row.subtype.as_deref(), Some("agent_message"));
+            assert_eq!(row.content.as_deref(), Some("Work complete."));
+        }
+        other => panic!("expected one system row, got {other:?}"),
+    }
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Raw types for JSON blobs stored in `opencode.db`.
 //!
 //! Evidence: THE CANONICAL `groundtruth.json` (iron rule #6) — fixtures at
-//! 1.18.22 (basic-chat, tool-use, resume). Conversational truth lives in
+//! 1.18.22 plus the pinned 1.18.23 writer schema. Conversational truth lives in
 //! `message.data` (role-tagged) and `part.data` (type-tagged). Table columns
 //! themselves are covered by the SQLite schema dump; credential/account tables
 //! are inventoried and MUST-NOT-PARSE.
@@ -49,7 +49,20 @@ pub fn parse_part(json: &str) -> Result<ParsedPart, serde_json::Error> {
     let rtype = value["type"].as_str().map(str::to_owned);
     let known = matches!(
         rtype.as_deref(),
-        Some("text" | "tool" | "step-start" | "step-finish")
+        Some(
+            "text"
+                | "subtask"
+                | "reasoning"
+                | "file"
+                | "tool"
+                | "step-start"
+                | "step-finish"
+                | "snapshot"
+                | "patch"
+                | "agent"
+                | "retry"
+                | "compaction"
+        )
     );
     if known {
         Ok(ParsedPart::Known(Box::new(serde_json::from_value(value)?)))
@@ -81,7 +94,14 @@ impl Drift for MessageData {
 pub struct UserMessage {
     pub agent: String,
     pub model: UserModel,
-    pub summary: UserSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<UserSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Value>,
     pub time: CreatedTime,
     #[serde(flatten)]
     pub unknown: Unknown,
@@ -91,7 +111,9 @@ impl Drift for UserMessage {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
         note_unknown(&self.model.unknown, &format!("{prefix}.model"), out);
-        note_unknown(&self.summary.unknown, &format!("{prefix}.summary"), out);
+        if let Some(summary) = &self.summary {
+            note_unknown(&summary.unknown, &format!("{prefix}.summary"), out);
+        }
         note_unknown(&self.time.unknown, &format!("{prefix}.time"), out);
     }
 }
@@ -102,12 +124,18 @@ pub struct UserModel {
     pub provider_id: String,
     #[serde(rename = "modelID")]
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UserSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     pub diffs: Vec<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
@@ -124,7 +152,8 @@ pub struct CreatedTime {
 pub struct AssistantMessage {
     pub agent: String,
     pub cost: serde_json::Number,
-    pub finish: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<String>,
     pub mode: String,
     #[serde(rename = "modelID")]
     pub model_id: String,
@@ -135,6 +164,14 @@ pub struct AssistantMessage {
     pub provider_id: String,
     pub time: CompletedTime,
     pub tokens: Tokens,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -159,17 +196,19 @@ pub struct AssistantPath {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CompletedTime {
     pub created: u64,
-    pub completed: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<u64>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Tokens {
-    pub total: u64,
-    pub input: u64,
-    pub output: u64,
-    pub reasoning: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<serde_json::Number>,
+    pub input: serde_json::Number,
+    pub output: serde_json::Number,
+    pub reasoning: serde_json::Number,
     pub cache: CacheTokens,
     #[serde(flatten)]
     pub unknown: Unknown,
@@ -184,8 +223,8 @@ impl Drift for Tokens {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CacheTokens {
-    pub read: u64,
-    pub write: u64,
+    pub read: serde_json::Number,
+    pub write: serde_json::Number,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -197,10 +236,26 @@ pub enum PartData {
     Text(TextPart),
     #[serde(rename = "tool")]
     Tool(ToolPart),
+    #[serde(rename = "reasoning")]
+    Reasoning(ReasoningPart),
+    #[serde(rename = "file")]
+    File(FilePart),
+    #[serde(rename = "subtask")]
+    Subtask(SubtaskPart),
     #[serde(rename = "step-start")]
     StepStart(StepStartPart),
     #[serde(rename = "step-finish")]
     StepFinish(StepFinishPart),
+    #[serde(rename = "snapshot")]
+    Snapshot(SnapshotPart),
+    #[serde(rename = "patch")]
+    Patch(PatchPart),
+    #[serde(rename = "agent")]
+    Agent(AgentPart),
+    #[serde(rename = "retry")]
+    Retry(RetryPart),
+    #[serde(rename = "compaction")]
+    Compaction(CompactionPart),
 }
 
 impl Drift for PartData {
@@ -208,8 +263,16 @@ impl Drift for PartData {
         match self {
             PartData::Text(part) => part.drift(prefix, out),
             PartData::Tool(part) => note_unknown(&part.unknown, prefix, out),
+            PartData::Reasoning(part) => part.drift(prefix, out),
+            PartData::File(part) => note_unknown(&part.unknown, prefix, out),
+            PartData::Subtask(part) => part.drift(prefix, out),
             PartData::StepStart(part) => note_unknown(&part.unknown, prefix, out),
             PartData::StepFinish(part) => part.drift(prefix, out),
+            PartData::Snapshot(part) => note_unknown(&part.unknown, prefix, out),
+            PartData::Patch(part) => note_unknown(&part.unknown, prefix, out),
+            PartData::Agent(part) => note_unknown(&part.unknown, prefix, out),
+            PartData::Retry(part) => part.drift(prefix, out),
+            PartData::Compaction(part) => note_unknown(&part.unknown, prefix, out),
         }
     }
 }
@@ -219,6 +282,12 @@ pub struct TextPart {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<SpanTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthetic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -235,7 +304,8 @@ impl Drift for TextPart {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SpanTime {
     pub start: u64,
-    pub end: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<u64>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -248,8 +318,61 @@ pub struct ToolPart {
     #[serde(rename = "callID")]
     pub call_id: String,
     pub state: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ReasoningPart {
+    pub text: String,
+    pub time: SpanTime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for ReasoningPart {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        note_unknown(&self.time.unknown, &format!("{prefix}.time"), out);
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FilePart {
+    pub mime: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SubtaskPart {
+    pub prompt: String,
+    pub description: String,
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<UserModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for SubtaskPart {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        if let Some(model) = &self.model {
+            note_unknown(&model.unknown, &format!("{prefix}.model"), out);
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -276,4 +399,59 @@ impl Drift for StepFinishPart {
         note_unknown(&self.unknown, prefix, out);
         self.tokens.drift(&format!("{prefix}.tokens"), out);
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SnapshotPart {
+    pub snapshot: String,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PatchPart {
+    pub hash: String,
+    pub files: Vec<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AgentPart {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RetryPart {
+    pub attempt: u64,
+    pub error: Value,
+    pub time: CreatedTime,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for RetryPart {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        note_unknown(&self.time.unknown, &format!("{prefix}.time"), out);
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CompactionPart {
+    pub auto: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overflow: Option<bool>,
+    #[serde(
+        rename = "tail_start_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tail_start_id: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
 }

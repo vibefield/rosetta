@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS session (
   root_session_id   TEXT NOT NULL REFERENCES session(id),
   role              TEXT NOT NULL DEFAULT 'main',
   title             TEXT,
+  -- Best bounded meta answer. Streamed title singleton rows may refine the
+  -- public title; this is their deterministic fallback after a source sweep.
+  meta_title        TEXT,
+  meta_title_rank   INTEGER NOT NULL DEFAULT 0,
+  meta_title_at     INTEGER,
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
@@ -237,6 +242,27 @@ CREATE TABLE IF NOT EXISTS drift_seen (
   event_key TEXT PRIMARY KEY
 ) WITHOUT ROWID;
 
+-- Native agents such as Hermes report replacement-keyed task/session totals
+-- without attributing them to an individual response. Keep those facts
+-- canonical instead of fabricating message rows merely to feed the aggregate.
+CREATE TABLE IF NOT EXISTS session_usage (
+  session_id     TEXT NOT NULL REFERENCES session(id),
+  sample_key     TEXT NOT NULL,
+  ts             INTEGER NOT NULL,
+  model          TEXT,
+  in_tokens      INTEGER,
+  out_tokens     INTEGER,
+  cache_r_tokens INTEGER,
+  cache_w_tokens INTEGER,
+  think_tokens   INTEGER,
+  src_cursor     INTEGER REFERENCES ingest_cursor(id),
+  PRIMARY KEY (session_id, sample_key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_usage_src ON session_usage(src_cursor);
+CREATE INDEX IF NOT EXISTS session_usage_bucket_key ON session_usage(
+  session_id, COALESCE(model, 'unknown'), ts
+);
+
 CREATE TABLE IF NOT EXISTS usage_bucket (
   session_id      TEXT NOT NULL REFERENCES session(id),
   hour_ts         INTEGER NOT NULL,
@@ -286,6 +312,7 @@ DROP INDEX IF EXISTS session_parent;
 DROP INDEX IF EXISTS workspace_obs_session;
 DROP INDEX IF EXISTS task_session;
 DROP INDEX IF EXISTS message_bucket_key;
+DROP INDEX IF EXISTS session_usage_bucket_key;
 DROP INDEX IF EXISTS file_edit_session;
 DROP INDEX IF EXISTS file_edit_path;
 DROP INDEX IF EXISTS file_edit_message;
@@ -303,6 +330,9 @@ CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
+);
+CREATE INDEX IF NOT EXISTS session_usage_bucket_key ON session_usage(
+  session_id, COALESCE(model, 'unknown'), ts
 );
 CREATE INDEX IF NOT EXISTS file_edit_session ON file_edit(session_id, at);
 CREATE INDEX IF NOT EXISTS file_edit_path    ON file_edit(path);

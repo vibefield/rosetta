@@ -66,5 +66,33 @@
     "agent_version": null,
     "src_cursor": 7,
     "src_offset": 1
+  },
+  {
+    "op": "session_usage",
+    "session_id": "336b1c3b9f222df527145d8e4ce18b21a780ec593f8b7d92862921474b567d3c",
+    "key": "8ed1bf49b8ace426581e8882fa302cafaeea45850f1ee70c8dbacf983988cd43",
+    "ts": 1787635889310,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "336b1c3b9f222df527145d8e4ce18b21a780ec593f8b7d92862921474b567d3c",
+    "key": "091ca7e6c945f15c46daf88b3fb6f3b410fc8cdafac7baae891dfd8f8b3a3b21",
+    "ts": 1787635889304,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0
+    }
   }
 ]

@@ -11,12 +11,20 @@ evidence = "fixture"
 notes = "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg, response_item, world_state, turn_context. Pinned writer evidence adds custom_tool_call/custom_tool_call_output to the fixture-backed response items. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large."
 
 [[streams]]
+id = "state-db"
+glob = "state_*.sqlite*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "fixture"
+notes = "Versioned WAL-mode session metadata projection. The threads table supplies the complete current id/cwd/version/time/title inventory; optional generated name takes precedence over a bounded first-prompt fallback. Sidecars are watch hints only. Schema dump: sources/<version>.sqlite-schema.sql."
+
+[[streams]]
 id = "state-dbs"
 glob = "*.sqlite*"
 file_format = "sqlite"
 discipline = "database"
 evidence = "fixture"
-notes = "Version-suffixed WAL-mode SQLite stores created on first run at 0.149.1: goals_1, logs_2, memories_1, queue_1, state_5 (150 migrations), thread_history_1 (+ -wal/-shm). thread_history_1 is codex's OWN rollout->SQLite projection with per-thread byte-offset cursors (thread_history_projection_state.next_rollout_byte_offset) — rollouts stay the source of truth. state_5.threads holds session metadata; rollout_migration_state instruments the JSONL migration. Schema dump: sources/<version>.sqlite-schema.sql."
+notes = "Inventory for the remaining version-suffixed WAL-mode stores: goals_1, logs_2, memories_1, queue_1, thread_history_1 (+ -wal/-shm). thread_history_1 is Codex's own rollout projection with byte-offset cursors; rollouts remain timeline truth. The earlier state-db stream claims state_*.sqlite first."
 
 [[streams]]
 id = "writer-locks"

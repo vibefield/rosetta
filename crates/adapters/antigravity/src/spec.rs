@@ -30,6 +30,11 @@ pub const TRANSCRIPT_FULL: &str = "transcript-full";
 pub const TRANSCRIPT_CHUNKS: &str = "transcript-chunks";
 pub const TRANSCRIPT_FULL_CHUNKS: &str = "transcript-full-chunks";
 
+/// Authoritative multi-session metadata index. It supplements the transcript
+/// with titles, previews, workspace identity, and native parentage, and also
+/// keeps sessions whose transcript has not been retained discoverable.
+pub const CONVERSATION_SUMMARIES: &str = "conversation-summaries";
+
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
     DOC.get_or_init(|| {
@@ -66,8 +71,8 @@ struct StreamRecordTypes {
 #[cfg(test)]
 mod tests {
     use super::{
-        TRANSCRIPT, TRANSCRIPT_CHUNKS, TRANSCRIPT_FULL, TRANSCRIPT_FULL_CHUNKS,
-        declared_transcript_types, doc,
+        CONVERSATION_SUMMARIES, TRANSCRIPT, TRANSCRIPT_CHUNKS, TRANSCRIPT_FULL,
+        TRANSCRIPT_FULL_CHUNKS, declared_transcript_types, doc,
     };
 
     #[test]
@@ -81,6 +86,7 @@ mod tests {
         for stream in [TRANSCRIPT_FULL, TRANSCRIPT_CHUNKS, TRANSCRIPT_FULL_CHUNKS] {
             assert!(doc().stream(stream).is_some(), "missing {stream}");
         }
+        assert!(doc().stream(CONVERSATION_SUMMARIES).is_some());
     }
 
     #[test]

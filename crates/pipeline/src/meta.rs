@@ -8,7 +8,9 @@ use std::path::Path;
 use rosetta_adapter_support::{
     AgentAdapter, FileDiscipline, FileFormat, FileStat, SkimResult, StreamDriver,
 };
-use rosetta_core::rows::{ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
+use rosetta_core::rows::{
+    ProjectRow, RuntimeRow, SessionRole, SessionRow, SessionTitleRow, StreamState, TitleKind,
+};
 use rosetta_core::{IngestOp, ids};
 use rosetta_store::{ApplyStats, Batch, Store};
 
@@ -28,6 +30,10 @@ pub struct SessionFile {
     pub size: u64,
     pub modified_ms: i64,
     pub agent_version: Option<String>,
+    /// Meta confirmed that the physical snapshot source no longer exists.
+    /// Only these virtual tombstones may turn a Missing read into an empty
+    /// authoritative generation; a racing ordinary read remains incomplete.
+    pub source_missing: bool,
 }
 
 #[derive(Debug, Default)]
@@ -46,6 +52,14 @@ pub struct MetaReport {
     pub sessions: usize,
     pub projects: usize,
     pub stats: ApplyStats,
+}
+
+#[derive(Debug, Default)]
+struct MetaOutput {
+    projects: Vec<ProjectRow>,
+    sessions: Vec<SessionRow>,
+    files: Vec<SessionFile>,
+    ops: Vec<IngestOp>,
 }
 
 pub fn meta_ingest(
@@ -81,10 +95,7 @@ pub fn meta_ingest_into(
     })?;
 
     let mut report = MetaReport::default();
-    let mut files = Vec::new();
-    let mut projects: Vec<ProjectRow> = Vec::new();
-    let mut sessions: Vec<SessionRow> = Vec::new();
-    let mut skim_ops: Vec<IngestOp> = Vec::new();
+    let mut output = MetaOutput::default();
     report.walk_truncated = walk.truncated;
 
     for file in &walk.files {
@@ -101,6 +112,29 @@ pub fn meta_ingest_into(
             StreamDriver::JsonLines
                 if stream.file_format == FileFormat::Jsonl
                     && stream.discipline == FileDiscipline::AppendOnly => {}
+            StreamDriver::DocumentSnapshot
+                if matches!(
+                    stream.file_format,
+                    FileFormat::Json | FileFormat::Toml | FileFormat::Markdown | FileFormat::Text
+                ) && stream.discipline == FileDiscipline::RewriteInPlace =>
+            {
+                admit_document(
+                    adapter,
+                    runtime,
+                    root,
+                    store,
+                    stream,
+                    driver,
+                    &file.relative_path,
+                    file.size,
+                    file.modified_ms,
+                    opts,
+                    &mut report,
+                    &mut output,
+                    instrument,
+                )?;
+                continue;
+            }
             StreamDriver::SqliteSnapshot
                 if stream.file_format == FileFormat::Sqlite
                     && stream.discipline == FileDiscipline::Database =>
@@ -138,9 +172,7 @@ pub fn meta_ingest_into(
                     file.size,
                     file.modified_ms,
                     &mut report,
-                    &mut projects,
-                    &mut sessions,
-                    &mut files,
+                    &mut output,
                     instrument,
                 )?;
                 continue;
@@ -198,16 +230,45 @@ pub fn meta_ingest_into(
             instrument.add(Metric::BytesRead, first.len() as u64);
             skim = adapter.skim(&stream.id, &stat, &first, &windows.tail);
         }
-        skim_ops.extend(std::mem::take(&mut skim.ops));
+        if opts.skim_fallback_bytes > 0
+            && opts.skim_fallback_records > 0
+            && adapter.wants_skim_fallback(&stream.id, &skim)
+        {
+            // Rewind to the beginning of the record clipped by the head so
+            // every byte handed to the adapter is a complete JSONL record.
+            let start = windows
+                .head
+                .iter()
+                .rposition(|byte| *byte == opts.tail.delimiter)
+                .map_or(0, |at| at + 1) as u64;
+            if let Some(scan) = instrument.time(Metric::SkimFallbackNanos, || {
+                rosetta_capture::scan_records(
+                    &root.join(&file.relative_path),
+                    start,
+                    opts.skim_fallback_bytes,
+                    opts.skim_fallback_records,
+                    opts.tail.delimiter,
+                    opts.tail.max_record_bytes,
+                    opts.tail.normalize_crlf,
+                )
+            })? {
+                instrument.add(Metric::SkimFallbackBytes, scan.bytes_read);
+                instrument.add(Metric::BytesRead, scan.bytes_read);
+                for record in scan.records {
+                    if adapter.absorb_skim_fallback_record(&stream.id, &record, &mut skim) {
+                        break;
+                    }
+                }
+            }
+        }
+        output.ops.extend(std::mem::take(&mut skim.ops));
         let Some(native_session_id) = skim.session_id.clone() else {
             report.files_unidentified += 1;
             continue;
         };
         admit_identified(
             runtime,
-            &mut projects,
-            &mut sessions,
-            &mut files,
+            &mut output,
             AdmitSource {
                 relative_path: file.relative_path.clone(),
                 stream_id: stream.id.clone(),
@@ -222,26 +283,89 @@ pub fn meta_ingest_into(
         );
     }
 
+    // Snapshot membership is authoritative even when the whole physical
+    // source disappears. The walk cannot call `admit_document/database` for a
+    // missing path, so retain its existing virtual cursors as explicit empty
+    // tombstones for one generation. JSONL files keep their ordinary missing
+    // semantics and are never swept here.
+    let present: std::collections::BTreeSet<&str> = walk
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect();
+    for (virtual_path, cursor_stream, session_id) in
+        rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, "")?
+    {
+        if output
+            .files
+            .iter()
+            .any(|file| file.relative_path == virtual_path)
+        {
+            continue;
+        }
+        let Some((physical_path, native_session_id)) = virtual_path.split_once('#') else {
+            continue;
+        };
+        let native_session_id = native_session_id.to_owned();
+        if present.contains(physical_path) {
+            continue;
+        }
+        let Some(stream) = layout.stream(&cursor_stream) else {
+            continue;
+        };
+        let Some(driver) = adapter.stream_driver(&cursor_stream) else {
+            continue;
+        };
+        if !matches!(
+            driver,
+            StreamDriver::DocumentSnapshot | StreamDriver::SqliteSnapshot
+        ) {
+            continue;
+        }
+        output.files.push(SessionFile {
+            relative_path: virtual_path,
+            stream_id: cursor_stream,
+            file_format: stream.file_format,
+            discipline: stream.discipline,
+            driver,
+            session_id,
+            native_session_id,
+            size: 0,
+            modified_ms: 0,
+            agent_version: None,
+            source_missing: true,
+        });
+    }
+
     // A re-skim must never regress ingest progress: a session the stream
     // phase already indexed stays indexed.
-    for session in &mut sessions {
+    for session in &mut output.sessions {
         if let Some(existing) = rosetta_store::queries::session(store.conn(), &session.id)? {
             session.stream_state = existing.stream_state;
         }
     }
-    sessions.sort_by_key(|session| !matches!(session.role, SessionRole::Main));
+    output
+        .sessions
+        .sort_by_key(|session| !matches!(session.role, SessionRole::Main));
 
-    report.sessions = sessions.len();
-    report.projects = projects.len();
+    report.sessions = output.sessions.len();
+    report.projects = output.projects.len();
     instrument.add(Metric::FilesMatched, report.files_matched as u64);
     instrument.add(Metric::SessionsDiscovered, report.sessions as u64);
 
     // FK order: runtime → projects → sessions, one transaction.
-    let mut ops: Vec<IngestOp> = Vec::with_capacity(1 + projects.len() + sessions.len());
+    let MetaOutput {
+        projects,
+        sessions,
+        mut files,
+        ops: meta_ops,
+    } = output;
+    let mut ops: Vec<IngestOp> =
+        Vec::with_capacity(1 + projects.len() + sessions.len() + meta_ops.len());
     ops.push(IngestOp::Runtime(runtime.clone()));
     ops.extend(projects.into_iter().map(IngestOp::Project));
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
-    ops.extend(skim_ops);
+    ops.extend(meta_ops);
     if let Some(ledger) = ledger {
         instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
             let json = serde_json::to_string(&ops).map_err(|error| {
@@ -270,19 +394,41 @@ pub fn meta_ingest_into(
 fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
     match sessions.iter_mut().find(|existing| existing.id == row.id) {
         Some(existing) => {
-            let started_at = existing.started_at.min(row.started_at);
-            if row.updated_at >= existing.updated_at
-                || (existing.role == SessionRole::Main && row.role != SessionRole::Main)
-            {
-                *existing = row;
+            let newer = row.updated_at >= existing.updated_at;
+            existing.started_at = existing.started_at.min(row.started_at);
+            existing.updated_at = existing.updated_at.max(row.updated_at);
+            if newer {
+                existing.title = row.title.or_else(|| existing.title.clone());
+                existing.summary = row.summary.or_else(|| existing.summary.clone());
             } else {
-                existing.project_id = existing.project_id.clone().or(row.project_id);
-                existing.parent_session_id =
-                    existing.parent_session_id.clone().or(row.parent_session_id);
+                existing.title = existing.title.clone().or(row.title);
+                existing.summary = existing.summary.clone().or(row.summary);
             }
-            existing.started_at = started_at;
+            existing.project_id = existing.project_id.clone().or(row.project_id);
+            existing.parent_session_id =
+                existing.parent_session_id.clone().or(row.parent_session_id);
+            if existing.root_session_id == existing.id && row.root_session_id != row.id {
+                existing.root_session_id = row.root_session_id;
+            }
+            if existing.role == SessionRole::Main && row.role != SessionRole::Main {
+                existing.role = row.role;
+            }
+            existing.stream_state = stronger_stream_state(existing.stream_state, row.stream_state);
         }
         None => sessions.push(row),
+    }
+}
+
+fn stronger_stream_state(left: StreamState, right: StreamState) -> StreamState {
+    let rank = |state| match state {
+        StreamState::Pending => 0,
+        StreamState::Streaming => 1,
+        StreamState::Indexed => 2,
+    };
+    if rank(right) > rank(left) {
+        right
+    } else {
+        left
     }
 }
 
@@ -303,20 +449,30 @@ struct AdmitSource {
 /// database-enumerated session.
 fn admit_identified(
     runtime: &RuntimeRow,
-    projects: &mut Vec<ProjectRow>,
-    sessions: &mut Vec<SessionRow>,
-    files: &mut Vec<SessionFile>,
+    output: &mut MetaOutput,
     source: AdmitSource,
-    skim: SkimResult,
+    mut skim: SkimResult,
     native_session_id: String,
 ) {
     let session_id = ids::session_id(&runtime.id, &native_session_id);
 
+    if let Some(title) = skim.title.take() {
+        output.ops.push(IngestOp::SessionTitle(SessionTitleRow {
+            session_id: session_id.clone(),
+            title,
+            kind: skim.title_kind.take().unwrap_or(TitleKind::Explicit),
+            at: skim
+                .updated_at
+                .or(skim.started_at)
+                .unwrap_or(source.modified_ms),
+        }));
+    }
+
     let project_id = skim.cwd.as_deref().map(|cwd| {
         let project = crate::project::project(cwd);
         let id = project.id.clone();
-        if !projects.iter().any(|existing| existing.id == id) {
-            projects.push(project);
+        if !output.projects.iter().any(|existing| existing.id == id) {
+            output.projects.push(project);
         }
         id
     });
@@ -341,7 +497,7 @@ fn admit_identified(
         parent_session_id.as_ref(),
     ) {
         merge_session(
-            sessions,
+            &mut output.sessions,
             SessionRow {
                 id: parent_id.clone(),
                 native_session_id: parent_native.to_owned(),
@@ -369,15 +525,16 @@ fn admit_identified(
         parent_session_id,
         root_session_id,
         role,
-        title: skim.title,
-        summary: None,
+        // Ranked title facts are applied after all session rows exist.
+        title: None,
+        summary: skim.summary,
         started_at: skim.started_at.unwrap_or(source.modified_ms),
-        updated_at: source.modified_ms,
+        updated_at: skim.updated_at.unwrap_or(source.modified_ms),
         stream_state: StreamState::Pending,
     };
-    merge_session(sessions, row);
+    merge_session(&mut output.sessions, row);
 
-    files.push(SessionFile {
+    output.files.push(SessionFile {
         relative_path: source.relative_path,
         stream_id: source.stream_id,
         file_format: source.file_format,
@@ -388,7 +545,118 @@ fn admit_identified(
         size: source.size,
         modified_ms: source.modified_ms,
         agent_version: skim.agent_version,
+        source_missing: false,
     });
+}
+
+/// Meta admission for a rewrite-in-place document. One physical file may
+/// enumerate several native sessions, each represented as an independently
+/// replayable virtual source (`<document-path>#<native-id>`).
+#[allow(clippy::too_many_arguments)]
+fn admit_document(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &Store,
+    stream: &rosetta_adapter_support::StreamSpec,
+    driver: StreamDriver,
+    relative_path: &str,
+    size: u64,
+    modified_ms: i64,
+    opts: &IngestOptions,
+    report: &mut MetaReport,
+    output: &mut MetaOutput,
+    instrument: &Instrument,
+) -> Result<(), PipelineError> {
+    let path = root.join(relative_path);
+    let document_limit = adapter.document_size_limit(&stream.id, opts.tail.max_record_bytes);
+    let mut retries = 0_u32;
+    let snapshot = loop {
+        match instrument.time(Metric::SkimNanos, || {
+            rosetta_capture::snapshot_document(&path, document_limit)
+        })? {
+            rosetta_capture::DocumentOutcome::Ready(snapshot) => break snapshot,
+            rosetta_capture::DocumentOutcome::Missing => {
+                report.files_vanished += 1;
+                return Ok(());
+            }
+            rosetta_capture::DocumentOutcome::Unstable => {
+                retries += 1;
+                if retries > opts.max_retries {
+                    report.files_vanished += 1;
+                    return Ok(());
+                }
+            }
+            rosetta_capture::DocumentOutcome::Oversized { size, limit } => {
+                return Err(PipelineError::Config(format!(
+                    "document snapshot {relative_path} is {size} bytes, above the {limit}-byte limit"
+                )));
+            }
+        }
+    };
+
+    report.files_skimmed += 1;
+    instrument.add(Metric::FilesSkimmed, 1);
+    instrument.add(Metric::BytesRead, snapshot.bytes().len() as u64);
+    let stat = FileStat {
+        relative_path: relative_path.to_owned(),
+        size,
+        modified_ms,
+    };
+    for mut skim in adapter.document_sessions(&stream.id, &stat, snapshot.bytes()) {
+        output.ops.extend(std::mem::take(&mut skim.ops));
+        let Some(native) = skim.session_id.clone() else {
+            report.files_unidentified += 1;
+            continue;
+        };
+        admit_identified(
+            runtime,
+            output,
+            AdmitSource {
+                relative_path: format!("{relative_path}#{native}"),
+                stream_id: stream.id.clone(),
+                file_format: stream.file_format,
+                discipline: stream.discipline,
+                driver,
+                size,
+                modified_ms,
+            },
+            skim,
+            native,
+        );
+    }
+
+    // Removed members are retained for one empty generation so their old
+    // projection contribution is swept just like removed SQLite members.
+    let prefix = format!("{relative_path}#");
+    for (virtual_path, cursor_stream, session_id) in
+        rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, &prefix)?
+    {
+        if output
+            .files
+            .iter()
+            .any(|file| file.relative_path == virtual_path)
+        {
+            continue;
+        }
+        let Some(native_session_id) = virtual_path.strip_prefix(&prefix).map(str::to_owned) else {
+            continue;
+        };
+        output.files.push(SessionFile {
+            relative_path: virtual_path,
+            stream_id: cursor_stream,
+            file_format: stream.file_format,
+            discipline: stream.discipline,
+            driver,
+            session_id,
+            native_session_id,
+            size,
+            modified_ms,
+            agent_version: None,
+            source_missing: false,
+        });
+    }
+    Ok(())
 }
 
 /// Meta admission for a `SqliteSnapshot` stream: enumerate the database's
@@ -407,13 +675,9 @@ fn admit_database(
     size: u64,
     modified_ms: i64,
     report: &mut MetaReport,
-    projects: &mut Vec<ProjectRow>,
-    sessions: &mut Vec<SessionRow>,
-    files: &mut Vec<SessionFile>,
+    output: &mut MetaOutput,
     instrument: &Instrument,
 ) -> Result<(), PipelineError> {
-    use rosetta_core::rows::SessionRole;
-
     let Some(plan) = adapter.snapshot_plan(&stream.id) else {
         return Err(PipelineError::Config(format!(
             "{} drives stream {} as SqliteSnapshot but declares no snapshot plan",
@@ -439,35 +703,15 @@ fn admit_database(
         let value: serde_json::Value = serde_json::from_str(&row).map_err(|error| {
             PipelineError::Config(format!("sessions_sql row is not an object: {error}"))
         })?;
-        let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_owned);
-        let Some(native) = text("native_session_id") else {
+        let skim = adapter.snapshot_session(&stream.id, &value);
+        let Some(native) = skim.session_id.clone() else {
             report.files_unidentified += 1;
             continue;
         };
-        let skim = SkimResult {
-            ops: Vec::new(),
-            session_id: Some(native.clone()),
-            parent_session_id: text("parent_native_session_id"),
-            root_session_id: text("root_native_session_id"),
-            role: match text("role").as_deref() {
-                Some("subagent") => Some(SessionRole::Subagent),
-                Some("team") => Some(SessionRole::Team),
-                _ => None,
-            },
-            cwd: text("cwd"),
-            agent_version: text("agent_version"),
-            title: text("title"),
-            started_at: value.get("started_at").and_then(|v| v.as_i64()),
-        };
-        let updated = value
-            .get("updated_at")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(modified_ms);
+        let updated = skim.updated_at.unwrap_or(modified_ms);
         admit_identified(
             runtime,
-            projects,
-            sessions,
-            files,
+            output,
             AdmitSource {
                 relative_path: format!("{db_relative}#{native}"),
                 stream_id: stream.id.clone(),
@@ -489,13 +733,17 @@ fn admit_database(
     for (relative_path, cursor_stream, session_id) in
         rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, &prefix)?
     {
-        if files.iter().any(|file| file.relative_path == relative_path) {
+        if output
+            .files
+            .iter()
+            .any(|file| file.relative_path == relative_path)
+        {
             continue;
         }
         let Some(native_session_id) = relative_path.strip_prefix(&prefix).map(str::to_owned) else {
             continue;
         };
-        files.push(SessionFile {
+        output.files.push(SessionFile {
             relative_path,
             stream_id: cursor_stream,
             file_format: stream.file_format,
@@ -506,6 +754,7 @@ fn admit_database(
             size,
             modified_ms,
             agent_version: None,
+            source_missing: false,
         });
     }
     Ok(())

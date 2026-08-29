@@ -1127,6 +1127,7 @@ version = "0.1.0"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
+ "rusqlite",
  "serde",
  "serde_json",
  "walkdir",
@@ -1230,6 +1231,7 @@ dependencies = [
  "rosetta-core",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]
@@ -1270,8 +1272,10 @@ name = "rosetta-pipeline"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "rosetta-adapter-antigravity",
  "rosetta-adapter-claude-code",
  "rosetta-adapter-codex",
+ "rosetta-adapter-copilot",
  "rosetta-adapter-support",
  "rosetta-bench-corpus",
  "rosetta-capture",

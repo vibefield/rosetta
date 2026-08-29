@@ -4,8 +4,10 @@ use std::any::Any;
 
 use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
-    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
+    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, SnapshotPlan, StreamDriver,
 };
+use rosetta_core::rows::{SessionRole, TitleKind};
+use serde_json::Value;
 
 use crate::normalize::{self, CodexState};
 use crate::raw::rollout::RolloutPayload;
@@ -25,11 +27,65 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
-        (stream_id == spec::ROLLOUT).then_some(StreamDriver::JsonLines)
+        match stream_id {
+            spec::ROLLOUT => Some(StreamDriver::JsonLines),
+            spec::STATE_DB => Some(StreamDriver::SqliteSnapshot),
+            _ => None,
+        }
     }
 
     fn normalizer_version(&self) -> u32 {
-        3
+        5
+    }
+
+    fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
+        (stream_id == spec::STATE_DB).then(|| SnapshotPlan {
+            // `SELECT *` is intentional compatibility machinery: the base
+            // `threads` columns predate optional `name` and millisecond stamp
+            // columns. `snapshot_session` inspects whichever optional columns
+            // this version exposes without emitting schema-dependent SQL.
+            sessions_sql: "SELECT * FROM threads ORDER BY created_at, id".to_owned(),
+            record_queries: Vec::new(),
+        })
+    }
+
+    fn snapshot_session(&self, stream_id: &str, row: &Value) -> SkimResult {
+        if stream_id != spec::STATE_DB {
+            return SkimResult::default();
+        }
+        let (parent_session_id, subagent_source) = source_parent(row);
+        let thread_source = row.get("thread_source").and_then(Value::as_str);
+        let role = if parent_session_id.is_some()
+            || subagent_source
+            || matches!(thread_source, Some("subagent" | "guardian_review"))
+        {
+            SessionRole::Subagent
+        } else {
+            SessionRole::Main
+        };
+        let native_name = row.get("name").and_then(Value::as_str);
+        let title = codex_display_title(native_name, row.get("title").and_then(Value::as_str));
+        let title_kind = title.as_ref().map(|_| {
+            if normalized_text(native_name).is_some() {
+                TitleKind::Explicit
+            } else {
+                TitleKind::Fallback
+            }
+        });
+        SkimResult {
+            ops: Vec::new(),
+            session_id: nonempty(row.get("id").and_then(Value::as_str)),
+            parent_session_id: parent_session_id.clone(),
+            root_session_id: parent_session_id,
+            role: Some(role),
+            cwd: nonempty(row.get("cwd").and_then(Value::as_str)),
+            agent_version: nonempty(row.get("cli_version").and_then(Value::as_str)),
+            title,
+            title_kind,
+            summary: None,
+            started_at: timestamp_ms(row, "created_at_ms", "created_at"),
+            updated_at: timestamp_ms(row, "updated_at_ms", "updated_at"),
+        }
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -76,7 +132,7 @@ impl AgentAdapter for CodexAdapter {
     /// opening record, and the file's mtime already gives the pipeline the
     /// session's `updated_at`.
     fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], _tail: &[u8]) -> SkimResult {
-        if self.stream_driver(stream_id).is_none() {
+        if stream_id != spec::ROLLOUT {
             return SkimResult::default();
         }
 
@@ -106,15 +162,16 @@ impl AgentAdapter for CodexAdapter {
             role,
             cwd: Some(meta.cwd.clone()),
             agent_version: Some(meta.cli_version.clone()),
-            // NOTHING codex writes names a session: `session_meta` carries only
-            // identity and provenance, and the one human-readable string near
-            // it — `turn_context.summary` — is the reasoning-summary policy
-            // ("auto"), not a title. The field stays None for this agent.
+            // Rollouts do not carry the display title. The state database is a
+            // sibling metadata source and merges onto this same native id.
             title: None,
+            title_kind: None,
+            summary: None,
             // The payload's own stamp is when the session opened; the envelope's
             // is when the record was written. `normalize::session_meta` prefers
             // them in the same order.
             started_at: rfc3339_ms(&meta.timestamp).or_else(|| rfc3339_ms(&record.timestamp)),
+            updated_at: None,
         }
     }
 
@@ -127,6 +184,61 @@ impl AgentAdapter for CodexAdapter {
         ctx.state = Some(state);
         outcome
     }
+}
+
+const CODEX_FALLBACK_TITLE_CHARS: usize = 36;
+
+fn nonempty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn normalized_text(value: Option<&str>) -> Option<String> {
+    let normalized = value?.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn codex_display_title(name: Option<&str>, native_title: Option<&str>) -> Option<String> {
+    if let Some(name) = normalized_text(name) {
+        return Some(name);
+    }
+    let fallback = normalized_text(native_title)?;
+    if fallback.chars().count() <= CODEX_FALLBACK_TITLE_CHARS {
+        return Some(fallback);
+    }
+    let mut display: String = fallback
+        .chars()
+        .take(CODEX_FALLBACK_TITLE_CHARS - 1)
+        .collect();
+    display.push('…');
+    Some(display)
+}
+
+fn timestamp_ms(row: &Value, millisecond_key: &str, second_key: &str) -> Option<i64> {
+    row.get(millisecond_key)
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            row.get(second_key)
+                .and_then(Value::as_i64)
+                .and_then(|seconds| seconds.checked_mul(1_000))
+        })
+}
+
+fn source_parent(row: &Value) -> (Option<String>, bool) {
+    let Some(source) = row.get("source").and_then(Value::as_str) else {
+        return (None, false);
+    };
+    let Ok(source) = serde_json::from_str::<Value>(source) else {
+        return (None, false);
+    };
+    let subagent = source.get("subagent").is_some();
+    let parent = source
+        .pointer("/subagent/thread_spawn/parent_thread_id")
+        .and_then(Value::as_str)
+        .and_then(|value| nonempty(Some(value)));
+    (parent, subagent)
 }
 
 fn take_state(ctx: &mut NormalizeCtx) -> Box<CodexState> {
@@ -151,9 +263,10 @@ fn first_complete_line(head: &[u8], whole_file: bool) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodexAdapter, first_complete_line};
+    use super::{CodexAdapter, codex_display_title, first_complete_line};
     use crate::spec;
     use rosetta_adapter_support::adapter::{AgentAdapter, FileStat, SkimResult};
+    use rosetta_core::rows::SessionRole;
 
     const ROLLOUT: &str = "sessions/2026/08/24/rollout-2026-08-24T19-35-03-01a036c5.jsonl";
 
@@ -205,7 +318,7 @@ mod tests {
         assert_eq!(result.cwd.as_deref(), Some("/w"));
         assert_eq!(result.agent_version.as_deref(), Some("0.149.1"));
         assert_eq!(result.started_at, Some(1_787_625_303_577));
-        // Codex names no session — see the note on `skim`.
+        // The rollout itself has no title; state metadata is a sibling source.
         assert!(result.title.is_none());
     }
 
@@ -274,5 +387,45 @@ mod tests {
         assert_eq!(first_complete_line(b"one", true), Some("one"));
         assert_eq!(first_complete_line(b"one", false), None);
         assert_eq!(first_complete_line(b"one\ntwo", false), Some("one"));
+    }
+
+    #[test]
+    fn state_metadata_prefers_name_and_bounds_unicode_fallback() {
+        let named = serde_json::json!({
+            "id": "named",
+            "name": "  Review   Rosetta codebase  ",
+            "title": "ignored first prompt",
+            "cwd": "/w",
+            "cli_version": "0.150.1",
+            "created_at": 10,
+            "updated_at_ms": 20_123,
+            "source": "cli"
+        });
+        let result = CodexAdapter.snapshot_session(spec::STATE_DB, &named);
+        assert_eq!(result.title.as_deref(), Some("Review Rosetta codebase"));
+        assert_eq!(result.started_at, Some(10_000));
+        assert_eq!(result.updated_at, Some(20_123));
+
+        let long = format!("{}   tail", "界".repeat(40));
+        let fallback = codex_display_title(None, Some(&long)).unwrap();
+        assert_eq!(fallback.chars().count(), 36);
+        assert!(fallback.ends_with('…'));
+    }
+
+    #[test]
+    fn state_metadata_tolerates_legacy_optional_columns_and_recovers_parent() {
+        let legacy = serde_json::json!({
+            "id": "child",
+            "title": "  legacy\n title  ",
+            "cwd": "/w",
+            "created_at": 10,
+            "updated_at": 11,
+            "source": "{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"parent\"}}}"
+        });
+        let result = CodexAdapter.snapshot_session(spec::STATE_DB, &legacy);
+        assert_eq!(result.title.as_deref(), Some("legacy title"));
+        assert_eq!(result.parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(result.root_session_id.as_deref(), Some("parent"));
+        assert_eq!(result.role, Some(SessionRole::Subagent));
     }
 }
