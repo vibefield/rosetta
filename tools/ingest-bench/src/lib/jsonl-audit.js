@@ -228,6 +228,7 @@ class JsonlAuditRun {
         selected,
         workDir,
         reportPath,
+        includeBoundaryEvidence: true,
         onCommand: (command) => { this.active = command; },
         onEvent: (event) => {
           if (event.event === 'stage-profile') this.emit({ type: 'audit-stage', event });

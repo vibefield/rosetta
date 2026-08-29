@@ -543,6 +543,58 @@ function auditEvent(message) {
   }
 }
 
+function boundaryPane(side, block) {
+  const pane = document.createElement('section'); pane.className = 'audit-boundary-pane';
+  const head = document.createElement('div'); head.className = 'audit-boundary-pane-head';
+  const direction = document.createElement('span'); direction.textContent = side;
+  const facts = document.createElement('small');
+  const factParts = [];
+  if (block?.bytes != null) factParts.push(formatBytes(block.bytes));
+  if (block?.previewBytes != null && block.previewBytes !== block.bytes) factParts.push(`${formatBytes(block.previewBytes)} shown`);
+  if (block?.truncated) factParts.push('truncated');
+  facts.textContent = factParts.join(' · ') || 'not materialized';
+  head.append(direction, facts);
+  const representation = document.createElement('div'); representation.className = 'audit-boundary-representation';
+  representation.textContent = block?.representation || 'No captured representation';
+  const content = document.createElement('pre');
+  if (block?.data == null) {
+    content.textContent = 'No content-bearing value was available at this boundary.';
+  } else if (typeof block.data === 'string') {
+    content.textContent = block.data;
+  } else {
+    content.textContent = JSON.stringify(block.data, null, 2);
+  }
+  pane.append(head, representation, content);
+  return pane;
+}
+
+function renderBoundaryEvidence(evidence) {
+  const section = $('#audit-boundary-inspector');
+  const root = $('#audit-boundary-steps'); root.replaceChildren();
+  if (!evidence?.steps?.length) {
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+  const sample = evidence.sample || {};
+  const identity = sample.timelineId
+    ? `timeline ${sample.timelineId}`
+    : `source offset ${formatNumber(sample.sourceOffset)}`;
+  $('#audit-boundary-summary').textContent = `One representative ${sample.stream || 'JSONL'} record is followed through the real production path (${identity}). Previews are bounded; full private artifacts remain available in the run directory. SQLite snapshot queries added ${formatDuration(evidence.diagnosticOverheadMs)} outside the nested production timers; the post-finalization query remains inside the finalize-publish phase wall.`;
+  for (const step of evidence.steps) {
+    const detail = document.createElement('details'); detail.className = 'audit-boundary-step'; detail.open = true;
+    const summary = document.createElement('summary');
+    const number = document.createElement('span'); number.textContent = String(step.step).padStart(2, '0');
+    const name = document.createElement('strong'); name.textContent = step.name;
+    const direction = document.createElement('small'); direction.textContent = 'before → after';
+    summary.append(number, name, direction);
+    const note = document.createElement('p'); note.className = 'audit-boundary-note'; note.textContent = step.note;
+    const grid = document.createElement('div'); grid.className = 'audit-boundary-grid';
+    grid.append(boundaryPane('before', step.before), boundaryPane('after', step.after));
+    detail.append(summary, note, grid); root.append(detail);
+  }
+}
+
 function renderAuditResult(audit) {
   state.auditResult = audit;
   $('#audit-progress-card').classList.add('hidden');
@@ -572,6 +624,8 @@ function renderAuditResult(audit) {
     const value = document.createElement('div'); value.className = 'audit-chart-value'; value.textContent = stage.measuredMs == null ? 'combined' : formatDuration(stage.measuredMs);
     row.append(label, track, value); chart.append(row);
   }
+
+  renderBoundaryEvidence(report.boundaryEvidence);
 
   const explanations = $('#audit-step-explanations'); explanations.replaceChildren();
   for (const stage of report.coldIngest.stages) {

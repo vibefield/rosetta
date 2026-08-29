@@ -499,6 +499,7 @@ async function profileSelection({
   preparationStarted = process.hrtime.bigint(),
   requestedLargest = null,
   admittedJsonLinesAvailable = null,
+  includeBoundaryEvidence = false,
   onEvent = () => {},
   onLog = () => {},
   onCommand = () => {},
@@ -552,15 +553,21 @@ async function profileSelection({
     }
     const preparationWallMs = Number(process.hrtime.bigint() - preparationStarted) / 1e6;
 
-    const ingest = await runRosettad(binary, [
+    const ingestArgs = [
       'ingest', '--db', db, '--ledger', ledger,
       '--home', snapshotHome, '--agent', agent, '--profile', '--json',
-    ], { onEvent, onLog, onCommand });
+    ];
+    if (includeBoundaryEvidence) ingestArgs.push('--audit-boundaries');
+    const ingest = await runRosettad(binary, ingestArgs, { onEvent, onLog, onCommand });
     const stageReport = buildStageReport(ingest.events, ingest.process.durationMs, agent);
     const streamEvent = ingest.events.find((event) => event.event === 'stream' && event.agent === agent);
     const overallProfileEvent = ingest.events.findLast((event) => event.event === 'profile');
+    const boundaryEvidence = ingest.events.find((event) => event.event === 'boundary-evidence') || null;
     if (!streamEvent || !overallProfileEvent) {
       throw new Error('ingest completed without required stream/profile evidence');
+    }
+    if (includeBoundaryEvidence && !boundaryEvidence) {
+      throw new Error('ingest completed without requested step 5–8 boundary evidence');
     }
 
     const totalSourceBytes = selected.reduce((sum, source) => sum + source.bytes, 0);
@@ -592,6 +599,7 @@ async function profileSelection({
         pageCacheNote: 'projection-cold, not filesystem-cache-cold; snapshot verification reads every source byte before ingest',
       },
       coldIngest: stageReport,
+      boundaryEvidence,
       outcome: {
         records: streamEvent.records,
         parsed: streamEvent.parsed,
@@ -612,6 +620,7 @@ async function profileSelection({
         'There is no standalone generic fold/merge boundary; enrichment is unmetered and merge work lands inside canonical SQLite apply.',
         'The deferred raw-ledger durability barrier currently runs before global SQLite finalization.',
         'Parent timers and their child timers overlap and must not be summed.',
+        ...(boundaryEvidence ? [`Boundary evidence collection reported ${round(boundaryEvidence.diagnosticOverheadMs)} ms of SQLite snapshot-query overhead outside the nested production timers. The pre-finalization query is process residual; the post-finalization query is inside the finalize-publish phase wall, and the external process wall includes both.`] : []),
       ],
     };
 

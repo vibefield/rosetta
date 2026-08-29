@@ -71,6 +71,10 @@ local JSONL/NDJSON. The workbench:
 - charts all eleven conceptual boundaries, preserving combined/unobservable
   rows instead of inventing timings, and explains both why each boundary exists
   and what the current production implementation actually does there;
+- follows one bounded native record through steps 5–8, showing the parsed
+  native JSON, emitted `IngestOp` values, enriched `WriteBatch`, private
+  pre-finalization SQLite state, and validated post-finalization state side by
+  side;
 - compares raw source, ledger, SQLite, and FTS5 sidecar sizes and exposes parse,
   drift, message, merge, session, validation, and publication evidence; and
 - retains the private snapshot and output artifacts so the resulting projection
