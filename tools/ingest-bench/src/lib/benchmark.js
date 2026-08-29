@@ -10,10 +10,16 @@ const {
   validateAgents,
 } = require('./daemon');
 
-const FORMAT = 'rosetta-ingest-bench/1';
+const FORMAT = 'rosetta-ingest-bench/2';
+const STAGES = new Set(['discovery', 'meta', 'ingest']);
 
-function runName(now = new Date()) {
-  return `run-${now.toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')}-${randomBytes(3).toString('hex')}`;
+function validateStage(stage) {
+  if (!STAGES.has(stage)) throw new Error(`unknown benchmark stage: ${stage}`);
+  return stage;
+}
+
+function runName(stage, now = new Date()) {
+  return `run-${validateStage(stage)}-${now.toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')}-${randomBytes(3).toString('hex')}`;
 }
 
 function serializeError(error) {
@@ -34,6 +40,7 @@ class BenchmarkRun {
       home: assertDirectory(config.home, 'home directory'),
       outputDir: assertDirectory(config.outputDir, 'output directory', { create: true }),
       agents: validateAgents(config.agents),
+      stage: validateStage(config.stage),
     };
   }
 
@@ -44,7 +51,7 @@ class BenchmarkRun {
 
   async execute() {
     const startedAt = new Date();
-    const runDir = path.join(this.config.outputDir, runName(startedAt));
+    const runDir = path.join(this.config.outputDir, runName(this.config.stage, startedAt));
     fs.mkdirSync(runDir, { recursive: false });
     const paths = {
       runDir,
@@ -59,6 +66,7 @@ class BenchmarkRun {
       startedAt: startedAt.toISOString(),
       finishedAt: null,
       status: 'running',
+      stage: this.config.stage,
       config: {
         binary: this.config.binary,
         home: this.config.home,
@@ -70,27 +78,34 @@ class BenchmarkRun {
     this.emit({ type: 'run-start', report });
 
     try {
-      await this.phase(report, 'discovery', 'discover', {
-        home: this.config.home,
-        agents: this.config.agents,
-      });
-      this.requireAgentEvents(report, 'discovery', 'discovery', (event) => event.installed);
-      await this.phase(report, 'meta', 'meta', {
-        db: paths.metaDb,
-        ledger: paths.metaLedger,
-        home: this.config.home,
-        agents: this.config.agents,
-      });
-      this.requireAgentEvents(report, 'meta', 'meta');
-      await this.phase(report, 'ingest', 'ingest', {
-        db: paths.projectionDb,
-        ledger: paths.projectionLedger,
-        home: this.config.home,
-        agents: this.config.agents,
-      });
-      this.requireAgentEvents(report, 'ingest', 'stream');
-      if (!fs.existsSync(paths.projectionDb)) {
-        throw new Error('rosettad exited successfully without publishing rosetta.sqlite');
+      if (this.config.stage === 'discovery') {
+        await this.phase(report, 'discovery', 'discover', {
+          home: this.config.home,
+          agents: this.config.agents,
+        });
+        this.requireAgentEvents(report, 'discovery', 'discovery', (event) => event.installed);
+      } else if (this.config.stage === 'meta') {
+        await this.phase(report, 'meta', 'meta', {
+          db: paths.metaDb,
+          ledger: paths.metaLedger,
+          home: this.config.home,
+          agents: this.config.agents,
+        });
+        this.requireAgentEvents(report, 'meta', 'meta');
+        if (!fs.existsSync(paths.metaDb)) {
+          throw new Error('rosettad exited successfully without publishing meta.sqlite');
+        }
+      } else {
+        await this.phase(report, 'ingest', 'ingest', {
+          db: paths.projectionDb,
+          ledger: paths.projectionLedger,
+          home: this.config.home,
+          agents: this.config.agents,
+        });
+        this.requireAgentEvents(report, 'ingest', 'stream');
+        if (!fs.existsSync(paths.projectionDb)) {
+          throw new Error('rosettad exited successfully without publishing rosetta.sqlite');
+        }
       }
       report.status = 'complete';
       return report;
@@ -167,4 +182,4 @@ class BenchmarkRun {
   }
 }
 
-module.exports = { BenchmarkRun, FORMAT, runName, serializeError };
+module.exports = { BenchmarkRun, FORMAT, runName, serializeError, validateStage };

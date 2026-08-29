@@ -9,7 +9,8 @@ const { ProjectionDatabase } = require('./lib/database');
 const { assertDirectory, assertFile, discover } = require('./lib/daemon');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
-const database = new ProjectionDatabase();
+const projectionDatabase = new ProjectionDatabase();
+const metaDatabase = new ProjectionDatabase();
 let window = null;
 let activeRun = null;
 let activeDiscovery = null;
@@ -94,9 +95,9 @@ ipcMain.handle('dialog:directory', async (_event, title) => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle('dialog:database', async () => {
+ipcMain.handle('dialog:database', async (_event, title) => {
   const result = await dialog.showOpenDialog(window, {
-    title: 'Open a Rosetta SQLite projection',
+    title: typeof title === 'string' ? title : 'Open a Rosetta SQLite projection',
     properties: ['openFile'],
     filters: [{ name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db'] }, { name: 'All files', extensions: ['*'] }],
   });
@@ -126,7 +127,7 @@ ipcMain.handle('daemon:discover', async (_event, config) => {
   }
 });
 
-ipcMain.handle('benchmark:run', async (_event, config) => {
+ipcMain.handle('benchmark:run-stage', async (_event, config) => {
   if (activeRun || activeDiscovery) throw new Error('another daemon process is already running');
   try {
     activeRun = new BenchmarkRun(config, (event) => send('benchmark:event', event));
@@ -143,10 +144,13 @@ ipcMain.handle('benchmark:cancel', () => {
   return Boolean(activeRun);
 });
 
-ipcMain.handle('database:open', (_event, file) => database.open(file));
-ipcMain.handle('database:overview', () => database.overview());
-ipcMain.handle('database:table', (_event, name, options) => database.table(name, options));
-ipcMain.handle('database:query', (_event, sql) => database.query(sql));
+ipcMain.handle('meta-database:open', (_event, file) => metaDatabase.open(file));
+ipcMain.handle('meta-database:data', () => metaDatabase.metaData());
+
+ipcMain.handle('database:open', (_event, file) => projectionDatabase.open(file));
+ipcMain.handle('database:overview', () => projectionDatabase.overview());
+ipcMain.handle('database:table', (_event, name, options) => projectionDatabase.table(name, options));
+ipcMain.handle('database:query', (_event, sql) => projectionDatabase.query(sql));
 
 ipcMain.handle('shell:reveal', async (_event, target) => {
   const resolved = path.resolve(target);
@@ -163,7 +167,8 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   activeRun?.cancel();
-  database.close();
+  metaDatabase.close();
+  projectionDatabase.close();
 });
 
 app.on('window-all-closed', () => {

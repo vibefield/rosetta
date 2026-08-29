@@ -8,7 +8,7 @@
     "prestart": "cargo build -p rosettad --release",
     "start": "electron .",
     "test": "node --test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js"
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/meta-tree.js && node --check src/renderer/app.js"
   },
   "devDependencies": {
     "electron": "44.0.0"

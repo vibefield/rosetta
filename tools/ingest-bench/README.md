@@ -1,9 +1,9 @@
 # Rosetta ingest bench
 
 `ingest-bench` is a local Electron workbench for verifying Rosetta below the L3
-service boundary. It drives the real `rosettad` binary for discovery, bounded
-metadata ingestion, and full cold ingestion, then opens the published SQLite
-projection directly through a defensive read-only connection.
+service boundary. It drives the real `rosettad` binary for independently timed
+discovery, bounded metadata ingestion, or full cold ingestion, then opens the
+published SQLite results directly through defensive read-only connections.
 
 It does not contain an adapter, parser, schema copy, or alternate ingest path.
 Agent-specific knowledge stays in `groundtruth/<agent>` and
@@ -12,8 +12,8 @@ pipeline and store.
 
 ## Workflow and timing semantics
 
-One run creates a unique directory and executes three fresh daemon processes in
-sequence:
+Each stage button creates a unique directory and executes one fresh daemon
+process. Stages never depend on a previous bench run:
 
 | phase | daemon command | output | reported wall time |
 |---|---|---|---|
@@ -26,10 +26,10 @@ The external wall clock is the headline for each process. The UI also shows
 may overlap—especially `apply time` and its SQLite subphases—and must not be
 summed into a synthetic total.
 
-Both metadata and full ingest perform their own prerequisite discovery. The
-metadata phase intentionally uses a different database and ledger, so it never
-warms or mutates the full cold run. Every benchmark directory is new; the app
-does not delete or overwrite earlier evidence.
+Metadata and full ingest perform their own prerequisite discovery internally.
+Every click gets a new database and ledger, so running meta cannot warm or
+mutate a later full cold run. The app does not delete or overwrite earlier
+evidence.
 
 ## Run it
 
@@ -50,16 +50,19 @@ The app asks for:
 
 - the `rosettad` executable (auto-detected from `cargo metadata` when built);
 - the home directory whose agent roots should be expanded and probed;
-- an output parent directory that has room for a metadata projection, full raw
-  ledger, and full projection;
+- an output parent directory that has room for the selected stage's projection
+  and ledger;
 - one or more installed agents returned by discovery.
 
-After a successful cold run, the Database tab opens `rosetta.sqlite`
-automatically. It provides schema-object navigation, paginated table/view data,
-full cell inspection, canonical row-count summaries, and an ad hoc console for
-`SELECT`, `WITH`, `EXPLAIN`, and `PRAGMA` statements. Results are capped at 1,000
-rows. The SQLite handle is opened read-only, `query_only` and defensive mode are
-enabled, and database work stays in Electron's main process.
+After a successful meta run, the Meta data tab opens `meta.sqlite`
+automatically and renders a long-scroll project list. Selecting one project
+loads only that project's session tree; subagents nest beneath their parent and
+expand on demand. Cards include titles, owning agents, roots, repositories,
+workspace, timestamps, source counts, and ingest state. After a successful full ingest, the Database tab opens
+`rosetta.sqlite` and provides an ad hoc
+console for `SELECT`, `WITH`, `EXPLAIN`, and `PRAGMA` statements. Results are
+capped at 1,000 rows. Both SQLite handles are independent, read-only,
+`query_only`, and defensive; database work stays in Electron's main process.
 
 Useful verification queries include:
 
@@ -86,11 +89,17 @@ LIMIT 100;
 ## Run artifacts
 
 ```text
-run-<UTC timestamp>-<suffix>/
-├── benchmark-report.json   # commands, events, logs, wall time, profile metrics
+run-discovery-<UTC timestamp>-<suffix>/
+└── benchmark-report.json
+
+run-meta-<UTC timestamp>-<suffix>/
+├── benchmark-report.json   # command, events, logs, wall time, profile metrics
 ├── meta.sqlite             # standalone bounded-meta result
 ├── meta.sqlite.lock        # cross-process writer lock database
-├── meta.ledger/            # metadata phase ledger
+└── meta.ledger/            # metadata phase ledger
+
+run-ingest-<UTC timestamp>-<suffix>/
+├── benchmark-report.json
 ├── rosetta.sqlite          # final cold canonical projection
 ├── rosetta.sqlite.lock     # cross-process writer lock database
 └── rosetta.ledger/         # final cold raw ledger
@@ -105,7 +114,8 @@ cleans them up automatically.
 
 Implemented:
 
-- isolated wall-clock measurements for discovery, metadata, and cold ingest;
+- independent wall-clock runs for discovery, metadata, and cold ingest;
+- dedicated project/session views for the bounded meta projection;
 - newline-delimited JSON framing at the `rosettad` CLI edge;
 - live stdout/stderr capture, cancellation, and a durable JSON run report;
 - direct read-only SQLite browsing without leaking raw SQL into L3;

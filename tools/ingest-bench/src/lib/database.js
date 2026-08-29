@@ -41,6 +41,15 @@ function safeRows(rows) {
   return rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, safeValue(value)])));
 }
 
+function parseJson(value, fallback) {
+  if (typeof value !== 'string') return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 function resultFor(statement, rows, extra = {}) {
   return {
     columns: statement.columns().map((column) => column.name),
@@ -86,6 +95,8 @@ class ProjectionDatabase {
       'agent_runtime',
       'project',
       'session',
+      'workspace_obs',
+      'ingest_cursor',
       'message',
       'file_edit',
       'git_commit',
@@ -119,6 +130,74 @@ class ProjectionDatabase {
       counts,
       objects,
     };
+  }
+
+  metaData() {
+    const overview = this.overview();
+    const projects = safeRows(this.db.prepare(`
+      SELECT p.id,
+             p.name,
+             p.root_paths AS rootPaths,
+             p.git_repo AS gitRepo,
+             COUNT(DISTINCT s.id) AS sessionCount,
+             SUM(CASE WHEN s.role = 'main' THEN 1 ELSE 0 END) AS mainSessionCount,
+             SUM(CASE WHEN s.id IS NOT NULL AND s.role <> 'main' THEN 1 ELSE 0 END) AS childSessionCount,
+             MAX(s.updated_at) AS latestUpdatedAt,
+             COALESCE(GROUP_CONCAT(DISTINCT r.kind), '') AS agentKinds
+      FROM project p
+      LEFT JOIN session s ON s.project_id = p.id
+      LEFT JOIN agent_runtime r ON r.id = s.runtime_id
+      GROUP BY p.id, p.name, p.root_paths, p.git_repo
+      ORDER BY COALESCE(MAX(s.updated_at), 0) DESC, p.name COLLATE NOCASE
+    `).all()).map((row) => ({
+      ...row,
+      rootPaths: parseJson(row.rootPaths, []),
+      agentKinds: row.agentKinds ? row.agentKinds.split(',').sort() : [],
+    }));
+    const sessions = safeRows(this.db.prepare(`
+      SELECT s.id,
+             s.native_session_id AS nativeSessionId,
+             s.title,
+             s.summary,
+             s.role,
+             s.stream_state AS streamState,
+             s.started_at AS startedAt,
+             s.updated_at AS updatedAt,
+             s.project_assigned_at AS projectAssignedAt,
+             s.parent_session_id AS parentSessionId,
+             s.root_session_id AS rootSessionId,
+             r.id AS runtimeId,
+             r.kind AS agentKind,
+             r.data_root AS dataRoot,
+             r.enabled AS runtimeEnabled,
+             r.versions_seen AS versionsSeen,
+             p.id AS projectId,
+             p.name AS projectName,
+             p.root_paths AS projectRootPaths,
+             p.git_repo AS projectGitRepo,
+             w.cwd,
+             w.git_branch AS gitBranch,
+             w.git_repo AS workspaceGitRepo,
+             (SELECT COUNT(*) FROM workspace_obs wo WHERE wo.session_id = s.id) AS workspaceObservationCount,
+             (SELECT COUNT(*) FROM ingest_cursor c WHERE c.session_id = s.id) AS sourceCount
+      FROM session s
+      JOIN agent_runtime r ON r.id = s.runtime_id
+      LEFT JOIN project p ON p.id = s.project_id
+      LEFT JOIN workspace_obs w ON w.rowid = (
+        SELECT latest.rowid
+        FROM workspace_obs latest
+        WHERE latest.session_id = s.id
+        ORDER BY latest.at DESC, latest.rowid DESC
+        LIMIT 1
+      )
+      ORDER BY s.updated_at DESC, s.id
+    `).all()).map((row) => ({
+      ...row,
+      runtimeEnabled: Boolean(row.runtimeEnabled),
+      versionsSeen: parseJson(row.versionsSeen, null),
+      projectRootPaths: parseJson(row.projectRootPaths, []),
+    }));
+    return { overview, projects, sessions };
   }
 
   table(name, { limit = 100, offset = 0 } = {}) {

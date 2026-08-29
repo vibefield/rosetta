@@ -14,6 +14,7 @@
     <div class="wordmark"><span class="mark">R</span><span>rosetta</span><b>ingest bench</b></div>
     <nav class="tabs" aria-label="Workbench views">
       <button class="tab active" data-tab="benchmark">Benchmark</button>
+      <button class="tab" data-tab="meta">Meta data</button>
       <button class="tab" data-tab="database">Database</button>
       <button class="tab" data-tab="logs">Daemon log <span id="log-count" class="count">0</span></button>
     </nav>
@@ -26,11 +27,10 @@
         <div>
           <div class="eyebrow">rosetta · L2 verification · local only</div>
           <h1>Cold ingestion workbench</h1>
-          <p class="sub">Measure discovery, bounded metadata ingestion, and a clean full ingest through the real <code>rosettad</code> process. Each run gets new databases and ledgers; the final projection opens read-only for inspection.</p>
+          <p class="sub">Measure discovery, bounded metadata ingestion, or a clean full ingest through the real <code>rosettad</code> process. Run any stage independently; every click gets a fresh artifact directory.</p>
         </div>
         <div class="head-actions">
           <button id="stop-button" class="button danger" disabled>Stop run</button>
-          <button id="run-button" class="button primary" disabled>Run selected agents</button>
         </div>
       </div>
 
@@ -67,29 +67,63 @@
               <div class="phase-index">01</div><span class="badge pure">read only</span>
               <h3>Discovery</h3><p>Probe registered layouts, walk matching paths, and measure source size.</p>
               <div class="phase-result"><strong>—</strong><span>not run</span></div>
+              <div class="phase-actions"><button class="button primary small run-stage" data-stage="discovery" disabled>Run discovery</button></div>
               <div class="progress"><i></i></div>
             </article>
             <article class="phase-card" data-phase="meta">
               <div class="phase-index">02</div><span class="badge io">bounded I/O</span>
               <h3>Meta ingest</h3><p>Skim heads and tails into an isolated metadata-only projection and ledger.</p>
               <div class="phase-result"><strong>—</strong><span>not run</span></div>
+              <div class="phase-actions"><button class="button primary small run-stage" data-stage="meta" disabled>Run meta ingest</button><button id="view-meta-button" class="button secondary small" disabled>View data</button></div>
               <div class="progress"><i></i></div>
             </article>
             <article class="phase-card" data-phase="ingest">
               <div class="phase-index">03</div><span class="badge io">cold publish</span>
               <h3>Full ingestion</h3><p>Ledger, normalize, canonical rows, buckets, FTS, validation, and atomic publication.</p>
               <div class="phase-result"><strong>—</strong><span>not run</span></div>
+              <div class="phase-actions"><button class="button primary small run-stage" data-stage="ingest" disabled>Run full ingest</button></div>
               <div class="progress"><i></i></div>
             </article>
           </section>
 
           <section id="result-panel" class="card result-panel hidden">
             <div class="panel-head">
-              <div><div class="section-label">Last run</div><h2 id="result-title">Benchmark result</h2></div>
+              <div><div class="section-label">Last stage run</div><h2 id="result-title">Benchmark result</h2></div>
               <button id="reveal-run" class="button secondary small">Reveal artifacts</button>
             </div>
             <div id="result-summary" class="result-summary"></div>
             <div class="table-shell"><table><thead><tr><th>phase</th><th>wall</th><th>walk</th><th>skim</th><th>read</th><th>normalize</th><th>apply</th><th>FTS</th></tr></thead><tbody id="phase-table"></tbody></table></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="meta-view" class="view">
+      <div class="page-head compact">
+        <div><div class="eyebrow">bounded meta ingest · read-only</div><h1>Projects and sessions</h1><p class="sub">See the user-facing metadata available before transcript streaming: project roots and repositories, session titles, owning agents, hierarchy, workspace, timestamps, and indexing state.</p></div>
+        <div class="head-actions"><button id="open-meta-button" class="button secondary">Open meta.sqlite…</button><button id="reveal-meta" class="button secondary" disabled>Reveal file</button></div>
+      </div>
+
+      <div id="meta-empty" class="callout"><b>No meta result open.</b> Run the Meta ingest stage or choose an existing <code>meta.sqlite</code> artifact.</div>
+      <div id="meta-content" class="hidden">
+        <section id="meta-summary" class="stat-grid"></section>
+        <div class="meta-browser-layout">
+          <section class="meta-list-section meta-project-section card">
+            <div class="panel-head meta-list-head">
+              <div><div class="section-label">Project list</div><h2>All projects <span id="meta-project-count" class="inline-count"></span></h2></div>
+              <input id="meta-project-filter" class="meta-filter" aria-label="Filter projects" placeholder="Filter projects, roots, repositories, or agents">
+            </div>
+            <p class="hint">Choose one project to load only its session hierarchy.</p>
+            <div id="meta-projects" class="meta-project-list"></div>
+          </section>
+
+          <section class="meta-list-section meta-session-section card">
+            <div class="panel-head meta-list-head">
+              <div><div class="section-label">Session hierarchy</div><h2><span id="meta-session-title">Choose a project</span> <span id="meta-session-count" class="inline-count"></span></h2></div>
+              <div class="meta-filter-actions"><input id="meta-session-filter" class="meta-filter" aria-label="Filter selected project sessions" placeholder="Filter titles, agents, paths, or IDs"></div>
+            </div>
+            <p id="meta-session-scope" class="hint" aria-live="polite">Select one project to load its session hierarchy.</p>
+            <div id="meta-sessions" class="meta-session-list meta-session-tree" aria-live="polite"></div>
           </section>
         </div>
       </div>
@@ -101,7 +135,7 @@
         <div class="head-actions"><button id="open-db-button" class="button secondary">Open projection…</button><button id="reveal-db" class="button secondary" disabled>Reveal file</button></div>
       </div>
 
-      <div id="db-empty" class="callout"><b>No projection open.</b> Complete a benchmark or choose an existing Rosetta SQLite file.</div>
+      <div id="db-empty" class="callout"><b>No projection open.</b> Run Full ingestion or choose an existing Rosetta SQLite file.</div>
       <div id="db-content" class="hidden">
         <section id="db-summary" class="stat-grid"></section>
         <div class="db-layout">
@@ -144,6 +178,7 @@ ORDER BY rows DESC;</textarea>
     <pre id="cell-value"></pre>
   </dialog>
   <div id="toast" class="toast" role="status"></div>
+  <script src="meta-tree.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

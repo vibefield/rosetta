@@ -8,12 +8,20 @@ const state = {
   report: null,
   logs: [],
   logFilter: 'all',
+  metaDatabase: null,
+  metaData: null,
+  selectedMetaProjectId: null,
+  expandedMetaSessionIds: new Set(),
+  collapsedMetaSessionIds: new Set(),
+  metaSessionRenderToken: 0,
   database: null,
   objects: [],
   currentObject: null,
   tableOffset: 0,
   pageSize: 100,
 };
+const numberFormatter = new Intl.NumberFormat();
+const timestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
 
 function formatDuration(ms) {
   if (ms == null || !Number.isFinite(Number(ms))) return '—';
@@ -35,7 +43,7 @@ function formatBytes(bytes) {
 
 function formatNumber(value) {
   if (value == null) return '—';
-  return typeof value === 'number' ? new Intl.NumberFormat().format(value) : String(value);
+  return typeof value === 'number' ? numberFormatter.format(value) : String(value);
 }
 
 function formatCell(value) {
@@ -73,10 +81,15 @@ function setGlobal(label, mode = '') {
   global.lastElementChild.textContent = label;
 }
 
+function updateRunControls() {
+  const disabled = state.busy || state.selectedAgents.size === 0;
+  $$('.run-stage').forEach((button) => { button.disabled = disabled; });
+}
+
 function setBusy(busy, label = 'Ready') {
   state.busy = busy;
   $('#discover-button').disabled = busy;
-  $('#run-button').disabled = busy || state.selectedAgents.size === 0;
+  updateRunControls();
   $('#stop-button').disabled = !busy;
   $('#binary-input').disabled = busy;
   $('#home-input').disabled = busy;
@@ -124,7 +137,7 @@ function renderAgents() {
     input.addEventListener('change', () => {
       if (input.checked) state.selectedAgents.add(discovery.agent);
       else state.selectedAgents.delete(discovery.agent);
-      $('#run-button').disabled = state.busy || state.selectedAgents.size === 0;
+      updateRunControls();
     });
     const name = document.createElement('strong');
     name.textContent = discovery.agent;
@@ -138,12 +151,11 @@ function renderAgents() {
   }
 }
 
-function resetPhases() {
-  $$('.phase-card').forEach((card) => {
-    card.classList.remove('running', 'complete', 'failed');
-    card.querySelector('.phase-result strong').textContent = '—';
-    card.querySelector('.phase-result span').textContent = 'not run';
-  });
+function resetPhase(phase) {
+  const card = $(`.phase-card[data-phase="${phase}"]`);
+  card.classList.remove('running', 'complete', 'failed');
+  card.querySelector('.phase-result strong').textContent = '—';
+  card.querySelector('.phase-result span').textContent = 'not run';
 }
 
 function updatePhase(phase, mode, report = null) {
@@ -179,24 +191,32 @@ async function runDiscovery() {
   }
 }
 
-async function runBenchmark() {
-  resetPhases();
+async function runStage(stage) {
+  resetPhase(stage);
   $('#result-panel').classList.add('hidden');
   state.report = null;
-  setBusy(true, 'Benchmark running');
+  setBusy(true, `${stage === 'ingest' ? 'Full ingest' : stage === 'meta' ? 'Meta ingest' : 'Discovery'} running`);
   try {
-    const report = await window.rosetta.runBenchmark({
+    const report = await window.rosetta.runStage({
       binary: $('#binary-input').value,
       home: $('#home-input').value,
       outputDir: $('#output-input').value,
       agents: [...state.selectedAgents],
+      stage,
     });
     state.report = report;
     renderReport(report);
-    await openDatabase(report.paths.projectionDb);
-    toast('Cold ingest complete. The published projection is open read-only.');
+    if (stage === 'meta') {
+      await openMetaDatabase(report.paths.metaDb);
+      toast('Meta ingest complete. Its metadata projection is open read-only.');
+    } else if (stage === 'ingest') {
+      await openDatabase(report.paths.projectionDb);
+      toast('Full ingest complete. The published projection is open read-only.');
+    } else {
+      toast('Discovery benchmark complete.');
+    }
   } catch (error) {
-    setGlobal('Benchmark failed', 'failed');
+    setGlobal(`${stage === 'ingest' ? 'Full ingest' : stage === 'meta' ? 'Meta ingest' : 'Discovery'} failed`, 'failed');
     toast(errorMessage(error), 'error');
   } finally {
     setBusy(false);
@@ -209,15 +229,26 @@ function metric(phase, name) {
   return value.unit === 'ms' ? formatDuration(value.value) : `${formatNumber(value.value)} ${value.unit}`;
 }
 
+function stageLabel(stage) {
+  if (stage === 'meta') return 'Meta ingest';
+  if (stage === 'ingest') return 'Full ingestion';
+  return 'Discovery';
+}
+
 function renderReport(report) {
   $('#result-panel').classList.remove('hidden');
-  $('#result-title').textContent = report.status === 'complete' ? 'Cold run published' : `Run ${report.status}`;
+  $('#result-title').textContent = report.status === 'complete'
+    ? `${stageLabel(report.stage)} complete`
+    : `${stageLabel(report.stage)} ${report.status}`;
   const summary = $('#result-summary');
   summary.replaceChildren();
+  const artifact = report.stage === 'meta'
+    ? report.paths.metaDb
+    : report.stage === 'ingest' ? report.paths.projectionDb : report.paths.report;
   const facts = [
     ['agents', report.config.agents.join(', ')],
-    ['total wall', formatDuration(Object.values(report.phases).reduce((sum, phase) => sum + (phase.wallMs || 0), 0))],
-    ['projection', report.paths.projectionDb.split(/[\\/]/).pop()],
+    ['wall', formatDuration(report.phases[report.stage]?.wallMs)],
+    ['artifact', artifact.split(/[\\/]/).pop()],
     ['report', report.paths.report.split(/[\\/]/).pop()],
   ];
   for (const [label, value] of facts) {
@@ -229,8 +260,7 @@ function renderReport(report) {
   }
   const table = $('#phase-table');
   table.replaceChildren();
-  for (const name of ['discovery', 'meta', 'ingest']) {
-    const phase = report.phases[name] || {};
+  for (const [name, phase] of Object.entries(report.phases)) {
     const row = document.createElement('tr');
     for (const value of [name, formatDuration(phase.wallMs), metric(phase, 'walk time'), metric(phase, 'skim time'), metric(phase, 'read time'), metric(phase, 'normalize time'), metric(phase, 'apply time'), metric(phase, 'bulk FTS time')]) {
       const cell = document.createElement('td'); cell.textContent = value; cell.className = 'mono'; row.append(cell);
@@ -255,6 +285,297 @@ function addStat(root, label, value) {
   const key = document.createElement('span'); key.textContent = label;
   const val = document.createElement('strong'); val.textContent = value; val.title = value;
   stat.append(key, val); root.append(stat);
+}
+
+function metaElement(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function formatTimestamp(ms) {
+  if (ms == null || !Number.isFinite(Number(ms))) return '—';
+  return timestampFormatter.format(new Date(Number(ms)));
+}
+
+function formatStructured(value) {
+  if (value == null) return '—';
+  if (Array.isArray(value)) return value.join(', ') || '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function searchable(values) {
+  return values.flatMap((value) => Array.isArray(value) ? value : [value]).filter((value) => value != null).join(' ').toLowerCase();
+}
+
+async function openMetaDatabase(file) {
+  if (!file) return;
+  try {
+    await window.rosetta.openMetaDatabase(file);
+    const data = await window.rosetta.metaDatabaseData();
+    state.metaDatabase = data.overview;
+    state.metaData = data;
+    state.selectedMetaProjectId = null;
+    state.expandedMetaSessionIds.clear();
+    state.collapsedMetaSessionIds.clear();
+    $('#meta-project-filter').value = '';
+    $('#meta-session-filter').value = '';
+    $('#meta-empty').classList.add('hidden');
+    $('#meta-content').classList.remove('hidden');
+    $('#reveal-meta').disabled = false;
+    $('#view-meta-button').disabled = false;
+    renderMetaDatabaseOverview(data);
+    renderMetaProjects();
+    renderMetaSessions();
+    switchTab('meta');
+  } catch (error) {
+    toast(`Could not open meta projection: ${errorMessage(error)}`, 'error');
+  }
+}
+
+function renderMetaDatabaseOverview(data) {
+  const root = $('#meta-summary'); root.replaceChildren();
+  const titled = data.sessions.filter((session) => session.title?.trim()).length;
+  const unassigned = data.sessions.filter((session) => !session.projectId).length;
+  const sources = data.sessions.reduce((sum, session) => sum + Number(session.sourceCount || 0), 0);
+  addStat(root, 'agents', formatNumber(data.overview.counts.agent_runtime));
+  addStat(root, 'projects', formatNumber(data.projects.length));
+  addStat(root, 'sessions', formatNumber(data.sessions.length));
+  addStat(root, 'with titles', formatNumber(titled));
+  addStat(root, 'unassigned', formatNumber(unassigned));
+  addStat(root, 'source files', formatNumber(sources));
+}
+
+function renderMetaProjects() {
+  if (!state.metaData) return;
+  const query = $('#meta-project-filter').value.trim().toLowerCase();
+  const projects = state.metaData.projects.filter((project) => searchable([
+    project.name, project.id, project.rootPaths, project.gitRepo, project.agentKinds,
+  ]).includes(query));
+  $('#meta-project-count').textContent = query
+    ? `${formatNumber(projects.length)} of ${formatNumber(state.metaData.projects.length)}`
+    : formatNumber(projects.length);
+  const root = $('#meta-projects'); root.replaceChildren();
+  if (!projects.length) {
+    root.append(metaElement('div', 'empty-state', 'No project matches this filter.'));
+    return;
+  }
+  for (const project of projects) {
+    const active = state.selectedMetaProjectId === project.id;
+    const card = metaElement('button', `meta-project-card${active ? ' active' : ''}`);
+    card.type = 'button';
+    card.setAttribute('aria-pressed', String(active));
+    const heading = metaElement('div', 'meta-card-heading');
+    heading.append(
+      metaElement('strong', '', project.name),
+      metaElement('span', 'meta-count', `${formatNumber(project.sessionCount)} session${Number(project.sessionCount) === 1 ? '' : 's'}`),
+    );
+    card.append(heading);
+    card.append(metaElement('code', 'meta-project-id', project.id));
+    const facts = metaElement('div', 'meta-project-facts');
+    if (project.gitRepo) facts.append(metaElement('span', 'meta-chip', project.gitRepo));
+    for (const agent of project.agentKinds) facts.append(metaElement('span', 'meta-chip agent', agent));
+    facts.append(metaElement('span', 'meta-muted', `${formatNumber(project.mainSessionCount)} main · ${formatNumber(project.childSessionCount)} child`));
+    if (project.latestUpdatedAt) facts.append(metaElement('span', 'meta-muted', `latest ${formatTimestamp(project.latestUpdatedAt)}`));
+    card.append(facts);
+    const paths = metaElement('div', 'meta-project-paths');
+    for (const path of project.rootPaths) paths.append(metaElement('code', '', path));
+    if (!project.rootPaths.length) paths.append(metaElement('span', 'meta-muted', 'No root path captured'));
+    card.append(paths);
+    card.addEventListener('click', () => {
+      if (state.selectedMetaProjectId === project.id) return;
+      state.selectedMetaProjectId = project.id;
+      state.expandedMetaSessionIds.clear();
+      state.collapsedMetaSessionIds.clear();
+      $('#meta-session-filter').value = '';
+      renderMetaProjects();
+      renderMetaSessions();
+    });
+    root.append(card);
+  }
+}
+
+function appendMetaFact(root, label, value, { mono = false } = {}) {
+  if (value == null || value === '') return;
+  const item = metaElement('div', 'meta-fact');
+  item.append(metaElement('dt', '', label), metaElement('dd', mono ? 'mono' : '', String(value)));
+  root.append(item);
+}
+
+function sessionCard(session, {
+  childCount = 0,
+  expanded = false,
+  detachedParent = false,
+  childrenId = '',
+  onToggle = null,
+} = {}) {
+  const roleClass = session.role === 'main' ? 'main' : 'subagent';
+  const card = metaElement('article', `meta-session-card ${roleClass}${detachedParent ? ' detached-parent' : ''}`);
+  const heading = metaElement('div', 'meta-card-heading meta-session-heading');
+  const titleBlock = metaElement('div', 'meta-session-title-block');
+  const title = session.title?.trim();
+  titleBlock.append(metaElement('h3', title ? '' : 'missing', title || 'No title captured'));
+  titleBlock.append(metaElement('code', 'meta-native-id', session.nativeSessionId));
+  const badges = metaElement('div', 'meta-badges');
+  badges.append(
+    metaElement('span', 'meta-chip agent', session.agentKind),
+    metaElement('span', 'meta-chip', session.role),
+    metaElement('span', `meta-chip state ${session.streamState}`, session.streamState),
+  );
+  if (detachedParent) badges.append(metaElement('span', 'meta-chip hierarchy', 'parent outside project'));
+  if (childCount > 0) {
+    const toggle = metaElement('button', 'meta-session-toggle');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-controls', childrenId);
+    toggle.title = `${expanded ? 'Collapse' : 'Expand'} ${formatNumber(childCount)} nested subagent${childCount === 1 ? '' : 's'}`;
+    const caret = metaElement('span', 'meta-session-toggle-caret', '›');
+    caret.setAttribute('aria-hidden', 'true');
+    toggle.append(caret, metaElement('span', '', `${formatNumber(childCount)} nested`));
+    toggle.addEventListener('click', onToggle);
+    badges.append(toggle);
+  }
+  heading.append(titleBlock, badges);
+  card.append(heading);
+  if (session.summary?.trim()) {
+    const summary = metaElement('p', 'meta-session-summary');
+    summary.append(metaElement('span', 'meta-inline-label', 'Summary'), document.createTextNode(session.summary));
+    card.append(summary);
+  }
+  const context = metaElement('div', 'meta-session-context');
+  context.append(metaElement('strong', '', session.projectName || 'Unassigned project'));
+  if (session.cwd) context.append(metaElement('code', '', session.cwd));
+  card.append(context);
+  const facts = metaElement('dl', 'meta-fact-grid');
+  appendMetaFact(facts, 'Agent', session.agentKind);
+  appendMetaFact(facts, 'Runtime enabled', session.runtimeEnabled ? 'yes' : 'no');
+  appendMetaFact(facts, 'Project', session.projectName || 'Unassigned');
+  appendMetaFact(facts, 'Repository', session.workspaceGitRepo || session.projectGitRepo);
+  appendMetaFact(facts, 'Git branch', session.gitBranch);
+  appendMetaFact(facts, 'Started', formatTimestamp(session.startedAt));
+  appendMetaFact(facts, 'Updated', formatTimestamp(session.updatedAt));
+  appendMetaFact(facts, 'Duration', formatDuration(Number(session.updatedAt) - Number(session.startedAt)));
+  appendMetaFact(facts, 'Source files', formatNumber(session.sourceCount));
+  appendMetaFact(facts, 'Workspace observations', formatNumber(session.workspaceObservationCount));
+  appendMetaFact(facts, 'Agent versions', formatStructured(session.versionsSeen));
+  appendMetaFact(facts, 'Data root', session.dataRoot, { mono: true });
+  appendMetaFact(facts, 'Native session ID', session.nativeSessionId, { mono: true });
+  appendMetaFact(facts, 'Canonical session ID', session.id, { mono: true });
+  appendMetaFact(facts, 'Runtime ID', session.runtimeId, { mono: true });
+  appendMetaFact(facts, 'Project ID', session.projectId, { mono: true });
+  appendMetaFact(facts, 'Parent session ID', session.parentSessionId, { mono: true });
+  appendMetaFact(facts, 'Root session ID', session.rootSessionId, { mono: true });
+  if (session.projectAssignedAt) appendMetaFact(facts, 'Project assigned', formatTimestamp(session.projectAssignedAt));
+  card.append(facts);
+  return card;
+}
+
+function sessionSearchText(session) {
+  return searchable([
+    session.title, session.summary, session.agentKind, session.role, session.streamState,
+    session.projectName, session.cwd, session.nativeSessionId, session.id,
+    session.parentSessionId, session.rootSessionId, session.runtimeId, session.dataRoot,
+    session.projectRootPaths, session.projectGitRepo, session.workspaceGitRepo, session.gitBranch,
+  ]);
+}
+
+function metaSessionChildrenId(session) {
+  return `meta-session-children-${String(session.id).replace(/[^a-z0-9_-]/gi, '-')}`;
+}
+
+function visibleDescendantCount(node) {
+  return node.children.reduce((count, child) => count + 1 + visibleDescendantCount(child), 0);
+}
+
+function metaSessionTreeNode(node, depth, queryActive) {
+  const id = node.session.id;
+  const childrenId = metaSessionChildrenId(node.session);
+  const autoExpanded = queryActive && node.hasMatchingDescendant;
+  const expanded = node.children.length > 0
+    && !state.collapsedMetaSessionIds.has(id)
+    && (state.expandedMetaSessionIds.has(id) || autoExpanded);
+  const wrapper = metaElement('div', `meta-session-node depth-${Math.min(depth, 4)}`);
+  const onToggle = () => {
+    if (expanded) {
+      state.expandedMetaSessionIds.delete(id);
+      state.collapsedMetaSessionIds.add(id);
+    } else {
+      state.expandedMetaSessionIds.add(id);
+      state.collapsedMetaSessionIds.delete(id);
+    }
+    renderMetaSessions();
+  };
+  wrapper.append(sessionCard(node.session, {
+    childCount: visibleDescendantCount(node),
+    expanded,
+    detachedParent: node.detachedParent,
+    childrenId,
+    onToggle,
+  }));
+  if (expanded) {
+    const children = metaElement('div', 'meta-session-children');
+    children.id = childrenId;
+    children.setAttribute('role', 'group');
+    children.setAttribute('aria-label', `Subagents of ${node.session.title?.trim() || node.session.nativeSessionId}`);
+    for (const child of node.children) children.append(metaSessionTreeNode(child, depth + 1, queryActive));
+    wrapper.append(children);
+  }
+  return wrapper;
+}
+
+function renderMetaSessions() {
+  if (!state.metaData) return;
+  const renderToken = ++state.metaSessionRenderToken;
+  const query = $('#meta-session-filter').value.trim().toLowerCase();
+  const project = state.metaData.projects.find((item) => item.id === state.selectedMetaProjectId);
+  const title = $('#meta-session-title');
+  const root = $('#meta-sessions'); root.replaceChildren();
+  root.setAttribute('aria-busy', 'false');
+  if (!project) {
+    title.textContent = 'Choose a project';
+    $('#meta-session-count').textContent = '';
+    $('#meta-session-scope').textContent = 'Select one project to load its session hierarchy.';
+    root.append(metaElement('div', 'empty-state', 'Select a project from the list to view its sessions.'));
+    return;
+  }
+  title.textContent = project.name;
+  const sessions = state.metaData.sessions.filter((session) => session.projectId === project.id);
+  const matches = query ? (session) => sessionSearchText(session).includes(query) : () => true;
+  const forest = window.RosettaMetaTree.buildSessionForest(sessions, matches);
+  $('#meta-session-count').textContent = query
+    ? `${formatNumber(forest.matchingCount)} of ${formatNumber(forest.total)}`
+    : formatNumber(forest.total);
+  const detached = forest.detachedCount
+    ? ` · ${formatNumber(forest.detachedCount)} parent${forest.detachedCount === 1 ? '' : 's'} outside project`
+    : '';
+  const scope = query
+    ? `${project.name} · ${formatNumber(forest.matchingCount)} matching session${forest.matchingCount === 1 ? '' : 's'} with parent context${detached}.`
+    : `${project.name} · ${formatNumber(forest.rootCount)} top-level · ${formatNumber(forest.nestedCount)} nested${detached}. Expand a parent to inspect its subagents.`;
+  $('#meta-session-scope').textContent = scope;
+  if (!forest.roots.length) {
+    root.append(metaElement('div', 'empty-state', 'No session in this project matches the current filter.'));
+    return;
+  }
+  root.setAttribute('aria-busy', 'true');
+  const appendChunk = (start) => {
+    if (renderToken !== state.metaSessionRenderToken) return;
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(start + 40, forest.roots.length);
+    for (let index = start; index < end; index += 1) {
+      fragment.append(metaSessionTreeNode(forest.roots[index], 0, Boolean(query)));
+    }
+    root.append(fragment);
+    if (end < forest.roots.length) {
+      $('#meta-session-scope').textContent = `${scope} Rendering ${formatNumber(end)} of ${formatNumber(forest.roots.length)} top-level groups…`;
+      requestAnimationFrame(() => appendChunk(end));
+    } else {
+      root.setAttribute('aria-busy', 'false');
+      $('#meta-session-scope').textContent = scope;
+    }
+  };
+  appendChunk(0);
 }
 
 async function openDatabase(file) {
@@ -378,12 +699,20 @@ async function init() {
   $('#home-browse').addEventListener('click', async () => { const dir = await window.rosetta.chooseDirectory('Choose the home directory to probe'); if (dir) $('#home-input').value = dir; });
   $('#output-browse').addEventListener('click', async () => { const dir = await window.rosetta.chooseDirectory('Choose benchmark output directory'); if (dir) $('#output-input').value = dir; });
   $('#discover-button').addEventListener('click', runDiscovery);
-  $('#run-button').addEventListener('click', runBenchmark);
+  $$('.run-stage').forEach((button) => button.addEventListener('click', () => runStage(button.dataset.stage)));
   $('#stop-button').addEventListener('click', async () => { await window.rosetta.cancelBenchmark(); setGlobal('Stopping daemon', 'running'); });
-  $('#select-all').addEventListener('click', () => { state.selectedAgents = new Set(state.discoveries.filter((item) => item.installed).map((item) => item.agent)); renderAgents(); $('#run-button').disabled = state.busy || state.selectedAgents.size === 0; });
-  $('#select-none').addEventListener('click', () => { state.selectedAgents.clear(); renderAgents(); $('#run-button').disabled = true; });
+  $('#select-all').addEventListener('click', () => { state.selectedAgents = new Set(state.discoveries.filter((item) => item.installed).map((item) => item.agent)); renderAgents(); updateRunControls(); });
+  $('#select-none').addEventListener('click', () => { state.selectedAgents.clear(); renderAgents(); updateRunControls(); });
   $('#reveal-run').addEventListener('click', () => state.report && window.rosetta.reveal(state.report.paths.report));
-  $('#open-db-button').addEventListener('click', async () => { const file = await window.rosetta.chooseDatabase(); if (file) openDatabase(file); });
+  $('#view-meta-button').addEventListener('click', () => switchTab('meta'));
+  $('#open-meta-button').addEventListener('click', async () => { const file = await window.rosetta.chooseDatabase('Open a meta.sqlite projection'); if (file) openMetaDatabase(file); });
+  $('#reveal-meta').addEventListener('click', () => state.metaDatabase && window.rosetta.reveal(state.metaDatabase.file));
+  $('#meta-project-filter').addEventListener('input', renderMetaProjects);
+  $('#meta-session-filter').addEventListener('input', () => {
+    state.collapsedMetaSessionIds.clear();
+    renderMetaSessions();
+  });
+  $('#open-db-button').addEventListener('click', async () => { const file = await window.rosetta.chooseDatabase('Open a Rosetta SQLite projection'); if (file) openDatabase(file); });
   $('#reveal-db').addEventListener('click', () => state.database && window.rosetta.reveal(state.database.file));
   $('#object-filter').addEventListener('input', renderObjects);
   $('#prev-page').addEventListener('click', () => state.currentObject && loadTable(state.currentObject, Math.max(0, state.tableOffset - state.pageSize)));
