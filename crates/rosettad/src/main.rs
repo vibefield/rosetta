@@ -1,6 +1,8 @@
 //! rosettad — ingestion, live watching, and ledger-backed projection rebuilds.
 //!
 //!   rosettad discover [--home DIR]
+//!   rosettad sources [--home DIR] [--agent KIND ...]
+//!   rosettad streams [--agent KIND ...]
 //!   rosettad meta --db PATH [--home DIR] [--agent KIND ...] [--profile]
 //!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile]
 //!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N]
@@ -11,7 +13,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rosetta_adapter_antigravity::AntigravityAdapter;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
@@ -54,14 +56,20 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("discover") => bench::cmd_discover(&args[1..]),
+        Some("sources") => bench::cmd_sources(&args[1..]),
+        Some("streams") => bench::cmd_streams(&args[1..]),
         Some("meta") => bench::cmd_meta(&args[1..]),
         Some("ingest") => cmd_ingest(&args[1..]),
         Some("watch") => cmd_watch(&args[1..]),
         Some("serve") => serve::cmd_serve(&args[1..]),
         Some("rebuild") => cmd_rebuild(&args[1..]),
         _ => {
-            eprintln!("usage: rosettad <discover|meta|ingest|watch|serve|rebuild> [options]");
+            eprintln!(
+                "usage: rosettad <discover|sources|streams|meta|ingest|watch|serve|rebuild> [options]"
+            );
             eprintln!("  discover [--home DIR] [--agent KIND ...] [--json]");
+            eprintln!("  sources [--home DIR] [--agent KIND ...] [--json]");
+            eprintln!("  streams [--agent KIND ...] [--json]");
             eprintln!("  meta --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
             eprintln!("  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
@@ -438,8 +446,13 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         .as_ref()
         .map_or(public_ledgers.as_path(), ColdLedgerStage::path);
     let mut ingest_ledgers = Vec::new();
+    let stage_started = Instant::now();
+    let stage_before = instrument.snapshot();
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
+    if flags.json && flags.profile {
+        bench::emit_stage_profile("discovery", None, stage_started, &stage_before, &instrument);
+    }
     let mut failures = Vec::new();
 
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
@@ -471,6 +484,8 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             .last_mut()
             .expect("the runtime ledger was just pushed");
 
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
         let (meta, files) = meta_ingest_into(
             *adapter,
             &runtime,
@@ -481,6 +496,15 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             Some(&mut *ledger),
         )
         .map_err(|error| error.to_string())?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile(
+                "metadata",
+                Some(adapter.kind()),
+                stage_started,
+                &stage_before,
+                &instrument,
+            );
+        }
         if flags.json {
             bench::emit(&bench::meta_event(adapter.kind(), &meta));
         } else {
@@ -512,6 +536,8 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             ));
         }
 
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
         let stream = stream_backfill_into(
             *adapter,
             &runtime,
@@ -523,6 +549,15 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             Some(&mut *ledger),
         )
         .map_err(|error| error.to_string())?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile(
+                "stream",
+                Some(adapter.kind()),
+                stage_started,
+                &stage_before,
+                &instrument,
+            );
+        }
         if flags.json {
             bench::emit(&serde_json::json!({
                 "event": "stream",
@@ -580,11 +615,22 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     // failures still cross the barrier before publication is refused; an IO
     // error may return earlier, but no private projection can be published.
     if defer_ledger_sync {
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
         ingest_ledgers.iter_mut().try_for_each(|ledger| {
             instrument
                 .ledger_write(ledger, |ledger| ledger.flush())
                 .map_err(|error| error.to_string())
         })?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile(
+                "ledger-durability",
+                None,
+                stage_started,
+                &stage_before,
+                &instrument,
+            );
+        }
     }
 
     if !failures.is_empty() {
@@ -598,12 +644,33 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     drop(ingest_ledgers);
     if let Some(temp) = private_projection {
         let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
         publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile(
+                "finalize-publish",
+                None,
+                stage_started,
+                &stage_before,
+                &instrument,
+            );
+        }
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
         instrument.time(Metric::SearchSyncNanos, || build_search_wait(&db))?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile("search", None, stage_started, &stage_before, &instrument);
+        }
     } else {
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
         instrument.time(Metric::SearchSyncNanos, || {
             synchronize_search_wait(&db, &mut store)
         })?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile("search", None, stage_started, &stage_before, &instrument);
+        }
     }
     if flags.json {
         bench::emit_profile("ingest", &instrument);

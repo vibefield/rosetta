@@ -4,8 +4,12 @@
 //! owns no agent paths, parsers, or projection SQL.
 
 use std::path::Path;
+use std::time::Instant;
 
-use rosetta_pipeline::{Instrument, MetaReport, meta_ingest_into};
+use rosetta_adapter_support::{AgentAdapter, FileDiscipline, FileFormat, StreamDriver};
+use rosetta_pipeline::{
+    IngestOptions, Instrument, InstrumentSnapshot, MetaReport, expand_data_root, meta_ingest_into,
+};
 use rosetta_store::Store;
 use serde_json::{Value, json};
 
@@ -21,6 +25,166 @@ pub(crate) fn emit_profile(command: &str, instrument: &Instrument) {
         "command": command,
         "report": instrument.report(),
     }));
+}
+
+/// Emit one wall-clock boundary together with the profiler counters accrued
+/// inside it. The wall clock is the stage headline; the counter delta explains
+/// where that time went and may contain documented parent/child overlaps.
+pub(crate) fn emit_stage_profile(
+    stage: &str,
+    agent: Option<&str>,
+    started: Instant,
+    before: &InstrumentSnapshot,
+    instrument: &Instrument,
+) {
+    let delta = instrument.snapshot().delta_since(before);
+    emit(&json!({
+        "event": "stage-profile",
+        "command": "ingest",
+        "stage": stage,
+        "agent": agent,
+        "wallMs": started.elapsed().as_secs_f64() * 1_000.0,
+        "report": delta.report(),
+    }));
+}
+
+fn driver_name(driver: StreamDriver) -> &'static str {
+    match driver {
+        StreamDriver::JsonLines => "json-lines",
+        StreamDriver::DocumentSnapshot => "document-snapshot",
+        StreamDriver::SqliteSnapshot => "sqlite-snapshot",
+    }
+}
+
+fn format_name(format: FileFormat) -> &'static str {
+    match format {
+        FileFormat::Jsonl => "jsonl",
+        FileFormat::Json => "json",
+        FileFormat::Toml => "toml",
+        FileFormat::Markdown => "markdown",
+        FileFormat::Sqlite => "sqlite",
+        FileFormat::Text => "text",
+    }
+}
+
+fn discipline_name(discipline: FileDiscipline) -> &'static str {
+    match discipline {
+        FileDiscipline::AppendOnly => "append-only",
+        FileDiscipline::RewriteInPlace => "rewrite-in-place",
+        FileDiscipline::Database => "database",
+    }
+}
+
+/// Describe the adapter streams which have production drivers. Audit tools
+/// use this to ask the adapter how an explicitly selected file may be staged.
+pub(crate) fn cmd_streams(args: &[String]) -> Result<(), String> {
+    let flags = parse_flags(args)?;
+    let adapters = selected(&flags)?;
+    if !flags.json {
+        println!("{:<14} {:<24} {:<20}  glob", "agent", "stream", "driver");
+    }
+    for adapter in adapters {
+        let layout = adapter.layout();
+        for stream in &layout.streams {
+            let Some(driver) = adapter.stream_driver(&stream.id) else {
+                continue;
+            };
+            if flags.json {
+                emit(&json!({
+                    "event": "stream-spec",
+                    "agent": adapter.kind(),
+                    "dataRoot": layout.data_root,
+                    "stream": stream.id,
+                    "glob": stream.glob,
+                    "driver": driver_name(driver),
+                    "fileFormat": format_name(stream.file_format),
+                    "discipline": discipline_name(stream.discipline),
+                }));
+            } else {
+                println!(
+                    "{:<14} {:<24} {:<20}  {}",
+                    adapter.kind(),
+                    stream.id,
+                    driver_name(driver),
+                    stream.glob,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn admitted_sources(
+    adapter: &dyn AgentAdapter,
+    root: &Path,
+    opts: &IngestOptions,
+) -> Result<rosetta_capture::WalkReport, String> {
+    let layout = adapter.layout();
+    rosetta_capture::walk_filtered(root, opts.max_files, |relative_path| {
+        layout
+            .matching_stream(relative_path)
+            .is_some_and(|stream| adapter.stream_driver(&stream.id).is_some())
+    })
+    .map_err(|error| error.to_string())
+}
+
+/// List only source files admitted by an adapter driver. This keeps local
+/// benchmark tools out of agent-specific path and stream-id knowledge.
+pub(crate) fn cmd_sources(args: &[String]) -> Result<(), String> {
+    let flags = parse_flags(args)?;
+    let opts = IngestOptions::default();
+    let adapters = selected(&flags)?;
+    let mut truncated = Vec::new();
+
+    if !flags.json {
+        println!("{:<14} {:<20} {:>14}  path", "agent", "driver", "bytes");
+    }
+    for adapter in adapters {
+        let layout = adapter.layout();
+        let root = expand_data_root(&layout.data_root, &flags.home);
+        let report = admitted_sources(adapter, &root, &opts)?;
+        if report.truncated {
+            truncated.push(adapter.kind());
+        }
+        for file in report.files {
+            let stream = layout
+                .matching_stream(&file.relative_path)
+                .expect("the admitted-source filter matched this path");
+            let driver = adapter
+                .stream_driver(&stream.id)
+                .expect("the admitted-source filter required a driver");
+            if flags.json {
+                emit(&json!({
+                    "event": "source",
+                    "agent": adapter.kind(),
+                    "dataRoot": layout.data_root,
+                    "resolvedRoot": root,
+                    "relativePath": file.relative_path,
+                    "stream": stream.id,
+                    "driver": driver_name(driver),
+                    "bytes": file.size,
+                    "modifiedMs": file.modified_ms,
+                }));
+            } else {
+                println!(
+                    "{:<14} {:<20} {:>14}  {}",
+                    adapter.kind(),
+                    driver_name(driver),
+                    file.size,
+                    file.relative_path,
+                );
+            }
+        }
+    }
+
+    if truncated.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "admitted-source coverage was truncated for {}",
+            truncated.join(", ")
+        ))
+    }
 }
 
 pub(crate) fn meta_event(agent: &str, meta: &MetaReport) -> Value {
@@ -202,5 +366,31 @@ pub(crate) fn cmd_meta(args: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err(failures.join("; "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rosetta_adapter_claude_code::ClaudeCodeAdapter;
+
+    use super::*;
+
+    #[test]
+    fn admitted_source_inventory_uses_the_adapter_driver_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let transcript = temp.path().join("projects/work/session.jsonl");
+        let prompt_history = temp.path().join("history.jsonl");
+        let state = temp.path().join(".claude.json");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        std::fs::write(&prompt_history, b"{}\n").unwrap();
+        std::fs::write(&state, b"{}").unwrap();
+
+        let report =
+            admitted_sources(&ClaudeCodeAdapter, temp.path(), &IngestOptions::default()).unwrap();
+
+        assert!(!report.truncated);
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].relative_path, "projects/work/session.jsonl");
     }
 }
