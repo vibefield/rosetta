@@ -2,31 +2,31 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
-use rosetta_search::TextQuery;
-use rosetta_store::queries::{self, SearchFilter, SearchHit};
+use rosetta_search::{Fts5SidecarSearch, SearchBackend, SearchQuery, SearchReadiness, TextQuery};
+use rosetta_store::queries::SearchHit;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::RUN_FORMAT;
 use crate::fingerprint::{fingerprint_file, verify_campaign};
 use crate::model::{
     CampaignManifest, CaseReport, ClassReport, DatabaseFingerprint, LaneReport, LatencySummary,
-    ProjectionCounts, QueryCase, QueryFilterSpec, RunConfig, RunReport,
+    ProjectionCounts, QueryCase, RunConfig, RunReport,
 };
 use crate::stats::summarize;
 
 #[derive(Debug, Clone, Copy)]
 enum Lane {
-    SharedConnection,
-    FreshConnection,
+    SharedBackend,
+    FreshBackend,
 }
 
 impl Lane {
-    const ALL: [Self; 2] = [Self::SharedConnection, Self::FreshConnection];
+    const ALL: [Self; 2] = [Self::SharedBackend, Self::FreshBackend];
 
     fn name(self) -> &'static str {
         match self {
-            Self::SharedConnection => "shared-connection",
-            Self::FreshConnection => "fresh-connection",
+            Self::SharedBackend => "shared-backend",
+            Self::FreshBackend => "fresh-backend",
         }
     }
 }
@@ -44,8 +44,11 @@ fn nonnegative_count(value: i64, label: &str) -> Result<u64, String> {
     u64::try_from(value).map_err(|_| format!("{label} count is negative: {value}"))
 }
 
-fn validate_projection(connection: &Connection) -> Result<(i64, String, ProjectionCounts), String> {
-    let schema_version: i64 = connection
+fn validate_projection(
+    canonical: &Connection,
+    generation: &Connection,
+) -> Result<(i64, String, ProjectionCounts), String> {
+    let schema_version: i64 = canonical
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|error| format!("reading projection schema: {error}"))?;
     if schema_version != rosetta_store::schema::SCHEMA_VERSION {
@@ -54,13 +57,13 @@ fn validate_projection(connection: &Connection) -> Result<(i64, String, Projecti
             rosetta_store::schema::SCHEMA_VERSION
         ));
     }
-    let quick: String = connection
+    let quick: String = canonical
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(|error| format!("running quick_check: {error}"))?;
     if quick != "ok" {
         return Err(format!("SQLite quick_check returned {quick}"));
     }
-    let mut foreign = connection
+    let mut foreign = canonical
         .prepare("PRAGMA foreign_key_check")
         .map_err(|error| format!("preparing foreign_key_check: {error}"))?;
     if foreign
@@ -70,33 +73,39 @@ fn validate_projection(connection: &Connection) -> Result<(i64, String, Projecti
     {
         return Err("foreign_key_check reported a violation".into());
     }
-    let (messages, fts, indexed_sessions, source_ops, pending_merges): (i64, i64, i64, i64, i64) =
-        connection
-            .query_row(
-                "SELECT
+    let (messages, indexed_sessions, source_ops, pending_merges): (i64, i64, i64, i64) = canonical
+        .query_row(
+            "SELECT
                (SELECT COUNT(*) FROM message),
-               (SELECT COUNT(*) FROM message_fts),
                (SELECT COUNT(*) FROM session WHERE stream_state = 'indexed'),
                (SELECT COUNT(*) FROM source_op),
                (SELECT COUNT(*) FROM pending_merge)",
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .map_err(|error| format!("checking projection cardinalities: {error}"))?;
-    if messages != fts {
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|error| format!("checking projection cardinalities: {error}"))?;
+    let search_quick: String = generation
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|error| format!("running detached search quick_check: {error}"))?;
+    if search_quick != "ok" {
         return Err(format!(
-            "message/FTS cardinality differs: {messages} canonical rows, {fts} indexed rows"
+            "detached search SQLite quick_check returned {search_quick}"
         ));
     }
-    let sqlite_version: String = connection
+    let (documents, fts): (i64, i64) = generation
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM search_document),
+                    (SELECT COUNT(*) FROM message_fts)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| format!("checking detached search cardinalities: {error}"))?;
+    if messages != documents || messages != fts {
+        return Err(format!(
+            "canonical/search cardinality differs: {messages} messages, {documents} documents, {fts} FTS rows"
+        ));
+    }
+    let sqlite_version: String = canonical
         .query_row("SELECT sqlite_version()", [], |row| row.get(0))
         .map_err(|error| format!("reading SQLite version: {error}"))?;
     Ok((
@@ -112,17 +121,20 @@ fn validate_projection(connection: &Connection) -> Result<(i64, String, Projecti
     ))
 }
 
-fn filter(spec: &QueryFilterSpec) -> SearchFilter {
-    SearchFilter {
-        session: spec.session.clone(),
-        runtime: spec.runtime.clone(),
-        agent: spec.agent.clone(),
-        project: spec.project.clone(),
-        kind: spec.kind.clone(),
-        is_error: spec.is_error,
-        after_ts: spec.after_ts,
-        before_ts: spec.before_ts,
-    }
+fn product_query(case: &QueryCase) -> Result<SearchQuery, String> {
+    Ok(SearchQuery {
+        text: TextQuery::parse(&case.query)
+            .map_err(|error| format!("query case `{}` failed: {error}", case.label))?,
+        limit: case.limit,
+        session: case.filter.session.clone(),
+        runtime: case.filter.runtime.clone(),
+        agent: case.filter.agent.clone(),
+        project: case.filter.project.clone(),
+        kind: case.filter.kind.clone(),
+        is_error: case.filter.is_error,
+        after_ts: case.filter.after_ts,
+        before_ts: case.filter.before_ts,
+    })
 }
 
 fn result_fingerprint(hits: &[SearchHit]) -> String {
@@ -149,26 +161,23 @@ fn schedule(cases: &[QueryCase]) -> Vec<usize> {
 fn run_one(
     lane: Lane,
     db: &Path,
-    shared: Option<&Connection>,
+    shared: Option<&Fts5SidecarSearch>,
     case: &QueryCase,
 ) -> Result<(u64, u64, String), String> {
     let started = Instant::now();
-    let expression = TextQuery::parse(&case.query)
-        .map_err(|error| format!("query case `{}` failed: {error}", case.label))?
-        .fts5_expression();
-    let hits = match lane {
-        Lane::SharedConnection => queries::search_filtered(
-            shared.expect("shared lane has a connection"),
-            &expression,
-            case.limit,
-            &filter(&case.filter),
-        ),
-        Lane::FreshConnection => {
-            let connection = open_read(db)?;
-            queries::search_filtered(&connection, &expression, case.limit, &filter(&case.filter))
-        }
+    let query = product_query(case)?;
+    let output = match lane {
+        Lane::SharedBackend => shared.expect("shared lane has a backend").search(query),
+        Lane::FreshBackend => Fts5SidecarSearch::new(db).search(query),
     }
     .map_err(|error| format!("query case `{}` failed: {error}", case.label))?;
+    if output.state.readiness != SearchReadiness::Ready {
+        return Err(format!(
+            "query case `{}` saw detached search state {:?}",
+            case.label, output.state.readiness
+        ));
+    }
+    let hits = output.hits;
     let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
     Ok((hits.len() as u64, nanos, result_fingerprint(&hits)))
 }
@@ -181,8 +190,8 @@ fn execute_lane(
     measured_cycles: u32,
 ) -> Result<LaneReport, String> {
     let shared = match lane {
-        Lane::SharedConnection => Some(open_read(db)?),
-        Lane::FreshConnection => None,
+        Lane::SharedBackend => Some(Fts5SidecarSearch::new(db)),
+        Lane::FreshBackend => None,
     };
     let schedule = schedule(cases);
     let mut expected: Vec<Option<(u64, String)>> = vec![None; cases.len()];
@@ -287,8 +296,20 @@ pub fn run_campaign(
 
     let suite = verify_campaign(manifest, ledger_root, query_suite)?;
     let database_artifact = fingerprint_file(db, true)?;
+    let backend = Fts5SidecarSearch::new(db);
+    let generation_path = backend
+        .current_generation_path()
+        .map_err(|error| format!("resolving detached search generation: {error}"))?
+        .ok_or("detached search has no CURRENT generation")?;
+    let search_artifact = fingerprint_file(&generation_path, true)?;
     let connection = open_read(db)?;
-    let (schema_version, sqlite_version, counts) = validate_projection(&connection)?;
+    let search_connection = open_read(&generation_path)?;
+    let (schema_version, sqlite_version, counts) =
+        validate_projection(&connection, &search_connection)?;
+    if backend.state().readiness != SearchReadiness::Ready {
+        return Err("detached search is not coherent with the canonical projection".into());
+    }
+    drop(search_connection);
     drop(connection);
 
     let mut lanes = Vec::new();
@@ -305,6 +326,15 @@ pub fn run_campaign(
     let database_after = fingerprint_file(db, true)?;
     if database_after != database_artifact {
         return Err("database changed during the read-only benchmark".into());
+    }
+    let generation_after = backend
+        .current_generation_path()
+        .map_err(|error| format!("rechecking detached search generation: {error}"))?
+        .ok_or("detached search lost its CURRENT generation")?;
+    if generation_after != generation_path
+        || fingerprint_file(&generation_after, true)? != search_artifact
+    {
+        return Err("detached search generation changed during the benchmark".into());
     }
     let suite_after = verify_campaign(manifest, ledger_root, query_suite)?;
     if suite_after != suite {
@@ -329,6 +359,7 @@ pub fn run_campaign(
             sqlite_version,
             counts,
         },
+        search_generation: search_artifact,
         config: RunConfig {
             warmup_cycles,
             measured_cycles,
@@ -353,7 +384,16 @@ pub fn summary_line(name: &str, summary: &LatencySummary) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::schedule;
+    use std::sync::atomic::AtomicBool;
+
+    use rosetta_core::IngestOp;
+    use rosetta_core::rows::{
+        MessageKind, MessageRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+    };
+    use rosetta_search::{Fts5SidecarSearch, synchronize_fts5_once};
+    use rosetta_store::{Batch, Store};
+
+    use super::{Lane, run_one, schedule};
     use crate::model::{QueryCase, QueryFilterSpec};
 
     #[test]
@@ -377,5 +417,86 @@ mod tests {
             },
         ];
         assert_eq!(schedule(&cases), vec![0, 0, 1]);
+    }
+
+    #[test]
+    fn benchmark_query_uses_the_detached_product_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.sqlite");
+        let mut store = Store::open(&db).unwrap();
+        store
+            .apply(&Batch {
+                ops: vec![
+                    IngestOp::Runtime(RuntimeRow {
+                        id: "rt".into(),
+                        kind: "codex".into(),
+                        data_root: "/agent".into(),
+                        enabled: true,
+                        account: None,
+                        config: None,
+                        skills: None,
+                        versions_seen: None,
+                        discovered_at: 1,
+                    }),
+                    IngestOp::SessionMeta(SessionRow {
+                        id: "s".into(),
+                        native_session_id: "native".into(),
+                        runtime_id: "rt".into(),
+                        project_id: None,
+                        parent_session_id: None,
+                        root_session_id: "s".into(),
+                        role: SessionRole::Main,
+                        title: None,
+                        summary: None,
+                        started_at: 1,
+                        updated_at: 2,
+                        stream_state: StreamState::Indexed,
+                    }),
+                    IngestOp::Message(Box::new(MessageRow {
+                        timeline_id: "m".into(),
+                        session_id: "s".into(),
+                        ordinal: 0,
+                        kind: MessageKind::Agent,
+                        subtype: None,
+                        uuid: None,
+                        parent_uuid: None,
+                        ts: Some(1),
+                        model: None,
+                        effort: None,
+                        content: Some("detached needle".into()),
+                        tool: None,
+                        branch_tool_id: None,
+                        usage: None,
+                        agent_version: None,
+                        src_cursor: None,
+                        src_offset: None,
+                    })),
+                ],
+                checkpoints: vec![],
+                source: None,
+            })
+            .unwrap();
+        let backend = Fts5SidecarSearch::new(&db);
+        let ack = synchronize_fts5_once(&backend, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .acknowledge_search(&ack.projection_epoch, ack.revision)
+                .unwrap()
+        );
+        let case = QueryCase {
+            label: "detached".into(),
+            class: "test".into(),
+            query: "needle".into(),
+            weight: 1,
+            limit: 10,
+            filter: QueryFilterSpec::default(),
+        };
+
+        let shared = run_one(Lane::SharedBackend, &db, Some(&backend), &case).unwrap();
+        let fresh = run_one(Lane::FreshBackend, &db, None, &case).unwrap();
+        assert_eq!(shared.0, 1);
+        assert_eq!((shared.0, shared.2), (fresh.0, fresh.2));
     }
 }

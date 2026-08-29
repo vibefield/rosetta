@@ -86,9 +86,10 @@ pub enum Metric {
     BulkValidateNanos,
     BulkPragmaNanos,
     PublishNanos,
+    SearchSyncNanos,
 }
 
-const METRIC_COUNT: usize = 76;
+const METRIC_COUNT: usize = 77;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -173,6 +174,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::BulkValidateNanos, "bulk validate time"),
     (Metric::BulkPragmaNanos, "bulk pragma time"),
     (Metric::PublishNanos, "publication time"),
+    (Metric::SearchSyncNanos, "detached search sync time"),
 ];
 
 fn index(metric: Metric) -> usize {
@@ -305,16 +307,31 @@ impl Instrument {
     pub fn finish_bulk_load(&self, store: &mut Store) -> Result<BulkLoadStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || store.finish_bulk_load());
         if let Ok(stats) = &result {
-            self.add(Metric::BulkRenumberRows, stats.renumber_rows);
-            self.add(Metric::BulkRenumberNanos, stats.renumber_nanos);
-            self.add(Metric::BulkBucketNanos, stats.bucket_nanos);
-            self.add(Metric::BulkFtsNanos, stats.fts_nanos);
-            self.add(Metric::BulkIndexNanos, stats.index_nanos);
-            self.add(Metric::SqliteCommitNanos, stats.commit_nanos);
-            self.add(Metric::BulkValidateNanos, stats.validate_nanos);
-            self.add(Metric::BulkPragmaNanos, stats.pragma_nanos);
+            self.record_bulk_stats(stats);
         }
         result
+    }
+
+    /// Finalize the public progressive cold path with the same canonical
+    /// accounting as a private rebuild. Search is deliberately absent: its
+    /// detached worker reports readiness independently.
+    pub fn finish_progressive_load(&self, store: &mut Store) -> Result<BulkLoadStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.finish_progressive_load());
+        if let Ok(stats) = &result {
+            self.record_bulk_stats(stats);
+        }
+        result
+    }
+
+    fn record_bulk_stats(&self, stats: &BulkLoadStats) {
+        self.add(Metric::BulkRenumberRows, stats.renumber_rows);
+        self.add(Metric::BulkRenumberNanos, stats.renumber_nanos);
+        self.add(Metric::BulkBucketNanos, stats.bucket_nanos);
+        self.add(Metric::BulkFtsNanos, stats.fts_nanos);
+        self.add(Metric::BulkIndexNanos, stats.index_nanos);
+        self.add(Metric::SqliteCommitNanos, stats.commit_nanos);
+        self.add(Metric::BulkValidateNanos, stats.validate_nanos);
+        self.add(Metric::BulkPragmaNanos, stats.pragma_nanos);
     }
 
     /// Human-readable report: raw counters plus the derived rates the bench

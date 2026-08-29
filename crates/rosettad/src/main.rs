@@ -28,6 +28,9 @@ use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, discover,
     meta_ingest_into, rebuild_runtime, stream_backfill_into,
 };
+use rosetta_search::{
+    Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness, synchronize_fts5_once,
+};
 use rosetta_store::Store;
 
 mod bench;
@@ -318,6 +321,35 @@ fn open_ledger(root: &std::path::Path, kind: &str) -> Result<Ledger, String> {
     Ledger::open(&root.join(kind)).map_err(|error| error.to_string())
 }
 
+fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
+    for ack in worker.drain_acknowledgements() {
+        store
+            .acknowledge_search(&ack.projection_epoch, ack.revision)
+            .map_err(|error| format!("acknowledging search revision: {error}"))?;
+    }
+    Ok(())
+}
+
+fn build_search_wait(db: &std::path::Path) -> Result<rosetta_search::SearchAck, String> {
+    let search = Fts5SidecarSearch::new(db);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let ack = synchronize_fts5_once(&search, &stop)
+        .map_err(|error| format!("building search projection: {error}"))?
+        .ok_or_else(|| "canonical projection is not ready for search".to_string())?;
+    if search.state().readiness != SearchReadiness::Ready {
+        return Err("search projection did not become ready after synchronization".into());
+    }
+    Ok(ack)
+}
+
+fn synchronize_search_wait(db: &std::path::Path, store: &mut Store) -> Result<(), String> {
+    let ack = build_search_wait(db)?;
+    store
+        .acknowledge_search(&ack.projection_epoch, ack.revision)
+        .map_err(|error| format!("acknowledging search projection: {error}"))?;
+    Ok(())
+}
+
 fn default_home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -567,6 +599,11 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     if let Some(temp) = private_projection {
         let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
         publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
+        instrument.time(Metric::SearchSyncNanos, || build_search_wait(&db))?;
+    } else {
+        instrument.time(Metric::SearchSyncNanos, || {
+            synchronize_search_wait(&db, &mut store)
+        })?;
     }
     if flags.json {
         bench::emit_profile("ingest", &instrument);
@@ -588,15 +625,11 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
-    let (mut store, private_projection) = open_for_backfill(&db)?;
+    let mut store = open_progressive_backfill(&db)?;
+    let progressive = store.is_progressive();
     let public_ledgers = ledger_root(&flags, &db);
-    let defer_ledger_sync = private_projection.is_some();
-    let ledger_stage = defer_ledger_sync
-        .then(|| ColdLedgerStage::new(&public_ledgers))
-        .transpose()?;
-    let backfill_ledgers = ledger_stage
-        .as_ref()
-        .map_or(public_ledgers.as_path(), ColdLedgerStage::path);
+    let search = Fts5SidecarSearch::new(db.clone());
+    let search_worker = Fts5SearchWorker::start(search);
     let discoveries =
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
 
@@ -613,12 +646,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         // Watch BEFORE the backfill scan: a write landing mid-backfill still
         // produces a hint for the first live tick.
         let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
-        let ledger = open_ledger(backfill_ledgers, adapter.kind())?;
-        let mut ledger = if defer_ledger_sync {
-            ledger.defer_sync_until_flush()
-        } else {
-            ledger
-        };
+        let mut ledger = open_ledger(&public_ledgers, adapter.kind())?;
 
         let (meta, files) = meta_ingest_into(
             *adapter,
@@ -641,6 +669,8 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
+        search_worker.wake();
+        acknowledge_search(&mut store, &search_worker)?;
         println!(
             "{}: backfilled {} sessions ({} rows) — watching {}",
             adapter.kind(),
@@ -670,20 +700,18 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     if !failures.is_empty() {
         return Err(failures.join("; "));
     }
-    if defer_ledger_sync {
-        for (_, _, _, _, ledger) in &mut pending_runners {
-            let mut ledger = ledger.take().expect("a cold runner owns its staged ledger");
-            instrument
-                .ledger_write(&mut ledger, |ledger| ledger.flush())
-                .map_err(|error| error.to_string())?;
-        }
+    for (_, _, _, _, ledger) in &mut pending_runners {
+        let ledger = ledger.as_mut().expect("a watch runner owns its ledger");
+        instrument
+            .ledger_write(ledger, |ledger| ledger.flush())
+            .map_err(|error| error.to_string())?;
     }
-    if let Some(temp) = private_projection {
-        let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
-        publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
-        store = Store::open(&db)
-            .map_err(|error| format!("opening published {}: {error:?}", db.display()))?;
+    if progressive {
+        instrument
+            .finish_progressive_load(&mut store)
+            .map_err(|error| format!("finalizing progressive projection: {error}"))?;
     }
+    search_worker.wake();
 
     let mut runners = Vec::new();
     for (adapter, runtime, root, events, ledger) in pending_runners {
@@ -728,6 +756,8 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                 );
             }
         }
+        search_worker.wake();
+        acknowledge_search(&mut store, &search_worker)?;
     }
 
     for (kind, runner, _) in &runners {
@@ -746,6 +776,8 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
     }
+    acknowledge_search(&mut store, &search_worker)?;
+    search_worker.stop();
     Ok(())
 }
 
@@ -816,6 +848,17 @@ fn projection_parent(db: &std::path::Path) -> &std::path::Path {
     db.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."))
+}
+
+/// Open the installed projection itself for a progressive first run. Unlike
+/// private `ingest`/`rebuild`, every committed source is immediately readable;
+/// durable projection_state records whether the final canonical gate has run.
+fn open_progressive_backfill(db: &std::path::Path) -> Result<Store, String> {
+    let parent = projection_parent(db);
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+    Store::open_progressive(db)
+        .map_err(|error| format!("opening progressive {}: {error:?}", db.display()))
 }
 
 /// A first ingest is a cold build, not a live mutation: construct it in a
@@ -991,6 +1034,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     }
 
     publish_private_projection(store, temp, &db, &instrument, || Ok(()))?;
+    instrument.time(Metric::SearchSyncNanos, || build_search_wait(&db))?;
 
     for (kind, report, profile) in reports {
         println!(

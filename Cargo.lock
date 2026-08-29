@@ -1378,6 +1378,7 @@ dependencies = [
  "rosetta-capture",
  "rosetta-core",
  "rosetta-pipeline",
+ "rosetta-search",
  "rosetta-server",
  "rosetta-store",
  "rusqlite",

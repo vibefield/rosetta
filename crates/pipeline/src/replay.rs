@@ -447,27 +447,12 @@ pub fn rebuild_runtime(
             .or_insert(clean);
     }
     for (session_id, clean) in session_health {
-        let Some(mut session) = queries::session(store.conn(), &session_id)? else {
-            continue;
-        };
         let next = if clean {
             StreamState::Indexed
         } else {
             StreamState::Streaming
         };
-        if session.stream_state == next {
-            continue;
-        }
-        session.stream_state = next;
-        let stats = instrument.apply(
-            store,
-            &Batch {
-                ops: vec![IngestOp::SessionMeta(session)],
-                checkpoints: vec![],
-                source: None,
-            },
-        )?;
-        merge_stats(&mut report.stats, &stats);
+        store.set_session_stream_state(&session_id, next)?;
     }
 
     Ok(report)

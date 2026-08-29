@@ -13,33 +13,223 @@
 //! re-warms from the projection on a cadence and fans precise diffs to
 //! `/ws/meta`, and the stream queue is driven one file at a time so the
 //! boost ledger can move what the reader opened to the front. Effects
-//! observation still starts only AFTER the cold backfill publishes — bulk
-//! load never pays the mutation-log cost.
+//! observation starts only after the progressive projection passes its final
+//! canonical gate; the periodic mirror re-warm carries committed metadata
+//! during the cold load without charging every row for a mutation log.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rosetta_capture::NotifyEvents;
+use rosetta_adapter_support::AgentAdapter;
+use rosetta_capture::{Ledger, NotifyEvents};
+use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, StreamReport,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport, Metric,
+    SessionFile, StreamReport,
 };
+use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
     IngestCounterSource, IngestCounters, RuntimeTick, router,
 };
-use rosetta_store::Store;
+use rosetta_store::{Store, queries};
 
 use crate::{
-    ColdLedgerStage, ledger_root, open_for_backfill, open_ledger, parse_flags, projection_lock,
-    publish_private_projection, record_backfill_failures, selected,
+    ledger_root, open_ledger, open_progressive_backfill, parse_flags, projection_lock,
+    record_backfill_failures, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
-const REWARM_INTERVAL: Duration = Duration::from_secs(2);
+const REWARM_INTERVAL: Duration = Duration::from_millis(500);
 const CONSENT_POLL: Duration = Duration::from_millis(200);
+
+struct BackfillRuntime {
+    adapter: &'static dyn AgentAdapter,
+    runtime: RuntimeRow,
+    root: PathBuf,
+    discovery_truncated: bool,
+    events: NotifyEvents,
+    ledger: Option<Ledger>,
+    meta: MetaReport,
+    roster: Vec<SessionFile>,
+    stream: StreamReport,
+    stream_meter: StreamMeter,
+}
+
+#[derive(Clone)]
+struct StreamMeter {
+    instrument: Arc<Instrument>,
+    state: Arc<Mutex<StreamMeterState>>,
+}
+
+struct StreamMeterState {
+    baseline: InstrumentSnapshot,
+    completed: IngestCounters,
+    active: bool,
+}
+
+impl StreamMeter {
+    fn new(instrument: &Arc<Instrument>) -> Self {
+        Self {
+            instrument: instrument.clone(),
+            state: Arc::new(Mutex::new(StreamMeterState {
+                baseline: instrument.snapshot(),
+                completed: IngestCounters::default(),
+                active: false,
+            })),
+        }
+    }
+
+    fn source(&self) -> IngestCounterSource {
+        let meter = self.clone();
+        Arc::new(move || meter.snapshot())
+    }
+
+    fn begin(&self) {
+        let mut state = self.state.lock().expect("stream meter poisoned");
+        state.baseline = self.instrument.snapshot();
+        state.active = true;
+    }
+
+    fn finish(&self) {
+        let current = self.instrument.snapshot();
+        let mut state = self.state.lock().expect("stream meter poisoned");
+        let delta = current.delta_since(&state.baseline);
+        state.completed.bytes_read = state
+            .completed
+            .bytes_read
+            .saturating_add(delta.get(Metric::BytesRead));
+        state.completed.records = state
+            .completed
+            .records
+            .saturating_add(delta.get(Metric::RecordsFramed));
+        state.baseline = current;
+        state.active = false;
+    }
+
+    fn snapshot(&self) -> IngestCounters {
+        let state = self.state.lock().expect("stream meter poisoned");
+        let mut counters = state.completed;
+        if state.active {
+            let delta = self.instrument.snapshot().delta_since(&state.baseline);
+            counters.bytes_read = counters
+                .bytes_read
+                .saturating_add(delta.get(Metric::BytesRead));
+            counters.records = counters
+                .records
+                .saturating_add(delta.get(Metric::RecordsFramed));
+        }
+        counters
+    }
+}
+
+struct BackfillSchedule {
+    queues: Vec<VecDeque<SessionFile>>,
+    attention: VecDeque<usize>,
+    round_robin: usize,
+}
+
+impl BackfillSchedule {
+    fn new(rosters: impl IntoIterator<Item = Vec<SessionFile>>) -> Self {
+        Self {
+            queues: rosters
+                .into_iter()
+                .map(Self::order_runtime_roster)
+                .map(VecDeque::from)
+                .collect(),
+            attention: VecDeque::new(),
+            round_robin: 0,
+        }
+    }
+
+    /// Newest session first, canonical source path within a session. The
+    /// latter makes public first-generation ordinals append in their final
+    /// order, avoiding a growing session-wide rank after every source while
+    /// preserving the product's newest-first reveal.
+    fn order_runtime_roster(roster: Vec<SessionFile>) -> Vec<SessionFile> {
+        let mut sessions: BTreeMap<String, Vec<SessionFile>> = BTreeMap::new();
+        for file in roster {
+            sessions
+                .entry(file.session_id.clone())
+                .or_default()
+                .push(file);
+        }
+        let mut sessions = sessions.into_values().collect::<Vec<_>>();
+        for files in &mut sessions {
+            files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        }
+        sessions.sort_by(|left, right| {
+            let left_newest = left.iter().map(|file| file.modified_ms).max().unwrap_or(0);
+            let right_newest = right.iter().map(|file| file.modified_ms).max().unwrap_or(0);
+            right_newest
+                .cmp(&left_newest)
+                .then_with(|| left[0].session_id.cmp(&right[0].session_id))
+        });
+        sessions.into_iter().flatten().collect()
+    }
+
+    fn pending(&self) -> bool {
+        self.queues.iter().any(|queue| !queue.is_empty())
+    }
+
+    fn promote(&mut self, session_ids: impl IntoIterator<Item = String>) {
+        let mut promoted = Vec::new();
+        for session_id in session_ids {
+            for (index, queue) in self.queues.iter_mut().enumerate() {
+                let mut at = 0;
+                while at < queue.len() {
+                    if queue[at].session_id == session_id {
+                        let file = queue.remove(at).expect("queue index was in bounds");
+                        self.attention.push_back(index);
+                        promoted.push((index, file));
+                    } else {
+                        at += 1;
+                    }
+                }
+            }
+        }
+        // Reversing the physical push preserves the boost ledger's oldest-
+        // request-first order when several ids belong to one runtime.
+        for (index, file) in promoted.into_iter().rev() {
+            self.queues[index].push_front(file);
+        }
+    }
+
+    /// Complete the first streamable session in canonical list order before
+    /// ordinary runtime rotation. Returns whether a supplied id was queued.
+    fn bootstrap(&mut self, session_ids: impl IntoIterator<Item = String>) -> bool {
+        for session_id in session_ids {
+            let runtime = self
+                .queues
+                .iter()
+                .position(|queue| queue.iter().any(|file| file.session_id == session_id));
+            let Some(runtime) = runtime else {
+                continue;
+            };
+            self.promote([session_id]);
+            self.round_robin = (runtime + 1) % self.queues.len();
+            return true;
+        }
+        false
+    }
+
+    fn pop_next(&mut self) -> Option<(usize, SessionFile)> {
+        while let Some(index) = self.attention.pop_front() {
+            if let Some(file) = self.queues[index].pop_front() {
+                return Some((index, file));
+            }
+        }
+        let index = (0..self.queues.len())
+            .map(|offset| (self.round_robin + offset) % self.queues.len())
+            .find(|index| !self.queues[*index].is_empty())?;
+        self.round_robin = (index + 1) % self.queues.len();
+        self.queues[index].pop_front().map(|file| (index, file))
+    }
+}
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -89,6 +279,39 @@ fn fold_stream(total: &mut StreamReport, part: StreamReport) {
     total.stats.messages_updated += part.stats.messages_updated;
 }
 
+fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
+    for ack in worker.drain_acknowledgements() {
+        store
+            .acknowledge_search(&ack.projection_epoch, ack.revision)
+            .map_err(|error| format!("acknowledging search revision: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Give the first detached generation a clean I/O window after canonical
+/// publication. HTTP remains live and source watchers are already armed, so
+/// agent writes queue as hints while the disposable index builds. A failed
+/// search projection never blocks canonical live ingest.
+fn await_initial_search(
+    store: &mut Store,
+    search: &Fts5SidecarSearch,
+    worker: &Fts5SearchWorker,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    worker.wake();
+    while !stop.load(Ordering::SeqCst) {
+        acknowledge_search(store, worker)?;
+        if matches!(
+            search.state().readiness,
+            SearchReadiness::Ready | SearchReadiness::Failed
+        ) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
+}
+
 pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("serve needs --db PATH")?;
@@ -104,16 +327,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
-    // Cold start: watch-before-scan backfill, exactly like `watch`.
-    let (mut store, private_projection) = open_for_backfill(&db)?;
+    // Serve is the progressive first-run owner: the installed projection is
+    // public from its first committed skim. `rebuild` and finite `ingest`
+    // retain their private atomic path.
+    let mut store = open_progressive_backfill(&db)?;
+    let progressive = store.is_progressive();
     let public_ledgers = ledger_root(&flags, &db);
-    let defer_ledger_sync = private_projection.is_some();
-    let ledger_stage = defer_ledger_sync
-        .then(|| ColdLedgerStage::new(&public_ledgers))
-        .transpose()?;
-    let backfill_ledgers = ledger_stage
-        .as_ref()
-        .map_or(public_ledgers.as_path(), ColdLedgerStage::path);
 
     // The transport comes up before any ingest work. A returning user's
     // mirror warms from the standing projection so the room is instantly
@@ -122,10 +341,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
     let consent = Arc::new(ConsentGate::new());
     let boost = Arc::new(BoostLedger::new());
-    let mut warmed = 0_usize;
-    if private_projection.is_none() {
-        warmed = hub.warm(store.conn()).map_err(|error| error.to_string())?;
-    }
+    let warmed = hub.warm(store.conn()).map_err(|error| error.to_string())?;
+    let search = Fts5SidecarSearch::new(db.clone());
+    let search_worker = Fts5SearchWorker::start(search.clone());
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -154,7 +372,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         });
     }
-    let state = AppState::new(hub.clone(), db.clone())
+    let state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
         .with_boost(boost.clone());
@@ -173,8 +391,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
 
     // Mid-backfill readers: re-read the mirror from the projection on a
     // cadence and fan precise diffs to /ws/meta. Skims and per-file stream
-    // commits become visible as they land. WAL keeps the read harmless; a
-    // missing file (fresh install, private projection) skips the pass.
+    // commits become visible as they land. WAL keeps the read harmless. A
+    // fresh install now has a public file from process start, so every
+    // successful skim/source commit can fan out on this cadence.
     let (rewarm_tx, rewarm_rx) = tokio::sync::watch::channel(false);
     let rewarm_task = tokio_runtime.spawn({
         let hub = hub.clone();
@@ -214,16 +433,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     // Consent persists as the projection's `enabled` flags — enrollment
     // happens once, and restarts proceed without asking again.
-    let persisted: BTreeSet<String> = if private_projection.is_none() {
-        rosetta_store::queries::all_runtimes(store.conn())
-            .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?
-            .into_iter()
-            .filter(|runtime| runtime.enabled)
-            .map(|runtime| runtime.kind)
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
+    let persisted: BTreeSet<String> = rosetta_store::queries::all_runtimes(store.conn())
+        .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?
+        .into_iter()
+        .filter(|runtime| runtime.enabled)
+        .map(|runtime| runtime.kind)
+        .collect();
     let installed: BTreeSet<String> = adapters
         .iter()
         .zip(&discoveries)
@@ -282,9 +497,10 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
     }
 
-    // The backfill queue: skim (lists) before stream (transcripts), per
-    // runtime, with live meters on the health surface.
-    let mut pending_runners = Vec::new();
+    // Phase one: skim every enrolled runtime before reading any transcript.
+    // This publishes the whole project/session roster first, so one large
+    // runtime cannot hide every smaller runtime's lists.
+    let mut backfills = Vec::new();
     let mut failures = Vec::new();
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
         if !discovery.installed {
@@ -302,12 +518,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         runtime.enabled = true; // consent, persisted for the next start
 
         let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
-        let ledger = open_ledger(backfill_ledgers, adapter.kind())?;
-        let mut ledger = if defer_ledger_sync {
-            ledger.defer_sync_until_flush()
-        } else {
-            ledger
-        };
+        let mut ledger = open_ledger(&public_ledgers, adapter.kind())?;
         health.ingest_skim(
             adapter.kind(),
             counter_source(&instrument, instrument.snapshot()),
@@ -322,99 +533,108 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
-        let stream_baseline = instrument.snapshot();
+        let stream_meter = StreamMeter::new(&instrument);
         health.ingest_stream(
             adapter.kind(),
             meta.sessions as u64,
             meta.files_skimmed as u64,
-            counter_source(&instrument, stream_baseline.clone()),
+            stream_meter.source(),
         );
-
-        // The stream queue, one file per call: the boost ledger reorders
-        // between files (what the reader opened jumps the line), and a
-        // graceful stop lands between files instead of minutes away. The
-        // audit lane is disabled per file — a single-file slice would make
-        // every call force-replay its file — and runs once at the end.
-        let audit_free = IngestOptions {
-            audit_files_per_run: 0,
-            ..opts.clone()
-        };
         let roster = files.clone();
-        let mut queue: VecDeque<_> = files.into();
-        let mut stream = StreamReport::default();
-        while !queue.is_empty() {
-            if stop.load(Ordering::SeqCst) {
-                break;
-            }
-            for session_id in boost.drain().iter().rev() {
-                if let Some(at) = queue.iter().position(|file| &file.session_id == session_id)
-                    && let Some(file) = queue.remove(at)
-                {
-                    queue.push_front(file);
-                }
-            }
-            let file = queue.pop_front().expect("checked non-empty");
-            let report = rosetta_pipeline::stream_backfill_into(
-                *adapter,
-                &runtime,
-                &discovery.root,
-                &mut store,
-                std::slice::from_ref(&file),
-                &audit_free,
-                &instrument,
-                Some(&mut ledger),
-            )
-            .map_err(|error| error.to_string())?;
-            fold_stream(&mut stream, report);
-        }
-        if stop.load(Ordering::SeqCst) {
-            // A partial runtime earns no verdict and starts no runner.
+        backfills.push(BackfillRuntime {
+            adapter: *adapter,
+            runtime,
+            root: discovery.root.clone(),
+            discovery_truncated: discovery.walk_truncated,
+            events,
+            ledger: Some(ledger),
+            meta,
+            roster,
+            stream: StreamReport::default(),
+            stream_meter,
+        });
+    }
+
+    // Phase two: one newest-first file from each runtime in round-robin
+    // order. Attention requests temporarily jump ahead of that rotation but
+    // never weaken per-file durability or the graceful-stop boundary.
+    let audit_free = IngestOptions {
+        audit_files_per_run: 0,
+        ..opts.clone()
+    };
+    let mut schedule = BackfillSchedule::new(
+        backfills
+            .iter()
+            .map(|entry| entry.roster.clone())
+            .collect::<Vec<_>>(),
+    );
+    let recent_sessions = queries::session_list(store.conn(), None, 1_000)
+        .map_err(|error| format!("selecting first-readable session: {error}"))?;
+    schedule.bootstrap(recent_sessions.into_iter().map(|session| session.id));
+    while schedule.pending() && !stop.load(Ordering::SeqCst) {
+        schedule.promote(boost.drain());
+        let Some((index, file)) = schedule.pop_next() else {
             break;
-        }
-        // One audit-enabled pass over the whole roster: everything is
-        // checkpointed by now, so this only performs the run's single
-        // rotating forced replay — the audit lane's contract, unchanged.
+        };
+        let entry = &mut backfills[index];
+        entry.stream_meter.begin();
         let report = rosetta_pipeline::stream_backfill_into(
-            *adapter,
-            &runtime,
-            &discovery.root,
+            entry.adapter,
+            &entry.runtime,
+            &entry.root,
             &mut store,
-            &roster,
-            &opts,
+            std::slice::from_ref(&file),
+            &audit_free,
             &instrument,
-            Some(&mut ledger),
+            entry.ledger.as_mut(),
         )
         .map_err(|error| error.to_string())?;
-        fold_stream(&mut stream, report);
+        entry.stream_meter.finish();
+        fold_stream(&mut entry.stream, report);
+        search_worker.wake();
+        acknowledge_search(&mut store, &search_worker)?;
+    }
 
-        let stream_delta = instrument.snapshot().delta_since(&stream_baseline);
-        health.ingest_done(
-            adapter.kind(),
-            stream_delta.get(Metric::BytesRead),
-            stream_delta.get(Metric::RecordsFramed),
-        );
-        println!(
-            "{}: backfilled {} sessions ({} rows) — watching {}",
-            adapter.kind(),
-            meta.sessions,
-            stream.stats.messages_inserted,
-            discovery.root.display(),
-        );
-        record_backfill_failures(
-            adapter.kind(),
-            discovery.walk_truncated,
-            &meta,
-            &stream,
-            &mut failures,
-        );
-
-        pending_runners.push((
-            *adapter,
-            runtime,
-            discovery.root.clone(),
-            events,
-            Some(ledger),
-        ));
+    // Preserve the audit lane exactly once per runtime, after every ordinary
+    // file has reached its checkpoint. Passing the full roster is essential:
+    // rotating_audit_paths selects from the slice it receives.
+    if !stop.load(Ordering::SeqCst) {
+        for entry in &mut backfills {
+            entry.stream_meter.begin();
+            let report = rosetta_pipeline::stream_backfill_into(
+                entry.adapter,
+                &entry.runtime,
+                &entry.root,
+                &mut store,
+                &entry.roster,
+                &opts,
+                &instrument,
+                entry.ledger.as_mut(),
+            )
+            .map_err(|error| error.to_string())?;
+            entry.stream_meter.finish();
+            fold_stream(&mut entry.stream, report);
+            let stream_totals = entry.stream_meter.snapshot();
+            health.ingest_done(
+                entry.adapter.kind(),
+                stream_totals.bytes_read,
+                stream_totals.records,
+            );
+            println!(
+                "{}: backfilled {} sessions ({} rows) — watching {}",
+                entry.adapter.kind(),
+                entry.meta.sessions,
+                entry.stream.stats.messages_inserted,
+                entry.root.display(),
+            );
+            record_backfill_failures(
+                entry.adapter.kind(),
+                entry.discovery_truncated,
+                &entry.meta,
+                &entry.stream,
+                &mut failures,
+            );
+        }
     }
     let interrupted = stop.load(Ordering::SeqCst);
     if !failures.is_empty() {
@@ -424,53 +644,50 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let mut runners = Vec::new();
     let mut absorbed = 0_u64;
     if !interrupted {
-        // A graceful interrupt mid-backfill never publishes: a fresh
-        // install's private projection and staged ledgers are dropped
-        // whole, and the next start redoes the cold load from scratch.
-        if pending_runners.is_empty() {
+        if backfills.is_empty() {
             return Err("nothing to serve: no enrolled runtimes".to_string());
         }
-        if defer_ledger_sync {
-            for (_, _, _, _, ledger) in &mut pending_runners {
-                let mut ledger = ledger.take().expect("a cold runner owns its staged ledger");
-                instrument
-                    .ledger_write(&mut ledger, |ledger| ledger.flush())
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        if let Some(temp) = private_projection {
-            let ledger_stage =
-                ledger_stage.expect("a private projection has a private ledger stage");
-            publish_private_projection(store, temp, &db, &instrument, || ledger_stage.publish())?;
-            store = Store::open(&db)
-                .map_err(|error| format!("opening published {}: {error:?}", db.display()))?;
+        for entry in &mut backfills {
+            let ledger = entry.ledger.as_mut().expect("a backfill owns its ledger");
+            instrument
+                .ledger_write(ledger, |ledger| ledger.flush())
+                .map_err(|error| error.to_string())?;
         }
 
-        // Backfill over: retire the rewarm cadence, take one authoritative
-        // warm that also fans the closing diffs, and hand the mirror to the
-        // effects drain. On a fresh install this is the moment the whole
-        // surface arrives; meta subscribers absorb it via their designed
-        // overflow-resync path.
+        // No periodic read snapshot should pin WAL frames while the final
+        // progressive checkpoint folds the durable log into the canonical
+        // file. The closing authoritative warm below replaces this cadence.
         let _ = rewarm_tx.send(true);
         let _ = tokio_runtime.block_on(rewarm_task);
-        for (adapter, runtime, root, events, ledger) in pending_runners {
-            let ledger = match ledger {
-                Some(ledger) => ledger,
-                None => open_ledger(&public_ledgers, adapter.kind())?,
-            };
-            let runner = LiveRunner::start_with_ledger(
-                adapter,
-                runtime,
-                root,
-                Box::new(events),
-                &mut store,
+        if progressive {
+            instrument
+                .finish_progressive_load(&mut store)
+                .map_err(|error| format!("finalizing progressive projection: {error}"))?;
+        }
+
+        // Canonical reads are public now. Let the initial detached generation
+        // finish without competing source scans or live SQLite writes; the
+        // watchers created before backfill retain every intervening hint.
+        await_initial_search(&mut store, &search, &search_worker, &stop)?;
+
+        // Backfill over: take one authoritative warm and hand the
+        // already-progressive mirror to the effects drain.
+        for mut entry in backfills {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let ledger = entry.ledger.take().expect("a backfill owns its ledger");
+            let runner = LiveRunner::resume_from_roster(
+                entry.adapter,
+                entry.runtime,
+                entry.root,
+                Box::new(entry.events),
+                entry.roster,
                 opts.clone(),
                 live.clone(),
                 Some(ledger),
-                &instrument,
-            )
-            .map_err(|error| error.to_string())?;
-            runners.push((adapter.kind(), runner, 0_u64));
+            );
+            runners.push((entry.adapter.kind(), runner, 0_u64));
         }
         store.observe_effects();
         let published = hub
@@ -478,7 +695,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         store.drain_effects();
         health.ingest_live();
-        println!("live — {published} mirror diffs published at publication");
+        println!("live — {published} closing mirror diffs published");
 
         // The ingest loop: ticks ARE the existing phases; the drain feeds
         // the hub strictly after each batch's commit.
@@ -508,6 +725,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                     now_ms(),
                 );
             }
+            search_worker.wake();
+            acknowledge_search(&mut store, &search_worker)?;
             let effects = store.drain_effects();
             if !effects.is_empty() {
                 let report = hub
@@ -519,7 +738,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     } else {
         let _ = rewarm_tx.send(true);
         let _ = tokio_runtime.block_on(rewarm_task);
-        println!("interrupted during backfill — nothing published, shutting down");
+        println!(
+            "interrupted during backfill — committed progress retained for resume, shutting down"
+        );
     }
 
     let _ = shutdown_tx.send(true);
@@ -535,9 +756,177 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             report.ticks, report.events, report.polls, report.stream.stats.messages_inserted,
         );
     }
+    acknowledge_search(&mut store, &search_worker)?;
+    search_worker.stop();
     println!("hub: {absorbed} live items fanned out");
     if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rosetta_adapter_support::{FileDiscipline, FileFormat, StreamDriver};
+
+    use super::*;
+
+    fn file(session_id: &str) -> SessionFile {
+        SessionFile {
+            relative_path: format!("{session_id}.jsonl"),
+            stream_id: "transcript".into(),
+            file_format: FileFormat::Jsonl,
+            discipline: FileDiscipline::AppendOnly,
+            driver: StreamDriver::JsonLines,
+            session_id: session_id.into(),
+            native_session_id: session_id.into(),
+            size: 1,
+            modified_ms: 1,
+            agent_version: None,
+            source_missing: false,
+        }
+    }
+
+    #[test]
+    fn schedule_is_round_robin_and_preserves_each_runtime_order() {
+        let mut schedule = BackfillSchedule::new(vec![
+            vec![file("a-new"), file("a-old")],
+            vec![file("b-new"), file("b-old")],
+            vec![file("c-only")],
+        ]);
+        let mut order = Vec::new();
+        while let Some((runtime, file)) = schedule.pop_next() {
+            order.push((runtime, file.session_id));
+        }
+        assert_eq!(
+            order,
+            [
+                (0, "a-new".into()),
+                (1, "b-new".into()),
+                (2, "c-only".into()),
+                (0, "a-old".into()),
+                (1, "b-old".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn canonical_top_session_bootstraps_before_runtime_rotation() {
+        let mut older = file("older");
+        older.modified_ms = 10;
+        let mut newest_z = file("newest");
+        newest_z.relative_path = "z.jsonl".into();
+        newest_z.modified_ms = 30;
+        let mut newest_a = file("newest");
+        newest_a.relative_path = "a.jsonl".into();
+        newest_a.modified_ms = 29;
+        let mut middle = file("middle");
+        middle.modified_ms = 20;
+
+        let mut schedule =
+            BackfillSchedule::new(vec![vec![older], vec![newest_z, newest_a], vec![middle]]);
+        assert!(schedule.bootstrap(["newest".to_string()]));
+        let first = schedule.pop_next().unwrap();
+        let second = schedule.pop_next().unwrap();
+        let third = schedule.pop_next().unwrap();
+        assert_eq!(
+            (
+                first.0,
+                first.1.session_id.as_str(),
+                first.1.relative_path.as_str()
+            ),
+            (1, "newest", "a.jsonl")
+        );
+        assert_eq!(
+            (
+                second.0,
+                second.1.session_id.as_str(),
+                second.1.relative_path.as_str()
+            ),
+            (1, "newest", "z.jsonl")
+        );
+        assert_eq!((third.0, third.1.session_id.as_str()), (2, "middle"));
+    }
+
+    #[test]
+    fn boosts_jump_the_global_rotation_oldest_request_first() {
+        let mut schedule = BackfillSchedule::new(vec![
+            vec![file("a1"), file("a2"), file("a3")],
+            vec![file("b1"), file("b2")],
+        ]);
+        assert_eq!(schedule.pop_next().unwrap().1.session_id, "a1");
+        schedule.promote(["a3".to_string(), "a2".to_string()]);
+        assert_eq!(schedule.pop_next().unwrap().1.session_id, "a3");
+        assert_eq!(schedule.pop_next().unwrap().1.session_id, "a2");
+        assert_eq!(schedule.pop_next().unwrap().1.session_id, "b1");
+    }
+
+    #[test]
+    fn one_session_reveals_newest_first_but_activates_sources_in_path_order() {
+        let mut older_b = file("older");
+        older_b.relative_path = "z.jsonl".into();
+        older_b.modified_ms = 10;
+        let mut newest_b = file("newest");
+        newest_b.relative_path = "z.jsonl".into();
+        newest_b.modified_ms = 20;
+        let mut newest_a = file("newest");
+        newest_a.relative_path = "a.jsonl".into();
+        newest_a.modified_ms = 19;
+        let mut older_a = file("older");
+        older_a.relative_path = "a.jsonl".into();
+        older_a.modified_ms = 9;
+
+        let mut schedule = BackfillSchedule::new(vec![vec![older_b, newest_b, older_a, newest_a]]);
+        let order = std::iter::from_fn(|| schedule.pop_next().map(|(_, file)| file))
+            .map(|file| (file.session_id, file.relative_path))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            [
+                ("newest".into(), "a.jsonl".into()),
+                ("newest".into(), "z.jsonl".into()),
+                ("older".into(), "a.jsonl".into()),
+                ("older".into(), "z.jsonl".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn boost_promotes_every_source_for_the_session_without_reordering_paths() {
+        let mut target_z = file("target");
+        target_z.relative_path = "z.jsonl".into();
+        let mut target_a = file("target");
+        target_a.relative_path = "a.jsonl".into();
+        let mut schedule = BackfillSchedule::new(vec![vec![
+            file("first"),
+            target_z,
+            file("middle"),
+            target_a,
+        ]]);
+        assert_eq!(schedule.pop_next().unwrap().1.session_id, "first");
+        schedule.promote(["target".to_string()]);
+        let first = schedule.pop_next().unwrap().1;
+        let second = schedule.pop_next().unwrap().1;
+        assert_eq!(first.relative_path, "a.jsonl");
+        assert_eq!(second.relative_path, "z.jsonl");
+    }
+
+    #[test]
+    fn interleaved_stream_meters_count_only_their_active_runtime() {
+        let instrument = Arc::new(Instrument::new());
+        let first = StreamMeter::new(&instrument);
+        let second = StreamMeter::new(&instrument);
+        first.begin();
+        instrument.add(Metric::BytesRead, 10);
+        instrument.add(Metric::RecordsFramed, 1);
+        first.finish();
+        second.begin();
+        instrument.add(Metric::BytesRead, 20);
+        instrument.add(Metric::RecordsFramed, 2);
+        second.finish();
+        assert_eq!(first.snapshot().bytes_read, 10);
+        assert_eq!(first.snapshot().records, 1);
+        assert_eq!(second.snapshot().bytes_read, 20);
+        assert_eq!(second.snapshot().records, 2);
+    }
 }

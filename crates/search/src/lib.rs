@@ -14,6 +14,11 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
 pub use rosetta_store::queries::SearchHit;
+mod sidecar;
+mod worker;
+
+pub use sidecar::Fts5SidecarSearch;
+pub use worker::{Fts5SearchWorker, SearchAck, synchronize_fts5_once};
 
 pub const MAX_SEARCH_TEXT_BYTES: usize = 4_096;
 pub const MAX_SEARCH_CLAUSES: usize = 64;

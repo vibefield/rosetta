@@ -299,10 +299,19 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
         .unwrap();
 
     assert!(
-        queries::search(store.conn(), "before", 10)
+        !queries::projection_state(store.conn())
             .unwrap()
-            .is_empty()
+            .canonical_ready
     );
+    let in_file_fts: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'message_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(in_file_fts, 0, "search is a detached projection");
     let buckets: i64 = store
         .conn()
         .query_row("SELECT COUNT(*) FROM usage_bucket", [], |row| row.get(0))
@@ -320,9 +329,10 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
     assert_eq!(deferred, 0);
 
     store.finish_bulk_load().unwrap();
-    assert_eq!(
-        queries::search(store.conn(), "before", 10).unwrap().len(),
-        1
+    assert!(
+        queries::projection_state(store.conn())
+            .unwrap()
+            .canonical_ready
     );
     let (hour, input, messages, tools): (i64, i64, i64, i64) = store
         .conn()

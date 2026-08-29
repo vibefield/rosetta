@@ -1,7 +1,7 @@
-//! Private cold-rebuild maintenance. The file this operates on is never the
-//! installed projection: replay can therefore defer canonical presentation
-//! ordinals, derived structures, and secondary indexes, validate once, and
-//! publish only the finished database.
+//! Cold-load finalization shared by private atomic rebuilds and the final gate
+//! of a progressive public first run. Canonical ordinals, rollups, and read
+//! indexes are materialized here; full-text search is a detached projection
+//! with its own worker and readiness.
 
 use std::time::Instant;
 
@@ -25,6 +25,39 @@ pub(crate) fn prepare(conn: &Connection) -> Result<(), StoreError> {
     )?;
     conn.execute_batch(schema::BULK_DROP_INDEXES)?;
     Ok(())
+}
+
+/// Keep the progressive projection fully durable/readable while deferring
+/// secondary indexes that are not needed by the resident list mirror or the
+/// `(session_id, ordinal)` timeline identity. This retains WAL + NORMAL
+/// durability and ordinary auto-checkpointing; only private rebuilds may use
+/// MEMORY + OFF.
+pub(crate) fn prepare_progressive(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(schema::BULK_DROP_INDEXES)?;
+    Ok(())
+}
+
+/// Fold as much of the progressive WAL as possible into the canonical file.
+/// A transient reader can prevent TRUNCATE from resetting the WAL; PASSIVE
+/// still copies every unpinned frame. Callers keep canonical readiness false
+/// while checkpointing so the detached search worker cannot itself pin the
+/// pre-finalization WAL.
+pub(crate) fn checkpoint_progressive(conn: &Connection) -> Result<(), StoreError> {
+    let checkpoint = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    });
+    let (busy, _, _): (i64, i64, i64) = checkpoint?;
+    if busy != 0 {
+        let _: (i64, i64, i64) = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+    }
+    Ok(())
+}
+
+/// Finish the final checkpoint before canonical readiness becomes visible.
+pub(crate) fn finish_progressive_pragmas(conn: &Connection) -> Result<(), StoreError> {
+    checkpoint_progressive(conn)
 }
 
 /// Refuse to materialize/publish a scratch database while any source is still
@@ -97,17 +130,6 @@ pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<BulkLoadStats, StoreError
         params![HOUR_MS],
     )?;
     stats.bucket_nanos = elapsed_nanos(started);
-
-    // External-content FTS can rebuild directly from the finished message
-    // table. This is the intended FTS5 bulk-load path and avoids tokenizing
-    // each row inside thousands of source activation transactions.
-    let started = Instant::now();
-    tx.execute("INSERT INTO message_fts(message_fts) VALUES('rebuild')", [])?;
-    tx.execute(
-        "INSERT INTO message_fts(message_fts, rank) VALUES('integrity-check', 1)",
-        [],
-    )?;
-    stats.fts_nanos = elapsed_nanos(started);
 
     let started = Instant::now();
     tx.execute_batch(schema::BULK_CREATE_INDEXES)?;

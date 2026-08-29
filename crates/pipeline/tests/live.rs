@@ -97,6 +97,53 @@ fn runner<'a>(
     .unwrap()
 }
 
+fn resumed_runner<'a>(
+    h: &Harness,
+    adapter: &'a ClaudeCodeAdapter,
+    events: ScriptedEvents,
+    live: LiveOptions,
+) -> LiveRunner<'a> {
+    LiveRunner::resume_from_roster(
+        adapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::new(events),
+        h.files.clone(),
+        h.opts.clone(),
+        live,
+        None,
+    )
+}
+
+#[test]
+fn resume_from_backfill_roster_preserves_queued_hints_without_reskimming() {
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = backfilled_harness();
+    let target = h.files[0].clone();
+    append_user_line(
+        &h.root.join(&target.relative_path),
+        &target.native_session_id,
+        "quetzalcoatl queued during transition",
+    );
+    let mut events = ScriptedEvents::default();
+    events.push_changed(&target.relative_path);
+    let skimmed_before = h
+        .instrument
+        .snapshot()
+        .get(rosetta_pipeline::Metric::FilesSkimmed);
+
+    let mut runner = resumed_runner(&h, adapter, events, hot_live());
+    assert_eq!(
+        h.instrument
+            .snapshot()
+            .get(rosetta_pipeline::Metric::FilesSkimmed),
+        skimmed_before,
+        "resuming a fresh roster must not repeat meta ingest"
+    );
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    assert_eq!(runner.report().stream.stats.messages_inserted, 1);
+}
+
 #[test]
 fn event_hint_streams_only_the_appended_tail() {
     let adapter = &ClaudeCodeAdapter;

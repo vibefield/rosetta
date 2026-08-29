@@ -232,6 +232,7 @@ pub struct RunReport {
     pub ledger: LedgerFingerprint,
     pub query_suite: ArtifactFingerprint,
     pub database: DatabaseFingerprint,
+    pub search_generation: ArtifactFingerprint,
     pub config: RunConfig,
     pub lanes: Vec<LaneReport>,
 }

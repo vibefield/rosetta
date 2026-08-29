@@ -215,13 +215,16 @@ fn profile_ordinal_lookup<T>(
     result
 }
 
+mod metadata;
 mod rows;
 
+use metadata::{
+    apply_project, apply_runtime, apply_session, apply_session_title, refresh_session_title,
+};
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, OldRow, PendingGate, apply_message, apply_project, apply_runtime, apply_session,
-    apply_session_title, apply_tool_result, apply_usage, fts_delete, mark_bucket, queue_pending,
-    rebuild_bucket, refresh_session_title, touch_session,
+    BucketKey, OldRow, PendingGate, apply_message, apply_tool_result, apply_usage, fts_delete,
+    mark_bucket, queue_pending, rebuild_bucket, touch_session,
 };
 
 fn apply_workspace_obs(
@@ -425,7 +428,27 @@ fn apply_drift(
     stats.profile.drift_attempts += 1;
     let started = Instant::now();
     let result = (|| -> Result<(), StoreError> {
-        let event_key = serde_json::to_string(fact)?;
+        // Cursor rowids depend on source admission order. The durable dedupe
+        // identity must not: resolve provenance to the cursor's stable path
+        // so private, progressive, and replay projections converge.
+        let sample_path = match fact.sample_cursor {
+            Some(cursor) => tx
+                .prepare_cached("SELECT path FROM ingest_cursor WHERE id = ?1")?
+                .query_row(params![cursor], |row| row.get::<_, String>(0))
+                .optional()?,
+            None => None,
+        };
+        let event_key = serde_json::to_string(&(
+            &fact.runtime_id,
+            &fact.agent_version,
+            &fact.stream,
+            &fact.record_kind,
+            &fact.error_code,
+            &fact.shape_hash,
+            fact.at,
+            sample_path,
+            fact.sample_offset,
+        ))?;
         let inserted = tx
             .prepare_cached("INSERT OR IGNORE INTO drift_seen (event_key) VALUES (?1)")?
             .execute(params![event_key])?;
@@ -889,6 +912,34 @@ fn profile_renumber_session(
     Ok(())
 }
 
+/// A first-generation source is projected above the session's current
+/// ordinal maximum. That is already canonical when every previously visible
+/// source path sorts before this source path; only an out-of-order activation
+/// needs the window/sort repair. The serve scheduler normally arranges that
+/// fast path, while this guard keeps Store correct for boosts, resumes, and
+/// direct callers that activate sources in an arbitrary order.
+fn progressive_source_needs_renumber(
+    tx: &Transaction,
+    source: &SourceWrite,
+) -> Result<bool, StoreError> {
+    Ok(tx
+        .prepare_cached(
+            "SELECT EXISTS(
+               SELECT 1
+               FROM message m
+               JOIN ingest_cursor prior ON prior.id = m.src_cursor
+               JOIN ingest_cursor current ON current.id = ?1
+               WHERE m.session_id = ?2
+                 AND m.src_cursor != ?1
+                 AND prior.path > current.path
+               LIMIT 1
+             )",
+        )?
+        .query_row(params![source.cursor_id, source.session_id], |row| {
+            row.get::<_, bool>(0)
+        })?)
+}
+
 fn set_active_generation(
     tx: &Transaction,
     source: &SourceWrite,
@@ -1211,6 +1262,7 @@ pub(crate) fn apply_batch(
     batch: &Batch,
     maintenance: Maintenance,
     bulk_load: bool,
+    progressive_public: bool,
     mut effects: Option<&mut Effects>,
 ) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
@@ -1329,8 +1381,17 @@ pub(crate) fn apply_batch(
                         )?;
                         if source.mode == SourceMode::Activate {
                             set_active_generation(tx, source, active_generation)?;
-                            // Presentation ordinals remain collision-free but
-                            // provisional until one set-based bulk-finalize pass.
+                            if progressive_public && progressive_source_needs_renumber(tx, source)?
+                            {
+                                // This generation is now reader-visible. Put
+                                // an out-of-order source in canonical
+                                // path/offset order before its Indexed state
+                                // commit can be observed. In-order sources
+                                // already appended with their final ordinals.
+                                profile_renumber_session(tx, &source.session_id, &mut stats)?;
+                            }
+                            // A private build keeps collision-free provisional
+                            // ordinals until one set-based bulk-finalize pass.
                             tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
                                 .execute(params![source.cursor_id])?;
                         }

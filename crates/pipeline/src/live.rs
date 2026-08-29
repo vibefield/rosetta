@@ -117,7 +117,27 @@ impl<'a> LiveRunner<'a> {
             instrument,
             ledger.as_mut(),
         )?;
-        Ok(Self {
+        Ok(Self::resume_from_roster(
+            adapter, runtime, root, events, files, opts, live, ledger,
+        ))
+    }
+
+    /// Enter the live lane from a roster skimmed by the immediately preceding
+    /// backfill. The watcher must already be armed: queued hints cover changes
+    /// since that skim, and the ordinary stat poll remains the recovery lane.
+    /// This avoids re-reading every metadata source at the cold/live boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resume_from_roster(
+        adapter: &'a dyn AgentAdapter,
+        runtime: RuntimeRow,
+        root: PathBuf,
+        events: Box<dyn SourceEvents>,
+        files: Vec<SessionFile>,
+        opts: IngestOptions,
+        live: LiveOptions,
+        ledger: Option<Ledger>,
+    ) -> Self {
+        Self {
             adapter,
             runtime,
             root,
@@ -128,7 +148,7 @@ impl<'a> LiveRunner<'a> {
             ledger,
             last_poll: Instant::now(),
             report: LiveReport::default(),
-        })
+        }
     }
 
     pub fn report(&self) -> &LiveReport {

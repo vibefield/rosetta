@@ -997,6 +997,197 @@ fn project_upserts_union_root_paths() {
 }
 
 #[test]
+fn metadata_merges_are_independent_of_arrival_order() {
+    fn projected(reverse: bool) -> (String, String, SessionRow, String, i64) {
+        let mut store = Store::open_in_memory().unwrap();
+        store.apply(&base_batch()).unwrap();
+
+        let mut alpha = project();
+        alpha.name = "alpha".into();
+        alpha.root_paths = vec!["/w/alpha".into()];
+        let mut zulu = project();
+        zulu.name = "zulu".into();
+        zulu.root_paths = vec!["/w/zulu".into()];
+
+        let placeholder = session("s2");
+        let mut child = session("s2");
+        child.parent_session_id = Some("s1".into());
+        child.root_session_id = "s1".into();
+        child.role = SessionRole::Subagent;
+        let alpha_title = SessionTitleRow {
+            session_id: "s2".into(),
+            title: "Alpha title".into(),
+            kind: TitleKind::Explicit,
+            at: 20_000,
+        };
+        let zulu_title = SessionTitleRow {
+            session_id: "s2".into(),
+            title: "Zulu title".into(),
+            kind: TitleKind::Explicit,
+            at: 20_000,
+        };
+
+        let ops = if reverse {
+            vec![
+                IngestOp::Project(zulu),
+                IngestOp::Project(alpha),
+                IngestOp::SessionMeta(child),
+                IngestOp::SessionMeta(placeholder),
+            ]
+        } else {
+            vec![
+                IngestOp::Project(alpha),
+                IngestOp::Project(zulu),
+                IngestOp::SessionMeta(placeholder),
+                IngestOp::SessionMeta(child),
+            ]
+        };
+        store
+            .apply(&Batch {
+                ops,
+                checkpoints: vec![],
+                source: None,
+            })
+            .unwrap();
+        let titles = if reverse {
+            vec![
+                IngestOp::SessionTitle(zulu_title),
+                IngestOp::SessionTitle(alpha_title),
+            ]
+        } else {
+            vec![
+                IngestOp::SessionTitle(alpha_title),
+                IngestOp::SessionTitle(zulu_title),
+            ]
+        };
+        store
+            .apply(&Batch {
+                ops: titles,
+                checkpoints: vec![],
+                source: None,
+            })
+            .unwrap();
+
+        let (name, roots): (String, String) = store
+            .conn()
+            .query_row(
+                "SELECT name, root_paths FROM project WHERE id = 'p1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let child = queries::session(store.conn(), "s2").unwrap().unwrap();
+        let (meta_title, meta_title_at): (String, i64) = store
+            .conn()
+            .query_row(
+                "SELECT meta_title, meta_title_at FROM session WHERE id = 's2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        (name, roots, child, meta_title, meta_title_at)
+    }
+
+    let forward = projected(false);
+    let reverse = projected(true);
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.0, "alpha");
+    assert_eq!(forward.2.parent_session_id.as_deref(), Some("s1"));
+    assert_eq!(forward.2.root_session_id, "s1");
+    assert_eq!(forward.2.role, SessionRole::Subagent);
+    assert_eq!((forward.3.as_str(), forward.4), ("Alpha title", 20_000));
+}
+
+#[test]
+fn drift_dedupe_identity_uses_stable_source_path_not_cursor_rowid() {
+    fn event_key(reverse: bool) -> String {
+        let mut store = Store::open_in_memory().unwrap();
+        store.apply(&base_batch()).unwrap();
+        let checkpoint = |path: &str| CheckpointUpdate {
+            runtime_id: "rt1".into(),
+            stream: "transcript".into(),
+            path: path.into(),
+            session_id: "s1".into(),
+            expected: None,
+            next: format!("checkpoint-{path}"),
+            updated_at: Some(1),
+        };
+        let mut checkpoints = vec![checkpoint("other.jsonl"), checkpoint("target.jsonl")];
+        if reverse {
+            checkpoints.reverse();
+        }
+        store
+            .apply(&Batch {
+                ops: vec![],
+                checkpoints,
+                source: None,
+            })
+            .unwrap();
+        let cursor = queries::cursor_state(store.conn(), "rt1", "target.jsonl")
+            .unwrap()
+            .unwrap();
+        store
+            .apply(&Batch {
+                ops: vec![IngestOp::Drift(DriftFact {
+                    runtime_id: "rt1".into(),
+                    agent_version: "1.0".into(),
+                    stream: "transcript".into(),
+                    record_kind: "event".into(),
+                    error_code: "unknown".into(),
+                    shape_hash: "shape".into(),
+                    at: Some(10),
+                    sample_cursor: Some(cursor.id),
+                    sample_offset: Some(20),
+                })],
+                checkpoints: vec![],
+                source: None,
+            })
+            .unwrap();
+        store
+            .conn()
+            .query_row("SELECT event_key FROM drift_seen", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    assert_eq!(event_key(false), event_key(true));
+}
+
+#[test]
+fn stream_state_updates_do_not_feed_projected_titles_back_as_evidence() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionTitle(SessionTitleRow {
+                session_id: "s1".into(),
+                title: "Generated title".into(),
+                kind: TitleKind::Generated,
+                at: 12_345,
+            })],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    assert!(
+        store
+            .set_session_stream_state("s1", StreamState::Indexed)
+            .unwrap()
+    );
+    let (title, rank, at, state): (String, i64, i64, String) = store
+        .conn()
+        .query_row(
+            "SELECT meta_title, meta_title_rank, meta_title_at, stream_state
+             FROM session WHERE id = 's1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((title.as_str(), rank, at), ("Generated title", 2, 12_345));
+    assert_eq!(state, "indexed");
+}
+
+#[test]
 fn schema_mismatch_fails_closed_without_dropping_existing_data() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let conn = rusqlite::Connection::open(db.path()).unwrap();

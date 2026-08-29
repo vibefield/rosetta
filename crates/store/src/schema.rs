@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -22,6 +22,33 @@ CREATE TABLE IF NOT EXISTS agent_runtime (
   versions_seen TEXT,
   discovered_at INTEGER NOT NULL
 );
+
+-- Whole-projection identity plus the canonical/search synchronization
+-- watermark. The epoch is regenerated for every disposable projection; a
+-- search generation from another epoch is never serveable. `canonical_ready`
+-- is durable because an interrupted progressive first run is intentionally
+-- public and resumable, but not yet a fully validated projection.
+CREATE TABLE IF NOT EXISTS projection_state (
+  singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
+  projection_epoch  TEXT NOT NULL,
+  search_revision   INTEGER NOT NULL DEFAULT 0 CHECK (search_revision >= 0),
+  canonical_ready   INTEGER NOT NULL DEFAULT 0 CHECK (canonical_ready IN (0, 1))
+) WITHOUT ROWID;
+INSERT OR IGNORE INTO projection_state
+  (singleton, projection_epoch, search_revision, canonical_ready)
+VALUES
+  (1, lower(hex(randomblob(16))), 0, 0);
+
+-- Coalesced repair keys for the detached search projection. This is not an
+-- event log: repeated canonical mutations retain only the newest revision for
+-- a session. The asynchronous search worker is the sole consumer.
+CREATE TABLE IF NOT EXISTS search_dirty (
+  kind      TEXT NOT NULL CHECK (kind IN ('session')),
+  key       TEXT NOT NULL,
+  revision  INTEGER NOT NULL CHECK (revision >= 0),
+  PRIMARY KEY (kind, key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS search_dirty_revision ON search_dirty(revision);
 
 CREATE TABLE IF NOT EXISTS source_audit (
   runtime_id TEXT PRIMARY KEY REFERENCES agent_runtime(id),
@@ -58,9 +85,6 @@ CREATE TABLE IF NOT EXISTS session (
   -- Earlier observations may refine the assignment; later cwd changes may not.
   project_assigned_at INTEGER
 );
-CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS session_parent  ON session(parent_session_id);
 
 CREATE TABLE IF NOT EXISTS workspace_obs (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -71,7 +95,6 @@ CREATE TABLE IF NOT EXISTS workspace_obs (
   src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX IF NOT EXISTS workspace_obs_src ON workspace_obs(src_cursor);
-CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at);
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_obs_identity ON workspace_obs(
   session_id, at, cwd, COALESCE(git_branch,''), COALESCE(git_repo,'')
 );
@@ -95,7 +118,6 @@ CREATE TABLE IF NOT EXISTS task (
   updated_at INTEGER,
   src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
-CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS task_src ON task(src_cursor);
 
 -- ————— phase 3 · stream —————————————————————————————————————————
@@ -180,15 +202,6 @@ CREATE INDEX IF NOT EXISTS message_tool ON message(session_id, tool_id) WHERE to
 CREATE INDEX IF NOT EXISTS message_src ON message(src_cursor);
 -- Match rebuild_bucket's expressions exactly and put both equality keys
 -- before the timestamp range so SQLite can constrain all three terms.
-CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
-  session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-  content, tool_input, tool_result,
-  content='message', content_rowid='id',
-  tokenize='unicode61 remove_diacritics 2'
-);
 
 CREATE TABLE IF NOT EXISTS file_edit (
   session_id   TEXT NOT NULL REFERENCES session(id),
@@ -202,9 +215,6 @@ CREATE TABLE IF NOT EXISTS file_edit (
   src_cursor   INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX IF NOT EXISTS file_edit_src ON file_edit(src_cursor);
-CREATE INDEX IF NOT EXISTS file_edit_session ON file_edit(session_id, at);
-CREATE INDEX IF NOT EXISTS file_edit_path    ON file_edit(path);
-CREATE INDEX IF NOT EXISTS file_edit_message ON file_edit(message_id) WHERE message_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS file_edit_identity ON file_edit(
   session_id, COALESCE(message_id,-1), path, kind,
   COALESCE(snapshot_ref,''), COALESCE(at,-1)
@@ -259,9 +269,6 @@ CREATE TABLE IF NOT EXISTS session_usage (
   PRIMARY KEY (session_id, sample_key)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_usage_src ON session_usage(src_cursor);
-CREATE INDEX IF NOT EXISTS session_usage_bucket_key ON session_usage(
-  session_id, COALESCE(model, 'unknown'), ts
-);
 
 CREATE TABLE IF NOT EXISTS usage_bucket (
   session_id      TEXT NOT NULL REFERENCES session(id),
@@ -276,7 +283,6 @@ CREATE TABLE IF NOT EXISTS usage_bucket (
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, hour_ts, model)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS usage_bucket_hour ON usage_bucket(hour_ts);
 
 CREATE VIEW IF NOT EXISTS session_contribution AS
 SELECT r.id AS session_id, r.project_id,
@@ -340,7 +346,7 @@ CREATE INDEX IF NOT EXISTS file_edit_message ON file_edit(message_id) WHERE mess
 CREATE INDEX IF NOT EXISTS usage_bucket_hour ON usage_bucket(hour_ts);
 "#;
 
-pub fn init(conn: &Connection) -> Result<(), StoreError> {
+fn init_base(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     conn.pragma_update(None, "foreign_keys", true)?;
 
@@ -354,4 +360,19 @@ pub fn init(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch(DDL)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
+}
+
+/// Initialize a normal reader-ready projection, including every secondary
+/// presentation index.
+pub fn init(conn: &Connection) -> Result<(), StoreError> {
+    init_base(conn)?;
+    conn.execute_batch(BULK_CREATE_INDEXES)?;
+    Ok(())
+}
+
+/// Initialize only correctness-critical tables and indexes. Cold writers use
+/// this so a resumed progressive projection does not rebuild large secondary
+/// indexes merely to drop them again before continuing.
+pub(crate) fn init_deferred(conn: &Connection) -> Result<(), StoreError> {
+    init_base(conn)
 }

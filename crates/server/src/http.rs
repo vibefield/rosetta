@@ -26,7 +26,9 @@ use rosetta_protocol::{
     RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
     StatusResponse, TimelineCursor, TimelinePage, UsageResponse,
 };
-use rosetta_search::{Fts5Search, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery};
+use rosetta_search::{
+    Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
+};
 use rosetta_store::queries;
 use rosetta_store::{StoreError, schema};
 
@@ -54,9 +56,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Build the shipped synchronous-FTS5 service state.
+    /// Build the shipped detached-FTS5 service state. The persistent daemon
+    /// also starts its worker; a static reader honestly reports building when
+    /// no complete sidecar generation exists.
     pub fn new(hub: Arc<Hub>, db: PathBuf) -> Self {
-        let search = Arc::new(Fts5Search::new(db.clone()));
+        let search = Arc::new(Fts5SidecarSearch::new(db.clone()));
         Self {
             hub,
             db: Arc::new(db),
@@ -259,28 +263,32 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         .health
         .as_ref()
         .map(|health| health.snapshot(&state.hub, now_ms()));
-    let schema_version = with_read(state.db.clone(), |conn| {
-        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(|error| Failure::internal(format!("{error}")))
+    let projection = with_read(state.db.clone(), |conn| {
+        let schema_version = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| Failure::internal(format!("{error}")))?;
+        let canonical_ready = if schema_version == schema::SCHEMA_VERSION {
+            queries::projection_state(conn)
+                .map_err(store_err)?
+                .canonical_ready
+        } else {
+            false
+        };
+        Ok((schema_version, canonical_ready))
     })
     .await;
-    let response = match schema_version {
-        Ok(schema_version) => {
-            let canonical_ready = schema_version == schema::SCHEMA_VERSION;
-            StatusResponse {
-                protocol_version: PROTOCOL_VERSION,
-                schema_version,
-                canonical_ready,
-                // Synchronous FTS5 commits with canonical rows; a foreign
-                // schema means neither surface is serveable.
-                search: if canonical_ready {
-                    search_state
-                } else {
-                    SearchState::failed()
-                },
-                daemon,
-            }
-        }
+    let response = match projection {
+        Ok((schema_version, canonical_ready)) => StatusResponse {
+            protocol_version: PROTOCOL_VERSION,
+            schema_version,
+            canonical_ready,
+            search: if schema_version == schema::SCHEMA_VERSION {
+                search_state
+            } else {
+                SearchState::failed()
+            },
+            daemon,
+        },
         // No readable projection — a fresh install still cold-loading its
         // private file. Status is the app's connectivity truth and answers
         // anyway; the daemon block carries the backfill meters.

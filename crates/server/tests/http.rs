@@ -2,6 +2,7 @@
 //! exact-watermark timeline pagination (expiry on rewrite, never a silent
 //! rebase), filtered search, and readiness on the status route.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -16,7 +17,8 @@ use rosetta_core::rows::{
 };
 use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
 use rosetta_search::{
-    SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness, SearchState,
+    Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
+    SearchState, synchronize_fts5_once,
 };
 use rosetta_server::{AppState, Hub, HubConfig, router};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
@@ -67,6 +69,7 @@ struct Harness {
     cursor: i64,
     hub: Arc<Hub>,
     db: std::path::PathBuf,
+    search: Fts5SidecarSearch,
     app: Router,
 }
 
@@ -118,13 +121,25 @@ fn harness() -> Harness {
     let hub = Arc::new(Hub::new(HubConfig::default(), 1));
     hub.warm(store.conn()).unwrap();
     store.drain_effects();
-    let app = router(AppState::new(hub.clone(), db.clone()));
+    let search = Fts5SidecarSearch::new(&db);
+    let ack = synchronize_fts5_once(&search, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+    store
+        .acknowledge_search(&ack.projection_epoch, ack.revision)
+        .unwrap();
+    let app = router(AppState::with_search(
+        hub.clone(),
+        db.clone(),
+        Arc::new(search.clone()),
+    ));
     Harness {
         _dir: dir,
         store,
         cursor,
         hub,
         db,
+        search,
         app,
     }
 }
@@ -147,6 +162,12 @@ impl Harness {
                 }),
             })
             .unwrap();
+        let ack = synchronize_fts5_once(&self.search, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        self.store
+            .acknowledge_search(&ack.projection_epoch, ack.revision)
+            .unwrap();
     }
 
     async fn get(&self, uri: &str) -> (StatusCode, serde_json::Value) {
@@ -164,7 +185,7 @@ impl Harness {
 }
 
 #[tokio::test]
-async fn status_reports_versions_and_synchronous_search() {
+async fn status_reports_versions_and_detached_search() {
     let h = harness();
     let (status, body) = h.get("/api/status").await;
     assert_eq!(status, StatusCode::OK);
@@ -175,6 +196,71 @@ async fn status_reports_versions_and_synchronous_search() {
         serde_json::to_value(parsed.search.readiness).unwrap(),
         "ready"
     );
+}
+
+#[tokio::test]
+async fn progressive_projection_lists_are_visible_before_canonical_or_search_ready() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("progressive.sqlite");
+    let mut store = Store::open_progressive(&db).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Runtime(RuntimeRow {
+                    id: "rt1".into(),
+                    kind: "claude-code".into(),
+                    data_root: "~/.claude".into(),
+                    enabled: true,
+                    account: None,
+                    config: None,
+                    skills: None,
+                    versions_seen: None,
+                    discovered_at: 1,
+                }),
+                IngestOp::Project(ProjectRow {
+                    id: "p1".into(),
+                    name: "project".into(),
+                    root_paths: vec!["/project".into()],
+                    git_repo: None,
+                }),
+                IngestOp::SessionMeta(session("s1")),
+            ],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let hub = Arc::new(Hub::new(HubConfig::default(), 1));
+    hub.warm(store.conn()).unwrap();
+    let app = router(AppState::new(hub, db));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let status: StatusResponse = serde_json::from_slice(&body).unwrap();
+    assert!(!status.canonical_ready);
+    assert_eq!(status.search.readiness, SearchReadiness::Building);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let sessions: SessionsResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(sessions.sessions.len(), 1);
+    assert_eq!(sessions.sessions[0].id, "s1");
 }
 
 #[derive(Clone)]

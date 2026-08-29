@@ -82,6 +82,152 @@ pub struct SearchFilter {
     pub before_ts: Option<Ms>,
 }
 
+/// Durable identity and publication/search watermarks for one disposable
+/// canonical projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionState {
+    pub projection_epoch: String,
+    pub search_revision: u64,
+    pub canonical_ready: bool,
+}
+
+/// One coalesced repair key consumed by the detached search worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRepair {
+    pub kind: String,
+    pub key: String,
+    pub revision: u64,
+}
+
+/// Complete search document materialized from canonical rows. Search owns its
+/// physical index, but SQLite remains the only source from which a document is
+/// built or repaired.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchDocument {
+    pub id: i64,
+    pub timeline_id: String,
+    pub session_id: String,
+    pub runtime_id: String,
+    pub agent: String,
+    pub project_id: Option<String>,
+    pub ts: Option<Ms>,
+    pub kind: String,
+    pub is_error: Option<bool>,
+    pub content: Option<String>,
+    pub tool_input: Option<String>,
+    pub tool_result: Option<String>,
+}
+
+pub fn projection_state(conn: &Connection) -> Result<ProjectionState, StoreError> {
+    let (projection_epoch, revision, canonical_ready): (String, i64, bool) = conn.query_row(
+        "SELECT projection_epoch, search_revision, canonical_ready
+         FROM projection_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let search_revision = u64::try_from(revision).map_err(|_| StoreError::ProjectionInvalid {
+        message: format!("negative search revision {revision}"),
+    })?;
+    Ok(ProjectionState {
+        projection_epoch,
+        search_revision,
+        canonical_ready,
+    })
+}
+
+/// Repairs newer than `after_revision`, bounded by one canonical snapshot.
+/// A key coalesced to a still-newer revision is intentionally excluded and
+/// survives acknowledgement of the older watermark.
+pub fn search_repairs(
+    conn: &Connection,
+    after_revision: u64,
+    through_revision: u64,
+) -> Result<Vec<SearchRepair>, StoreError> {
+    let after = i64::try_from(after_revision).map_err(|_| StoreError::ProjectionInvalid {
+        message: format!("search revision {after_revision} exceeds SQLite's integer range"),
+    })?;
+    let through = i64::try_from(through_revision).map_err(|_| StoreError::ProjectionInvalid {
+        message: format!("search revision {through_revision} exceeds SQLite's integer range"),
+    })?;
+    let mut statement = conn.prepare(
+        "SELECT kind, key, revision
+         FROM search_dirty
+         WHERE revision > ?1 AND revision <= ?2
+         ORDER BY revision, kind, key",
+    )?;
+    let rows = statement.query_map(params![after, through], |row| {
+        let revision: i64 = row.get(2)?;
+        Ok((row.get(0)?, row.get(1)?, revision))
+    })?;
+    let mut repairs = Vec::new();
+    for row in rows {
+        let (kind, key, revision) = row?;
+        repairs.push(SearchRepair {
+            kind,
+            key,
+            revision: u64::try_from(revision).map_err(|_| StoreError::ProjectionInvalid {
+                message: format!("negative dirty search revision {revision}"),
+            })?,
+        });
+    }
+    Ok(repairs)
+}
+
+fn visit_search_documents_where(
+    conn: &Connection,
+    predicate: &str,
+    session_id: Option<&str>,
+    mut visit: impl FnMut(SearchDocument) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    let sql = format!(
+        "SELECT m.id, m.timeline_id, m.session_id, s.runtime_id, r.kind,
+                s.project_id, m.ts, m.type, m.tool_is_error,
+                m.content, m.tool_input, m.tool_result
+         FROM message m
+         JOIN session s ON s.id = m.session_id
+         JOIN agent_runtime r ON r.id = s.runtime_id
+         {predicate}
+         ORDER BY m.id"
+    );
+    let mut statement = conn.prepare(&sql)?;
+    let mut rows = match session_id {
+        Some(session_id) => statement.query(params![session_id])?,
+        None => statement.query([])?,
+    };
+    while let Some(row) = rows.next()? {
+        visit(SearchDocument {
+            id: row.get(0)?,
+            timeline_id: row.get(1)?,
+            session_id: row.get(2)?,
+            runtime_id: row.get(3)?,
+            agent: row.get(4)?,
+            project_id: row.get(5)?,
+            ts: row.get(6)?,
+            kind: row.get(7)?,
+            is_error: row.get(8)?,
+            content: row.get(9)?,
+            tool_input: row.get(10)?,
+            tool_result: row.get(11)?,
+        })?;
+    }
+    Ok(())
+}
+
+pub fn visit_search_documents(
+    conn: &Connection,
+    visit: impl FnMut(SearchDocument) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    visit_search_documents_where(conn, "", None, visit)
+}
+
+pub fn visit_session_search_documents(
+    conn: &Connection,
+    session_id: &str,
+    visit: impl FnMut(SearchDocument) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    visit_search_documents_where(conn, "WHERE m.session_id = ?1", Some(session_id), visit)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorState {
     pub id: i64,
@@ -349,7 +495,7 @@ pub fn session_list(
         Some(project) => {
             let mut stmt = conn.prepare_cached(
                 "SELECT * FROM session WHERE project_id = ?1
-                 ORDER BY updated_at DESC LIMIT ?2",
+                 ORDER BY updated_at DESC, id LIMIT ?2",
             )?;
             let rows = stmt.query_map(params![project, limit], session_from_row)?;
             for row in rows {
@@ -358,7 +504,7 @@ pub fn session_list(
         }
         None => {
             let mut stmt =
-                conn.prepare_cached("SELECT * FROM session ORDER BY updated_at DESC LIMIT ?1")?;
+                conn.prepare_cached("SELECT * FROM session ORDER BY updated_at DESC, id LIMIT ?1")?;
             let rows = stmt.query_map(params![limit], session_from_row)?;
             for row in rows {
                 out.push(row?);
@@ -550,6 +696,18 @@ pub fn search_filtered(
 ) -> Result<Vec<SearchHit>, StoreError> {
     use rusqlite::types::Value;
 
+    let has_legacy_fts: bool = conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM sqlite_schema
+           WHERE type = 'table' AND name = 'message_fts'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_legacy_fts {
+        return search_canonical_compat(conn, query, limit, filter);
+    }
+
     let mut sql = String::from(
         "SELECT m.timeline_id, m.session_id,
                 snippet(message_fts, -1, '[', ']', '…', 12), rank
@@ -633,6 +791,132 @@ pub fn search_filtered(
         out.push(row?);
     }
     Ok(out)
+}
+
+/// Compatibility scan for L2 tests and old diagnostic callers after search
+/// moved out of the canonical database. Production L3 never uses this path:
+/// it goes through `SearchBackend`, whose non-ready state is explicit. Frozen
+/// schema-6 benchmark projections still take the exact FTS path above.
+fn search_canonical_compat(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+    filter: &SearchFilter,
+) -> Result<Vec<SearchHit>, StoreError> {
+    use rusqlite::types::Value;
+
+    fn clean_term(term: &str) -> String {
+        let term = term.trim().trim_matches('"');
+        term.replace("\"\"", "\"")
+    }
+
+    let (separator, disjunction) = if query.contains(" OR ") {
+        (" OR ", true)
+    } else if query.contains(" AND ") {
+        (" AND ", false)
+    } else {
+        (" ", false)
+    };
+    let terms: Vec<String> = query
+        .split(separator)
+        .map(clean_term)
+        .filter(|term| !term.is_empty())
+        .collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut sql = String::from(
+        "SELECT m.timeline_id, m.session_id,
+                COALESCE(m.content, m.tool_input, m.tool_result, ''), 0.0
+         FROM message m
+         JOIN session s ON s.id = m.session_id",
+    );
+    if filter.agent.is_some() {
+        sql.push_str(" JOIN agent_runtime r ON r.id = s.runtime_id");
+    }
+    sql.push_str(" WHERE (");
+    let mut binds = Vec::new();
+    for (index, term) in terms.into_iter().enumerate() {
+        if index > 0 {
+            sql.push_str(if disjunction { " OR " } else { " AND " });
+        }
+        binds.push(Value::from(format!("%{}%", term.to_lowercase())));
+        sql.push_str(&format!(
+            "lower(COALESCE(m.content, '') || ' ' ||
+                   COALESCE(m.tool_input, '') || ' ' ||
+                   COALESCE(m.tool_result, '')) LIKE ?{}",
+            binds.len()
+        ));
+    }
+    sql.push(')');
+    let clause = |sql: &mut String, predicate: &str, value: Value, binds: &mut Vec<Value>| {
+        binds.push(value);
+        sql.push_str(&format!(" AND {predicate} ?{}", binds.len()));
+    };
+    if let Some(session) = &filter.session {
+        clause(
+            &mut sql,
+            "m.session_id =",
+            Value::from(session.clone()),
+            &mut binds,
+        );
+    }
+    if let Some(runtime) = &filter.runtime {
+        clause(
+            &mut sql,
+            "s.runtime_id =",
+            Value::from(runtime.clone()),
+            &mut binds,
+        );
+    }
+    if let Some(agent) = &filter.agent {
+        clause(&mut sql, "r.kind =", Value::from(agent.clone()), &mut binds);
+    }
+    if let Some(project) = &filter.project {
+        clause(
+            &mut sql,
+            "s.project_id =",
+            Value::from(project.clone()),
+            &mut binds,
+        );
+    }
+    if let Some(kind) = &filter.kind {
+        clause(&mut sql, "m.type =", Value::from(kind.clone()), &mut binds);
+    }
+    if let Some(is_error) = filter.is_error {
+        clause(
+            &mut sql,
+            "m.tool_is_error =",
+            Value::from(i64::from(is_error)),
+            &mut binds,
+        );
+    }
+    if let Some(after) = filter.after_ts {
+        clause(&mut sql, "m.ts >=", Value::from(after), &mut binds);
+    }
+    if let Some(before) = filter.before_ts {
+        clause(&mut sql, "m.ts <=", Value::from(before), &mut binds);
+    }
+    binds.push(Value::from(limit));
+    sql.push_str(&format!(
+        " ORDER BY m.timeline_id COLLATE BINARY LIMIT ?{}",
+        binds.len()
+    ));
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(rusqlite::params_from_iter(binds), |row| {
+        Ok(SearchHit {
+            timeline_id: row.get(0)?,
+            session_id: row.get(1)?,
+            snippet: row.get(2)?,
+            score: row.get(3)?,
+        })
+    })?;
+    let mut hits = Vec::new();
+    for row in rows {
+        hits.push(row?);
+    }
+    Ok(hits)
 }
 
 /// Exact commit watermark for one session's presentation order, per the L3

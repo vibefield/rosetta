@@ -222,28 +222,12 @@ pub fn stream_backfill_into(
     // clean generation. This can both promote and downgrade: a torn append or
     // hard parse error must never leave a stale Indexed badge behind.
     for (session_id, complete) in session_health {
-        let Some(mut session) = queries::session(store.conn(), &session_id)? else {
-            continue;
-        };
         let next = if complete {
             StreamState::Indexed
         } else {
             StreamState::Streaming
         };
-        if session.stream_state == next {
-            continue;
-        }
-        session.stream_state = next;
-        let stats = instrument.apply(
-            store,
-            &Batch {
-                ops: vec![IngestOp::SessionMeta(session)],
-                checkpoints: vec![],
-                source: None,
-            },
-        )?;
-        merge_stats(&mut report.stats, &stats);
-        if complete {
+        if store.set_session_stream_state(&session_id, next)? && complete {
             report.sessions_indexed += 1;
         }
     }

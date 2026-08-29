@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hint::black_box;
 use std::ops::Bound;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
-use rosetta_search::{TextClause, TextQuery};
-use rosetta_store::queries::{self, SearchFilter, SearchHit};
-use rusqlite::{Connection, OpenFlags};
+use rosetta_search::{
+    Fts5SidecarSearch, SearchBackend, SearchQuery, SearchReadiness, TextClause, TextQuery,
+};
 use tantivy::Order;
 use tantivy::collector::TopDocs;
 use tantivy::collector::sort_key::{SortBySimilarityScore, SortByString};
@@ -51,42 +51,36 @@ struct RankedHit {
     session_id: String,
 }
 
-fn open_read(path: &Path) -> Result<Connection, String> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| format!("opening {} read-only: {error}", path.display()))?;
-    connection
-        .execute_batch("PRAGMA query_only = ON;")
-        .map_err(|error| format!("configuring read-only query connection: {error}"))?;
-    Ok(connection)
-}
-
-fn filter(spec: &QueryFilterSpec) -> SearchFilter {
-    SearchFilter {
-        session: spec.session.clone(),
-        runtime: spec.runtime.clone(),
-        agent: spec.agent.clone(),
-        project: spec.project.clone(),
-        kind: spec.kind.clone(),
-        is_error: spec.is_error,
-        after_ts: spec.after_ts,
-        before_ts: spec.before_ts,
-    }
-}
-
-fn fts_hits(conn: &Connection, case: &QueryCase) -> Result<Vec<RankedHit>, String> {
-    let expression = TextQuery::parse(&case.query)
-        .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))?
-        .fts5_expression();
-    queries::search_filtered(conn, &expression, case.limit, &filter(&case.filter))
-        .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))
-        .map(|hits| {
-            hits.into_iter()
-                .map(|hit: SearchHit| RankedHit {
-                    timeline_id: hit.timeline_id,
-                    session_id: hit.session_id,
-                })
-                .collect()
+fn fts_hits(search: &Fts5SidecarSearch, case: &QueryCase) -> Result<Vec<RankedHit>, String> {
+    let output = search
+        .search(SearchQuery {
+            text: TextQuery::parse(&case.query)
+                .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))?,
+            limit: case.limit,
+            session: case.filter.session.clone(),
+            runtime: case.filter.runtime.clone(),
+            agent: case.filter.agent.clone(),
+            project: case.filter.project.clone(),
+            kind: case.filter.kind.clone(),
+            is_error: case.filter.is_error,
+            after_ts: case.filter.after_ts,
+            before_ts: case.filter.before_ts,
         })
+        .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))?;
+    if output.state.readiness != SearchReadiness::Ready {
+        return Err(format!(
+            "FTS reference case `{}` saw detached search state {:?}",
+            case.label, output.state.readiness
+        ));
+    }
+    Ok(output
+        .hits
+        .into_iter()
+        .map(|hit| RankedHit {
+            timeline_id: hit.timeline_id,
+            session_id: hit.session_id,
+        })
+        .collect())
 }
 
 fn result_fingerprint(hits: &[RankedHit]) -> String {
@@ -310,8 +304,8 @@ fn baseline_cases(report: &RunReport) -> Result<BTreeMap<&str, &CaseReport>, Str
     let lane = report
         .lanes
         .iter()
-        .find(|lane| lane.lane == "shared-connection")
-        .ok_or("baseline report has no shared-connection lane")?;
+        .find(|lane| lane.lane == "shared-backend")
+        .ok_or("baseline report has no shared-backend lane")?;
     Ok(lane
         .cases
         .iter()
@@ -497,10 +491,17 @@ pub fn run_tantivy_prototype(options: &TantivyRunOptions) -> Result<TantivyRunRe
     }
 
     let baseline_cases = baseline_cases(&baseline)?;
-    let conn = open_read(&options.database)?;
+    let search = Fts5SidecarSearch::new(&options.database);
+    let generation = search
+        .current_generation_path()
+        .map_err(|error| format!("resolving detached FTS baseline: {error}"))?
+        .ok_or("detached FTS baseline has no CURRENT generation")?;
+    if fingerprint_file(&generation, true)? != baseline.search_generation {
+        return Err("detached generation differs from the frozen FTS baseline report".into());
+    }
     let mut reference = Vec::with_capacity(suite.cases.len());
     for case in &suite.cases {
-        let hits = fts_hits(&conn, case)?;
+        let hits = fts_hits(&search, case)?;
         let digest = result_fingerprint(&hits);
         let expected = baseline_cases
             .get(case.label.as_str())
@@ -513,7 +514,6 @@ pub fn run_tantivy_prototype(options: &TantivyRunOptions) -> Result<TantivyRunRe
         }
         reference.push(hits);
     }
-    drop(conn);
 
     let (build, index, fields) = build_index(
         &options.database,
@@ -568,6 +568,8 @@ pub fn run_tantivy_prototype(options: &TantivyRunOptions) -> Result<TantivyRunRe
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
     use std::fs;
 
     use rosetta_core::IngestOp;
@@ -667,6 +669,15 @@ mod tests {
                 source: None,
             })
             .unwrap();
+        let search = Fts5SidecarSearch::new(&db);
+        let ack = rosetta_search::synchronize_fts5_once(&search, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .acknowledge_search(&ack.projection_epoch, ack.revision)
+                .unwrap()
+        );
         drop(store);
 
         let index_path = temp.path().join("tantivy");
@@ -739,10 +750,9 @@ mod tests {
                 },
             },
         ];
-        let conn = open_read(&db).unwrap();
         let reference = cases
             .iter()
-            .map(|case| fts_hits(&conn, case).unwrap())
+            .map(|case| fts_hits(&search, case).unwrap())
             .collect::<Vec<_>>();
         let reader = index.reader().unwrap();
         let parser = QueryParser::for_index(

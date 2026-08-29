@@ -8,11 +8,13 @@ mod bulk;
 pub mod hot;
 pub mod queries;
 pub mod schema;
+mod search_sync;
 
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
 
+use rosetta_core::rows::StreamState;
 use rusqlite::Connection;
 
 pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
@@ -131,12 +133,30 @@ pub struct Store {
 enum StoreMode {
     Live,
     Bulk,
+    Progressive,
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path)?;
+        let objects: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )?;
         schema::init(&conn)?;
+        let state = queries::projection_state(&conn)?;
+        if objects == 0 {
+            conn.execute(
+                "UPDATE projection_state SET canonical_ready = 1 WHERE singleton = 1",
+                [],
+            )?;
+        } else if !state.canonical_ready {
+            return Err(StoreError::BulkLoadState {
+                message: "projection has an interrupted progressive backfill; resume it through ingest/watch/serve"
+                    .into(),
+            });
+        }
         Ok(Self {
             conn,
             mode: StoreMode::Live,
@@ -148,9 +168,38 @@ impl Store {
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
         schema::init(&conn)?;
+        conn.execute(
+            "UPDATE projection_state SET canonical_ready = 1 WHERE singleton = 1",
+            [],
+        )?;
         Ok(Self {
             conn,
             mode: StoreMode::Live,
+            bulk_abandoned: false,
+            effects: None,
+        })
+    }
+
+    /// Open or resume the one public projection used by a progressive first
+    /// run. A completed projection returns in ordinary live mode; an
+    /// interrupted one retains cold direct-first-generation behavior and is
+    /// finalized only after every selected runtime completes cleanly.
+    pub fn open_progressive(path: &Path) -> Result<Self, StoreError> {
+        let conn = Connection::open(path)?;
+        schema::init_deferred(&conn)?;
+        let state = queries::projection_state(&conn)?;
+        if state.canonical_ready {
+            conn.execute_batch(schema::BULK_CREATE_INDEXES)?;
+        } else {
+            bulk::prepare_progressive(&conn)?;
+        }
+        Ok(Self {
+            conn,
+            mode: if state.canonical_ready {
+                StoreMode::Live
+            } else {
+                StoreMode::Progressive
+            },
             bulk_abandoned: false,
             effects: None,
         })
@@ -183,7 +232,7 @@ impl Store {
                 message: "cold rebuild requires an empty SQLite file".to_string(),
             });
         }
-        schema::init(&conn)?;
+        schema::init_deferred(&conn)?;
         bulk::prepare(&conn)?;
         Ok(Self {
             conn,
@@ -199,12 +248,27 @@ impl Store {
     pub fn apply(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
         let mut fresh = self.effects.is_some().then(Effects::default);
         let tx = self.conn.transaction()?;
+        let search_before = if self.mode == StoreMode::Live {
+            Some(search_sync::before_batch(&tx, batch)?)
+        } else {
+            None
+        };
         let maintenance = match self.mode {
             StoreMode::Live => apply::LIVE_MAINTENANCE,
-            StoreMode::Bulk => apply::BULK_MAINTENANCE,
+            StoreMode::Bulk | StoreMode::Progressive => apply::BULK_MAINTENANCE,
         };
-        let bulk_load = self.mode == StoreMode::Bulk;
-        let mut stats = apply::apply_batch(&tx, batch, maintenance, bulk_load, fresh.as_mut())?;
+        let bulk_load = matches!(self.mode, StoreMode::Bulk | StoreMode::Progressive);
+        let mut stats = apply::apply_batch(
+            &tx,
+            batch,
+            maintenance,
+            bulk_load,
+            self.mode == StoreMode::Progressive,
+            fresh.as_mut(),
+        )?;
+        if let Some(search_before) = search_before {
+            search_sync::record_batch(&tx, batch, search_before)?;
+        }
         let started = Instant::now();
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(started);
@@ -240,6 +304,7 @@ impl Store {
         bulk::validate_complete(&self.conn)?;
         let tx = self.conn.transaction()?;
         let mut stats = bulk::finalize(&tx)?;
+        search_sync::mark_canonical_ready(&tx)?;
         let started = Instant::now();
         tx.commit()?;
         stats.commit_nanos = elapsed_nanos(started);
@@ -252,6 +317,86 @@ impl Store {
         self.mode = StoreMode::Live;
         self.bulk_abandoned = false;
         Ok(stats)
+    }
+
+    /// Finish an interrupted-or-fresh public cold load in place. Canonical
+    /// rows have already been readable after each source commit; this gate
+    /// materializes global ordinals and rollups, validates the whole file, and
+    /// durably marks it canonical-ready. Search remains an independent worker.
+    pub fn finish_progressive_load(&mut self) -> Result<BulkLoadStats, StoreError> {
+        if self.mode != StoreMode::Progressive {
+            return Err(StoreError::BulkLoadState {
+                message: "store is not in progressive cold-load mode".to_string(),
+            });
+        }
+        if self.bulk_abandoned {
+            return Err(StoreError::BulkLoadState {
+                message: "progressive cold load contains an abandoned source generation"
+                    .to_string(),
+            });
+        }
+        bulk::validate_complete(&self.conn)?;
+        let tx = self.conn.transaction()?;
+        let mut stats = bulk::finalize(&tx)?;
+        let started = Instant::now();
+        tx.commit()?;
+        stats.commit_nanos = elapsed_nanos(started);
+        let started = Instant::now();
+        bulk::validate(&self.conn)?;
+        stats.validate_nanos = elapsed_nanos(started);
+        let started = Instant::now();
+        bulk::finish_progressive_pragmas(&self.conn)?;
+        stats.pragma_nanos = elapsed_nanos(started);
+
+        // Readiness is the final, tiny commit. Publishing it any earlier lets
+        // the detached worker pin the large cold WAL while it builds search,
+        // multiplying both I/O and startup wall time.
+        let tx = self.conn.transaction()?;
+        search_sync::mark_canonical_ready(&tx)?;
+        let started = Instant::now();
+        tx.commit()?;
+        stats.commit_nanos = stats.commit_nanos.saturating_add(elapsed_nanos(started));
+        self.mode = StoreMode::Live;
+        self.bulk_abandoned = false;
+        Ok(stats)
+    }
+
+    pub fn is_progressive(&self) -> bool {
+        self.mode == StoreMode::Progressive
+    }
+
+    /// Change only the derived readiness badge for one session. Pipeline
+    /// completion must not round-trip a projected `SessionRow`: doing so
+    /// would feed the public title back as fresh explicit title evidence.
+    pub fn set_session_stream_state(
+        &mut self,
+        session_id: &str,
+        state: StreamState,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE session SET stream_state = ?2
+             WHERE id = ?1 AND stream_state != ?2",
+            rusqlite::params![session_id, state.as_str()],
+        )?;
+        if changed != 0
+            && let Some(effects) = self.effects.as_mut()
+        {
+            effects.touched_sessions.insert(session_id.to_owned());
+        }
+        Ok(changed != 0)
+    }
+
+    /// Apply a search worker acknowledgement through the canonical single
+    /// writer. A stale projection epoch is rejected without deleting repairs.
+    pub fn acknowledge_search(
+        &mut self,
+        projection_epoch: &str,
+        through_revision: u64,
+    ) -> Result<bool, StoreError> {
+        let tx = self.conn.transaction()?;
+        let accepted = search_sync::acknowledge(&tx, projection_epoch, through_revision)?;
+        tx.commit()?;
+        Ok(accepted)
     }
 
     /// Start collecting hot-tier effects. The daemon enables this before its

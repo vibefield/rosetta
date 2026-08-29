@@ -4,11 +4,12 @@
 content in the repository. It is the required evidence lane for search
 optimizations, not a general-purpose load generator.
 
-The tool measures two paths:
+The tool measures the production detached search sidecar through two paths:
 
-- `shared-connection`: repeated calls through one read-only SQLite connection;
-- `fresh-connection`: the current HTTP request shape, including one read-only
-  connection open per query.
+- `shared-backend`: repeated calls through one long-lived `SearchBackend` handle;
+- `fresh-backend`: a new backend handle per query. Both use the exact product
+  query path, including canonical/search coherence checks and read-only SQLite
+  snapshots.
 
 Each case, declared query class, and full declared mix reports p50, p95, and
 p99 using nearest-rank percentiles. At least 100 measured cycles are mandatory.
@@ -21,10 +22,10 @@ selective-heavy mix cannot hide broad-query latency.
 Suite queries use the product grammar, not FTS5 or Tantivy syntax: whitespace
 separates required terms and double quotes delimit required phrases. The
 harness validates the same 4,096-byte/64-clause bounds as the HTTP boundary and
-compiles the common query independently for each engine. Suite/run format 2
-binds new evidence to this grammar and deterministic FTS tie ordering; format 1
-reports and `fts5-diagnostic-v1.json` remain historical evidence and cannot be
-mixed into a new comparison.
+compiles the common query independently for each engine. Suite format 2 binds
+queries to this grammar and deterministic FTS tie ordering. Run format 3 binds
+new evidence to the detached generation selected by `CURRENT`; earlier reports
+remain historical evidence and cannot be mixed into a new comparison.
 
 ## Frozen protocol
 
@@ -56,7 +57,8 @@ mixed into a new comparison.
    ```
 
 5. Build the candidate projection from that exact frozen ledger, make the
-   resulting database read-only, and run the same command to produce
+   resulting canonical database, search generation, `CURRENT`, and containing
+   sidecar directories read-only, then run the same command to produce
    `after.json`. The campaign ID, machine label, cycle counts, schema version,
    logical row counts, query/filter digests, hit counts, and ranked-result
    digests must match.
@@ -70,11 +72,11 @@ mixed into a new comparison.
    ```
 
 The benchmark fingerprints and re-verifies the ledger and query suite before
-and after every run. It also fingerprints the SQLite file, opens it read-only
-with `query_only`, runs SQLite integrity/cardinality checks, and rejects ranked
-result drift. Fingerprinting warms the filesystem cache, so these are warm
-search distributions. Cold process/startup cost needs a separately declared
-lane.
+and after every run. It separately fingerprints the canonical SQLite file and
+the selected search generation, opens both read-only with `query_only`, runs
+integrity/cardinality/coherence checks, and rejects ranked-result drift.
+Fingerprinting warms the filesystem cache, so these are warm search
+distributions. Cold process/startup cost needs a separately declared lane.
 
 ## Benchmark-only Tantivy prototype
 
