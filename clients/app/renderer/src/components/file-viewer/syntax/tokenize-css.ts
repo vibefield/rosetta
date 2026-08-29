@@ -103,7 +103,10 @@ export function tokenizeCss(text: string): readonly Token[] {
       push(pseudo === null ? "operator" : "constant", pseudo ?? ":");
       continue;
     }
-    if (char === "$" || (char === "@" && depth > 0)) {
+    // A Less variable is a VALUE, so it is the value position that tells it
+    // apart from an at-rule — not the nesting depth, which reads SCSS's
+    // nested `@media` as a variable.
+    if (char === "$" || (char === "@" && inValue)) {
       const variable = match(VARIABLE);
       if (variable !== null) {
         push("constant", variable);
@@ -142,7 +145,12 @@ export function tokenizeCss(text: string): readonly Token[] {
         continue;
       }
     }
-    if (/[0-9]/.test(char) || (char === "." && /[0-9]/.test(text[index + 1] ?? ""))) {
+    // `-4px` is one negative length, not an operator and a length. `--x` and
+    // `-webkit-` are not numbers, and the digit test is what separates them.
+    if (
+      /[0-9]/.test(char) ||
+      ((char === "." || char === "-") && /[0-9.]/.test(text[index + 1] ?? ""))
+    ) {
       const number = match(NUMBER);
       if (number !== null) {
         push("number", number);

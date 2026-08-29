@@ -14,6 +14,8 @@ const TAG_NAME = /[A-Za-z_][A-Za-z0-9_:.-]*/y;
  * `v-if`, `:class`, `@click`, `#ref`, `[prop]`, `(click)`. */
 const ATTRIBUTE_NAME = /[A-Za-z_@:#$[(][-A-Za-z0-9_@:.$\])]*/y;
 const ENTITY = /&[a-zA-Z][a-zA-Z0-9]*;|&#[0-9]+;|&#x[0-9a-fA-F]+;/y;
+/** Elements whose body is another language, not markup. */
+const RAW_TEXT: ReadonlySet<string> = new Set(["script", "style"]);
 
 export function tokenizeMarkup(text: string): readonly Token[] {
   const out: Token[] = [];
@@ -37,6 +39,25 @@ export function tokenizeMarkup(text: string): readonly Token[] {
     return found === null ? null : found[0];
   };
 
+  /** Where `<script>`'s body ends. Lowercased lazily: most files have no raw
+   * text in them and should not pay for a second copy of themselves. */
+  let lowered: string | null = null;
+  const rawTextEnd = (from: number, tag: string): number => {
+    lowered ??= text.toLowerCase();
+    const at = lowered.indexOf(`</${tag.toLowerCase()}`, from);
+    return at === -1 ? text.length : at;
+  };
+
+  /** A quoted attribute value, stopped at the end of the line when the quote
+   * never closes. Losing a wrapped value is a smaller wrong than one typo
+   * painting the rest of the document as a string — which is the same trade
+   * the generic tokenizer already makes for a single-line literal. */
+  const attributeValue = (quote: string): string => {
+    const raw = through(index + 1, quote);
+    const newline = raw.indexOf("\n");
+    return newline === -1 ? raw : raw.slice(0, newline);
+  };
+
   while (index < text.length) {
     if (text.startsWith("<!--", index)) {
       push("comment", through(index + 4, "-->"));
@@ -52,7 +73,8 @@ export function tokenizeMarkup(text: string): readonly Token[] {
     }
 
     if (text[index] === "<") {
-      push("operator", text.startsWith("</", index) ? "</" : "<");
+      const closing = text.startsWith("</", index);
+      push("operator", closing ? "</" : "<");
       const name = match(TAG_NAME);
       if (name !== null) push("tag", name);
 
@@ -72,7 +94,7 @@ export function tokenizeMarkup(text: string): readonly Token[] {
           continue;
         }
         if (char === '"' || char === "'") {
-          push("string", through(index + 1, char));
+          push("string", attributeValue(char));
           continue;
         }
         const attribute = match(ATTRIBUTE_NAME);
@@ -83,7 +105,18 @@ export function tokenizeMarkup(text: string): readonly Token[] {
         // An unquoted value, or something this lexer has no name for.
         push("plain", char);
       }
-      if (index < text.length) push("operator", ">");
+      if (index < text.length) {
+        // `<br/>` closed itself; `<div>` did not. The character before the
+        // `>` is the whole difference.
+        const selfClosing = text[index - 1] === "/";
+        push("operator", ">");
+        // A `<script>` body is JavaScript, and `if (a < b)` inside it is not
+        // the start of a tag. Lexing it as markup used to swallow everything
+        // to the next `>` — including the `</script>` that ends the element.
+        if (!closing && !selfClosing && name !== null && RAW_TEXT.has(name.toLowerCase())) {
+          push("plain", text.slice(index, rawTextEnd(index, name)));
+        }
+      }
       continue;
     }
 

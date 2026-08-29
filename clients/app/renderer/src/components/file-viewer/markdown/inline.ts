@@ -7,8 +7,16 @@
 
 import type { Inline } from "./types";
 
-/** `[label](href)` and `![alt](src)`, with the optional "title" ignored. */
-const LINK = /^!?\[((?:[^[\]\\]|\\.|\[[^\]]*\])*)\]\(\s*(<[^>]*>|[^\s)]*)(?:\s+"[^"]*")?\s*\)/;
+/**
+ * `[label](href)` and `![alt](src)`, with the optional "title" ignored.
+ *
+ * The href carries one level of balanced parentheses, because
+ * `…/wiki/Foo_(bar)` is a real link and stopping at the first `)` truncated
+ * it and left the other one loose in the prose. One level is what a regex can
+ * count and what every such URL actually uses.
+ */
+const LINK =
+  /^!?\[((?:[^[\]\\]|\\.|\[[^\]]*\])*)\]\(\s*(<[^>]*>|(?:[^\s()]|\([^\s()]*\))*)(?:\s+"[^"]*")?\s*\)/;
 const AUTOLINK = /^<((?:https?|mailto|file):[^>\s]+)>/;
 const BARE_URL = /^https?:\/\/[^\s<>()[\]"']+[^\s<>()[\]"'.,;:!?]/;
 /** A run of backticks opens a code span that the same run closes. */

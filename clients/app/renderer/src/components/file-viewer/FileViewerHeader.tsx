@@ -57,7 +57,9 @@ export function FileViewerHeader({
   return (
     <header className="ah-fileview__head">
       <div className="ah-fileview__title">
-        <ColumnHeading name={handle.name} tint={tint} mono title={handle.path} />
+        {/* `null` would mean "no tooltip at all" — and a file with no
+            derivable path is exactly when a truncated name needs one. */}
+        <ColumnHeading name={handle.name} tint={tint} mono title={handle.path ?? undefined} />
         {kind !== null && <span className="ah-fileview__kind">{kind.label}</span>}
         <span className="ah-caption tnum">{fmtBytes(handle.size)}</span>
       </div>

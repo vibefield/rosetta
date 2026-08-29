@@ -181,8 +181,11 @@ app.whenReady().then(() => {
   //      extensions, cannot launch anything.
   //
   // Anything else answers false, which the room reports to the reader. A
-  // silent no-op would read as a broken button.
-  ipcMain.handle("ah-file-open-external", (_evt, raw) => {
+  // silent no-op would read as a broken button — which is also why the
+  // OS's own answer is awaited rather than discarded: `openPath` resolves to
+  // a reason when nothing opened, and reporting success over it would be the
+  // one place this gate lied.
+  ipcMain.handle("ah-file-open-external", async (_evt, raw) => {
     if (typeof raw !== "string" || raw === "" || worktreeRoot === null) return false;
     if (!/\.(html?|svg)$/i.test(raw)) return false;
     try {
@@ -190,8 +193,7 @@ app.whenReady().then(() => {
       const root = realpathSync(worktreeRoot);
       const inside = target === root || target.startsWith(root + path.sep);
       if (!inside || !statSync(target).isFile()) return false;
-      void shell.openPath(target);
-      return true;
+      return (await shell.openPath(target)) === "";
     } catch {
       return false;
     }

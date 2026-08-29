@@ -1045,20 +1045,23 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   --ah-syn-property: color-mix(in oklab, var(--vf-accent-1) 64%, white);
 }
 
-[data-t="comment"] { color: var(--vf-text-faint); font-style: italic; }
-[data-t="operator"] { color: var(--vf-text-tertiary); }
-[data-t="keyword"] { color: var(--ah-syn-keyword); }
+/* Scoped to the viewer, like every other rule in this file. Unscoped,
+   `[data-t=…]` is nine global selectors waiting for the first component that
+   picks the same attribute name. */
+.ah-fileview [data-t="comment"] { color: var(--vf-text-faint); font-style: italic; }
+.ah-fileview [data-t="operator"] { color: var(--vf-text-tertiary); }
+.ah-fileview [data-t="keyword"] { color: var(--ah-syn-keyword); }
 /* A markup tag is the keyword of its language, and an attribute is a
    property. Two syntaxes, the same two roles — so the same two colours,
    rather than a second palette for a reader to learn. */
-[data-t="tag"] { color: var(--ah-syn-keyword); }
-[data-t="type"] { color: var(--ah-syn-type); }
-[data-t="function"] { color: var(--ah-syn-function); }
-[data-t="string"] { color: var(--ah-syn-string); }
+.ah-fileview [data-t="tag"] { color: var(--ah-syn-keyword); }
+.ah-fileview [data-t="type"] { color: var(--ah-syn-type); }
+.ah-fileview [data-t="function"] { color: var(--ah-syn-function); }
+.ah-fileview [data-t="string"] { color: var(--ah-syn-string); }
 /* Numbers and named literals are one idea — a value the language spells for
    you — and they share an accent to say so. */
-[data-t="number"], [data-t="constant"] { color: var(--ah-syn-value); }
-[data-t="property"] { color: var(--ah-syn-property); }
+.ah-fileview [data-t="number"], .ah-fileview [data-t="constant"] { color: var(--ah-syn-value); }
+.ah-fileview [data-t="property"] { color: var(--ah-syn-property); }
 
 /* ── the markdown view ─────────────────────────────────────────────────── */
 
