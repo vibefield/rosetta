@@ -57,8 +57,10 @@ of receiving inferred costs. Stage wall clocks and nested profiler timers are
 both retained, and nested parent/child timers are never added together.
 
 The Electron workbench exposes the same machinery in its **JSONL audit** tab.
-Choose any local JSONL/NDJSON files, then choose the adapter and one of the
-JSON-lines streams that adapter actually drives. The workbench:
+It inventories the selected adapter's admitted JSON-lines sources, ranks them
+by size, and preloads the largest local file and its matching stream. A dropdown
+provides the next-largest sources, while the file browser still accepts any
+local JSONL/NDJSON. The workbench:
 
 - shows file size, torn-tail status, and bounded head/tail records as both raw
   UTF-8 and parsed JSON without loading a large transcript into the renderer;

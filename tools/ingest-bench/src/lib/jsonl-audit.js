@@ -9,6 +9,7 @@ const {
   concreteJsonlPath,
   profileSelection,
   runRosettad,
+  safeJoin,
 } = require('../../scripts/profile-cold-start');
 
 const PREVIEW_WINDOW_BYTES = 512 * 1024;
@@ -153,6 +154,31 @@ async function streamSpecs(binary, agent) {
   return result.events.filter((event) => event.event === 'stream-spec' && event.driver === 'json-lines');
 }
 
+function rankJsonlSources(events, limit = 25) {
+  const boundedLimit = Math.max(1, Math.min(100, Number(limit) || 25));
+  return events
+    .filter((event) => event.event === 'source' && event.driver === 'json-lines')
+    .sort((left, right) => Number(right.bytes) - Number(left.bytes)
+      || String(left.relativePath).localeCompare(String(right.relativePath)))
+    .slice(0, boundedLimit)
+    .map((source) => ({
+      ...source,
+      file: safeJoin(source.resolvedRoot, source.relativePath),
+    }));
+}
+
+async function sourceInventory(binary, home, agent, limit = 25) {
+  const selectedAgent = validateAgents([agent])[0];
+  const result = await runRosettad(assertFile(binary, 'rosettad binary'), [
+    'sources', '--home', assertDirectory(home, 'home directory'), '--agent', selectedAgent, '--json',
+  ]);
+  const admitted = result.events.filter((event) => event.event === 'source' && event.driver === 'json-lines');
+  return {
+    total: admitted.length,
+    sources: rankJsonlSources(admitted, limit),
+  };
+}
+
 function auditRunName(now = new Date()) {
   const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
   return `run-jsonl-audit-${timestamp}-${randomBytes(3).toString('hex')}`;
@@ -232,5 +258,7 @@ module.exports = {
   JsonlAuditRun,
   auditRunName,
   inspectJsonl,
+  rankJsonlSources,
+  sourceInventory,
   streamSpecs,
 };

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { auditRunName, inspectJsonl } = require('../src/lib/jsonl-audit');
+const { auditRunName, inspectJsonl, rankJsonlSources } = require('../src/lib/jsonl-audit');
 
 test('JSONL inspection returns bounded raw and parsed content without hiding a torn tail', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rosetta-jsonl-preview-'));
@@ -27,4 +27,17 @@ test('JSONL inspection returns bounded raw and parsed content without hiding a t
 test('audit run names are sortable and stage scoped', () => {
   const name = auditRunName(new Date('2026-08-29T12:34:56.789Z'));
   assert.match(name, /^run-jsonl-audit-2026-08-29_12-34-56-789-[a-f0-9]{6}$/);
+});
+
+test('source ranking keeps only the largest adapter-admitted JSON-lines files', () => {
+  const ranked = rankJsonlSources([
+    { event: 'source', driver: 'inventory', bytes: 900, resolvedRoot: '/tmp/root', relativePath: 'ignored.jsonl' },
+    { event: 'source', driver: 'json-lines', stream: 'main', bytes: 10, resolvedRoot: '/tmp/root', relativePath: 'small.jsonl' },
+    { event: 'source', driver: 'json-lines', stream: 'subagent', bytes: 400, resolvedRoot: '/tmp/root', relativePath: 'large.jsonl' },
+    { event: 'other', driver: 'json-lines', bytes: 800, resolvedRoot: '/tmp/root', relativePath: 'not-a-source.jsonl' },
+    { event: 'source', driver: 'json-lines', stream: 'main', bytes: 200, resolvedRoot: '/tmp/root', relativePath: 'middle.jsonl' },
+  ], 2);
+
+  assert.deepEqual(ranked.map((source) => source.relativePath), ['large.jsonl', 'middle.jsonl']);
+  assert.deepEqual(ranked.map((source) => source.file), ['/tmp/root/large.jsonl', '/tmp/root/middle.jsonl']);
 });

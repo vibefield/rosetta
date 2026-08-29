@@ -7,7 +7,12 @@ const { spawnSync } = require('node:child_process');
 const { BenchmarkRun } = require('./lib/benchmark');
 const { ProjectionDatabase } = require('./lib/database');
 const { AGENTS, assertDirectory, assertFile, discover } = require('./lib/daemon');
-const { JsonlAuditRun, inspectJsonl, streamSpecs } = require('./lib/jsonl-audit');
+const {
+  JsonlAuditRun,
+  inspectJsonl,
+  sourceInventory,
+  streamSpecs,
+} = require('./lib/jsonl-audit');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const projectionDatabase = new ProjectionDatabase();
@@ -161,6 +166,11 @@ ipcMain.handle('audit:inspect', (_event, file) => inspectJsonl(file));
 ipcMain.handle('audit:streams', async (_event, config) => {
   if (activeRun || activeDiscovery || activeAudit) throw new Error('another daemon process is already running');
   return streamSpecs(assertFile(config.binary, 'rosettad binary'), config.agent);
+});
+
+ipcMain.handle('audit:sources', async (_event, config) => {
+  if (activeRun || activeDiscovery || activeAudit) throw new Error('another daemon process is already running');
+  return sourceInventory(config.binary, config.home, config.agent, config.limit);
 });
 
 ipcMain.handle('audit:run', async (_event, config) => {

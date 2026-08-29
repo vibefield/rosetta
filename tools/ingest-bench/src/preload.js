@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('rosetta', {
   runStage: (config) => ipcRenderer.invoke('benchmark:run-stage', config),
   cancelBenchmark: () => ipcRenderer.invoke('benchmark:cancel'),
   inspectJsonl: (file) => ipcRenderer.invoke('audit:inspect', file),
+  auditSources: (config) => ipcRenderer.invoke('audit:sources', config),
   auditStreams: (config) => ipcRenderer.invoke('audit:streams', config),
   runJsonlAudit: (config) => ipcRenderer.invoke('audit:run', config),
   cancelJsonlAudit: () => ipcRenderer.invoke('audit:cancel'),

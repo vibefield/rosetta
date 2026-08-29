@@ -20,9 +20,12 @@ const state = {
   tableOffset: 0,
   pageSize: 100,
   auditFiles: [],
+  auditSources: [],
   auditStreams: [],
   auditResult: null,
   auditCompletedStages: new Set(),
+  auditCatalogToken: 0,
+  auditSelectionToken: 0,
   busyKind: null,
 };
 const numberFormatter = new Intl.NumberFormat();
@@ -97,7 +100,9 @@ function updateAuditControls() {
   $('#audit-choose-files').disabled = state.busy;
   $('#audit-agent').disabled = state.busy;
   $('#audit-stream').disabled = state.busy || state.auditStreams.length === 0;
+  $('#audit-known-source').disabled = state.busy || state.auditSources.length === 0;
   $('#audit-binary').disabled = state.busy;
+  $('#audit-home').disabled = state.busy;
   $('#audit-output').disabled = state.busy;
 }
 
@@ -306,7 +311,7 @@ function auditSummaryItem(label, value) {
   return item;
 }
 
-async function loadAuditStreams() {
+async function loadAuditStreams(catalogToken) {
   const select = $('#audit-stream');
   select.replaceChildren();
   const pending = document.createElement('option'); pending.value = ''; pending.textContent = 'Loading adapter streams…';
@@ -317,6 +322,7 @@ async function loadAuditStreams() {
       binary: $('#audit-binary').value,
       agent: $('#audit-agent').value,
     });
+    if (catalogToken !== state.auditCatalogToken) return;
     select.replaceChildren();
     if (!state.auditStreams.length) {
       const empty = document.createElement('option'); empty.value = ''; empty.textContent = 'No JSONL production driver'; select.append(empty);
@@ -330,6 +336,7 @@ async function loadAuditStreams() {
       }
     }
   } catch (error) {
+    if (catalogToken !== state.auditCatalogToken) return;
     state.auditStreams = [];
     select.replaceChildren();
     const failed = document.createElement('option'); failed.value = ''; failed.textContent = 'Could not load streams'; select.append(failed);
@@ -337,6 +344,86 @@ async function loadAuditStreams() {
   } finally {
     updateAuditControls();
   }
+}
+
+async function selectKnownAuditSource() {
+  const select = $('#audit-known-source');
+  const source = state.auditSources.find((candidate) => candidate.file === select.value);
+  if (!source) return;
+  const selectionToken = ++state.auditSelectionToken;
+  try {
+    setGlobal('Inspecting large JSONL', 'running');
+    if (state.auditStreams.some((stream) => stream.stream === source.stream)) {
+      $('#audit-stream').value = source.stream;
+    }
+    const inspected = await window.rosetta.inspectJsonl(source.file);
+    if (selectionToken !== state.auditSelectionToken || select.value !== source.file) return;
+    state.auditFiles = [inspected];
+    renderAuditFiles();
+    setGlobal('Ready');
+  } catch (error) {
+    if (selectionToken !== state.auditSelectionToken) return;
+    setGlobal('JSONL inspection failed', 'failed');
+    toast(errorMessage(error), 'error');
+  }
+}
+
+async function loadAuditSources(catalogToken, { autoSelect = false } = {}) {
+  const select = $('#audit-known-source');
+  select.replaceChildren();
+  const pending = document.createElement('option'); pending.value = ''; pending.textContent = 'Loading admitted sources…';
+  select.append(pending);
+  select.disabled = true;
+  $('#audit-source-summary').textContent = 'Walking the adapter root and ranking admitted JSONL files by size…';
+  try {
+    const inventory = await window.rosetta.auditSources({
+      binary: $('#audit-binary').value,
+      home: $('#audit-home').value,
+      agent: $('#audit-agent').value,
+      limit: 25,
+    });
+    if (catalogToken !== state.auditCatalogToken) return;
+    state.auditSources = inventory.sources;
+    select.replaceChildren();
+    if (!state.auditSources.length) {
+      const empty = document.createElement('option'); empty.value = ''; empty.textContent = 'No admitted JSONL sources found'; select.append(empty);
+      $('#audit-source-summary').textContent = 'No local source matched this adapter. You can still browse to a JSONL manually.';
+      return;
+    }
+    const prompt = document.createElement('option'); prompt.value = ''; prompt.textContent = 'Choose an admitted source…'; select.append(prompt);
+    for (const source of state.auditSources) {
+      const option = document.createElement('option');
+      option.value = source.file;
+      option.textContent = `${formatBytes(source.bytes)} · ${source.stream} · ${source.relativePath}`;
+      option.title = source.file;
+      select.append(option);
+    }
+    $('#audit-source-summary').textContent = `Showing the largest ${formatNumber(state.auditSources.length)} of ${formatNumber(inventory.total)} admitted JSONL sources. The first is the default.`;
+    if (autoSelect && !state.auditFiles.length) {
+      select.value = state.auditSources[0].file;
+      await selectKnownAuditSource();
+    }
+  } catch (error) {
+    if (catalogToken !== state.auditCatalogToken) return;
+    state.auditSources = [];
+    select.replaceChildren();
+    const failed = document.createElement('option'); failed.value = ''; failed.textContent = 'Could not inventory sources'; select.append(failed);
+    $('#audit-source-summary').textContent = 'Automatic source inventory failed. Manual JSONL browsing remains available.';
+    toast(errorMessage(error), 'error');
+  } finally {
+    updateAuditControls();
+  }
+}
+
+async function reloadAuditCatalog({ autoSelect = true } = {}) {
+  const catalogToken = ++state.auditCatalogToken;
+  ++state.auditSelectionToken;
+  state.auditFiles = [];
+  state.auditSources = [];
+  renderAuditFiles();
+  await loadAuditStreams(catalogToken);
+  if (catalogToken !== state.auditCatalogToken) return;
+  await loadAuditSources(catalogToken, { autoSelect });
 }
 
 function renderAuditFiles() {
@@ -409,8 +496,12 @@ async function chooseAuditFiles() {
   try {
     const files = await window.rosetta.chooseJsonl();
     if (!files.length) return;
+    const selectionToken = ++state.auditSelectionToken;
+    $('#audit-known-source').value = '';
     setGlobal('Inspecting JSONL', 'running');
-    state.auditFiles = await Promise.all(files.map((file) => window.rosetta.inspectJsonl(file)));
+    const inspected = await Promise.all(files.map((file) => window.rosetta.inspectJsonl(file)));
+    if (selectionToken !== state.auditSelectionToken) return;
+    state.auditFiles = inspected;
     renderAuditFiles();
     setGlobal('Ready');
   } catch (error) {
@@ -950,6 +1041,7 @@ async function init() {
   $('#home-input').value = defaults.home;
   $('#output-input').value = defaults.outputDir;
   $('#audit-binary').value = defaults.binary;
+  $('#audit-home').value = defaults.home;
   $('#audit-output').value = defaults.outputDir;
   const auditAgent = $('#audit-agent');
   for (const agent of defaults.agents) {
@@ -964,14 +1056,19 @@ async function init() {
   $('#output-browse').addEventListener('click', async () => { const dir = await window.rosetta.chooseDirectory('Choose benchmark output directory'); if (dir) $('#output-input').value = dir; });
   $('#audit-binary-browse').addEventListener('click', async () => {
     const file = await window.rosetta.chooseBinary();
-    if (file) { $('#audit-binary').value = file; await loadAuditStreams(); }
+    if (file) { $('#audit-binary').value = file; await reloadAuditCatalog(); }
+  });
+  $('#audit-home-browse').addEventListener('click', async () => {
+    const dir = await window.rosetta.chooseDirectory('Choose the home directory containing agent data');
+    if (dir) { $('#audit-home').value = dir; await reloadAuditCatalog(); }
   });
   $('#audit-output-browse').addEventListener('click', async () => {
     const dir = await window.rosetta.chooseDirectory('Choose private JSONL audit output directory');
     if (dir) $('#audit-output').value = dir;
   });
-  $('#audit-agent').addEventListener('change', loadAuditStreams);
+  $('#audit-agent').addEventListener('change', reloadAuditCatalog);
   $('#audit-stream').addEventListener('change', updateAuditControls);
+  $('#audit-known-source').addEventListener('change', selectKnownAuditSource);
   $('#audit-choose-files').addEventListener('click', chooseAuditFiles);
   $('#audit-preview-file').addEventListener('change', renderAuditPreview);
   $('#audit-run').addEventListener('click', runJsonlAudit);
@@ -1005,7 +1102,7 @@ async function init() {
   window.rosetta.onDaemonEvent((message) => { if (message.type === 'log') appendLog(message); });
   window.rosetta.onBenchmarkEvent(benchmarkEvent);
   window.rosetta.onAuditEvent(auditEvent);
-  await loadAuditStreams();
+  await reloadAuditCatalog();
 }
 
 init().catch((error) => toast(errorMessage(error), 'error'));

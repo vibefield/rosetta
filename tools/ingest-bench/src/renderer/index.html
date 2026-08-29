@@ -117,6 +117,10 @@
             <div class="path-control"><input id="audit-binary" spellcheck="false"><button id="audit-binary-browse" class="icon-button" aria-label="Choose binary">…</button></div>
           </label>
           <label class="field">
+            <span>source home</span>
+            <div class="path-control"><input id="audit-home" spellcheck="false"><button id="audit-home-browse" class="icon-button" aria-label="Choose source home">…</button></div>
+          </label>
+          <label class="field">
             <span>adapter grammar</span>
             <select id="audit-agent"></select>
           </label>
@@ -125,10 +129,15 @@
             <select id="audit-stream"><option value="">Load an adapter first</option></select>
           </label>
           <label class="field">
+            <span>largest local JSONL sources</span>
+            <select id="audit-known-source"><option value="">Loading admitted sources…</option></select>
+          </label>
+          <p id="audit-source-summary" class="hint">The largest admitted source is preloaded automatically.</p>
+          <label class="field">
             <span>private audit output</span>
             <div class="path-control"><input id="audit-output" spellcheck="false"><button id="audit-output-browse" class="icon-button" aria-label="Choose output directory">…</button></div>
           </label>
-          <button id="audit-choose-files" class="button secondary wide">Choose JSONL files…</button>
+          <button id="audit-choose-files" class="button secondary wide">Browse other JSONL files…</button>
           <button id="audit-run" class="button primary wide" disabled>Freeze snapshot and run audit</button>
           <p class="hint">Adapter + stream define meaning. Snapshot copy/hash time is shown but excluded from cold ingest. Audit artifacts contain private content and are retained for inspection.</p>
         </aside>
