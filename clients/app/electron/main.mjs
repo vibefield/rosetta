@@ -43,13 +43,16 @@ if (!singleInstance) {
 
 // ── The app-owned daemon ─────────────────────────────────────────────────
 // The archive db, its ledger, and the search sidecar all live beside each
-// other under userData/cache — the app's own, disposable, rebuildable.
-// `AH_DB` repoints the file (e.g. onto an external disk); `AH_DAEMON` skips
-// the spawn entirely and uses an already-running daemon.
+// other under userData/archive — the app's own, disposable, rebuildable.
+// NOT `cache/`: on a case-insensitive filesystem that is Chromium's own
+// `Cache/` folder, and the archive must never sit where browser-cache
+// clearing can reach it. `AH_DB` repoints the file (e.g. onto an external
+// disk); `AH_DAEMON` skips the spawn entirely and uses an already-running
+// daemon.
 let daemonProcess = null;
 
 function resolveDbPath() {
-  return process.env.AH_DB ?? path.join(app.getPath("userData"), "cache", "rosetta.db");
+  return process.env.AH_DB ?? path.join(app.getPath("userData"), "archive", "rosetta.db");
 }
 
 /** Find a rosettad binary: explicit `ROSETTAD_BIN`, else the newest build in
