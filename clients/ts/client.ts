@@ -5,7 +5,10 @@
 // Consumers render; they never re-implement protocol semantics.
 
 import type { ApiError } from "./generated/ApiError";
+import type { BoostResponse } from "./generated/BoostResponse";
 import type { ContributionResponse } from "./generated/ContributionResponse";
+import type { DiscoveriesResponse } from "./generated/DiscoveriesResponse";
+import type { EnableResponse } from "./generated/EnableResponse";
 import type { ErrorCode } from "./generated/ErrorCode";
 import type { HeatmapResponse } from "./generated/HeatmapResponse";
 import type { MessageRow } from "./generated/MessageRow";
@@ -104,8 +107,8 @@ export class RosettaClient {
     this.WebSocketImpl = options.WebSocketImpl ?? WebSocket;
   }
 
-  private async request<T>(path: string): Promise<T> {
-    const response = await this.fetchFn(`${this.baseUrl}${path}`);
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await this.fetchFn(`${this.baseUrl}${path}`, init);
     if (!response.ok) {
       let code: ErrorCode | null = null;
       let message = `${response.status} on ${path}`;
@@ -128,6 +131,32 @@ export class RosettaClient {
 
   status(): Promise<StatusResponse> {
     return this.request("/api/status");
+  }
+
+  /** The roll call's census — what discovery found, content-free. */
+  discoveries(): Promise<DiscoveriesResponse> {
+    return this.request("/api/discoveries");
+  }
+
+  /** Consent: enroll the chosen agent kinds. Grantable exactly once, while
+   * the daemon is awaiting consent. */
+  enableRuntimes(kinds: string[]): Promise<EnableResponse> {
+    return this.request("/api/runtimes/enable", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kinds }),
+    });
+  }
+
+  /** Attention-directed ingestion: the reader opened a still-queued
+   * session — ask the daemon to read it next. Advisory; safe to fire on
+   * every selection of a pending session. */
+  boost(sessionId: string): Promise<BoostResponse> {
+    return this.request("/api/ingest/boost", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
   }
 
   runtimes(): Promise<RuntimesResponse> {

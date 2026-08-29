@@ -89,6 +89,13 @@ impl DaemonHealth {
         }
     }
 
+    /// The census is on the board and nothing has been read — the user is
+    /// choosing. The app renders the roll call off this phase alone.
+    pub fn ingest_await_consent(&self) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        ingest.phase = IngestPhase::AwaitingConsent;
+    }
+
     /// Enroll one installed runtime with its census denominators, queued.
     pub fn ingest_register(&self, kind: &str, files_total: u64, bytes_total: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");

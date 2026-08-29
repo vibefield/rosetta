@@ -21,7 +21,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::json;
 
 use rosetta_protocol::{
-    ApiError, ContributionResponse, ErrorCode, HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse,
+    ApiError, BoostRequest, BoostResponse, ContributionResponse, DiscoveriesResponse,
+    EnableRequest, EnableResponse, ErrorCode, HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse,
     RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
     StatusResponse, TimelineCursor, TimelinePage, UsageResponse,
 };
@@ -46,6 +47,10 @@ pub struct AppState {
     pub search: Arc<dyn SearchBackend>,
     /// Daemon liveness, present only when a live ingest loop feeds it.
     pub health: Option<Arc<crate::health::DaemonHealth>>,
+    /// The roll call's board and gate, present only on a consent-aware serve.
+    pub consent: Option<Arc<crate::consent::ConsentGate>>,
+    /// The boost queue, present only while a serve loop drains it.
+    pub boost: Option<Arc<crate::consent::BoostLedger>>,
 }
 
 impl AppState {
@@ -57,6 +62,8 @@ impl AppState {
             db: Arc::new(db),
             search,
             health: None,
+            consent: None,
+            boost: None,
         }
     }
 
@@ -68,6 +75,8 @@ impl AppState {
             db: Arc::new(db),
             search,
             health: None,
+            consent: None,
+            boost: None,
         }
     }
 
@@ -76,11 +85,37 @@ impl AppState {
         self.health = Some(health);
         self
     }
+
+    /// Attach the consent gate (the serve loop arms and awaits it).
+    pub fn with_consent(mut self, consent: Arc<crate::consent::ConsentGate>) -> Self {
+        self.consent = Some(consent);
+        self
+    }
+
+    /// Attach the boost ledger (the serve loop drains it between files).
+    pub fn with_boost(mut self, boost: Arc<crate::consent::BoostLedger>) -> Self {
+        self.boost = Some(boost);
+        self
+    }
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/status", get(status))
+        .route("/api/discoveries", get(discoveries))
+        // The two writes a reader's intent can make. Both carry the same
+        // origin guard the WS upgrades do: a browser page from a foreign
+        // origin is refused outright, preflight or not.
+        .route(
+            "/api/runtimes/enable",
+            axum::routing::post(enable)
+                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
+        .route(
+            "/api/ingest/boost",
+            axum::routing::post(boost)
+                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
         .route("/api/runtimes", get(runtimes))
         .route("/api/projects", get(projects))
         .route("/api/projects/{id}/heatmap", get(heatmap))
@@ -113,7 +148,7 @@ fn cors_layer() -> tower_http::cors::CorsLayer {
     use tower_http::cors::{AllowOrigin, CorsLayer};
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, _| origin_allowed(origin)))
-        .allow_methods([axum::http::Method::GET])
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
         .allow_headers(tower_http::cors::Any)
 }
 
@@ -266,6 +301,51 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// The roll call's census. Empty until discovery has run (or on a serve
+/// without a consent gate, e.g. static serving).
+async fn discoveries(State(state): State<AppState>) -> Json<DiscoveriesResponse> {
+    Json(DiscoveriesResponse {
+        discoveries: state
+            .consent
+            .as_ref()
+            .map(|gate| gate.rows())
+            .unwrap_or_default(),
+    })
+}
+
+async fn enable(
+    State(state): State<AppState>,
+    Json(request): Json<EnableRequest>,
+) -> Result<Json<EnableResponse>, Failure> {
+    let Some(gate) = state.consent.as_ref() else {
+        return Err(Failure::bad_request("this daemon takes no enrollment"));
+    };
+    match gate.grant(&request.kinds) {
+        Ok(enabled) => Ok(Json(EnableResponse { enabled })),
+        Err(crate::consent::GrantError::NotOpen) => Err(Failure::bad_request(
+            "enrollment is closed — this daemon already has its consented set; restart to change it",
+        )),
+        Err(crate::consent::GrantError::NotGrantable) => Err(Failure::bad_request(
+            "only installed agent kinds from /api/discoveries can enroll",
+        )),
+    }
+}
+
+async fn boost(
+    State(state): State<AppState>,
+    Json(request): Json<BoostRequest>,
+) -> Result<Json<BoostResponse>, Failure> {
+    let Some(ledger) = state.boost.as_ref() else {
+        // No backfill loop to reorder — nothing to do, honestly said.
+        return Ok(Json(BoostResponse { queued: false }));
+    };
+    if request.session_id.is_empty() {
+        return Err(Failure::bad_request("boost needs a session_id"));
+    }
+    ledger.push(&request.session_id);
+    Ok(Json(BoostResponse { queued: true }))
 }
 
 async fn runtimes(State(state): State<AppState>) -> Json<RuntimesResponse> {

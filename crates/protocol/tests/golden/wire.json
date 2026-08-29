@@ -1,4 +1,10 @@
 {
+  "boost_request": {
+    "session_id": "s1"
+  },
+  "boost_response": {
+    "queued": true
+  },
   "contribution": {
     "rows": [
       {
@@ -10,6 +16,29 @@
         "session_id": "s1",
         "tokens": 5
       }
+    ]
+  },
+  "discoveries": {
+    "discoveries": [
+      {
+        "bytes": 2147483648,
+        "data_root": "~/.claude",
+        "enabled": false,
+        "files": 1209,
+        "installed": true,
+        "kind": "claude-code",
+        "newest_modified_ms": 1000
+      }
+    ]
+  },
+  "enable_request": {
+    "kinds": [
+      "claude-code"
+    ]
+  },
+  "enable_response": {
+    "enabled": [
+      "claude-code"
     ]
   },
   "error_codes": [
@@ -152,6 +181,12 @@
       }
     ]
   },
+  "ingest_phases": [
+    "discovering",
+    "awaiting_consent",
+    "backfilling",
+    "live"
+  ],
   "mutations": [
     {
       "agent_version": "2.1.240",

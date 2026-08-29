@@ -1,8 +1,14 @@
 export type * from "./generated/ApiError";
 export type * from "./generated/BackfillState";
+export type * from "./generated/BoostRequest";
+export type * from "./generated/BoostResponse";
 export type * from "./generated/ContributionResponse";
 export type * from "./generated/ContributionRow";
 export type * from "./generated/DaemonStatus";
+export type * from "./generated/DiscoveriesResponse";
+export type * from "./generated/DiscoveryRow";
+export type * from "./generated/EnableRequest";
+export type * from "./generated/EnableResponse";
 export type * from "./generated/ErrorCode";
 export type * from "./generated/HeatmapDay";
 export type * from "./generated/HeatmapResponse";

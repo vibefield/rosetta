@@ -55,13 +55,16 @@ pub struct DaemonStatus {
     pub ingest: IngestProgress,
 }
 
-/// Where the daemon's ingest is in its life. `Live` means the watch loop
-/// owns the store and the cold backfill is history.
+/// Where the daemon's ingest is in its life. `AwaitingConsent` means the
+/// census is on the board and nothing has been read — the USER decides
+/// which runtimes enroll. `Live` means the watch loop owns the store and
+/// the cold backfill is history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum IngestPhase {
     Discovering,
+    AwaitingConsent,
     Backfilling,
     Live,
 }
@@ -111,6 +114,61 @@ pub struct RuntimeBackfill {
     /// Transcript records parsed so far.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub records: u64,
+}
+
+/// One probed agent adapter — the roll call's row. Census facts only
+/// (counts, sizes, a newest-touch stamp), never content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DiscoveryRow {
+    pub kind: String,
+    /// The layout's `~/...` form — machine-independent, names no home.
+    pub data_root: String,
+    /// The root exists and holds at least one file a layout stream claims.
+    pub installed: bool,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub files: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub bytes: u64,
+    pub newest_modified_ms: Ms,
+    /// Consent already granted — persisted from an earlier run, the CLI,
+    /// or this run's enable call.
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DiscoveriesResponse {
+    pub discoveries: Vec<DiscoveryRow>,
+}
+
+/// Consent: the kinds the user chose on the roll call. Only installed
+/// kinds are grantable, and only while the daemon is awaiting consent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct EnableRequest {
+    pub kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct EnableResponse {
+    pub enabled: Vec<String>,
+}
+
+/// Attention-directed ingestion: the reader opened a session that is still
+/// in the backfill queue — move it to the front.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct BoostRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct BoostResponse {
+    /// Recorded. Advisory: an id the queue never meets simply expires.
+    pub queued: bool,
 }
 
 /// One watched runtime's live-ingest counters, cumulative since start.

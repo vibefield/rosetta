@@ -92,6 +92,9 @@ struct Flags {
     ledger: Option<PathBuf>,
     /// serve only: the localhost listen address.
     addr: Option<String>,
+    /// serve only: consent for every installed runtime from the command
+    /// line — the headless stand-in for the app's roll call.
+    all_agents: bool,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -104,6 +107,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         ticks: None,
         ledger: None,
         addr: None,
+        all_agents: false,
     };
     let mut at = 0;
     while at < args.len() {
@@ -119,6 +123,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--profile" => {
                 flags.profile = true;
+                at += 1;
+            }
+            "--all-agents" => {
+                flags.all_agents = true;
                 at += 1;
             }
             "--json" => {

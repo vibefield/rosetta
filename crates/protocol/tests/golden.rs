@@ -6,7 +6,8 @@
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
 use rosetta_protocol::{
-    ApiError, BackfillState, ContributionResponse, ContributionRow, DaemonStatus, ErrorCode,
+    ApiError, BackfillState, BoostRequest, BoostResponse, ContributionResponse, ContributionRow,
+    DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest, EnableResponse, ErrorCode,
     HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, MessageKind,
     MessageRow, ModelDay, Mutation, PROTOCOL_VERSION, ProjectRow, ProjectsResponse,
     RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness,
@@ -260,6 +261,27 @@ fn exemplars() -> serde_json::Value {
             ],
             hours: vec![HourTotal { hour: 15, tokens: 123 }],
         },
+        "ingest_phases": [
+            IngestPhase::Discovering,
+            IngestPhase::AwaitingConsent,
+            IngestPhase::Backfilling,
+            IngestPhase::Live,
+        ],
+        "discoveries": DiscoveriesResponse {
+            discoveries: vec![DiscoveryRow {
+                kind: "claude-code".into(),
+                data_root: "~/.claude".into(),
+                installed: true,
+                files: 1_209,
+                bytes: 2_147_483_648,
+                newest_modified_ms: 1_000,
+                enabled: false,
+            }],
+        },
+        "enable_request": EnableRequest { kinds: vec!["claude-code".into()] },
+        "enable_response": EnableResponse { enabled: vec!["claude-code".into()] },
+        "boost_request": BoostRequest { session_id: "s1".into() },
+        "boost_response": BoostResponse { queued: true },
         "contribution": ContributionResponse {
             rows: vec![ContributionRow {
                 session_id: "s1".into(),

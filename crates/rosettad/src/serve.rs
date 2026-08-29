@@ -6,12 +6,17 @@
 //!
 //! The transport binds FIRST — `/api/status` answers from process start and
 //! carries the cold-start meters, so the app is never met by a refused
-//! connection. During the backfill the mirror re-warms from the projection
-//! on a cadence and fans precise diffs to `/ws/meta`; on a fresh install the
-//! projection is still a private file and each pass is a cheap no-op.
-//! Effects observation still starts only AFTER the cold backfill publishes —
-//! bulk load never pays the mutation-log cost.
+//! connection. Consent gates all reading: discovery fills the roll-call
+//! board, and a runtime is ingested only if it was enrolled on an earlier
+//! run (the projection's `enabled` flags), named on the command line, or
+//! chosen in the app while the daemon waits. During the backfill the mirror
+//! re-warms from the projection on a cadence and fans precise diffs to
+//! `/ws/meta`, and the stream queue is driven one file at a time so the
+//! boost ledger can move what the reader opened to the front. Effects
+//! observation still starts only AFTER the cold backfill publishes — bulk
+//! load never pays the mutation-log cost.
 
+use std::collections::{BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,11 +24,11 @@ use std::time::Duration;
 
 use rosetta_capture::NotifyEvents;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, StreamReport,
 };
 use rosetta_server::{
-    AppState, DaemonHealth, Hub, HubConfig, IngestCounterSource, IngestCounters, RuntimeTick,
-    router,
+    AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
+    IngestCounterSource, IngestCounters, RuntimeTick, router,
 };
 use rosetta_store::Store;
 
@@ -34,6 +39,7 @@ use crate::{
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
 const REWARM_INTERVAL: Duration = Duration::from_secs(2);
+const CONSENT_POLL: Duration = Duration::from_millis(200);
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -59,6 +65,28 @@ fn counter_source(
             records: delta.get(Metric::RecordsFramed),
         }
     })
+}
+
+/// Fold one per-file stream report into the runtime's aggregate — the
+/// fields the failure verdict and the operator's summary read.
+fn fold_stream(total: &mut StreamReport, part: StreamReport) {
+    total.files += part.files;
+    total.files_missing += part.files_missing;
+    total.batches += part.batches;
+    total.records += part.records;
+    total.oversized += part.oversized;
+    total.parsed += part.parsed;
+    total.unknown += part.unknown;
+    total.hard_errors += part.hard_errors;
+    total.generations_restarted += part.generations_restarted;
+    total.files_audited += part.files_audited;
+    total.conflicts += part.conflicts;
+    total.retries_exhausted += part.retries_exhausted;
+    total.files_incomplete += part.files_incomplete;
+    total.sessions_indexed += part.sessions_indexed;
+    total.siblings_healed += part.siblings_healed;
+    total.stats.messages_inserted += part.stats.messages_inserted;
+    total.stats.messages_updated += part.stats.messages_updated;
 }
 
 pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
@@ -92,6 +120,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // whole; a fresh install serves empty lists and honest meters.
     let health = Arc::new(DaemonHealth::new(now_ms()));
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
+    let consent = Arc::new(ConsentGate::new());
+    let boost = Arc::new(BoostLedger::new());
     let mut warmed = 0_usize;
     if private_projection.is_none() {
         warmed = hub.warm(store.conn()).map_err(|error| error.to_string())?;
@@ -112,19 +142,22 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     {
         // First ctrl-c stops gracefully (the backfill finishes its current
-        // runtime; the live loop exits on its next tick); a second forces.
+        // file; the live loop exits on its next tick); a second forces.
         let stop = stop.clone();
         tokio_runtime.spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 stop.store(true, Ordering::SeqCst);
-                eprintln!("stopping — finishing the current runtime; ctrl-c again to force quit");
+                eprintln!("stopping — finishing the current file; ctrl-c again to force quit");
             }
             if tokio::signal::ctrl_c().await.is_ok() {
                 std::process::exit(130);
             }
         });
     }
-    let state = AppState::new(hub.clone(), db.clone()).with_daemon_health(health.clone());
+    let state = AppState::new(hub.clone(), db.clone())
+        .with_daemon_health(health.clone())
+        .with_consent(consent.clone())
+        .with_boost(boost.clone());
     let server = tokio_runtime.spawn({
         let mut shutdown_rx = shutdown_rx.clone();
         let router = router(state);
@@ -136,9 +169,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .await
         }
     });
-    println!(
-        "serving http://{local} — {warmed} mirror rows warm, backfill starting (ctrl-c to stop)"
-    );
+    println!("serving http://{local} — {warmed} mirror rows warm (ctrl-c to stop)");
 
     // Mid-backfill readers: re-read the mirror from the projection on a
     // cadence and fan precise diffs to /ws/meta. Skims and per-file stream
@@ -178,12 +209,71 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
     });
 
-    // The census, then the backfill queue: skim (lists) before stream
-    // (transcripts), per runtime, with live meters on the health surface.
+    // The census fills the roll-call board; consent decides what is read.
     let discoveries = rosetta_pipeline::discover(&adapters, &flags.home, &opts, &instrument)
         .map_err(|error| error.to_string())?;
+    // Consent persists as the projection's `enabled` flags — enrollment
+    // happens once, and restarts proceed without asking again.
+    let persisted: BTreeSet<String> = if private_projection.is_none() {
+        rosetta_store::queries::all_runtimes(store.conn())
+            .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?
+            .into_iter()
+            .filter(|runtime| runtime.enabled)
+            .map(|runtime| runtime.kind)
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    let installed: BTreeSet<String> = adapters
+        .iter()
+        .zip(&discoveries)
+        .filter(|(_, discovery)| discovery.installed)
+        .map(|(adapter, _)| adapter.kind().to_string())
+        .collect();
+    let mut consented: BTreeSet<String> = persisted.intersection(&installed).cloned().collect();
+    // `--agent` names kinds outright and `--all-agents` says everything
+    // installed — both are consent from the command line, the headless
+    // stand-in for the app's roll call.
+    if !flags.agents.is_empty() || flags.all_agents {
+        consented.extend(installed.iter().cloned());
+    }
+    consent.publish(
+        adapters
+            .iter()
+            .zip(&discoveries)
+            .map(|(adapter, discovery)| DiscoveryRow {
+                kind: adapter.kind().to_string(),
+                data_root: discovery.runtime.data_root.clone(),
+                installed: discovery.installed,
+                files: discovery.file_count as u64,
+                bytes: discovery.total_bytes,
+                newest_modified_ms: discovery.newest_modified_ms,
+                enabled: consented.contains(adapter.kind()),
+            })
+            .collect(),
+    );
+    if consented.is_empty() {
+        // Nothing enrolled and nobody said yes: the board is published and
+        // NOTHING has been read. Wait for the roll call.
+        let granted = consent.arm();
+        health.ingest_await_consent();
+        println!("no enrolled agents — choose in the app (or pass --all-agents)");
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            match granted.recv_timeout(CONSENT_POLL) {
+                Ok(kinds) => {
+                    consented.extend(kinds);
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
-        if discovery.installed {
+        if discovery.installed && consented.contains(adapter.kind()) {
             health.ingest_register(
                 adapter.kind(),
                 discovery.file_count as u64,
@@ -192,6 +282,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
     }
 
+    // The backfill queue: skim (lists) before stream (transcripts), per
+    // runtime, with live meters on the health surface.
     let mut pending_runners = Vec::new();
     let mut failures = Vec::new();
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
@@ -199,11 +291,15 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             println!("{}: not installed, skipping", adapter.kind());
             continue;
         }
+        if !consented.contains(adapter.kind()) {
+            println!("{}: installed but not enrolled, skipping", adapter.kind());
+            continue;
+        }
         if stop.load(Ordering::SeqCst) {
             break;
         }
         let mut runtime = discovery.runtime.clone();
-        runtime.enabled = true; // serving is explicit consent
+        runtime.enabled = true; // consent, persisted for the next start
 
         let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
         let ledger = open_ledger(backfill_ledgers, adapter.kind())?;
@@ -233,17 +329,64 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             meta.files_skimmed as u64,
             counter_source(&instrument, stream_baseline.clone()),
         );
-        let stream = rosetta_pipeline::stream_backfill_into(
+
+        // The stream queue, one file per call: the boost ledger reorders
+        // between files (what the reader opened jumps the line), and a
+        // graceful stop lands between files instead of minutes away. The
+        // audit lane is disabled per file — a single-file slice would make
+        // every call force-replay its file — and runs once at the end.
+        let audit_free = IngestOptions {
+            audit_files_per_run: 0,
+            ..opts.clone()
+        };
+        let roster = files.clone();
+        let mut queue: VecDeque<_> = files.into();
+        let mut stream = StreamReport::default();
+        while !queue.is_empty() {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            for session_id in boost.drain().iter().rev() {
+                if let Some(at) = queue.iter().position(|file| &file.session_id == session_id)
+                    && let Some(file) = queue.remove(at)
+                {
+                    queue.push_front(file);
+                }
+            }
+            let file = queue.pop_front().expect("checked non-empty");
+            let report = rosetta_pipeline::stream_backfill_into(
+                *adapter,
+                &runtime,
+                &discovery.root,
+                &mut store,
+                std::slice::from_ref(&file),
+                &audit_free,
+                &instrument,
+                Some(&mut ledger),
+            )
+            .map_err(|error| error.to_string())?;
+            fold_stream(&mut stream, report);
+        }
+        if stop.load(Ordering::SeqCst) {
+            // A partial runtime earns no verdict and starts no runner.
+            break;
+        }
+        // One audit-enabled pass over the whole roster: everything is
+        // checkpointed by now, so this only performs the run's single
+        // rotating forced replay — the audit lane's contract, unchanged.
+        let report = rosetta_pipeline::stream_backfill_into(
             *adapter,
             &runtime,
             &discovery.root,
             &mut store,
-            &files,
+            &roster,
             &opts,
             &instrument,
             Some(&mut ledger),
         )
         .map_err(|error| error.to_string())?;
+        fold_stream(&mut stream, report);
+
         let stream_delta = instrument.snapshot().delta_since(&stream_baseline);
         health.ingest_done(
             adapter.kind(),
@@ -285,7 +428,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         // install's private projection and staged ledgers are dropped
         // whole, and the next start redoes the cold load from scratch.
         if pending_runners.is_empty() {
-            return Err("nothing to serve: no installed runtimes".to_string());
+            return Err("nothing to serve: no enrolled runtimes".to_string());
         }
         if defer_ledger_sync {
             for (_, _, _, _, ledger) in &mut pending_runners {
