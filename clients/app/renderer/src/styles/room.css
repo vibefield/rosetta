@@ -833,3 +833,29 @@ code, .mono { font-family: var(--vf-font-mono); }
 }
 .ah-coldstart__row[data-state="done"] .ah-meter i { background: var(--vf-green); }
 .ah-coldstart__row[data-state="queued"] .ah-coldstart__kind { color: var(--vf-text-faint); }
+
+/* the roll call: consent in one screen — census rows on the ramp, one act */
+.ah-rollcall { display: flex; flex-direction: column; gap: 4px; width: min(400px, 88%); margin-top: 6px; text-align: left; }
+.ah-rollcall__row {
+  display: grid; grid-template-columns: 14px 14px minmax(0, 1fr); gap: 3px 10px; align-items: center;
+  padding: 8px 11px; border-radius: 10px; background: var(--vf-fill); cursor: pointer;
+  transition: background-color 160ms ease;
+}
+.ah-rollcall__row:hover { background: var(--vf-fill-hover); }
+.ah-rollcall__row input { width: 13px; height: 13px; margin: 0; accent-color: var(--vf-select); }
+.ah-rollcall__row .ah-agent { width: 14px; height: 14px; }
+.ah-rollcall__row b { font-size: 12px; font-weight: 500; color: var(--vf-text-primary); }
+.ah-rollcall__census {
+  grid-column: 3; color: var(--vf-text-faint); font-size: 9.5px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-rollcall__census code { font-size: 9.5px; }
+.ah-rollcall__absent { margin: 2px 0 0; color: var(--vf-text-faint); font-size: 10px; }
+.ah-rollcall__begin {
+  margin-top: 10px; height: 30px; padding: 0 20px; border: 0; border-radius: 999px;
+  background: var(--vf-foreground); color: var(--vf-canvas-bg); font-size: 12px; font-weight: 500;
+  transition: opacity 160ms ease, transform 140ms ease;
+}
+.ah-rollcall__begin:not(:disabled):active { transform: scale(0.96); }
+.ah-rollcall__begin:disabled { opacity: 0.45; cursor: default; }
+.ah-rollcall__error { margin: 4px 0 0; color: var(--vf-red); font-size: 10.5px; }

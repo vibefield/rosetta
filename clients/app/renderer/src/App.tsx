@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import { ColdStartPanel } from "./components/ColdStart";
+import { RollCallPanel } from "./components/RollCall";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
 import { SearchStrip } from "./components/SearchStrip";
@@ -158,6 +159,15 @@ export default function App() {
     () => (meta?.sessions ?? []).find((s) => s.id === sessionId) ?? null,
     [meta, sessionId],
   );
+  // Attention-directed ingestion: opening a still-pending session moves its
+  // file to the front of the backfill queue, so nothing the reader actually
+  // reaches for is ever not-ready. Advisory — an old daemon just keeps its
+  // order, and the ledger dedupes repeats.
+  const sessionState = session?.stream_state ?? null;
+  useEffect(() => {
+    if (sessionId === null || sessionState !== "pending" || !ingestActive) return;
+    client.boost(sessionId).catch(() => {});
+  }, [sessionId, sessionState, ingestActive]);
   const feed = useTimeline(sessionId);
   const usage = useProjectUsage(
     projectId === UNASSIGNED_PROJECT_ID ? null : projectId,
@@ -202,7 +212,9 @@ export default function App() {
     : [
         "your whole agentic past",
         ...kinds,
-        ...(ingestActive
+        // "warming" belongs to the backfill alone — the roll call's wait
+        // heats nothing.
+        ...(ingest?.phase === "backfilling"
           ? [`warming${warming !== null ? ` ${Math.round(warming * 100)}%` : ""}`]
           : []),
         // A fresh install has no index yet — that is warming, not failure;
@@ -213,6 +225,8 @@ export default function App() {
       ].join(" · ");
 
   const disconnected = meta === null;
+  // The roll call: discovery is on the board and nothing has been read.
+  const awaitingConsent = ingest?.phase === "awaiting_consent";
   // The first run: the daemon answers (its meters are moving) but the
   // projection is still a private file, so there are no lists yet. Only
   // the ready may claim emptiness — this is the honest room instead.
@@ -243,6 +257,8 @@ export default function App() {
               <i style={{ width: metaStatus === "connecting" ? "30%" : "8%" }} />
             </div>
           </EmptyState>
+        ) : awaitingConsent ? (
+          <RollCallPanel />
         ) : coldStarting ? (
           <ColdStartPanel ingest={ingest} />
         ) : (
