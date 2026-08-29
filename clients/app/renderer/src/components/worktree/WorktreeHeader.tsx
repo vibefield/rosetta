@@ -2,12 +2,13 @@
 // — "Worktree" was a category, and the head names objects. A path is an id,
 // so it sets in mono.
 //
-// No badge. We know how many files the tree is SHOWING, not how many the
-// repository has, and a badge counting the interface is not a fact.
+// No count. We know how many files the tree is SHOWING, not how many the
+// repository has, and a badge counting the interface is not a fact — which
+// is the one thing this head does differently from its three siblings.
 
-import type { CSSProperties } from "react";
 import type { GitFacts } from "../../lib/desktop-host";
 import { tildePath } from "../../lib/format";
+import { ColumnHeading } from "../ui";
 
 export interface WorktreeHeaderProps {
   /** The root the tree is actually showing, or null before one opens. */
@@ -32,12 +33,13 @@ export function WorktreeHeader({ root, tint, homeDirectory, facts }: WorktreeHea
   const caption = formatGitFacts(facts);
   return (
     <header>
-      <div className="ah-colhead">
-        <i style={tint !== null ? ({ "--tint": tint } as CSSProperties) : undefined} />
-        <strong className="ah-idname" title={root ?? undefined}>
-          {root === null ? "—" : tildePath(root, homeDirectory)}
-        </strong>
-      </div>
+      <ColumnHeading
+        name={root === null ? "—" : tildePath(root, homeDirectory)}
+        tint={tint}
+        mono
+        // The head abbreviates to `~`; the tooltip keeps the whole path.
+        title={root}
+      />
       {caption !== null && <span className="ah-caption tnum">{caption}</span>}
     </header>
   );

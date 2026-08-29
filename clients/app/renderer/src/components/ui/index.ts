@@ -1,3 +1,5 @@
+export { ColumnHeading } from "./ColumnHeading";
+export type { ColumnHeadingProps } from "./ColumnHeading";
 export { EmptyState } from "./EmptyState";
 export type { EmptyStateProps } from "./EmptyState";
 export { ListSummaryHeader } from "./ListSummaryHeader";

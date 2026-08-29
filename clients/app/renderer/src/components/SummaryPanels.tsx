@@ -7,7 +7,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
 import { CalendarHeatmap, Streamgraph, Treemap } from "./charts";
 import type { TreemapData } from "./charts";
-import { SegmentedControl, Veil } from "./ui";
+import { ColumnHeading, SegmentedControl, Veil } from "./ui";
 import { sessionCountLabel } from "../lib/ingest";
 import {
   calculateActivityStats,
@@ -131,16 +131,12 @@ export function ProjectSummaryPanel({
   return (
     <div className="ah-meta" style={{ "--tint": project.tint } as TintStyle}>
       <div className="ah-meta__head">
-        <span className="ah-colhead">
-          <i />
-          <strong title={project.row.name}>{project.row.name}</strong>
-          <span
-            className="ah-bubble"
-            title={`${visibleSessionCount} sessions in this list`}
-          >
-            {visibleSessionCount}
-          </span>
-        </span>
+        <ColumnHeading
+          name={project.row.name}
+          tint={project.tint}
+          count={visibleSessionCount}
+          countTitle={`${visibleSessionCount} sessions in this list`}
+        />
         <span className="ah-meta__acts">
           {/* the two toggles sit together and the one act sits last, so a
               project with no remote never moves a control that has one */}
@@ -340,15 +336,15 @@ export function PortfolioSummaryPanel({
   return (
     <div className="ah-meta">
       <div className="ah-meta__head">
-        <span className="ah-colhead">
-          {/* the marker keeps the component's shape and spends no hue: this
-              head names a set, and hue in this room names one project */}
-          <i style={{ "--tint": "var(--vf-text-tertiary)" } as TintStyle} />
-          <strong>Projects</strong>
-          <span className="ah-bubble" title={`${projects.length} projects in this list`}>
-            {projects.length}
-          </span>
-        </span>
+        {/* The marker keeps the component's shape and spends no hue: this
+            head names a SET, and hue in this room names one project. */}
+        <ColumnHeading
+          name="Projects"
+          tint="var(--vf-text-tertiary)"
+          title={null}
+          count={projects.length}
+          countTitle={`${projects.length} projects in this list`}
+        />
         <span className="ah-meta__acts">
           <button
             type="button"

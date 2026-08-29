@@ -3,7 +3,6 @@
 // the watermark marks where live began in YOUR reading and never chases the
 // tail; arrival is a notice, not a stolen scroll.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import type { MessageRow, SearchHit, SessionRow } from "@rosetta/protocol";
 import { clock, clockShort, tokenText } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
@@ -12,7 +11,7 @@ import type { DocBlock, ProjectViewModel } from "../lib/model";
 import { documentBlocks, parseSnippet, verbSummary } from "../lib/model";
 import type { SearchResultsViewModel } from "../lib/search-results";
 import { getSessionTitle } from "./sessions/session-display";
-import { EmptyState, ResultGroupHeader } from "./ui";
+import { ColumnHeading, EmptyState, ResultGroupHeader } from "./ui";
 
 function fmtDur(ms: number | null): string {
   if (ms === null || ms <= 0) return "";
@@ -182,21 +181,20 @@ export function TranscriptColumn({
   return (
     <div className="ah-col ah-col--measure" style={{ position: "relative" }}>
       <header>
-        <div className="ah-colhead" style={project ? ({ "--tint": project.tint } as CSSProperties) : undefined}>
-          {searching ? (
-            <span className="ah-eyebrow">Matches</span>
-          ) : session ? (
-            <>
-              <i />
-              <strong title={getSessionTitle(session)}>{getSessionTitle(session)}</strong>
-              <span className="ah-bubble" title={`${feed.rows.length} messages loaded`}>
-                {feed.rows.length}
-              </span>
-            </>
-          ) : (
-            <span className="ah-eyebrow">Transcript</span>
-          )}
-        </div>
+        {searching || session === null ? (
+          // Not naming an object: search names a RESULT SET and an empty
+          // column names itself, so neither earns a marker or a count.
+          <div className="ah-colhead">
+            <span className="ah-eyebrow">{searching ? "Matches" : "Transcript"}</span>
+          </div>
+        ) : (
+          <ColumnHeading
+            name={getSessionTitle(session)}
+            tint={project?.tint ?? null}
+            count={feed.rows.length}
+            countTitle={`${feed.rows.length} messages loaded`}
+          />
+        )}
         <span className="ah-headacts">
           <span className="ah-caption tnum">
             {searchResults
