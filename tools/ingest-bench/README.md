@@ -26,6 +26,57 @@ The external wall clock is the headline for each process. The UI also shows
 may overlap—especially `apply time` and its SQLite subphases—and must not be
 summed into a synthetic total.
 
+### Focused cold-stage profile
+
+For one reproducible cold-path decomposition, the command-line harness selects
+the largest adapter-admitted JSON-lines sources, copies and SHA-256 verifies
+them into a permission-read-only private snapshot, and drives the ordinary
+`rosettad ingest` path. Selection/copy/hash time is reported separately and is
+not charged to cold ingest. The small optional JSON report omits source paths
+and checksum values; the temporary snapshot, raw ledger, SQLite projection, and
+search sidecar are deleted unless `--work-dir` is supplied.
+
+Build the daemon first, then profile the three largest Claude Code sources:
+
+```sh
+cargo build -p rosettad --release
+cd tools/ingest-bench
+npm run profile:cold -- --agent claude-code --count 3 \
+  --report /private/tmp/rosetta-claude-cold-stages.json
+```
+
+Use `--binary PATH` when the desired daemon is not in Cargo's configured target
+directory. Use `--work-dir NEW_DIR` only when private artifacts are needed for
+manual inspection; the directory must not exist yet and must stay out of
+version control.
+
+The report is intentionally honest about the current measurement boundary:
+`AgentAdapter::ingest_line` combines parse and normalize, while generic
+fold/merge is not a standalone stage. Those rows are marked combined instead
+of receiving inferred costs. Stage wall clocks and nested profiler timers are
+both retained, and nested parent/child timers are never added together.
+
+The Electron workbench exposes the same machinery in its **JSONL audit** tab.
+Choose any local JSONL/NDJSON files, then choose the adapter and one of the
+JSON-lines streams that adapter actually drives. The workbench:
+
+- shows file size, torn-tail status, and bounded head/tail records as both raw
+  UTF-8 and parsed JSON without loading a large transcript into the renderer;
+- materializes a safe path from the selected canonical stream glob, then asks
+  `rosettad sources` to verify that the staged file is genuinely admitted;
+- freezes and checksum-verifies a read-only snapshot before running the normal
+  release ingest path;
+- charts all eleven conceptual boundaries, preserving combined/unobservable
+  rows instead of inventing timings;
+- compares raw source, ledger, SQLite, and FTS5 sidecar sizes and exposes parse,
+  drift, message, merge, session, validation, and publication evidence; and
+- retains the private snapshot and output artifacts so the resulting projection
+  can be opened directly in the Database tab for a full row-level audit.
+
+“Any JSONL” means any file can be inspected. Ingestion still requires a real
+adapter grammar: selecting the wrong stream is expected to surface unknown or
+hard-error evidence, not silently reinterpret the file.
+
 Metadata and full ingest perform their own prerequisite discovery internally.
 Every click gets a new database and ledger, so running meta cannot warm or
 mutate a later full cold run. The app does not delete or overwrite earlier

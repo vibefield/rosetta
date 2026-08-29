@@ -19,6 +19,11 @@ const state = {
   currentObject: null,
   tableOffset: 0,
   pageSize: 100,
+  auditFiles: [],
+  auditStreams: [],
+  auditResult: null,
+  auditCompletedStages: new Set(),
+  busyKind: null,
 };
 const numberFormatter = new Intl.NumberFormat();
 const timestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
@@ -86,11 +91,24 @@ function updateRunControls() {
   $$('.run-stage').forEach((button) => { button.disabled = disabled; });
 }
 
-function setBusy(busy, label = 'Ready') {
+function updateAuditControls() {
+  const configured = state.auditFiles.length > 0 && Boolean($('#audit-stream').value);
+  $('#audit-run').disabled = state.busy || !configured;
+  $('#audit-choose-files').disabled = state.busy;
+  $('#audit-agent').disabled = state.busy;
+  $('#audit-stream').disabled = state.busy || state.auditStreams.length === 0;
+  $('#audit-binary').disabled = state.busy;
+  $('#audit-output').disabled = state.busy;
+}
+
+function setBusy(busy, label = 'Ready', kind = null) {
   state.busy = busy;
+  state.busyKind = busy ? (kind || 'benchmark') : null;
   $('#discover-button').disabled = busy;
   updateRunControls();
-  $('#stop-button').disabled = !busy;
+  updateAuditControls();
+  $('#stop-button').disabled = !busy || state.busyKind === 'audit';
+  $('#audit-stop').disabled = !busy || state.busyKind !== 'audit';
   $('#binary-input').disabled = busy;
   $('#home-input').disabled = busy;
   $('#output-input').disabled = busy;
@@ -277,6 +295,230 @@ function benchmarkEvent(message) {
   if (message.type === 'run-finish') {
     state.report = message.report;
     renderReport(message.report);
+  }
+}
+
+function auditSummaryItem(label, value) {
+  const item = document.createElement('div'); item.className = 'summary-item';
+  const key = document.createElement('span'); key.textContent = label;
+  const val = document.createElement('strong'); val.textContent = value; val.title = value;
+  item.append(key, val);
+  return item;
+}
+
+async function loadAuditStreams() {
+  const select = $('#audit-stream');
+  select.replaceChildren();
+  const pending = document.createElement('option'); pending.value = ''; pending.textContent = 'Loading adapter streams…';
+  select.append(pending);
+  select.disabled = true;
+  try {
+    state.auditStreams = await window.rosetta.auditStreams({
+      binary: $('#audit-binary').value,
+      agent: $('#audit-agent').value,
+    });
+    select.replaceChildren();
+    if (!state.auditStreams.length) {
+      const empty = document.createElement('option'); empty.value = ''; empty.textContent = 'No JSONL production driver'; select.append(empty);
+    } else {
+      for (const stream of state.auditStreams) {
+        const option = document.createElement('option');
+        option.value = stream.stream;
+        option.textContent = `${stream.stream} · ${stream.glob}`;
+        option.title = `${stream.driver} · ${stream.discipline} · ${stream.glob}`;
+        select.append(option);
+      }
+    }
+  } catch (error) {
+    state.auditStreams = [];
+    select.replaceChildren();
+    const failed = document.createElement('option'); failed.value = ''; failed.textContent = 'Could not load streams'; select.append(failed);
+    toast(errorMessage(error), 'error');
+  } finally {
+    updateAuditControls();
+  }
+}
+
+function renderAuditFiles() {
+  const root = $('#audit-files'); root.replaceChildren();
+  $('#audit-file-total').textContent = state.auditFiles.length
+    ? `${formatNumber(state.auditFiles.length)} file${state.auditFiles.length === 1 ? '' : 's'} · ${formatBytes(state.auditFiles.reduce((sum, file) => sum + file.bytes, 0))}`
+    : 'no files';
+  if (!state.auditFiles.length) {
+    root.className = 'audit-files empty-state';
+    root.textContent = 'Choose one or more JSONL files. Preview reads are bounded; the ingest itself streams every complete record.';
+    $('#audit-preview-card').classList.add('hidden');
+    updateAuditControls();
+    return;
+  }
+  root.className = 'audit-files';
+  for (const file of state.auditFiles) {
+    const row = document.createElement('div'); row.className = 'audit-file';
+    const name = document.createElement('strong'); name.textContent = file.name; name.title = file.file;
+    const full = document.createElement('code'); full.textContent = file.file; full.title = file.file;
+    const size = document.createElement('span'); size.textContent = formatBytes(file.bytes);
+    row.append(name, size, full); root.append(row);
+  }
+  const picker = $('#audit-preview-file'); picker.replaceChildren();
+  for (const file of state.auditFiles) {
+    const option = document.createElement('option'); option.value = file.file; option.textContent = file.name; option.title = file.file; picker.append(option);
+  }
+  $('#audit-preview-card').classList.remove('hidden');
+  renderAuditPreview();
+  updateAuditControls();
+}
+
+function renderAuditPreview() {
+  const selected = state.auditFiles.find((file) => file.file === $('#audit-preview-file').value) || state.auditFiles[0];
+  if (!selected) return;
+  $('#audit-preview-file').value = selected.file;
+  $('#audit-preview-title').textContent = selected.name;
+  const stats = $('#audit-preview-stats'); stats.replaceChildren();
+  stats.append(
+    auditSummaryItem('file size', formatBytes(selected.bytes)),
+    auditSummaryItem('preview I/O', formatBytes(selected.previewBytesRead)),
+    auditSummaryItem('sampled records', formatNumber(selected.records.length)),
+    auditSummaryItem('trailing newline', selected.trailingNewline ? 'yes' : 'no — torn tail'),
+  );
+  const records = $('#audit-records'); records.replaceChildren();
+  if (!selected.records.length) {
+    const empty = document.createElement('div'); empty.className = 'empty-state'; empty.textContent = 'No complete record fits in the bounded head/tail windows.'; records.append(empty); return;
+  }
+  for (const record of selected.records) {
+    const detail = document.createElement('details'); detail.className = 'audit-record';
+    const summary = document.createElement('summary');
+    const title = document.createElement('strong');
+    title.textContent = record.ordinal ? `record ${formatNumber(record.ordinal)}` : `${record.location} sample`;
+    const facts = document.createElement('span'); facts.textContent = `offset ${formatNumber(record.offset)} · ${formatBytes(record.bytes)}${record.truncated ? ' · preview truncated' : ''}`;
+    const status = document.createElement('span');
+    status.className = record.validJson ? 'record-valid' : 'record-invalid';
+    status.textContent = record.validJson ? `valid ${record.topLevel}` : record.complete ? 'invalid JSON' : 'incomplete tail';
+    summary.append(title, facts, status); detail.append(summary);
+    const body = document.createElement('div'); body.className = 'audit-record-body';
+    const rawPane = document.createElement('section'); rawPane.className = 'audit-record-pane';
+    const rawLabel = document.createElement('div'); rawLabel.className = 'section-label'; rawLabel.textContent = 'Raw UTF-8';
+    const raw = document.createElement('pre'); raw.textContent = record.raw; rawPane.append(rawLabel, raw);
+    const parsedPane = document.createElement('section'); parsedPane.className = 'audit-record-pane';
+    const parsedLabel = document.createElement('div'); parsedLabel.className = 'section-label'; parsedLabel.textContent = record.validJson ? `Parsed · keys: ${record.keys.join(', ') || 'none'}` : 'Parse evidence';
+    const parsed = document.createElement('pre'); parsed.textContent = record.parsed || record.parseError || 'No parsed preview'; parsedPane.append(parsedLabel, parsed);
+    body.append(rawPane, parsedPane); detail.append(body); records.append(detail);
+  }
+}
+
+async function chooseAuditFiles() {
+  try {
+    const files = await window.rosetta.chooseJsonl();
+    if (!files.length) return;
+    setGlobal('Inspecting JSONL', 'running');
+    state.auditFiles = await Promise.all(files.map((file) => window.rosetta.inspectJsonl(file)));
+    renderAuditFiles();
+    setGlobal('Ready');
+  } catch (error) {
+    setGlobal('JSONL inspection failed', 'failed');
+    toast(errorMessage(error), 'error');
+  }
+}
+
+const auditPhaseOrder = ['discovery', 'metadata', 'stream', 'ledger-durability', 'finalize-publish', 'search'];
+
+function resetAuditProgress() {
+  state.auditCompletedStages.clear();
+  $('#audit-progress-card').classList.remove('hidden');
+  $('#audit-result').classList.add('hidden');
+  $('#audit-progress-label').textContent = 'freezing and verifying snapshot';
+  $('#audit-progress-bar').style.width = '4%';
+  const root = $('#audit-progress-stages'); root.replaceChildren();
+  for (const stage of auditPhaseOrder) {
+    const chip = document.createElement('span'); chip.className = 'audit-progress-stage'; chip.dataset.stage = stage; chip.textContent = stage; root.append(chip);
+  }
+}
+
+function auditEvent(message) {
+  if (message.type === 'log') appendLog(message);
+  if (message.type === 'audit-stage') {
+    const stage = message.event.stage;
+    state.auditCompletedStages.add(stage);
+    const chip = $(`#audit-progress-stages [data-stage="${stage}"]`);
+    if (chip) {
+      chip.classList.add('complete');
+      chip.textContent = `${stage} · ${formatDuration(message.event.wallMs)}`;
+    }
+    const completed = auditPhaseOrder.filter((name) => state.auditCompletedStages.has(name)).length;
+    $('#audit-progress-bar').style.width = `${Math.max(4, completed / auditPhaseOrder.length * 100)}%`;
+    $('#audit-progress-label').textContent = `${stage} complete`;
+  }
+  if (message.type === 'audit-failed' || message.type === 'audit-cancelled') {
+    $('#audit-progress-label').textContent = message.type === 'audit-cancelled' ? 'cancelled' : 'failed';
+  }
+}
+
+function renderAuditResult(audit) {
+  state.auditResult = audit;
+  $('#audit-progress-card').classList.add('hidden');
+  $('#audit-result').classList.remove('hidden');
+  const report = audit.report;
+  const outcome = report.outcome;
+  const stats = $('#audit-result-stats'); stats.replaceChildren();
+  addStat(stats, 'cold wall', formatDuration(report.coldIngest.processWallMs));
+  addStat(stats, 'raw input', formatBytes(report.selection.totalSourceBytes));
+  addStat(stats, 'raw ledger', formatBytes(outcome.rawLedgerBytes));
+  addStat(stats, 'SQLite', formatBytes(outcome.sqliteBytes));
+  addStat(stats, 'FTS5 sidecar', formatBytes(outcome.searchSidecarBytes));
+  addStat(stats, 'records', formatNumber(outcome.records));
+  addStat(stats, 'messages', formatNumber(outcome.messagesInserted));
+  addStat(stats, 'validation', outcome.prePublicationValidationPassed ? 'passed' : 'failed');
+
+  const measured = report.coldIngest.stages.filter((stage) => stage.measuredMs != null);
+  const maximum = Math.max(1, ...measured.map((stage) => stage.measuredMs));
+  const chart = $('#audit-stage-chart'); chart.replaceChildren();
+  for (const stage of report.coldIngest.stages) {
+    const row = document.createElement('div'); row.className = 'audit-chart-row';
+    const label = document.createElement('div'); label.className = 'audit-chart-label'; label.textContent = `${String(stage.step).padStart(2, '0')} ${stage.name}`; label.title = stage.name;
+    const track = document.createElement('div'); track.className = 'audit-chart-track';
+    const bar = document.createElement('div'); bar.className = `audit-chart-bar${stage.measuredMs == null ? ' combined' : ''}`;
+    bar.style.width = stage.measuredMs == null ? '100%' : `${Math.max(0.2, stage.measuredMs / maximum * 100)}%`;
+    track.append(bar);
+    const value = document.createElement('div'); value.className = 'audit-chart-value'; value.textContent = stage.measuredMs == null ? 'combined' : formatDuration(stage.measuredMs);
+    row.append(label, track, value); chart.append(row);
+  }
+
+  const table = $('#audit-stage-table'); table.replaceChildren();
+  for (const stage of report.coldIngest.stages) {
+    const row = document.createElement('tr');
+    const percent = stage.measuredMs == null ? '—' : `${(stage.measuredMs / report.coldIngest.processWallMs * 100).toFixed(1)}%`;
+    for (const value of [stage.step, stage.name, stage.measuredMs == null ? 'combined' : formatDuration(stage.measuredMs), percent, stage.basis]) {
+      const cell = document.createElement('td'); cell.textContent = value; if (value !== stage.basis) cell.className = 'mono'; row.append(cell);
+    }
+    table.append(row);
+  }
+  const facts = $('#audit-fact-list'); facts.replaceChildren();
+  for (const fact of [
+    ...report.implementationFacts,
+    report.preparation.pageCacheNote,
+    `Snapshot preparation took ${formatDuration(report.preparation.totalWallMs)} and is excluded from the cold wall.`,
+  ]) {
+    const item = document.createElement('li'); item.textContent = fact; facts.append(item);
+  }
+}
+
+async function runJsonlAudit() {
+  resetAuditProgress();
+  setBusy(true, 'JSONL audit running', 'audit');
+  try {
+    const audit = await window.rosetta.runJsonlAudit({
+      binary: $('#audit-binary').value,
+      agent: $('#audit-agent').value,
+      stream: $('#audit-stream').value,
+      files: state.auditFiles.map((file) => file.file),
+      outputDir: $('#audit-output').value,
+    });
+    renderAuditResult(audit);
+    toast('JSONL audit complete. Private projection and evidence are retained locally.');
+  } catch (error) {
+    setGlobal('JSONL audit failed', 'failed');
+    toast(errorMessage(error), 'error');
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -692,12 +934,35 @@ async function init() {
   $('#binary-input').value = defaults.binary;
   $('#home-input').value = defaults.home;
   $('#output-input').value = defaults.outputDir;
+  $('#audit-binary').value = defaults.binary;
+  $('#audit-output').value = defaults.outputDir;
+  const auditAgent = $('#audit-agent');
+  for (const agent of defaults.agents) {
+    const option = document.createElement('option'); option.value = agent; option.textContent = agent; auditAgent.append(option);
+  }
+  auditAgent.value = defaults.agents.includes('claude-code') ? 'claude-code' : defaults.agents[0];
   setBusy(false);
 
   $$('.tab').forEach((tab) => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
   $('#binary-browse').addEventListener('click', async () => { const file = await window.rosetta.chooseBinary(); if (file) $('#binary-input').value = file; });
   $('#home-browse').addEventListener('click', async () => { const dir = await window.rosetta.chooseDirectory('Choose the home directory to probe'); if (dir) $('#home-input').value = dir; });
   $('#output-browse').addEventListener('click', async () => { const dir = await window.rosetta.chooseDirectory('Choose benchmark output directory'); if (dir) $('#output-input').value = dir; });
+  $('#audit-binary-browse').addEventListener('click', async () => {
+    const file = await window.rosetta.chooseBinary();
+    if (file) { $('#audit-binary').value = file; await loadAuditStreams(); }
+  });
+  $('#audit-output-browse').addEventListener('click', async () => {
+    const dir = await window.rosetta.chooseDirectory('Choose private JSONL audit output directory');
+    if (dir) $('#audit-output').value = dir;
+  });
+  $('#audit-agent').addEventListener('change', loadAuditStreams);
+  $('#audit-stream').addEventListener('change', updateAuditControls);
+  $('#audit-choose-files').addEventListener('click', chooseAuditFiles);
+  $('#audit-preview-file').addEventListener('change', renderAuditPreview);
+  $('#audit-run').addEventListener('click', runJsonlAudit);
+  $('#audit-stop').addEventListener('click', async () => { await window.rosetta.cancelJsonlAudit(); setGlobal('Stopping JSONL audit', 'running'); });
+  $('#audit-open-db').addEventListener('click', () => state.auditResult && openDatabase(state.auditResult.paths.db));
+  $('#audit-reveal').addEventListener('click', () => state.auditResult && window.rosetta.reveal(state.auditResult.paths.report || state.auditResult.paths.workDir));
   $('#discover-button').addEventListener('click', runDiscovery);
   $$('.run-stage').forEach((button) => button.addEventListener('click', () => runStage(button.dataset.stage)));
   $('#stop-button').addEventListener('click', async () => { await window.rosetta.cancelBenchmark(); setGlobal('Stopping daemon', 'running'); });
@@ -724,6 +989,8 @@ async function init() {
   $('#close-dialog').addEventListener('click', () => $('#cell-dialog').close());
   window.rosetta.onDaemonEvent((message) => { if (message.type === 'log') appendLog(message); });
   window.rosetta.onBenchmarkEvent(benchmarkEvent);
+  window.rosetta.onAuditEvent(auditEvent);
+  await loadAuditStreams();
 }
 
 init().catch((error) => toast(errorMessage(error), 'error'));

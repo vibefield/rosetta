@@ -7,8 +7,9 @@
   "scripts": {
     "prestart": "cargo build -p rosettad --release",
     "start": "electron .",
+    "profile:cold": "node scripts/profile-cold-start.js",
     "test": "node --test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/meta-tree.js && node --check src/renderer/app.js"
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/lib/jsonl-audit.js && node --check scripts/profile-cold-start.js && node --check src/renderer/meta-tree.js && node --check src/renderer/app.js"
   },
   "devDependencies": {
     "electron": "44.0.0"

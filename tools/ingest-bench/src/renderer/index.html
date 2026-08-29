@@ -14,6 +14,7 @@
     <div class="wordmark"><span class="mark">R</span><span>rosetta</span><b>ingest bench</b></div>
     <nav class="tabs" aria-label="Workbench views">
       <button class="tab active" data-tab="benchmark">Benchmark</button>
+      <button class="tab" data-tab="audit">JSONL audit</button>
       <button class="tab" data-tab="meta">Meta data</button>
       <button class="tab" data-tab="database">Database</button>
       <button class="tab" data-tab="logs">Daemon log <span id="log-count" class="count">0</span></button>
@@ -93,6 +94,84 @@
             </div>
             <div id="result-summary" class="result-summary"></div>
             <div class="table-shell"><table><thead><tr><th>phase</th><th>wall</th><th>walk</th><th>skim</th><th>read</th><th>normalize</th><th>apply</th><th>FTS</th></tr></thead><tbody id="phase-table"></tbody></table></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="audit-view" class="view">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">immutable input · production adapter · private artifacts</div>
+          <h1>JSONL cold-path auditor</h1>
+          <p class="sub">Inspect bounded raw and parsed records from any JSONL, map it explicitly to one adapter stream grammar, then profile a clean production ingest through ledger, canonical SQLite, validation, publication, and detached FTS5.</p>
+        </div>
+        <div class="head-actions"><button id="audit-stop" class="button danger" disabled>Stop audit</button></div>
+      </div>
+
+      <div class="audit-layout">
+        <aside class="audit-setup card">
+          <div class="section-label">Audit configuration</div>
+          <label class="field">
+            <span>rosettad binary</span>
+            <div class="path-control"><input id="audit-binary" spellcheck="false"><button id="audit-binary-browse" class="icon-button" aria-label="Choose binary">…</button></div>
+          </label>
+          <label class="field">
+            <span>adapter grammar</span>
+            <select id="audit-agent"></select>
+          </label>
+          <label class="field">
+            <span>admitted JSONL stream</span>
+            <select id="audit-stream"><option value="">Load an adapter first</option></select>
+          </label>
+          <label class="field">
+            <span>private audit output</span>
+            <div class="path-control"><input id="audit-output" spellcheck="false"><button id="audit-output-browse" class="icon-button" aria-label="Choose output directory">…</button></div>
+          </label>
+          <button id="audit-choose-files" class="button secondary wide">Choose JSONL files…</button>
+          <button id="audit-run" class="button primary wide" disabled>Freeze snapshot and run audit</button>
+          <p class="hint">Adapter + stream define meaning. Snapshot copy/hash time is shown but excluded from cold ingest. Audit artifacts contain private content and are retained for inspection.</p>
+        </aside>
+
+        <div class="audit-main">
+          <section class="card audit-input-card">
+            <div class="panel-head">
+              <div><div class="section-label">Input evidence</div><h2>Selected JSONL</h2></div>
+              <span id="audit-file-total" class="inline-count">no files</span>
+            </div>
+            <div id="audit-files" class="audit-files empty-state">Choose one or more JSONL files. Preview reads are bounded; the ingest itself streams every complete record.</div>
+          </section>
+
+          <section id="audit-preview-card" class="card audit-preview-card hidden">
+            <div class="panel-head">
+              <div><div class="section-label">Bounded content inspection</div><h2 id="audit-preview-title">Record preview</h2></div>
+              <select id="audit-preview-file" aria-label="Choose a selected file to preview"></select>
+            </div>
+            <div id="audit-preview-stats" class="result-summary"></div>
+            <div id="audit-records" class="audit-records"></div>
+          </section>
+
+          <section id="audit-progress-card" class="card audit-progress-card hidden">
+            <div class="panel-head">
+              <div><div class="section-label">Production path</div><h2>Cold ingest in progress</h2></div>
+              <strong id="audit-progress-label" class="mono-label">preparing snapshot</strong>
+            </div>
+            <div class="audit-progress-track"><i id="audit-progress-bar"></i></div>
+            <div id="audit-progress-stages" class="audit-progress-stages"></div>
+          </section>
+
+          <section id="audit-result" class="card audit-result hidden">
+            <div class="panel-head">
+              <div><div class="section-label">Measured result</div><h2>Cold-path decomposition</h2></div>
+              <div class="mini-actions"><button id="audit-open-db" class="button secondary small">Open projection</button><button id="audit-reveal" class="button secondary small">Reveal artifacts</button></div>
+            </div>
+            <div id="audit-result-stats" class="stat-grid audit-stat-grid"></div>
+            <div class="audit-chart-shell">
+              <div class="section-label">Measured stage costs · parent/child overlaps remain separate</div>
+              <div id="audit-stage-chart" class="audit-stage-chart"></div>
+            </div>
+            <div class="table-shell"><table><thead><tr><th>step</th><th>boundary</th><th>cost</th><th>% wall</th><th>measurement basis</th></tr></thead><tbody id="audit-stage-table"></tbody></table></div>
+            <details class="audit-facts"><summary>Implementation order and measurement caveats</summary><ul id="audit-fact-list"></ul></details>
           </section>
         </div>
       </div>

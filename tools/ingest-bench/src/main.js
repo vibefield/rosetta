@@ -6,7 +6,8 @@ const { spawnSync } = require('node:child_process');
 
 const { BenchmarkRun } = require('./lib/benchmark');
 const { ProjectionDatabase } = require('./lib/database');
-const { assertDirectory, assertFile, discover } = require('./lib/daemon');
+const { AGENTS, assertDirectory, assertFile, discover } = require('./lib/daemon');
+const { JsonlAuditRun, inspectJsonl, streamSpecs } = require('./lib/jsonl-audit');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const projectionDatabase = new ProjectionDatabase();
@@ -14,6 +15,7 @@ const metaDatabase = new ProjectionDatabase();
 let window = null;
 let activeRun = null;
 let activeDiscovery = null;
+let activeAudit = null;
 
 function send(channel, payload) {
   if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
@@ -77,7 +79,17 @@ ipcMain.handle('app:defaults', () => ({
   binary: defaultBinary(),
   home: os.homedir(),
   outputDir: path.join(app.getPath('documents'), 'Rosetta Ingest Bench'),
+  agents: [...AGENTS],
 }));
+
+ipcMain.handle('dialog:jsonl', async () => {
+  const result = await dialog.showOpenDialog(window, {
+    title: 'Choose JSONL files to audit',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'JSON Lines', extensions: ['jsonl', 'ndjson'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
 
 ipcMain.handle('dialog:binary', async () => {
   const result = await dialog.showOpenDialog(window, {
@@ -144,6 +156,30 @@ ipcMain.handle('benchmark:cancel', () => {
   return Boolean(activeRun);
 });
 
+ipcMain.handle('audit:inspect', (_event, file) => inspectJsonl(file));
+
+ipcMain.handle('audit:streams', async (_event, config) => {
+  if (activeRun || activeDiscovery || activeAudit) throw new Error('another daemon process is already running');
+  return streamSpecs(assertFile(config.binary, 'rosettad binary'), config.agent);
+});
+
+ipcMain.handle('audit:run', async (_event, config) => {
+  if (activeRun || activeDiscovery || activeAudit) throw new Error('another daemon process is already running');
+  try {
+    activeAudit = new JsonlAuditRun(config, (event) => send('audit:event', event));
+    return await activeAudit.execute();
+  } catch (error) {
+    throw new Error(JSON.stringify(serializeFailure(error)));
+  } finally {
+    activeAudit = null;
+  }
+});
+
+ipcMain.handle('audit:cancel', () => {
+  activeAudit?.cancel();
+  return Boolean(activeAudit);
+});
+
 ipcMain.handle('meta-database:open', (_event, file) => metaDatabase.open(file));
 ipcMain.handle('meta-database:data', () => metaDatabase.metaData());
 
@@ -167,6 +203,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   activeRun?.cancel();
+  activeAudit?.cancel();
   metaDatabase.close();
   projectionDatabase.close();
 });
