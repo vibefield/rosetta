@@ -482,6 +482,21 @@ function renderAuditResult(audit) {
     row.append(label, track, value); chart.append(row);
   }
 
+  const explanations = $('#audit-step-explanations'); explanations.replaceChildren();
+  for (const stage of report.coldIngest.stages) {
+    const card = document.createElement('article'); card.className = 'audit-step-explanation';
+    const heading = document.createElement('div'); heading.className = 'audit-step-heading';
+    const number = document.createElement('span'); number.className = 'audit-step-number'; number.textContent = String(stage.step).padStart(2, '0');
+    const title = document.createElement('h4'); title.textContent = stage.name;
+    const cost = document.createElement('strong'); cost.textContent = stage.measuredMs == null ? 'combined timing' : formatDuration(stage.measuredMs);
+    heading.append(number, title, cost);
+    const purposeLabel = document.createElement('div'); purposeLabel.className = 'audit-explanation-label'; purposeLabel.textContent = 'Purpose';
+    const purpose = document.createElement('p'); purpose.textContent = stage.purpose;
+    const workLabel = document.createElement('div'); workLabel.className = 'audit-explanation-label'; workLabel.textContent = 'What it actually does';
+    const work = document.createElement('p'); work.textContent = stage.actualWork;
+    card.append(heading, purposeLabel, purpose, workLabel, work); explanations.append(card);
+  }
+
   const table = $('#audit-stage-table'); table.replaceChildren();
   for (const stage of report.coldIngest.stages) {
     const row = document.createElement('tr');

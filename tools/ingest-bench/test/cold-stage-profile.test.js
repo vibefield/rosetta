@@ -62,6 +62,12 @@ publication time 8.0 ms
   assert.equal(report.stages[9].measuredMs, 8);
   assert.equal(report.stages[10].measuredMs, 25);
   assert.equal(report.processResidualMs, 8);
+  for (const stage of report.stages) {
+    assert.ok(stage.purpose.length > 40, `step ${stage.step} needs a useful purpose`);
+    assert.ok(stage.actualWork.length > 60, `step ${stage.step} needs concrete implementation text`);
+  }
+  assert.match(report.stages[3].actualWork, /share one call and therefore one timer/);
+  assert.match(report.stages[8].actualWork, /before global SQLite finalization/);
 });
 
 test('safeJoin rejects traversal outside a runtime root', () => {

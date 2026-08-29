@@ -67,7 +67,8 @@ JSON-lines streams that adapter actually drives. The workbench:
 - freezes and checksum-verifies a read-only snapshot before running the normal
   release ingest path;
 - charts all eleven conceptual boundaries, preserving combined/unobservable
-  rows instead of inventing timings;
+  rows instead of inventing timings, and explains both why each boundary exists
+  and what the current production implementation actually does there;
 - compares raw source, ledger, SQLite, and FTS5 sidecar sizes and exposes parse,
   drift, message, merge, session, validation, and publication evidence; and
 - retains the private snapshot and output artifacts so the resulting projection

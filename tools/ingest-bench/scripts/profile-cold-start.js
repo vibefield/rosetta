@@ -325,6 +325,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 1,
         name: 'discovery',
+        purpose: 'Find the selected agent installation and quantify candidate input before ingest creates public state.',
+        actualWork: 'Expands the adapter’s canonical data root and walks only regular files claimed by its layout, collecting file count, bytes, and newest modification time. It does not read file bodies.',
         measuredMs: round(phases.discovery.wallMs),
         basis: 'phase wall',
         details: { walkMs: round(metricMs(phases.discovery.metrics, 'walk time')) },
@@ -332,6 +334,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 2,
         name: 'bounded metadata skim',
+        purpose: 'Create enough project and session structure for navigation without paying to read complete transcripts.',
+        actualWork: 'Walks matching files again, classifies their streams, reads bounded head/tail windows plus any bounded fallback, calls the adapter skim hook, and writes runtime/project/session metadata, source cursors, and metadata-ledger frames.',
         measuredMs: round(phases.metadata.wallMs),
         basis: 'metadata phase wall (includes its filtered walk and metadata writes)',
         details: {
@@ -344,6 +348,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 3,
         name: 'stream and frame full source records',
+        purpose: 'Turn source bytes into complete, restartable raw-record boundaries while detecting appends and rewrites safely.',
+        actualWork: 'The tailer reads bounded batches, checks generation/anchor state, frames newline-terminated records, and preserves a torn trailing suffix for a later run. This timer covers read/framing only; raw-ledger append happens later in the stream phase after normalization.',
         measuredMs: round(readMs),
         basis: 'tail read/framing timer; stream phase wall is reported in details',
         details: {
@@ -359,6 +365,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 4,
         name: 'parse',
+        purpose: 'Identify the native record variant and validate the raw JSON shape before it can affect canonical state.',
+        actualWork: 'The selected agent adapter deserializes JSON and dispatches on its native record type inside AgentAdapter::ingest_line. Parse and normalization currently share one call and therefore one timer.',
         measuredMs: null,
         basis: 'not separately observable: adapter ingest_line combines parse and normalize',
         details: {},
@@ -366,6 +374,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 5,
         name: 'normalize (including parse)',
+        purpose: 'Translate agent-specific events into Rosetta’s stable, backend-independent IngestOp vocabulary.',
+        actualWork: 'The adapter applies per-file context and checkpointed state, derives identities and usage deltas, emits canonical operations, and reports unknown or malformed known records. The completed raw batch is then appended/checkpointed in the ledger before SQLite apply.',
         measuredMs: round(normalizeMs),
         basis: 'combined adapter ingest_line timer',
         details: {
@@ -378,6 +388,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 6,
         name: 'fold / merge',
+        purpose: 'Reconcile records that describe different pieces of one logical message, tool call, usage event, or workspace fact.',
+        actualWork: 'Workspace enrichment runs in memory, while tool-result, usage, pending-record, and deterministic-identity merges happen inside Store::apply. There is no standalone generic fold transaction or exclusive timer today.',
         measuredMs: null,
         basis: 'not a standalone boundary: enrichment is unmetered and merge work is inside canonical apply',
         details: {},
@@ -385,6 +397,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 7,
         name: 'canonical SQLite apply',
+        purpose: 'Advance canonical rows and the source checkpoint atomically so the projection can never outrun its replay position.',
+        actualWork: 'One SQLite transaction reconciles the source generation, applies IngestOps, performs message/tool/usage/session and pending merges, writes the checkpoint with compare-and-swap semantics, records search dirtiness, and commits.',
         measuredMs: round(applyMs),
         basis: 'end-to-end Store::apply timers; child timers overlap this parent',
         details: {
@@ -397,6 +411,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 8,
         name: 'global finalization',
+        purpose: 'Build global ordering, aggregates, indexes, and integrity evidence that are cheaper or only correct after every source lands.',
+        actualWork: 'Verifies every source generation is complete, renumbers session timelines, rebuilds hourly usage buckets, creates deferred indexes and runs ANALYZE, marks the projection canonical-ready, commits, runs quick_check and foreign_key_check, then restores live pragmas.',
         measuredMs: round(metricMs(finalize, 'apply time')),
         basis: 'finish_bulk_load end-to-end timer',
         details: {
@@ -412,6 +428,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 9,
         name: 'raw-ledger durability barrier',
+        purpose: 'Make the raw replay authority durable before the private projection and ledger are allowed to become public.',
+        actualWork: 'Flushes buffered ledger frames and fsyncs the segment and required directories. In the current private cold path this barrier executes before global SQLite finalization, despite appearing as step 9 in the conceptual diagram.',
         measuredMs: round(phases['ledger-durability'].wallMs),
         basis: 'phase wall around deferred ledger flush/fsync',
         details: {
@@ -424,6 +442,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 10,
         name: 'atomic publish',
+        purpose: 'Expose the validated ledger/projection pair without readers ever observing a half-built database.',
+        actualWork: 'Closes and reopens the scratch SQLite file, checkpoints it into single-file form, preserves permissions, fsyncs it, atomically promotes the staged ledger directory, and atomically installs the finished projection.',
         measuredMs: round(metricMs(finalize, 'publication time')),
         basis: 'publication timer inside finalize-publish phase',
         details: {},
@@ -431,6 +451,8 @@ function buildStageReport(events, processWallMs, agent) {
       {
         step: 11,
         name: 'detached FTS5 search build',
+        purpose: 'Provide ranked full-text retrieval as a disposable projection while SQLite remains the canonical transactional store.',
+        actualWork: 'The search worker reads canonical searchable rows into a new FTS5 sidecar generation and advances its projection revision/readiness. The sidecar is physically detached and rebuildable; this finite CLI currently waits for it to become ready.',
         measuredMs: round(phases.search.wallMs),
         basis: 'search worker synchronization phase wall',
         details: {
