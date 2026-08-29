@@ -48,19 +48,22 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
 runtime adapters are registered in `rosettad`. The generic pipeline handles the
 JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrites,
 deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
-recovery, and an append-only checksummed raw ledger. `rebuild` replays the complete
-ledger into a private projection and atomically installs it only after validation;
-fresh ingest/watch backfills use the same private cold-load path, deferring FTS,
-rollups, and read indexes until publication. Live batches retain same-transaction
-derived-state maintenance with indexed provenance and coalesced bucket repairs;
-ordinary schema-version mismatches still fail closed so rebuild is always explicit.
-The store hot tier, in-process subscription hub, localhost HTTP/WebSocket transport,
-backend-neutral protocol, generated TypeScript bindings, and the `SearchBackend` seam
-with synchronous FTS5 as its reference implementation are implemented. A feature-gated,
-benchmark-only Tantivy prototype clears the frozen build, latency, filter, and deterministic
-tie-break gates, but production adoption is deferred pending judged relevance, product query
-weighting, an accepted 2.26× FTS storage margin, and the live/recovery gates. Consumer migrations
-and the two uncaptured roster agents remain Phase 4/Phase 1 work.
+recovery, and an append-only checksummed raw ledger. Fresh `serve` creates the public
+projection immediately: it skims every enrolled runtime first, reveals the first
+canonical list session, then interleaves runtimes round-robin with per-session boost.
+Interrupted progress is durable and resumable. Finite `ingest` and explicit `rebuild`
+remain private, validated, atomic publication paths.
+
+Projection schema 7 keeps canonical transactions, reconciliation, rollups, and joins in
+SQLite while production FTS5 lives in a disposable detached sidecar. The asynchronous
+worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
+revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
+Canonical and search readiness are independently surfaced. The store hot tier,
+subscription hub, localhost HTTP/WebSocket transport, backend-neutral protocol, and
+generated TypeScript bindings are implemented. A feature-gated Tantivy prototype remains
+benchmark-only pending judged relevance, product query weighting, storage acceptance, and
+production lifecycle evidence. Consumer migrations and the two uncaptured roster agents
+remain Phase 4/Phase 1 work.
 
 ## Repo map
 
@@ -79,7 +82,7 @@ crates/                    all Rust crates
   core/ capture/           LAYER 2 model, discovery, JSONL/SQLite capture, ledger, watch
   pipeline/ store/         LAYER 2 backfill/live/rebuild orchestration + projection/hot tier
   protocol/ server/        LAYER 3 wire contract + axum REST/WS runtime
-  search/                  backend-neutral query/readiness seam + FTS5 reference
+  search/                  backend-neutral query/readiness seam + detached FTS5 worker
   rosettad/                discover, ingest, watch, serve, and atomic rebuild CLI
   search-bench/            frozen-input FTS percentile campaign harness
 clients/                   TypeScript consumers                       [Phase 4]

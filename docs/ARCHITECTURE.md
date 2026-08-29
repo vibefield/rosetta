@@ -12,61 +12,36 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
-> **Implementation checkpoint (2026-08-28).** This document describes the target
-> architecture. Nine ground-truth/runtime-adapter packs are registered. The generic
-> runtime handles adapter-selected JSONL, bounded rewrite-in-place document snapshots,
-> and SQLite snapshots, including virtual-session membership and whole-source deletion;
-> generation-staged
-> reconciliation, deterministic adapter checkpoints, FTS and rollups, live watching
-> with polling/audit recovery, a checksummed append-only raw ledger, and validated
-> whole-projection rebuild with atomic installation. Fresh backfill and explicit rebuild
-> use a private projection: FTS, usage buckets, and read-only indexes are built once,
-> validated, and atomically published. Live batches coalesce repairs by
-> `(session, hour, model)`, and generation sweeps use indexed provenance. `source_op` is temporary
-> projection-internal rewrite staging, not a third durable representation. A source's first
-> generation projects directly inside the unpublished cold database; only replacements of an
-> already-active generation need staging. The store hot tier, in-process subscription
-> hub, axum REST/WebSocket transport, backend-neutral wire types, generated TypeScript
-> package, and `SearchBackend` seam with synchronous FTS5 as its reference are implemented.
-> Consumer migrations, a detached search worker, and the dedicated metrics stream remain.
-> Unknown projection schemas fail closed on ordinary open and are replaced only through
-> the explicit ledger rebuild command. Projection schema 6 adds replacement-keyed
-> `session_usage` for native totals that cannot honestly be attached to a response row.
-> The complete adapter-gap and client-visibility closure is recorded in
-> [`docs/ADAPTER_AUDIT.md`](ADAPTER_AUDIT.md).
+> **Implementation checkpoint (2026-08-29).** Nine ground-truth/runtime-adapter packs are
+> registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,
+> and SQLite snapshots; virtual membership/deletion, generation reconciliation, deterministic
+> checkpoints, polling/audits, and the checksummed raw ledger are implemented. `source_op` is
+> temporary replacement staging, never a third durable representation. Unknown projection
+> schemas fail closed and are replaced only by explicit ledger rebuild.
 >
-> Organic Claude Code, Codex, and Grok validation on 2026-08-26 established the first
-> measured performance baseline. On the final Codex cold run, FTS5 construction was
-> 33.85 s of 101.23 s, canonical application 24.08 s, and ledger writing 16.36 s. A
-> frozen-ledger rebuild took 79.53 s, led by FTS5 at 24.83 s. The evidence, readiness
-> split, crash-safe sidecar protocol, and ledger/writer optimization gates are specified
-> in [`docs/ingest-engine.html`](ingest-engine.html) under “Measured performance and
-> search-finalization specification.” Tantivy 0.26.1 is now an optional benchmark-only
-> dependency, not a selected production backend or canonical store.
+> Projection schema 7 separates the one canonical SQLite projection from a disposable SQLite
+> FTS5 sidecar. `projection_state`, the coalesced `search_dirty` repair set, and their asynchronous
+> worker landed together. Full generations publish through an atomic `CURRENT` manifest; epoch,
+> revision, acknowledgement, corruption, and crash tests prevent cross-generation results.
+> Canonical lists/timelines remain available while search is building. Tantivy 0.26.1 remains an
+> optional benchmark-only alternative; SQLite remains the canonical transactional store.
 >
-> A newer frozen-source campaign covers the six locally installed adapters from one
-> checksummed, permission-read-only snapshot: 181,526 source files, 38,998 matched files,
-> 2,234,095 records, 6,414 sessions, and 773,375 messages. The `44e8354` cold baseline
-> published in 451.54 s. The crash-safe staged-ledger path at `f22bd63` published the
-> exact same logical and ranked-search result in 352.52 s (−99.02 s / −21.9%): ledger
-> write time fell from 96.64 s to 18.02 s, segment syncs from 7,435 to 66, and segment
-> sync time from 81.14 s to 0.13 s. Twelve required directory barriers added 0.0005 s.
-> The same ledger rebuilt in 253.54 s. Remaining cold costs are canonical application
-> (102.64 s in the hardened run), synchronous FTS5 (84.99 s), global ordinal
-> finalization (36.75 s), source read (22.10 s), normalization (16.52 s), and usage
-> buckets (15.06 s); these phases vary materially between otherwise equal runs. A newer
-> frozen pair at `25d18e9` enlarged only the ledger writer buffer and reduced its split
-> phase from 18.237 s to 16.988 s (−1.249 s / −6.8%) for about 5 MiB additional peak RSS.
-> A separately measured zero-copy raw-frame candidate regressed total ledger time and was
-> reverted; neither result is extrapolated from whole-run wall variance.
-> Diagnostic broad-ranked FTS p95 is 193.99–196.59 ms while selective-ranked p95 is
-> 10.11–10.91 ms. The bounded Tantivy bake-off on the retained 768,280-message frozen
-> projection built in 11.285–11.330 s and returned aggregate p95/p99 in
-> 9.669–9.688/10.102–10.344 ms with zero filter violations and stable ordered results across
-> independent builds. Its 1.529–1.531 GiB index is 2.26× the 0.677 GiB SQLite FTS structures,
-> and top-100 overlap with FTS ranges from 7% to 80%; without judged relevance or product
-> weighting, production adoption is deliberately deferred.
-> SQLite remains the canonical transactional projection.
+> Fresh `serve` is progressive: the listener and empty public projection exist first, consent
+> precedes all reads, every runtime is skimmed before streaming, the first streamable canonical-list
+> session is completed, and the remaining files interleave by runtime with boost and a final audit
+> pass. Interrupted commits resume in place. Finite `ingest` and `rebuild` stay private, validated,
+> and atomically installed. Watchers are armed before scan; the initial search build gets a clean I/O
+> window, then the live lane reuses the existing roster rather than re-skimming it.
+>
+> The accepted six-adapter frozen pair used 38,998 matched files, 6,063 skims, 6,419 sessions,
+> and 774,219 final messages with zero hard errors. Private atomic wall was 522.54 s. Progressive
+> milestones were listener 1.19 s, lists 5.82 s, first readable 13.86 s, canonical ready 538.11 s,
+> search ready 704.74 s, and total wall 704.82 s (1.349× private; gate 1.5×). Full SQLite/FK checks,
+> exact normalized content-table digests, sidecar cardinality, and 100-cycle ranked-result digests
+> matched. The canonical file was 4.691 GB and its detached index 3.430 GB. Diagnostic FTS5
+> broad-ranked p95 was 271–380 ms versus selective-ranked p95 26.5–35.4 ms; this supports continued
+> Tantivy evaluation but not adoption without relevance and product-mix evidence. Private paths,
+> fingerprints, and query text remain unrecorded by policy.
 
 ---
 
@@ -425,20 +400,18 @@ ingestion.
 ## 6. Storage
 
 - **SQLite** (rusqlite, bundled), WAL, `synchronous=NORMAL`, single-writer daemon,
-  batched transactions. Today, one live ingest transaction applies canonical facts,
-  FTS maintenance, rollup corrections, and checkpoint/reconciliation state. The target
-  search split moves only disposable search maintenance behind a durable repair set;
-  canonical rows, rollups, and source-generation correctness remain atomic in SQLite.
-- **FTS5 external-content today**, behind an implemented backend-neutral
-  search/readiness seam. Organic broad-term ranking averaged roughly
-  119–143 ms on the large Codex/Claude projections, while selective retrieval remained
-  sub-millisecond. The disposable Tantivy prototype clears the frozen latency, build,
-  filter, and deterministic-order gates but not relevance, product-mix, storage-margin,
-  live-overhead, or crash gates. Retain FTS5 as the shipped reference and defer production
-  sidecar work until those inputs justify it; SQLite remains canonical either way.
+  batched transactions. One live ingest transaction applies canonical facts, rollup
+  corrections, checkpoint/reconciliation state, and coalesced search repair keys.
+  Canonical rows, rollups, joins, and source-generation correctness remain atomic here.
+- **Detached SQLite FTS5 sidecar today**, behind the backend-neutral search/readiness
+  seam. A worker builds private immutable generations, atomically selects one with
+  `CURRENT`, repairs complete sessions by epoch/revision, and acknowledges only after the
+  search commit. Search loss or corruption never blocks canonical reads and triggers a
+  rebuild. The disposable Tantivy prototype clears latency/build/filter/determinism gates
+  but not relevance, product-mix, or storage acceptance, so it is not production.
 - **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite
   projection; `--ledger` can relocate the segment root. An adopted search backend owns an
-  optional disposable `<projection>.search/`. Ledger is precious; DB and search indexes
+  disposable `<projection>.search/`. Ledger is precious; DB and search indexes
   are rebuildable projections.
 - Keep the schema compact rather than chasing a numeric table target. Entities, rollups,
   drift, cursors, generation staging, and the proposed search revision/repair set each
@@ -575,11 +548,11 @@ still require a driver-specific frozen pair or a declared production-weighted ag
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
-- Cold loads project each source's first generation directly and defer presentation
-  renumbering, FTS, rollups, and read indexes in an unpublished sibling database. One
-  set-based finalizer establishes canonical ordinals before validation/publication; live
-  batches and replacement swaps remain transactionally canonical. Live batches rebuild
-  each distinct affected usage bucket once, never once per message.
+- Private cold loads project each source's first generation directly and defer presentation
+  renumbering, rollups, and read indexes in an unpublished sibling database. Public fresh
+  serve commits per file with WAL durability, then runs the same set-based canonical gate.
+  FTS is always a detached generation. Live batches and replacement swaps remain
+  transactionally canonical and rebuild each distinct affected usage bucket once.
 - A first cold projection now requires both the projection and ledger destination to be
   absent. It buffer-flushes into a same-filesystem private ledger tree, syncs every staged
   segment plus child-to-parent directory entries, atomically promotes the whole tree,
@@ -623,7 +596,8 @@ rosetta/
 │   │   ├── claude-code/
 │   │   └── codex/
 │   ├── pipeline/             # ingest orchestration, analyzers, replay       (L2 runtime, Phase 3)
-│   ├── store/                # SQLite projection, FTS, change log, rebuild   (L2 persistence, Phase 3)
+│   ├── store/                # canonical SQLite projection + search repair log (L2 persistence, Phase 3)
+│   ├── search/               # detached FTS5 sidecar + publication worker   (L3 search boundary)
 │   ├── protocol/             # wire types (serde + ts-rs), versions          (L3 contract, Phase 4)
 │   ├── server/               # axum REST + WS services                       (L3 runtime, Phase 4)
 │   ├── search-bench/         # frozen-input search percentile campaigns     (evidence)
@@ -685,7 +659,7 @@ layer's design is frozen.
 
 | Decision | Default | Revisit when |
 |---|---|---|
-| FTS5 vs Tantivy | synchronous FTS5 today; prototype is fast but production adoption is deferred | revisit with judged relevance + declared/observed query mix + accepted storage margin; then require live-overhead and crash gates |
+| FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |

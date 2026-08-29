@@ -21,18 +21,19 @@ JSONL transcripts, rewrite-in-place metadata documents, and SQLite session datab
 it reconciles virtual membership and whole-source deletion, generation-stages rewrites, tails live
 changes with polling/audit recovery, and writes the canonical SQLite projection.
 Existing/live `ingest`, `watch`, and `serve` append source records to a checksummed raw
-ledger durably before visible projection commits. A first cold build uses a private
-same-filesystem ledger tree, syncs every segment and directory entry, atomically promotes
-that tree, and only then publishes the validated SQLite projection; a missing projection
-beside an existing ledger fails closed to `rebuild`. `rebuild` validates and replays the
-whole ledger into a private database before atomically replacing the projection. Ordinary
-opens still fail closed on a schema mismatch so replacement is never implicit. The
-in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, generated
-TypeScript protocol package, and a backend-neutral search seam with synchronous FTS5 as
-the reference backend are implemented. A benchmark-only Tantivy prototype meets the frozen
-build/latency/filter/determinism gates, but it is not a production backend: relevance judgments,
-product query weighting, storage acceptance, live repair, and crash recovery remain. Consumer
-migrations, a detached search worker, and the dedicated metrics stream remain.
+ledger durably before visible projection commits. A fresh `serve` projection is public and
+resumable from its first commit: all enrolled runtimes are skimmed before streaming, the
+first canonical list session is bootstrapped, then runtimes interleave round-robin with
+per-session boost. Finite `ingest` and `rebuild` retain a private same-filesystem ledger and
+SQLite build followed by validated atomic publication. A missing projection beside an
+existing ledger fails closed to `rebuild`, and ordinary opens fail closed on schema mismatch.
+
+The in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, generated
+TypeScript protocol package, and backend-neutral search seam are implemented. Production
+FTS5 is a detached, disposable sidecar built and repaired by an asynchronous epoch/revision
+worker; canonical and search readiness are separate wire facts. A benchmark-only Tantivy
+prototype is not a production backend: relevance judgments, product query weighting, and
+storage acceptance remain. Consumer migrations and the dedicated metrics stream remain.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code. The 2026-08-28
 adapter and client-visibility closure is recorded in

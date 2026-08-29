@@ -200,18 +200,17 @@
     timeline rows, and heavy aggregates live in materialized caches updated at ingest.</p>
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
-      <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;FTS · agent-view</div>
-    <div class="status"><b>Implementation checkpoint · 2026-08-28.</b> All eleven logical entities
+      <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
+    <div class="status"><b>Implementation checkpoint · 2026-08-29.</b> All eleven logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
-      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 6 adds
+      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 7 includes
       replacement-keyed <code>session_usage</code> for native totals that cannot be attributed to one
-      response. Its SQLite DDL
-      includes generation-scoped <code>source_op</code> replacement staging and differs from the
-      illustrative DDL below; first generations project directly only inside unpublished cold
-      databases. A separate checksummed raw ledger is flushed before projection commits, watch/live adds
-      polling plus rotating audits, and whole-projection rebuild validates into a private database
-      before atomic installation. Ordinary schema mismatches fail closed so rebuild stays explicit.
-      The in-process hot tier, subscription hub, HTTP/WebSocket transport and generated clients exist.
+      response, deterministic metadata evidence ties, generation-scoped <code>source_op</code>
+      replacement staging, and canonical/search epoch-revision state. Fresh serve commits to a public,
+      resumable WAL projection; finite ingest and whole-ledger rebuild validate privately before atomic
+      installation. FTS5 is a detached disposable generation built asynchronously after canonical
+      validation, then repaired from a coalesced session set. Ordinary schema mismatches fail closed.
+      The in-process hot tier, subscription hub, HTTP/WebSocket transport, and generated clients exist.
       The full adapter/visibility audit is in <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
   </div>
 
@@ -226,7 +225,7 @@
   <div class="legend" style="margin-top:0">
     <span class="lg"><span class="ph ph-0">discover</span> phase 1 — scan for installed agents; the app asks which to ingest</span>
     <span class="lg"><span class="ph ph-1">meta</span> phase 2 — stat + bounded reads; lists render before first paint</span>
-    <span class="lg"><span class="ph ph-2">stream</span> phase 3 — parallel lanes: transcripts · FTS · rollups · derivations</span>
+    <span class="lg"><span class="ph ph-2">stream</span> phase 3 — canonical transcripts · rollups · derivations; detached search follows</span>
     <span class="lg"><span class="ph ph-live">live</span> stream lane — watcher tail feeding realtime views</span>
   </div>
 
@@ -671,13 +670,13 @@
   <!-- ================================================================ -->
   <h2>Parse &amp; write strategy — discover, meta ingest, stream</h2>
   <p class="h2-note">Phase 1 finds what's installed so the app can ask what to ingest. Phase 2 makes
-  every list render within seconds. Phase 3 fans out into parallel lanes that never block each other —
-  heavy transcript/FTS backfill, rollup accumulation, and live tails feeding the realtime chat view,
-  all at once.</p>
+  every list render within seconds. Phase 3 commits canonical transcript and rollup state per file;
+  once the canonical gate passes, a detached search worker builds an independently published FTS5
+  generation while lists and timelines remain available.</p>
 
   <figure class="er">
     <div class="er-scroll">
-    <svg viewBox="0 0 1100 310" role="img" aria-label="Ingestion flow: discovery scans for installed agents, the user picks which to ingest, meta ingest fills project and session lists before first paint, then the stream phase fans out into three parallel non-blocking lanes — transcript and FTS backfill, usage bucket accumulation, and live watchers feeding the realtime chat view.">
+    <svg viewBox="0 0 1100 310" role="img" aria-label="Ingestion flow: discovery scans for installed agents, consent selects runtimes, metadata fills public project and session lists, canonical transcript and usage state commit progressively, and detached search publishes after canonical validation.">
       <defs>
         <marker id="arrInk2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
           <polygon points="0,0 10,5 0,10" fill="currentColor"/>
@@ -721,11 +720,11 @@
       <line x1="536" y1="162" x2="554" y2="162" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
       <polyline points="536,162 536,249 554,249" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk2)"/>
 
-      <!-- lane A: transcript + FTS -->
+      <!-- lane A: canonical transcript -->
       <g>
         <rect x="560" y="40" width="500" height="70" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
-        <text x="576" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">transcript + FTS — heavy backfill</text>
-        <text x="576" y="86" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">full parse → message rows · FTS index — newest-first · opening a session promotes it</text>
+        <text x="576" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">canonical transcript — public backfill</text>
+        <text x="576" y="86" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">message rows per file · canonical-list bootstrap · runtime round-robin · boost</text>
       </g>
 
       <!-- lane B: rollups -->
@@ -744,8 +743,8 @@
     </svg>
     </div>
     <figcaption>Widths are not to scale — discovery is milliseconds, meta ingest a couple of seconds,
-    and the three stream lanes run in parallel for as long as the app does. Nothing past discovery is
-    read until the user opts an agent in.</figcaption>
+    and stream commits continue while the app serves. Search is a later detached generation, not an
+    extra write in canonical transactions. Nothing past discovery is read until the user opts in.</figcaption>
   </figure>
 
   <div class="jobs" style="margin-top:20px">
@@ -765,9 +764,9 @@
     </div>
     <div class="job">
       <h3>3 · Stream lanes</h3>
-      <p>Parse workers run in parallel per lane; writes funnel through one writer with batched commits, so
-      lanes never contend on locks. Message rows, FTS entries, and rollup increments commit in the
-      <b>same transaction</b> — aggregates never drift from their rows, and the cumulative→delta
+      <p>Writes funnel through one canonical writer with batched commits. Message rows, rollup
+      corrections, checkpoints, and coalesced search-repair keys commit in the <b>same transaction</b>;
+      detached FTS generations never share that transaction. Aggregates cannot drift, and cumulative→delta
       normalization (the codex trap) happens here, once. Priority: live tails first, then sessions the
       user opens, then newest-first backfill. Everything resumes via
       <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">ingest_cursor</span>
@@ -782,9 +781,10 @@
 
   <!-- ================================================================ -->
   <h2>The SQLite projection</h2>
-  <p class="h2-note">The canonical model as actual DDL — one WAL database, grouped by the ingest phase
-  that fills each table. Ids are blake3 hex, times are unix milliseconds, structured values are JSON
-  text. The whole file is disposable: it rebuilds from the ledger (rule 4).</p>
+  <p class="h2-note">The canonical model as a compact DDL excerpt — one WAL database, grouped by the
+  ingest phase that fills each table. Search has its own disposable SQLite generation. Ids are blake3
+  hex, times are unix milliseconds, and structured values are JSON text. Both projections rebuild
+  from canonical rows or the ledger; only the ledger is precious.</p>
 
   <pre class="ddl"><span class="c">PRAGMA journal_mode = WAL;
 PRAGMA synchronous  = NORMAL;
@@ -803,6 +803,20 @@ CREATE TABLE <b>agent_runtime</b> (
   versions_seen TEXT,                       <span class="c">-- JSON array; refined by the stream</span>
   discovered_at INTEGER NOT NULL
 );
+
+CREATE TABLE <b>projection_state</b> (
+  singleton        INTEGER PRIMARY KEY CHECK (singleton = 1),
+  projection_epoch TEXT NOT NULL,             <span class="c">-- new for every disposable canonical build</span>
+  search_revision  INTEGER NOT NULL DEFAULT 0,
+  canonical_ready  INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+
+CREATE TABLE <b>search_dirty</b> (             <span class="c">-- coalesced repair set; worker-owned consumer</span>
+  kind     TEXT NOT NULL CHECK (kind = 'session'),
+  key      TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  PRIMARY KEY (kind, key)
+) WITHOUT ROWID;
 
 <span class="h">-- ————— phase 2 · meta ingest ————————————————————————————————————</span>
 
@@ -828,7 +842,8 @@ CREATE TABLE <b>session</b> (
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
-  stream_state      TEXT NOT NULL DEFAULT 'pending'  <span class="c">-- 'pending' | 'streaming' | 'indexed' — drives the UI badge</span>
+  stream_state      TEXT NOT NULL DEFAULT 'pending', <span class="c">-- 'pending' | 'streaming' | 'indexed' — drives the UI badge</span>
+  project_assigned_at INTEGER                    <span class="c">-- earliest workspace evidence wins deterministically</span>
 );
 CREATE INDEX session_project ON session(project_id, updated_at DESC);
 CREATE INDEX session_runtime ON session(runtime_id, updated_at DESC);
@@ -874,6 +889,9 @@ CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- driver checkpoi
   runtime_id  TEXT NOT NULL REFERENCES agent_runtime(id),
   stream      TEXT NOT NULL,                <span class="c">-- layout stream id</span>
   path        TEXT NOT NULL,                <span class="c">-- relative to data_root</span>
+  session_id  TEXT NOT NULL REFERENCES session(id),
+  active_generation  INTEGER NOT NULL DEFAULT 0,
+  highest_generation INTEGER NOT NULL DEFAULT 0,
   checkpoint  TEXT NOT NULL,                <span class="c">-- versioned opaque blob: generation · file identity ·</span>
                                             <span class="c">--   committed offset · boundary anchor · decoder version</span>
                                             <span class="c">--   (spaghetti AppendCheckpoint, ported; CAS'd at commit)</span>
@@ -882,7 +900,7 @@ CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- driver checkpoi
 );
 
 CREATE TABLE <b>message</b> (
-  id             INTEGER PRIMARY KEY,       <span class="c">-- rowid; message_fts points here</span>
+  id             INTEGER PRIMARY KEY,       <span class="c">-- stable join key copied into search_document</span>
   timeline_id    TEXT NOT NULL UNIQUE,      <span class="c">-- stable blake3; native uuids aren't unique</span>
   session_id     TEXT NOT NULL REFERENCES session(id),
   ordinal        INTEGER NOT NULL,
@@ -917,15 +935,10 @@ CREATE INDEX message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
 );                                             <span class="c">-- equality keys precede the timestamp range</span>
 
-CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
-  content, tool_input, tool_result,
-  content='message', content_rowid='id',    <span class="c">-- external content: index only, no copied text</span>
-  tokenize='unicode61 remove_diacritics 2'
-);
-<span class="c">-- no triggers: the stream writer inserts message rows, fts entries,
--- and coalesced rollup corrections in the SAME transaction. A private cold
--- build projects first generations directly, defers FTS and read indexes,
--- materializes them once, validates, then publishes.</span>
+<span class="c">-- No FTS table lives in the canonical database. The detached generation owns
+-- search_document metadata plus a contentless message_fts(content, tool_input,
+-- tool_result). Its search_state records projection_epoch + revision. The worker
+-- builds privately, validates, fsyncs, and atomically selects it through CURRENT.</span>
 
 CREATE TABLE <b>file_edit</b> (
   session_id   TEXT NOT NULL REFERENCES session(id),
@@ -1028,8 +1041,8 @@ LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
            GROUP BY rid) f ON f.rid = r.id
 WHERE r.id = r.root_session_id;</pre>
 
-  <p class="h2-note" style="margin-top:14px">Fourteen tables — thirteen real plus the external-content FTS
-  index — and one reporting view, against the ~15 budget. Live-lane updates touch
+  <p class="h2-note" style="margin-top:14px">Every canonical table has a named correctness or product
+  consumer; the detached search schema has one worker and one query backend. Live-lane updates touch
   <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">message</span>,
   <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">session.updated_at</span>, and the
   buckets through the same single-writer funnel as backfill.</p>
@@ -1046,7 +1059,7 @@ WHERE r.id = r.root_session_id;</pre>
       <p>GitHub-style day grid for a project, a session, or everything — grouped into the viewer's
       timezone at query time, which only works because the buckets are hourly. The same table answers
       hour-of-day profiles (when do you actually work?) with a different GROUP BY.</p>
-      <pre class="ddl" style="font-size:11.5px">SELECT date(b.hour_ts / 1000, 'unixepoch', 'localtime') AS day,
+      <pre class="ddl" style="font-size:11.5px">SELECT date((b.hour_ts + :utc_offset_ms) / 1000, 'unixepoch') AS day,
        SUM(b.in_tokens + b.out_tokens + b.think_tokens
            + b.cache_r_tokens + b.cache_w_tokens) AS tokens
 FROM usage_bucket b
@@ -1095,8 +1108,8 @@ ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pr
   <footer class="note">
     Iron rule 4 holds throughout, one level further than usual: the in-process hot tier rebuilds from
     this projection, and the projection — caches and cursors included — rebuilds from the append-only
-    ledger. Ten entities plus the internal ingest_cursor bookkeeping table, against the ~15-table
-    budget. This model is a Phase-2 hypothesis ratified against 9 of 11 ground-truth packs; gemini and
+    ledger. Tables are admitted by named consumers rather than a numeric budget. This model is a
+    Phase-2 hypothesis ratified against 9 of 11 ground-truth packs; gemini and
     cursor captures may still amend it. Implementation design: ingest-engine.html.
   </footer>
 </div>
