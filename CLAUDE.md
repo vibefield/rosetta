@@ -34,9 +34,23 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
 4. **Two data representations only:** append-only raw ledger + one canonical
    projection (SQLite plus content-addressed binary members). The projection is
    disposable — rebuilt from the ledger, never migrated.
-5. **Parsers exist once, in Rust.** Consumers get generated types (ts-rs from
+5. **Persist only what a user cares about.** Normalization is deliberately lossy:
+   it cherry-picks the locked, product-defined canonical fields and leaves every
+   other native value in the raw ledger. Agent-specific fields, unfamiliar tools,
+   progressive snapshots, candidate sets/orderings, correlation candidates, opener copies,
+   per-field merge histories, and other reconciliation machinery may exist transiently
+   in RAM, but must never become canonical SQLite columns or tables. A new agent shape
+   may update that agent's parser; it may not expand the canonical model without an
+   explicit product decision. Rewrites and restarts rebuild the affected projection
+   scope from the ledger instead of persisting a second fact journal in SQLite.
+   Minimal bounded cursor/provenance (including provenance for one selected user-facing value),
+   readiness, and coalesced search-repair watermarks
+   may persist for their named correctness consumers, but they may contain identifiers
+   and counters only—never native payloads, normalized op JSON, candidate values, or
+   merge history.
+6. **Parsers exist once, in Rust.** Consumers get generated types (ts-rs from
    `protocol`). Never hand-write a second parser in another language.
-6. **One ground-truth file per agent.** An agent's ground truth is solely and
+7. **One ground-truth file per agent.** An agent's ground truth is solely and
    fully reflected in `groundtruth/<agent>/groundtruth.json` — the ONLY
    source of truth, rebuilt by `build_canonical` from the intermediates in the sibling
    `sources/` dir (fixture captures, censuses, SQL dumps). Intermediates
@@ -55,19 +69,19 @@ canonical list session, then interleaves runtimes round-robin with per-session b
 Interrupted progress is durable and resumable. Finite `ingest` and explicit `rebuild`
 remain private, validated, atomic publication paths.
 
-Projection schema 7 keeps canonical transactions, reconciliation, rollups, and joins in
-SQLite while production FTS5 lives in a disposable detached sidecar. The asynchronous
+Projection schema 11 keeps user-facing canonical rows, rollups, and joins in SQLite while
+production FTS5 lives in a disposable detached sidecar. The asynchronous
 worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
 revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
 Verified inline image bytes are decoded once into immutable `<projection>.images/` members;
 SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the raw ledger
 remains lossless.
-The next projection candidate replaces schema 7's opaque tool input/result/payload values with
-a closed user-facing semantic action union across all captured adapters. Its evidence-amended
-contract uses adapter-derived correlation keys, versioned namespace-aware projectors, progressive
-typed updates, and provenance-marked causal/response grouping. Raw parsing stays permissive and
-narrowing stays nonfatal. It remains unshipped until current-writer, registry, correlation,
-reduction, product, and atomic-activation gates pass.
+The closed user-facing timeline and fixed semantic tool vocabulary are implemented across all
+captured adapters. Native payload noise and unsupported tool fields remain ledger-only. Tool
+fragments, evidence ranks, late usage, and complete replacement generations reconcile in RAM;
+SQLite has no normalized-op staging, pending-merge, opener-copy, per-field stamp, or tool-fact
+journal. Cold ingest writes one resolved tool row, live ingest updates only that resolved row, and
+a lost accumulator is recovered by affected-scope ledger replay.
 Canonical and search readiness are independently surfaced. The store hot tier,
 subscription hub, localhost HTTP/WebSocket transport, backend-neutral protocol, and
 generated TypeScript bindings are implemented. A feature-gated Tantivy prototype remains

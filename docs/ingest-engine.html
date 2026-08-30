@@ -185,7 +185,7 @@
     crate seam per stage, and measurement infrastructure designed in from day one — every phase and
     every hot component owns a fixture and a bench, so each can be optimized in isolation.
     Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
-    <div class="callout"><b>Implementation checkpoint · 2026-08-29.</b> All nine captured-agent
+    <div class="callout"><b>Implementation checkpoint · 2026-08-30.</b> All nine captured-agent
       adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, bounded
       rewrite-in-place document snapshots, consistent SQLite snapshots, serializable adapter
       checkpoints, authoritative virtual-session membership, whole-source deletion,
@@ -206,8 +206,9 @@
       six-adapter source snapshot established cold-write attribution, non-empty Hermes coverage,
       staged-ledger savings, and repeated broad-query tails. The evidence, bottleneck accounting,
       and gated optimization specification are recorded below.
-      <code>source_op</code> is only projection-internal staging; the raw ledger is the durable
-      replay substrate.</div>
+      Replacement generations and late tool/usage joins now stage only in process RAM. SQLite
+      receives resolved canonical rows plus bounded cursor watermarks; the raw ledger is the durable
+      restart/replay substrate.</div>
   </div>
 
   <div class="legend">
@@ -1127,8 +1128,8 @@ trait <b>AgentAdapter</b>: Send + Sync {
   </table>
   </div>
   <p><b>Frozen percentile follow-up.</b> A fresh Codex projection at <code>e28028d</code>
-  contained 313,413 canonical messages and the same number of FTS rows, with 366 Indexed sessions,
-  zero <code>source_op</code> rows, and zero pending merges. One checksummed 4.67 GB ledger was made
+  contained 313,413 canonical messages and the same number of FTS rows, with 366 Indexed sessions
+  and no unresolved projection state. One checksummed 4.67 GB ledger was made
   permission-read-only and paired with the checksummed committed diagnostic suite. Two identical release-mode replicates
   ran 5 warmups and 100 measured cycles per case. The fresh-connection lane includes opening a
   read-only SQLite connection on every query, matching the current HTTP handler's database path but
@@ -1181,7 +1182,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
       <tr><td class="cm">session readiness</td><td class="metric">366 Indexed</td><td>Rebuild reproduces source ingest readiness.</td></tr>
       <tr><td class="cm">generations · ordinals</td><td class="metric">0 mismatches · 0 collisions</td><td>No incomplete generation or presentation collision.</td></tr>
       <tr><td class="cm">parents · roots</td><td class="metric">0 missing · 0 missing</td><td>Topology is closed.</td></tr>
-      <tr><td class="cm">source_op · pending_merge</td><td class="metric">0 · 0</td><td>No unpublished staging or unresolved Codex merge.</td></tr>
+      <tr><td class="cm">serialized reconciliation tables</td><td class="metric">absent</td><td>Replacement input and late joins are process-local, never projection rows.</td></tr>
       <tr><td class="cm">messages · FTS · bucket count</td><td class="metric">311,858 each</td><td>Derived cardinalities equal canonical rows.</td></tr>
       <tr><td class="cm">tool calls · bucket calls</td><td class="metric">128,892 each</td><td>Aggregate exactness.</td></tr>
       <tr><td class="cm">tool results</td><td class="metric">128,890 / 128,892</td><td>Two genuine source calls ended without outputs; 59 structured-only outputs explain the difference from <code>tool_result IS NOT NULL</code>.</td></tr>
@@ -1714,12 +1715,14 @@ seal all sources → fsync every staged file + child/parent directory entries
   <div class="callout">
     <b>Decided — the projection carries no second journal.</b> Rule 4 names TWO representations: the
     raw ledger (durable truth) and the projection (canonical, disposable). Everything else inside the
-    database is projection-internal machinery — derived, same-transaction, prunable — like the FTS
-    index. <code>source_op</code> is exactly that: a staging buffer holding only not-yet-active
-    replacement generations, pruned at activation, empty in steady state. A source's first
-    generation bypasses it inside the unpublished cold database because there is no clean
-    contribution to protect; that database cannot publish after an abandon. Appends never
-    journal. A swap removes the old generation's contribution via <code>src_cursor</code> provenance
+    database is the resolved, user-facing projection plus bounded correctness watermarks; normalized
+    operations are never another table. Not-yet-active replacement generations, correlation evidence,
+    losing title candidates, opener copies, progressive patches, and late joins live in process RAM and disappear after the
+    transaction resolves them. A source's first generation may project directly inside the unpublished
+    cold database because there is no clean contribution to protect; that database cannot publish after
+    an abandon. A process loss keeps the prior active projection and replays the raw ledger rather than
+    recovering an internal fact journal. A swap removes the old generation's contribution via
+    <code>src_cursor</code> provenance
     columns (messages and the small tables all carry one), renumbers the session's presentation
     ordinals deterministically (source path · byte offset · insertion order), and recomputes the
     session's usage buckets from the surviving rows — aggregates can never keep residue a swap should

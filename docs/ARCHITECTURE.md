@@ -12,14 +12,16 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
-> **Implementation checkpoint (2026-08-29).** Nine ground-truth/runtime-adapter packs are
+> **Implementation checkpoint (2026-08-30).** Nine ground-truth/runtime-adapter packs are
 > registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,
 > and SQLite snapshots; virtual membership/deletion, generation reconciliation, deterministic
-> checkpoints, polling/audits, and the checksummed raw ledger are implemented. `source_op` is
-> temporary replacement staging, never a third durable representation. Unknown projection
-> schemas fail closed and are replaced only by explicit ledger rebuild.
+> checkpoints, polling/audits, and the checksummed raw ledger are implemented. Replacement
+> generations and late tool/usage relations stage only in process RAM. A process exit leaves the
+> prior projection active and reconstructs the lost accumulator by raw-ledger replay; no normalized
+> operation or reconciliation payload is serialized into SQLite. Unknown projection schemas fail
+> closed and are replaced only by explicit ledger rebuild.
 >
-> Projection schema 7 separates the one canonical SQLite projection from a disposable SQLite
+> Projection schema 11 separates the one canonical SQLite projection from a disposable SQLite
 > FTS5 sidecar. `projection_state`, the coalesced `search_dirty` repair set, and their asynchronous
 > worker landed together. Full generations publish through an atomic `CURRENT` manifest; epoch,
 > revision, acknowledgement, corruption, and crash tests prevent cross-generation results.
@@ -310,12 +312,11 @@ enum CanonicalFact {
 
 ### 4.1.1 Strict public message boundary
 
-> **Activation status (2026-08-29): evidence-amended candidate, not shipped.** Projection schema 7
-> still exposes `ToolCall { input: Value, result: String, payload: Value }`. The next
-> schema replaces it only when core types, all captured adapters, store/search consumers,
-> protocol, and the client activate together, after the current-writer, registry, correlation,
-> grouping, and product gates pass. Until then, the current columns remain explicitly legacy;
-> no consumer should grow new dependencies on their native shapes.
+> **Activation status (2026-08-30): shipped in projection schema 11.** Core types, every captured
+> adapter, canonical store/search, protocol, and the client share one closed user-facing timeline
+> and fixed tool vocabulary. Native input/result/payload objects remain ledger-only. Correlation,
+> evidence ranking, progressive snapshots, and late joins are normalization mechanics, not public
+> fields or durable SQLite facts.
 
 A privacy-safe point-in-time audit of the nine installed runtimes classified 377,877 tool
 calls. The draft native mapping covered 65.46% overall and 99.65% after excluding Codex's
@@ -360,11 +361,12 @@ universal `input`, `result`, or `payload` fields. The action families are:
 `external`, and `unknown`.
 
 Live, progressive, corrected, and out-of-order records use closed request/outcome patches
-parallel to this union. They have no text/JSON/generic variant; `pending_merge` stores only
-typed mutations. Missing fields never clear proven facts. Evidence rank plus source order
-resolves corrections deterministically; duplicate snapshots are idempotent. The store rejects
-a known-family change, while an `unknown` row may upgrade once when later request evidence
-establishes the registry-selected family.
+parallel to this union while normalizing. They have no text/JSON/generic variant and wait only
+in bounded process RAM when their opener has not arrived. Missing fields never clear proven
+facts. Evidence rank plus source order resolves corrections deterministically; duplicate
+snapshots are idempotent. Only the resolved `ToolInteraction` crosses into SQLite. The store
+rejects a known-family change, while an `unknown` row may upgrade once when later request
+evidence establishes the registry-selected family.
 
 Each family keeps only the data necessary to answer its user-facing question. In
 particular: reads keep path/range but not file content; file changes keep path plus exactly
@@ -505,9 +507,16 @@ ingestion.
 ## 6. Storage
 
 - **SQLite** (rusqlite, bundled), WAL, `synchronous=NORMAL`, single-writer daemon,
-  batched transactions. One live ingest transaction applies canonical facts, rollup
-  corrections, checkpoint/reconciliation state, and coalesced search repair keys.
-  Canonical rows, rollups, joins, and source-generation correctness remain atomic here.
+  batched transactions. One live ingest transaction applies resolved canonical rows, rollup
+  corrections, minimal cursor/provenance watermarks, and coalesced search repair keys.
+  Normalized operations, pending joins, opener copies, evidence winners, and replacement payloads
+  stay in RAM. Canonical rows, rollups, joins, and the generation watermark remain atomic; after a
+  crash the ledger recreates the discarded accumulator instead of SQLite acting as an event log.
+  Ranked session titles follow the same boundary: SQLite retains one selected title and bounded
+  winning provenance, never the losing candidate set.
+  Stream normalization is replay-pure: it may sanitize a native repository identity but cannot
+  consult today's checkout to enrich a historical workspace row. Filesystem-derived project
+  identity is captured during meta ingest and written into the ledger before it becomes canonical.
 - **Content-addressed image members** are part of the one canonical projection, not a third
   representation. An adapter may recognize and decode a verified native inline image, but only
   the store writes it to `<projection>.images/<blake3>.<ext>`. Live ingestion makes the immutable
@@ -590,19 +599,19 @@ This makes the optimization boundary explicit:
   88.671 s (−70.6%). Exact logical and ranked-result equivalence passed. Peak RSS
   rose from 190 MB to 502 MB, so partitioning that finalizer is a future measured
   memory/speed tradeoff, not a free follow-up.
-- Batch session timestamp touches and target-aware pending reconciliation are
-  roster-wide: all nine adapters exercise both `Message` and `ToolResult` store paths.
-  The transaction-local gate caches exact usage/result targets by canonical session,
-  loads them through the existing primary key, and updates immediately on queue/drain.
-  Persistent orphans in one session therefore remain recoverable without poisoning
-  unrelated messages, sessions, or adapters.
+- Batch session timestamp touches and RAM-only late-arrival reconciliation are roster-wide:
+  all captured adapters exercise the shared message/tool/usage store paths. A batch orders
+  openers before updates, folds each tool correlation once, and writes the resolved row once.
+  Cross-file orphans wait in a process-local target map; unrelated sessions perform no SQLite
+  reconciliation probes. A restart intentionally discards the map and replays the affected
+  ledger scope.
 - Same-batch tool-result folding is roster-wide in semantics, but the measured SQLite
   implementation is rejected. On the frozen mixed ledger it safely folded 358,790 of
   360,052 tool results plus 149,755 of 151,298 separate usage snapshots (99.45% overall)
   and retained exact logical counts. Fully populated message inserts nevertheless raised
   message-write time from 9.327 s to 17.113 s and canonical apply from 36.923 s to
-  42.805 s (+15.9%). The candidate was reverted at `0d5796d`; cross-batch, cross-file,
-  duplicate-target, and pending reconciliation remain on the established ordered path.
+  42.805 s (+15.9%). The candidate was reverted at `0d5796d`; schema 11 instead performs a
+  single RAM fold before canonical application without a persisted pending path.
   Inline usage remains part of message application, while separate usage ops currently
   come from Codex, Copilot, and Grok.
 - Larger live JSONL tail batches may apply to seven adapters, but the analogous private
@@ -659,24 +668,40 @@ This makes the optimization boundary explicit:
   row was inserted once. One max timestamp touch per affected session reduced touch attempts
   from 8,011 to 2,880. Deferring tool rows moved 3,926 provisional ordinals into the global
   38.1 ms renumber pass, which is included in the wall result. Both sides retained 24,854
-  parsed records, 12,557 ops, 3,934 messages, 2,566 tool rows, 5,132 facts, 868 edits, zero
-  pending merges, equal usage/aggregate rows, zero logical `EXCEPT` differences after mapping
+  parsed records, 12,557 ops, 3,934 messages, 2,566 tool rows, 5,132 reduced inputs, 868 edits,
+  equal usage/aggregate rows, zero logical `EXCEPT` differences after mapping
   surrogate message IDs, and passing quick/foreign-key checks. Frozen search campaign
   `67b44f4c6ec55edea241aaeb6760b725580d8d1c52fae599b2e00b6fbc9a6b2a` used the
   checksummed `product-diagnostic-v2` suite (BLAKE3
   `00dcab42b607869ed696fe70caed9ab16c7ffe3507453e8f3ffc2ebccbc4fbe1`), 5 warmups and
   100 cycles; the comparison passed equal schema/configuration, logical counts, filters, hit
   counts, and ordered-result digests. This optimization applies to every adapter emitting the
-  universal `Message::ToolUse` / `ToolUpdate` / response-usage / file-edit vocabulary; live
-  and progressive-public stores deliberately retain transactional reconciliation.
+  universal `Message::ToolUse` / `ToolUpdate` / response-usage / file-edit vocabulary. The later
+  schema-11 storage-boundary change removes the reduced-fact writes too; its performance claim
+  requires a new frozen before/after pair rather than reusing this earlier measurement.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
-now attribute replay cost by adapter and canonical statement family. The target-aware gate
-at `8fc0b50` reduced pending gate-plus-drain SQL from 7.905 s to 0.424 s on the same frozen
-ledger: 785,985 of 786,004 message probes were skipped and the 19 exact matches still
-drained. Exact logical/ranked-result equivalence passed. Wall moved from 317.49 s to
-252.02 s, but that is not the attributed saving because FTS and validation varied by
-30.292 s; the defensible pending reduction is 7.481 s (94.6%).
+attribute replay cost by adapter and canonical statement family. The former target-aware SQLite
+pending gate at `8fc0b50` was useful historical evidence (7.905 s to 0.424 s on the frozen
+ledger), but schema 11 deletes that SQL path entirely. A new frozen campaign must measure the
+RAM-only implementation before any further wall-time claim is merge-admissible.
+
+The schema-11 storage-boundary validation replayed the same permission-read-only 26-segment
+Claude ledger twice after the final code change: 1,241,440 records, 5,445 sources, 5,933 sessions,
+329,955 messages, 208,124 resolved tool rows, and 41,786 file edits. Final release wall was
+95.43 s (the preceding run was 95.90 s), with 24.818 s canonical apply, 9.346 s normalization,
+6.645 s global renumbering, 17.959 s detached search build, passing `quick_check`/foreign keys,
+and zero private reconciliation objects. The canonical SQLite file fell from the retained
+schema-10 artifact's 1,344,462,848 bytes to 666,062,848 bytes (-50.5%); detached search stayed
+effectively flat at about 394 MiB. `tool_update_fact` plus its two indexes had occupied about
+447 MiB, while removing opener/merge state from `message` cut that table from about 503 MiB to
+274 MiB. Public message/tool/title/file-edit/usage rows matched after excluding surrogate ids and
+source-provenance keys. The audit also found 6,415 historical `workspace_obs.git_repo` values that
+the old live path had inferred from a checkout but never captured in the ledger; stream projection
+now accepts only replayable native repository identity, with filesystem-derived project identity
+captured in the ledgered meta phase. Peak RSS was 3.64 GB, so partitioning the disposable cold RAM
+fold is the next measured memory target. There is no speedup claim here: an exact same-machine
+schema-10 rerun is still required before attributing the roughly 95-second absolute wall.
 
 The private-generation insert-first candidate at `207bc37` exercised all 786,004 message
 attempts and fell back on 17,724 legitimate repeated timeline identities. Message identity

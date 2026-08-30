@@ -115,8 +115,9 @@ Relevant implementation points:
   `custom-title`; malformed or budget-clipped records are never guessed at.
 - Streamed `ai_title` and `custom_title` summary singletons now reconcile the
   public `session.title`. The store derives custom-over-generated precedence
-  from the surviving source-owned rows, so order, batching, replay and source
-  replacement cannot invert it. A retained `meta_title` is the sweep fallback.
+  in RAM, persists only the selected title plus its bounded winning provenance,
+  and uses same-session raw-ledger replay after a source replacement. Losing
+  title candidates never become a second SQLite fact set.
 
 The minimized boundary regression places the first title beyond 64 KiB and the
 last beyond the 16 KiB tail, verifies the byte cap, then disables the fallback

@@ -244,19 +244,18 @@
       <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
     <div class="status"><b>Implementation checkpoint · 2026-08-29.</b> All eleven logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
-      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 7 includes
+      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 11 includes
       replacement-keyed <code>session_usage</code> for native totals that cannot be attributed to one
-      response, deterministic metadata evidence ties, generation-scoped <code>source_op</code>
-      replacement staging, and canonical/search epoch-revision state. Fresh serve commits to a public,
+      response, deterministic metadata evidence ties, RAM-only replacement staging, and
+      canonical/search epoch-revision state. Fresh serve commits to a public,
       resumable WAL projection; finite ingest and whole-ledger rebuild validate privately before atomic
       installation. Verified inline images are decoded into content-addressed projection members;
       message rows retain stable service URLs and the raw ledger remains lossless. FTS5 is a detached disposable generation built asynchronously after canonical
       validation, then repaired from a coalesced session set. Ordinary schema mismatches fail closed.
       The in-process hot tier, subscription hub, HTTP/WebSocket transport, and generated clients exist.
-      <b>Schema 7 still stores native tool input, result, and payload opaquely.</b> The strict message/tool
-      contract below is the evidence-amended candidate for the next projection schema; it remains
-      activation-blocked until the correlation, registry, grouping, and current-writer gates below pass.
-      It is not yet the shipped wire or SQLite shape. The full adapter/visibility audit is in
+      <b>Schema 11 ships the strict message/tool contract below.</b> Native tool objects, progressive
+      snapshots, and reconciliation bookkeeping remain ledger/RAM-only; SQLite contains only the
+      resolved user-facing action. The full adapter/visibility audit is in
       <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
   </div>
 
@@ -534,10 +533,11 @@
       Codex titles come from <span class="f">state_*.sqlite</span>; Copilot titles come from
       <span class="f">workspace.yaml</span>. Every title candidate carries an evidence rank:
       explicit native label &gt; agent-generated label &gt; prompt/checkpoint fallback. Claude's
-      source-owned <span class="f">custom_title</span>/<span class="f">ai_title</span> rows and
+      source-owned <span class="f">custom_title</span>/<span class="f">ai_title</span> records and
       Antigravity's exact <span class="f">USER Objective</span> checkpoint fallback use the same
-      ordering. Same-rank metadata replacements follow deterministic source/ingest order, so native
-      renames work while lower-confidence evidence cannot win merely by arriving later.</div>
+      ordering. The fold keeps losing candidates in RAM/the ledger and persists only the selected
+      title plus bounded winning provenance. Same-rank replacements use native time and a stable text
+      tie, so native renames work while lower-confidence evidence cannot win merely by arriving later.</div>
       <div class="consumers-line"><span class="cchip">agent-view</span></div>
     </div>
 
@@ -572,13 +572,15 @@
         <span class="f">session_id · at</span><span class="n">one row per observed change</span>
         <span class="f">cwd</span><span class="n">working directory</span>
         <span class="f">git_branch</span><span class="n">where stamped</span>
-        <span class="f">git_repo</span><span class="n">repo identity when derivable</span>
+        <span class="f">git_repo</span><span class="n">sanitized repo identity only when the native record reports it</span>
       </div>
       <div class="evidence"><b>Ratification:</b> codex carries cwd in <span class="f">turn_context</span>
       per turn; copilot emits <span class="f">session.context_changed</span>; claude-code stamps
       <span class="f">gitBranch</span> on every line. Sessions provably move directories — this table is
       why project assignment stays honest. The first observation lands during meta ingest; the full
-      history backfills in the stream phase.</div>
+      history backfills in the stream phase. Local Git discovery may enrich the ledgered meta-level
+      project row, but never a streamed observation: ledger-only replay cannot depend on today's
+      checkout still existing.</div>
       <div class="consumers-line"><span class="cchip">project assignment</span><span class="cchip">agent-view</span></div>
     </div>
 
@@ -1356,19 +1358,6 @@ struct EvidenceOrder {
   record_offset: u64, mutation_index: u32,
 }
 
-enum ToolMutation {
-  Opened {
-    entry: TimelineEntry,                  <span class="comment">// body = one typed ToolUse row</span>
-    evidence: EvidenceOrder,
-  },
-  Updated {
-    session_id: SessionId,
-    correlation_key: String,               <span class="comment">// native id is not required</span>
-    evidence: EvidenceOrder,
-    patch: ToolUpdatePatch,
-  },
-}
-
 struct ToolUpdatePatch {
   native_id: Option&lt;String&gt;,               <span class="comment">// enriches the audit reference only</span>
   request: Option&lt;ToolRequestPatch&gt;,        <span class="comment">// progressive/corrected request fields</span>
@@ -1380,11 +1369,8 @@ struct ToolUpdatePatch {
 
 <span class="comment">// Request/outcome patch enums are closed and parallel to ToolAction.</span>
 <span class="comment">// They have no Text/Json/Generic/native-payload variant.</span>
-
-enum ToolMergeState {                       <span class="comment">// private store type; parallel to ToolAction</span>
-  /* one typed field-version struct per action family */
-}
-struct EvidenceStamp { rank: u16, order: EvidenceOrder }</pre>
+<span class="comment">// Patches and evidence exist only during the in-memory fold; neither is a</span>
+<span class="comment">// protocol type, SQLite column, table, or serialized operation journal.</span></pre>
 
   <pre class="schema">#[serde(tag = "type", rename_all = "snake_case")]
 enum MessageDetail {                         <span class="comment">// the only producer of message.detail</span>
@@ -1396,24 +1382,23 @@ enum MessageDetail {                         <span class="comment">// the only p
 }</pre>
 
   <p class="small">Every mutation is idempotent by correlation key plus evidence order. Out-of-order
-  updates wait in <span class="mono">pending_merge</span> as typed patches; no native JSON waits there.
+  updates wait only in a process-local RAM map; no update fragment or native JSON is serialized to SQLite.
   Missing fields never clear earlier facts. A higher-ranked or later equally ranked fact may enrich or
   correct one field according to the registration's documented precedence. The store rejects known-family
   changes, except that <span class="mono">unknown</span> may upgrade once to the registry-selected family
   when a progressive request establishes its typed identity. Repeated snapshots therefore converge to one
   row instead of producing duplicates.</p>
-  <p class="small"><span class="mono">ToolMergeState</span> stores only an evidence stamp per typed
-  canonical field—never a native value—and is not exposed through protocol or search. This lets an older
-  out-of-order patch fill a missing field without overwriting a newer value, while a later higher-ranked
-  correction can replace exactly its field. Field-specific ranks come from the versioned registration;
-  the stable source identity/generation/offset/mutation-index tuple breaks ties identically across rebuilds.</p>
+  <p class="small">The non-serializable RAM fold may track an evidence winner per approved canonical
+  field while it resolves one batch. That bookkeeping is discarded after the resolved row commits. This
+  lets an older out-of-order patch fill a missing field without overwriting a newer value, while the raw
+  ledger—not a second SQLite fact journal—reconstructs the same fold after restart.</p>
   <p class="small">Unsupported update shapes omit only their unfamiliar facts and emit drift; they never
   erase a typed request. A live call may remain pending/running. When an authoritative source generation
   ends without terminal evidence, source finalization changes it to <span class="mono">unknown</span>, not
   succeeded. An update that never finds an opener becomes drift plus ledger provenance rather than a
   fabricated timeline row.</p>
 
-  <pre class="ddl"><span class="c">-- Target replacement for the schema-7 message tool columns; not shipped yet.</span>
+  <pre class="ddl"><span class="c">-- Shipped schema-11 message projection.</span>
 CREATE TABLE <b>message</b> (
   id               INTEGER PRIMARY KEY,
   timeline_id      TEXT NOT NULL UNIQUE,
@@ -1454,8 +1439,6 @@ CREATE TABLE <b>message</b> (
                       'ground_truth_protocol','source_finalization')),
   tool_detail      TEXT CHECK (tool_detail IS NULL OR json_valid(tool_detail)),
                                               <span class="c">-- closed ToolAction enum</span>
-  tool_merge_state TEXT CHECK (tool_merge_state IS NULL OR json_valid(tool_merge_state)),
-                                              <span class="c">-- private closed field-version enum</span>
   tool_error_kind  TEXT CHECK (tool_error_kind IS NULL OR tool_error_kind IN
                      ('permission','not_found','invalid_input','exit_nonzero',
                       'timeout','cancelled','provider','unknown')),
@@ -1478,13 +1461,13 @@ CREATE TABLE <b>message</b> (
           AND tool_correlation_key IS NOT NULL AND tool_correlation_kind IS NOT NULL
           AND tool_name IS NOT NULL AND tool_kind IS NOT NULL
           AND tool_status IS NOT NULL AND tool_status_basis IS NOT NULL
-          AND tool_detail IS NOT NULL AND tool_merge_state IS NOT NULL
+          AND tool_detail IS NOT NULL
           AND json_extract(tool_detail, '$.type') = tool_kind)
       OR (type != 'tool_use' AND tool_correlation_key IS NULL
           AND tool_correlation_kind IS NULL AND tool_native_id IS NULL
           AND tool_namespace IS NULL AND tool_provider IS NULL AND tool_name IS NULL
           AND tool_kind IS NULL AND tool_status IS NULL AND tool_status_basis IS NULL
-          AND tool_detail IS NULL AND tool_merge_state IS NULL AND parent_tool_native_id IS NULL
+          AND tool_detail IS NULL AND parent_tool_native_id IS NULL
           AND tool_error_kind IS NULL AND tool_error_summary IS NULL
           AND tool_diagnostic IS NULL AND tool_started_at IS NULL
           AND tool_completed_at IS NULL AND tool_duration_ms IS NULL)),
@@ -1595,10 +1578,10 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
     tool JSON. The timeline renders every action, attachment-only prose, citations, partial identities,
     unknown status, and synthetic grouping without native-key sniffing. Typed search fixtures prove every
     allowlisted lane and exclude discarded fields. Human/assistant prose queries retain their hit identities;
-    tool-noise queries are intentionally re-baselined rather than forced to match schema 7's digest.</p></div>
+    tool-noise queries are intentionally re-baselined rather than forced to match the legacy digest.</p></div>
     <div class="job"><h3>6 · Activate atomically</h3><p>Land common types, all nine adapter projectors,
     store/search consumers, protocol, client, and schema-version fail-closed behavior before publishing
-    the new projection. Rebuild privately from the unchanged ledger; do not migrate schema 7 rows.</p></div>
+    the new projection. Rebuild privately from the unchanged ledger; do not migrate legacy rows.</p></div>
   </div>
   <p class="small">Activation is a reviewed canonical/search semantics change, not a performance-only
   optimization: the new allowlist and exclusion oracle must be approved explicitly. After that baseline
@@ -1718,11 +1701,11 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
   </div>
 
   <!-- ================================================================ -->
-  <h2>The shipped SQLite projection</h2>
-  <p class="h2-note">This is the schema-7 implementation snapshot, retained here so the document stays
-  honest about running code. Its opaque tool columns are the gap replaced by the target message DDL
-  above. The next version is a private rebuild from the ledger, never an in-place migration. Search has
-  its own disposable SQLite generation; only the ledger is precious.</p>
+  <h2>Superseded schema-7 projection (historical)</h2>
+  <p class="h2-note">This snapshot is retained only to explain the storage reduction. It is not the
+  current contract: schema 11 uses the closed message DDL above and contains no serialized staging,
+  pending joins, opener copies, winner stamps, or tool-fact storage. Upgrades rebuild privately from the
+  ledger rather than migrating these legacy rows. Search has its own disposable generation.</p>
 
   <pre class="ddl"><span class="c">PRAGMA journal_mode = WAL;
 PRAGMA synchronous  = NORMAL;
@@ -1774,9 +1757,9 @@ CREATE TABLE <b>session</b> (
   root_session_id   TEXT NOT NULL REFERENCES session(id),  <span class="c">-- = id for roots; parents never change, set once</span>
   role              TEXT NOT NULL DEFAULT 'main', <span class="c">-- 'main' | 'subagent' | 'team'</span>
   title             TEXT,
-  meta_title        TEXT,                         <span class="c">-- best bounded/native title fact</span>
-  meta_title_rank   INTEGER NOT NULL DEFAULT 0,  <span class="c">-- 3 explicit · 2 generated · 1 fallback</span>
-  meta_title_at     INTEGER,                      <span class="c">-- source evidence time; not a cross-source clock</span>
+  title_rank        INTEGER NOT NULL DEFAULT 0,  <span class="c">-- selected title only: 3 explicit · 2 generated · 1 fallback</span>
+  title_at          INTEGER,                      <span class="c">-- winning native evidence time; not a candidate journal</span>
+  title_src_cursor  INTEGER,                      <span class="c">-- bounded winning provenance for source sweep/replay</span>
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
@@ -1786,6 +1769,7 @@ CREATE TABLE <b>session</b> (
 CREATE INDEX session_project ON session(project_id, updated_at DESC);
 CREATE INDEX session_runtime ON session(runtime_id, updated_at DESC);
 CREATE INDEX session_parent  ON session(parent_session_id);
+CREATE INDEX session_title_src ON session(title_src_cursor);
 
 CREATE TABLE <b>workspace_obs</b> (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -2050,8 +2034,8 @@ ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pr
     ledger. Tables are admitted by named consumers rather than a numeric budget. This model is a
     Phase-2 hypothesis checked and evidence-amended against 9 of 11 ground-truth packs, not yet ratified;
     Gemini and Cursor captures may still amend mappings without reopening the strict raw-versus-canonical
-    boundary. The typed message/tool contract is the next-schema candidate; schema 7 remains explicitly
-    labelled above until every evidence and activation gate passes and code, search, protocol, and clients
-    activate it together. Implementation design: ingest-engine.html.
+    boundary. The typed message/tool contract is active in schema 11 across code, search, protocol, and
+    clients. Fold patches and replacement generations remain process-local; only resolved user-facing
+    rows cross the canonical SQLite boundary. Implementation design: ingest-engine.html.
   </footer>
 </div>
