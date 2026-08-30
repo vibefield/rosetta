@@ -34,16 +34,21 @@ Three presentation rules hid the evidence:
 
 - the project ledger had no bucket for `project_id IS NULL`, hiding every
   Antigravity/Grok session in this projection;
-- the session list retained only roots, hiding 5,048 subagent/team sessions;
+- the session list retained only roots without embedding their 5,048 descendant
+  subagent/team sessions in the root transcript;
 - the badge component discarded runtime kinds without a bundled brand mark, making
   six implemented agents visually absent even when they contributed to a project.
 
-The app now has a synthetic, client-only **Unassigned sessions** project, defaults to
-**all** session threads with a roots/all control, opens search hits at the actual child
-session, and renders a deterministic initials badge for every unknown/unbundled runtime
-kind. Thinking, system, and summary rows are readable transcript asides instead of being
-discarded. “Unassigned” means exactly “the native records admitted so far contain no
-usable workspace fact”; it is not an agent classification or an ingest failure.
+The app now has a synthetic, client-only **Unassigned sessions** project. Only root
+threads appear in browse/search navigation; descendants are lazy, recursively embedded
+inside their canonical parent transcript, and a child search hit opens that root then
+expands to the actual descendant message. Proven native spawn links place a child under
+the delegate tool; parent-only evidence stays in an explicitly unanchored subthreads
+section instead of guessing by timestamps. The app also renders a deterministic initials
+badge for every unknown/unbundled runtime kind. Thinking, system, and summary rows are
+readable transcript asides instead of being discarded. “Unassigned” means exactly “the
+native records admitted so far contain no usable workspace fact”; it is not an agent
+classification or an ingest failure.
 
 A schema-6 metadata smoke against the same local roots used a temporary database and
 left the live daemon untouched. It matched 39,322 files with zero unidentified files
@@ -74,7 +79,7 @@ projection.
 | adapter | authoritative driven sources | gaps closed | deliberate evidence boundary |
 |---|---|---|---|
 | Antigravity CLI | transcript JSONL + metadata-only conversation-summary SQLite snapshot | admits summary-only sessions; explicit summary-index title, preview, cwd, parent/root and role; bounded checkpoint-objective fallback with stream/replay convergence; recognizes current `GENERIC` records | Antigravity IDE is a separate Tier-D surface; implicit protobuf/maintenance streams remain inventory |
-| Claude Code | root + subagent transcript JSONL | current organic type census; bounded complete-record title fallback; stream-level generated/custom title reconciliation; declared metadata variants retain schema-addition drift checks; child sessions are visible in the client | closed writer: rare teams/compaction records remain version-scoped organic evidence |
+| Claude Code | root + subagent transcript JSONL | current organic type census; bounded complete-record title fallback; stream-level generated/custom title reconciliation; declared metadata variants retain schema-addition drift checks; child sessions embed under their parent delegate when the result carries `agentId` | closed writer: rare teams/compaction records remain version-scoped organic evidence |
 | Codex | rollout JSONL + metadata-only `state_*.sqlite` snapshot | complete 0.150.1 writer vocabulary and tool/event projection; full current title bootstrap with generated-name precedence, 36-character Unicode-safe prompt fallback, legacy optional-column compatibility and incremental updates | an organic compaction replay fixture is still desirable; sparse `session_index.jsonl` is corroborating rather than required bootstrap state |
 | Copilot | events JSONL + bounded metadata-only `workspace.yaml` document snapshot | content-bearing 1.0.80 events; native generated/user title and cwd/timestamp admission; rename updates; body/path identity guard; all other declared events remain schema checked | the writer declares 53 event types while hermetic fixtures exercise a smaller hosted-model-independent subset; derived `session-store.db` remains excluded |
 | Grok | updates JSONL + metadata-only `summary.json` document snapshot | summary-only session admission; title, summary, cwd, start time and parent metadata; current update normalization remains single-rail to avoid duplicate chat-history/events | feedback/checkpoint bodies and some lifecycle variants have no primary captured body evidence |

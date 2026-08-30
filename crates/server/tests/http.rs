@@ -371,13 +371,44 @@ async fn detached_backend_never_masquerades_as_ready_empty_search() {
 
 #[tokio::test]
 async fn lists_serve_from_the_mirror_and_missing_sessions_are_404() {
-    let h = harness();
+    let mut h = harness();
+    let mut child = session("child");
+    child.parent_session_id = Some("s1".into());
+    child.root_session_id = "s1".into();
+    child.role = SessionRole::Subagent;
+    let mut grandchild = session("grandchild");
+    grandchild.parent_session_id = Some("child".into());
+    // A stale/self denormalized root must never override the authoritative
+    // parent edge and make this descendant browseable as a root.
+    grandchild.root_session_id = "grandchild".into();
+    grandchild.role = SessionRole::Subagent;
+    h.store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::SessionMeta(child.clone()),
+                IngestOp::SessionMeta(grandchild.clone()),
+            ],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    h.hub.rewarm(h.store.conn()).unwrap();
     let (status, body) = h.get("/api/sessions?limit=10").await;
     assert_eq!(status, StatusCode::OK);
     let parsed: SessionsResponse = serde_json::from_value(body).unwrap();
     assert_eq!(parsed.sessions.len(), 2);
+    assert!(
+        parsed
+            .sessions
+            .iter()
+            .all(|session| session.role == SessionRole::Main)
+    );
 
     let (status, _) = h.get("/api/sessions/s1").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = h.get("/api/sessions/child").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = h.get("/api/sessions/grandchild").await;
     assert_eq!(status, StatusCode::OK);
     let (status, body) = h.get("/api/sessions/ghost").await;
     assert_eq!(status, StatusCode::NOT_FOUND);

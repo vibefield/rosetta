@@ -574,6 +574,45 @@
 .ah-rung__result { color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
 .ah-rung[data-failed="true"] .ah-rung__result,
 .ah-rung[data-failed="true"] .ah-rung__verb { color: var(--vf-red); }
+.ah-rung[data-hit="true"] { animation: ah-land 1400ms ease; }
+
+/* A child run is part of the calling document. It borrows the work ladder's
+   rail instead of looking like another session/card, and opens lazily so a
+   root with many agents does not create a socket for every collapsed child. */
+.ah-subthread {
+  margin: 5px 0 7px 9px;
+  border-left: 1px solid var(--vf-hairline-strong);
+}
+.ah-subthread__head {
+  display: grid; grid-template-columns: 7px minmax(0, 1fr) auto 12px;
+  gap: 8px; align-items: center; width: 100%; min-height: 30px;
+  padding: 0 7px 0 9px; border: 0; background: transparent; text-align: left;
+  color: var(--vf-text-tertiary); font-size: 10.5px;
+}
+.ah-subthread__head:hover { color: var(--vf-text-secondary); background: var(--vf-fill-hover); }
+.ah-subthread__rail { width: 5px; height: 5px; border-radius: 999px; background: var(--vf-text-faint); }
+.ah-subthread[data-anchored="true"] .ah-subthread__rail { background: var(--vf-green); }
+.ah-subthread__title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-subthread__meta {
+  color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ah-subthread__chev { width: 12px; height: 12px; color: var(--vf-text-faint); }
+.ah-subthread__chev svg { width: 12px; height: 12px; display: block; transition: transform 180ms var(--vf-ease-island); }
+.ah-subthread[data-open="true"] .ah-subthread__chev svg { transform: rotate(90deg); }
+.ah-subthread__body {
+  margin-left: 9px; padding: 2px 4px 7px 13px; border-left: 1px solid var(--vf-hairline);
+}
+.ah-subthread__body .ah-tmsg { padding: 10px 0; }
+.ah-subthread__body .ah-tmsg p { font-size: 13px; }
+.ah-subthread__body .ah-work { margin-top: 8px; }
+.ah-subthread__empty { margin: 8px 0; color: var(--vf-text-faint); font-size: 11px; }
+.ah-unanchored { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--vf-hairline-strong); }
+.ah-unanchored__label {
+  margin-bottom: 5px; color: var(--vf-text-faint); font-size: 9.5px;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.ah-unanchored > .ah-subthread { margin-left: 0; }
 
 /* ── the two drawn markers ───────────────────────────────────────────────── */
 .ah-mark {

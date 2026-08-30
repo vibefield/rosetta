@@ -584,6 +584,58 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
 }
 
 #[test]
+fn delegate_result_links_the_canonical_child_session() {
+    let adapter = ClaudeCodeAdapter;
+    let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
+    let child_id = ids::session_id(&runtime_id, "a4f994cdced06ed01");
+    let (ops, _) = run(&[
+        assistant(
+            json!([{"type": "tool_use", "id": "toolu_spawn", "name": "Agent",
+                    "input": {"prompt": "go", "description": "sub"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_spawn"}]),
+            json!({"toolUseResult": {"agentId": "a4f994cdced06ed01"}}),
+        ),
+    ]);
+    let patch = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("delegate result patch");
+    assert_eq!(
+        patch.delegate_child_session_id.as_deref(),
+        Some(child_id.as_str())
+    );
+}
+
+#[test]
+fn incidental_agent_id_does_not_link_a_non_delegate_tool() {
+    let (ops, _) = run(&[
+        assistant(
+            json!([{"type": "tool_use", "id": "toolu_bash", "name": "Bash",
+                    "input": {"command": "printf done"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_bash"}]),
+            json!({"toolUseResult": {"agentId": "not-a-child"}}),
+        ),
+    ]);
+    let patch = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("tool result patch");
+    assert_eq!(patch.delegate_child_session_id, None);
+}
+
+#[test]
 fn read_image_results_do_not_cross_the_canonical_boundary() {
     let encoded_png_signature = "iVBORw0KGgo=";
     let (ops, _) = run(&[user(

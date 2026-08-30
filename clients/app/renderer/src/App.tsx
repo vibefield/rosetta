@@ -11,8 +11,9 @@ import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
 import { SearchStrip } from "./components/SearchStrip";
 import { SessionsColumn } from "./components/sessions";
-import type { SessionFacts, SessionScope } from "./components/sessions";
+import type { SessionFacts } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
+import type { ThreadFocus } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
 import { GitColumn, sessionFilePaths, useGuests } from "./components/git";
 import { WorktreeColumn } from "./components/worktree";
@@ -54,11 +55,10 @@ export default function App() {
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
   );
-  const [sort, setSort] = useState<ProjectSort>("spend");
+  const [sort, setSort] = useState<ProjectSort>("recent");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionScope, setSessionScope] = useState<SessionScope>("all");
-  const [focusId, setFocusId] = useState<string | null>(null);
+  const [focus, setFocus] = useState<ThreadFocus | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
   const search = useSearch(query);
@@ -117,23 +117,17 @@ export default function App() {
     return out;
   }, [stats]);
 
-  // Default selections once data lands; heal them when they go stale. The
-  // default is the top 30d spender, so it waits for the figures — picking
-  // before stats land would crown whichever project happened to list first.
+  // Default selections once data lands; heal them when they go stale. Match
+  // the project's initial selection to the list's recent-first ranking.
   useEffect(() => {
-    if (
-      projectViewModels.length === 0 ||
-      (projectIds.length > 0 && stats.size === 0)
-    ) {
-      return;
-    }
+    if (projectViewModels.length === 0) return;
     if (projectId === null || !projectById.has(projectId)) {
       const top = [...projectViewModels].sort(
-        (a, b) => b.tokensLast30Days - a.tokensLast30Days,
+        (a, b) => (b.lastActiveMs ?? 0) - (a.lastActiveMs ?? 0),
       )[0];
       setProjectId(top.row.id);
     }
-  }, [projectViewModels, projectById, projectId, stats, projectIds.length]);
+  }, [projectViewModels, projectById, projectId]);
 
   const projectSessions = useMemo(() => {
     if (projectId === null) return [];
@@ -141,10 +135,10 @@ export default function App() {
       .filter(
         (s) =>
           projectKey(s) === projectId &&
-          (sessionScope === "all" || s.id === s.root_session_id),
+          s.parent_session_id === null,
       )
       .sort((a, b) => b.updated_at - a.updated_at);
-  }, [meta, projectId, sessionScope]);
+  }, [meta, projectId]);
 
   useEffect(() => {
     if (projectSessions.length === 0) {
@@ -166,9 +160,9 @@ export default function App() {
   // order, and the ledger dedupes repeats.
   const sessionState = session?.stream_state ?? null;
   useEffect(() => {
-    if (sessionId === null || sessionState !== "pending" || !ingestActive) return;
+    if (sessionId === null || sessionState !== "pending" || ingest?.phase !== "backfilling") return;
     client.boost(sessionId).catch(() => {});
-  }, [sessionId, sessionState, ingestActive]);
+  }, [sessionId, sessionState, ingest?.phase]);
   const feed = useTimeline(sessionId);
   const usage = useProjectUsage(
     projectId === UNASSIGNED_PROJECT_ID ? null : projectId,
@@ -212,12 +206,11 @@ export default function App() {
     );
   }, [searching, search.response, meta, projectById]);
 
-  const openHit = (hitSession: SessionRow, hit: SearchHit) => {
+  const openHit = (rootSession: SessionRow, hit: SearchHit) => {
     setQuery("");
-    setProjectId(projectKey(hitSession));
-    setSessionScope("all");
-    setSessionId(hitSession.id);
-    setFocusId(hit.timeline_id);
+    setProjectId(projectKey(rootSession));
+    setSessionId(rootSession.id);
+    setFocus({ sessionId: hit.session_id, timelineId: hit.timeline_id });
   };
 
   const showReceipt = (text: string) => {
@@ -237,6 +230,7 @@ export default function App() {
         ...(ingest?.phase === "backfilling"
           ? [`warming${warming !== null ? ` ${Math.round(warming * 100)}%` : ""}`]
           : []),
+        ...(ingest?.phase === "metadata_ready" ? ["metadata audit · transcripts paused"] : []),
         // A fresh install has no index yet — that is warming, not failure;
         // "index failed" is reserved for a live daemon whose index broke.
         ...(readiness && readiness !== "ready" && !(ingestActive && readiness === "failed")
@@ -309,8 +303,6 @@ export default function App() {
               getRuntimeKind={kindOf}
               selectedSessionId={sessionId}
               usage={usage}
-              sessionScope={sessionScope}
-              onSessionScopeChange={setSessionScope}
               activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
               currentTimestamp={nowMs}
               ingest={ingest}
@@ -320,7 +312,6 @@ export default function App() {
                 if (searching) {
                   setQuery("");
                   setProjectId(projectKey(selectedSession));
-                  setSessionScope("all");
                 }
                 setSessionId(selectedSession.id);
               }}
@@ -339,10 +330,11 @@ export default function App() {
               isGitVisible={guests.available ? guests.gitVisible : null}
               onToggleGit={() => guests.toggle("git")}
               session={session}
+              sessions={meta?.sessions ?? []}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}
-              focusId={focusId}
-              onFocusConsumed={() => setFocusId(null)}
+              focus={focus}
+              onFocusConsumed={() => setFocus(null)}
               onReceipt={showReceipt}
               searchResults={searchResults}
               onOpenHit={openHit}

@@ -262,6 +262,7 @@ pub(crate) fn apply_snapshot_records(
     }
 
     let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
+    ctx.native_session_id = Some(file.native_session_id.clone());
     ctx.agent_version = file.agent_version.clone();
     ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
     ctx.src_cursor = Some(cursor.id);

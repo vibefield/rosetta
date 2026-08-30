@@ -532,6 +532,15 @@
       ordering. The fold keeps losing candidates in RAM/the ledger and persists only the selected
       title plus bounded winning provenance. Same-rank replacements use native time and a stable text
       tie, so native renames work while lower-confidence evidence cannot win merely by arriving later.</div>
+      <div class="evidence"><b>Presentation invariant:</b> sessions with no
+      <span class="f">parent_session_id</span> are top-level history/navigation
+      entries (and canonically have <span class="f">id = root_session_id</span>). Descendants
+      remain first-class addressable sessions for ingestion, provenance, search, and lazy loading, but
+      render inside their parent transcript. A proven
+      <span class="f">Delegate.child_session_id</span> places the child directly beneath its spawning
+      tool call. When the native source proves only the parent relationship, the child remains inside
+      that parent in an explicit unanchored-subthreads section; timestamp or adjacency is never used to
+      invent a spawn edge.</div>
       <div class="consumers-line"><span class="cchip">agent-view</span></div>
     </div>
 
@@ -549,7 +558,7 @@
         <span class="f">attachments[]</span><span class="n">typed image · document · audio · video · file references; inline bytes become content-addressed members</span>
         <span class="f">citations[]</span><span class="n">bounded source refs + validated prose spans; never uploaded-file attachments</span>
         <span class="f">usage</span><span class="n">per-turn normalized deltas</span>
-        <span class="f">parent tool ref</span><span class="n">anchors a spawned subagent thread when the source proves the relationship</span>
+        <span class="f">parent tool ref</span><span class="n">the tool row is an anchor candidate; a proven Delegate.child_session_id closes the edge to the embedded child thread</span>
         <span class="f">provenance</span><span class="n">agent version + raw ledger refs</span>
       </div>
       <div class="evidence"><b>Evidence status:</b> the closed action families fit 99.65% of observed calls

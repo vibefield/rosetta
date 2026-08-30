@@ -158,6 +158,7 @@
       "native_id": null,
       "request": null,
       "outcome": null,
+      "delegate_child_session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
       "status": {
         "value": "succeeded",
         "basis": "native_terminal_record"

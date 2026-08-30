@@ -356,6 +356,7 @@ fn ingest_file(
         .and_then(|(checkpoint, _)| checkpoint.tail_checkpoint());
 
     let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
+    ctx.native_session_id = Some(file.native_session_id.clone());
     ctx.agent_version = file.agent_version.clone();
     ctx.state = match &resumed {
         Some((_, _)) => None,

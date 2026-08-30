@@ -47,9 +47,28 @@ function compareProjectGroups(
   );
 }
 
+/** Resolve navigation from the authoritative parent chain. `root_session_id`
+ * remains a useful fallback for an orphaned retained child, but an immediate
+ * parent must never masquerade as a top-level thread for a nested hit. */
+function navigationRoot(
+  session: SessionRow,
+  sessions: ReadonlyMap<string, SessionRow>,
+): SessionRow | null {
+  let current = session;
+  const visited = new Set<string>();
+  while (current.parent_session_id !== null && !visited.has(current.id)) {
+    visited.add(current.id);
+    const parent = sessions.get(current.parent_session_id);
+    if (!parent) return sessions.get(session.root_session_id) ?? null;
+    current = parent;
+  }
+  return current.parent_session_id === null ? current : null;
+}
+
 /**
- * Groups protocol search hits once for every UI consumer. Hits referencing
- * unavailable sessions or projects are omitted because they cannot be opened.
+ * Groups protocol search hits once for every UI consumer. A child-session hit
+ * belongs to its root thread in navigation; the hit keeps its own session id
+ * so opening it can expand and land inside the embedded subthread.
  */
 export function createSearchResultsViewModel(
   hits: readonly SearchHit[],
@@ -60,9 +79,13 @@ export function createSearchResultsViewModel(
   const hitsBySessionId = new Map<string, SearchHit[]>();
 
   for (const hit of hits) {
-    const sessionHits = hitsBySessionId.get(hit.session_id);
+    const hitSession = sessionById.get(hit.session_id);
+    if (!hitSession) continue;
+    const rootSession = navigationRoot(hitSession, sessionById);
+    if (!rootSession) continue;
+    const sessionHits = hitsBySessionId.get(rootSession.id);
     if (sessionHits) sessionHits.push(hit);
-    else hitsBySessionId.set(hit.session_id, [hit]);
+    else hitsBySessionId.set(rootSession.id, [hit]);
   }
 
   const sessionsByProjectId = new Map<string, SessionSearchResult[]>();

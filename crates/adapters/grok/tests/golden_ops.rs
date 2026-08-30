@@ -81,6 +81,7 @@ fn context(adapter: &GrokAdapter, native_session_id: &str) -> NormalizeCtx {
     let runtime_id = ids::runtime_id(adapter.kind(), DATA_ROOT);
     let session_id = ids::session_id(&runtime_id, native_session_id);
     let mut ctx = NormalizeCtx::new(runtime_id, session_id);
+    ctx.native_session_id = Some(native_session_id.to_owned());
     ctx.state = adapter.init_state();
     ctx
 }

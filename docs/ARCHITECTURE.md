@@ -501,8 +501,9 @@ handshake**, its types live in `rosetta-protocol`, and a generated TypeScript pa
 again a silently breaking revision-id derivation. Golden contract tests freeze the wire
 format per protocol version.
 
-`GET /api/runtimes`, `/api/projects`, `/api/sessions`, and `/api/sessions/{id}` serve
-the metadata/browse side of the agent-view app; `/ws/meta` streams its changes.
+`GET /api/runtimes`, `/api/projects`, root-only `/api/sessions`, and addressable
+`/api/sessions/{id}` serve the metadata/browse side of the agent-view app; `/ws/meta`
+streams the complete topology so descendant timelines can be embedded recursively.
 
 **Metrics (job 3):**
 `WS /v1/metrics?families=usage,lifecycle&agent=…` — live distilled feed. Hot path is

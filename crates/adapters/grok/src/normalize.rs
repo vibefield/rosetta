@@ -17,7 +17,7 @@ use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, PlanRow, TaskRow, TaskStatus,
     TokenSnapshot,
 };
-use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
+use rosetta_core::timeline::{CorrelationDerivation, StatusBasis, ToolAction, ToolUpdatePatch};
 use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,6 +42,11 @@ pub struct GrokState {
     messages: BTreeMap<String, MessageRow>,
     current_model: Option<String>,
     responses: BTreeMap<String, ResponseTarget>,
+    /// Description → native spawn call ids. Grok's authoritative spawn event
+    /// repeats the request description and child session id but omits the
+    /// tool-call id. Only a unique exact description is strong enough to join.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pending_delegates: BTreeMap<String, Vec<String>>,
     plan_revision: i64,
 }
 
@@ -173,22 +178,10 @@ fn project(
             update.summary.as_ref().and_then(value_text),
             ops,
         ),
-        "subagent_spawned" => simple_message(
-            ctx,
-            line,
-            MessageKind::System,
-            "subagent_spawned",
-            update.description.clone(),
-            ops,
-        ),
-        "subagent_finished" => simple_message(
-            ctx,
-            line,
-            MessageKind::System,
-            "subagent_finished",
-            update.output.as_ref().and_then(value_text),
-            ops,
-        ),
+        "subagent_spawned" => subagent_spawned(ctx, state, line, ops),
+        // Completion output is machine plumbing. The ordinary tool lifecycle
+        // closes the visible delegate row; no second system message is useful.
+        "subagent_finished" => Ok(()),
         "plan" => plan(ctx, state, line, ops),
         "goal_updated" => goal(ctx, line, ops),
         "task_backgrounded" => task_backgrounded(ctx, line, ops),
@@ -406,6 +399,24 @@ fn tool_call(
             )
         }
     });
+    if matches!(
+        message.tool.as_ref().map(|tool| &tool.action),
+        Some(ToolAction::Delegate { .. })
+    ) {
+        message.branch_tool_id = Some(tool_id.to_owned());
+        if let Some(description) = input
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            state
+                .pending_delegates
+                .entry(description.to_owned())
+                .or_default()
+                .push(tool_id.to_owned());
+        }
+    }
     let timeline_id = message.timeline_id.clone();
     IngestOp::push_message(ops, message);
 
@@ -419,6 +430,53 @@ fn tool_call(
         ops.push(IngestOp::FileEdit(edit));
     }
     remember_response(state, prompt_id, timeline_id, 2);
+    Ok(())
+}
+
+fn subagent_spawned(
+    ctx: &NormalizeCtx,
+    state: &mut GrokState,
+    line: &UpdateLine,
+    ops: &mut Vec<IngestOp>,
+) -> Result<(), ()> {
+    let update = &line.params.update;
+    if let (Some(expected), Some(actual)) = (
+        ctx.native_session_id.as_deref(),
+        update.parent_session_id.as_deref(),
+    ) && expected != actual
+    {
+        return Err(());
+    }
+    let description = update
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(())?;
+    let child_native_id = update
+        .child_session_id
+        .as_deref()
+        .or(update.subagent_id.as_deref())
+        .filter(|value| !value.is_empty())
+        .ok_or(())?;
+
+    let correlation_key = match state.pending_delegates.get(description) {
+        Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
+        // Duplicate descriptions are not ordered evidence. Leave those
+        // children honestly unanchored instead of guessing by adjacency.
+        _ => return Ok(()),
+    };
+    state.pending_delegates.remove(description);
+    ops.push(IngestOp::ToolUpdate {
+        session_id: ctx.session_id.clone(),
+        correlation_key,
+        evidence: ctx.evidence(0),
+        patch: Box::new(ToolUpdatePatch {
+            delegate_child_session_id: Some(ids::session_id(&ctx.runtime_id, child_native_id)),
+            ..ToolUpdatePatch::default()
+        }),
+        at: stamp(line),
+    });
     Ok(())
 }
 
@@ -930,13 +988,15 @@ fn keys(value: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use rosetta_adapter_support::adapter::{LineStatus, NormalizeCtx};
-    use rosetta_core::IngestOp;
+    use rosetta_core::{IngestOp, ids};
 
     use super::{GrokState, ingest_line};
     use crate::spec;
 
     fn ctx() -> NormalizeCtx {
-        NormalizeCtx::new("runtime", "session")
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        ctx.native_session_id = Some("parent".into());
+        ctx
     }
 
     #[test]
@@ -967,5 +1027,25 @@ mod tests {
         let outcome = ingest_line(&mut ctx, &mut state, spec::UPDATES, line);
         assert!(matches!(outcome.status, LineStatus::HardError { .. }));
         assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+    }
+
+    #[test]
+    fn exact_spawn_description_links_the_delegate_to_the_child() {
+        let mut ctx = ctx();
+        let mut state = GrokState::default();
+        let call = br#"{"timestamp":1,"method":"session/update","params":{"sessionId":"parent","_meta":{"eventId":"e1","promptId":"p1","agentTimestampMs":1000},"update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"spawn_subagent","rawInput":{"description":"map store","prompt":"inspect the store"}}}}"#;
+        let spawned = br#"{"timestamp":2,"method":"session/update","params":{"sessionId":"parent","_meta":{"eventId":"e2","promptId":"p1","agentTimestampMs":2000},"update":{"sessionUpdate":"subagent_spawned","description":"map store","child_session_id":"child","parent_session_id":"parent","parent_prompt_id":"p1","subagent_id":"child"}}}"#;
+
+        let call = ingest_line(&mut ctx, &mut state, spec::UPDATES, call);
+        assert_eq!(call.status, LineStatus::Parsed);
+        let spawned = ingest_line(&mut ctx, &mut state, spec::UPDATES, spawned);
+        assert_eq!(spawned.status, LineStatus::Parsed);
+        let expected = ids::session_id("runtime", "child");
+        assert!(spawned.ops.iter().any(|op| matches!(
+            op,
+            IngestOp::ToolUpdate { correlation_key, patch, .. }
+                if correlation_key == "call-1"
+                    && patch.delegate_child_session_id.as_deref() == Some(expected.as_str())
+        )));
     }
 }

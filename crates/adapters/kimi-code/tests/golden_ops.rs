@@ -94,6 +94,7 @@ fn normalize(fixture: &WireFixture) -> (Vec<IngestOp>, Vec<String>) {
     let native = skim.session_id.expect("wire path has a native session id");
     let runtime_id = ids::runtime_id(adapter.kind(), DATA_ROOT);
     let mut ctx = NormalizeCtx::new(&runtime_id, ids::session_id(&runtime_id, &native));
+    ctx.native_session_id = Some(native);
     ctx.agent_version = skim.agent_version;
     ctx.state = adapter.init_state();
 

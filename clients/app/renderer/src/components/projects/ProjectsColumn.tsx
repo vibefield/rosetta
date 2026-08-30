@@ -6,11 +6,11 @@ import { PortfolioSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar, SegmentedControl, Veil } from "../ui";
 import { ProjectList } from "./ProjectList";
 
-export type ProjectSort = "spend" | "recent";
+export type ProjectSort = "recent" | "token";
 
 const PROJECT_SORT_OPTIONS = [
-  { value: "spend", label: "spend" },
   { value: "recent", label: "recent" },
+  { value: "token", label: "token" },
 ] as const;
 
 export interface ProjectsColumnProps {
@@ -85,7 +85,7 @@ export function ProjectsColumn({
           onProjectSelect={onProjectSelect}
         />
       )}
-      <ListToolbar label="spend over 30d">
+      <ListToolbar label="tokens over 30d">
         <SegmentedControl
           value={sort}
           options={PROJECT_SORT_OPTIONS}

@@ -11,7 +11,7 @@
 //! derived from the session id plus a stable discriminator, so replaying a file
 //! twice produces byte-identical ops.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rosetta_adapter_support::tool::{
@@ -64,6 +64,11 @@ pub struct ClaudeCodeState {
     /// resume and branch replay assign the same canonical block index.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     responses: BTreeMap<String, ClaudeResponseState>,
+    /// Result records carry no tool name. Retain only confirmed Agent/Task
+    /// opener ids so an incidental `agentId` field cannot link an unrelated
+    /// tool to a child session.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    delegate_calls: BTreeSet<String>,
 }
 
 impl ClaudeCodeState {
@@ -97,6 +102,14 @@ impl ClaudeCodeState {
         if let Some(response) = self.responses.get_mut(response_id) {
             response.usage = Some(usage);
         }
+    }
+
+    fn remember_delegate_call(&mut self, tool_use_id: &str) {
+        self.delegate_calls.insert(tool_use_id.to_owned());
+    }
+
+    fn take_delegate_call(&mut self, tool_use_id: &str) -> bool {
+        self.delegate_calls.remove(tool_use_id)
     }
 }
 
@@ -245,6 +258,13 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
                         tool_use_id,
                         content: content.as_ref(),
                         is_error: *is_error,
+                        delegate_child_native_id: line
+                            .tool_use_result
+                            .as_ref()
+                            .and_then(|result| result.get("agentId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned),
                     }),
                     UserContentBlock::Known(KnownUserBlock::Image { source, .. }) => {
                         match authored_attachment(AttachmentKind::Image, source) {
@@ -363,6 +383,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 });
                 if SPAWN_TOOLS.contains(&name.as_str()) {
                     row.branch_tool_id = Some(id.clone());
+                    emit.remember_delegate_call(id);
                 }
                 let edit = file_edit(&row, name, input, ts);
                 rows.push((row, edit));
@@ -718,6 +739,7 @@ struct ToolResultBlock<'a> {
     tool_use_id: &'a str,
     content: Option<&'a Value>,
     is_error: Option<bool>,
+    delegate_child_native_id: Option<String>,
 }
 
 /// The per-line fields every row from that line inherits.
@@ -820,23 +842,49 @@ impl<'a> Emit<'a> {
         }
     }
 
+    fn remember_delegate_call(&mut self, tool_use_id: &str) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_delegate_call(tool_use_id);
+        }
+    }
+
+    fn take_delegate_call(&mut self, tool_use_id: &str) -> bool {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .is_some_and(|state| state.take_delegate_call(tool_use_id))
+    }
+
     fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
         let diagnostic = result
             .is_error
             .is_some_and(|is_error| is_error)
             .then(|| result_text(result.content))
             .flatten();
+        let mut patch = terminal_update(
+            result.is_error,
+            true,
+            StatusBasis::NativeTerminalRecord,
+            at,
+            diagnostic.as_deref(),
+        );
+        if self.take_delegate_call(result.tool_use_id) {
+            patch.delegate_child_session_id = result
+                .delegate_child_native_id
+                .as_deref()
+                .map(|native| ids::session_id(&self.ctx.runtime_id, native));
+        }
         self.ops.push(IngestOp::ToolUpdate {
             session_id: self.session_id.clone(),
             correlation_key: result.tool_use_id.to_owned(),
             evidence: self.ctx.evidence(mutation_index),
-            patch: Box::new(terminal_update(
-                result.is_error,
-                true,
-                StatusBasis::NativeTerminalRecord,
-                at,
-                diagnostic.as_deref(),
-            )),
+            patch: Box::new(patch),
             at,
         });
     }

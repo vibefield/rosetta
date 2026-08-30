@@ -131,6 +131,10 @@ impl LineOutcome {
 pub struct NormalizeCtx {
     pub runtime_id: String,
     pub session_id: String,
+    /// The adapter's native identity for this session. Kept in process so a
+    /// proven child id in a tool result can be converted to the canonical
+    /// session id without persisting a second reconciliation vocabulary.
+    pub native_session_id: Option<String>,
     pub agent_version: Option<String>,
     /// Next presentation ordinal to assign; adapters take and increment.
     pub next_ordinal: i64,
@@ -153,6 +157,7 @@ impl NormalizeCtx {
         Self {
             runtime_id: runtime_id.into(),
             session_id: session_id.into(),
+            native_session_id: None,
             agent_version: None,
             next_ordinal: 0,
             cumulative: CumulativeUsage::new(),

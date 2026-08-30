@@ -5,6 +5,8 @@
 //! usage later carried by `step.end`. This projection takes the message rail
 //! and the dedicated usage rail exactly once.
 
+use std::collections::BTreeSet;
+
 use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
@@ -53,6 +55,10 @@ pub struct KimiCodeState {
     model: Option<String>,
     effort: Option<String>,
     pending_usage: Option<TokenSnapshot>,
+    /// Result records carry no tool name. Remember only reviewed Agent calls
+    /// so unrelated successful output cannot masquerade as a child link.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    delegate_calls: BTreeSet<String>,
 }
 
 pub fn ingest_line(
@@ -429,7 +435,7 @@ fn loop_event(
     match line.event.event_type.as_str() {
         "content.part" => content_part(ctx, state, stream_id, line, ops),
         "tool.call" => tool_call(ctx, state, stream_id, line, ops),
-        "tool.result" => tool_result(ctx, stream_id, line, ops),
+        "tool.result" => tool_result(ctx, state, stream_id, line, ops),
         declared if spec::declared_loop_event_types().contains(declared) => LineStatus::Parsed,
         other => {
             ops.push(drift(
@@ -590,6 +596,7 @@ fn tool_call(
     });
     if name == "Agent" {
         row.branch_tool_id = Some(tool_id.to_owned());
+        state.delegate_calls.insert(tool_id.to_owned());
     }
     stamp_response(&mut row, state);
     IngestOp::push_message(ops, row);
@@ -598,6 +605,7 @@ fn tool_call(
 
 fn tool_result(
     ctx: &NormalizeCtx,
+    state: &mut KimiCodeState,
     stream_id: &str,
     line: &ContextAppendLoopEventLine,
     ops: &mut Vec<IngestOp>,
@@ -645,20 +653,44 @@ fn tool_result(
             );
         }
     };
+    let delegate_child_session_id = state
+        .delegate_calls
+        .remove(tool_id)
+        .then(|| text.as_deref().and_then(delegate_agent_id))
+        .flatten()
+        .zip(ctx.native_session_id.as_deref())
+        .map(|(agent_id, native_session_id)| {
+            let root = native_session_id
+                .split_once("/agents/")
+                .map_or(native_session_id, |(root, _)| root);
+            ids::session_id(&ctx.runtime_id, &format!("{root}/agents/{agent_id}"))
+        });
+    let mut patch = terminal_update(
+        result.is_error,
+        true,
+        rosetta_core::StatusBasis::NativeTerminalRecord,
+        Some(ts),
+        text.as_deref(),
+    );
+    patch.delegate_child_session_id = delegate_child_session_id;
     ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
         correlation_key: tool_id.to_owned(),
         evidence: ctx.evidence(0),
-        patch: Box::new(terminal_update(
-            result.is_error,
-            true,
-            rosetta_core::StatusBasis::NativeTerminalRecord,
-            Some(ts),
-            text.as_deref(),
-        )),
+        patch: Box::new(patch),
         at: Some(ts),
     });
     LineStatus::Parsed
+}
+
+/// Kimi's reviewed Agent result protocol emits one stable `agent_id:` line.
+/// Successful command output is otherwise discarded at normalization.
+fn delegate_agent_id(text: &str) -> Option<&str> {
+    text.lines().find_map(|line| {
+        line.strip_prefix("agent_id:")
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && !id.chars().any(char::is_whitespace))
+    })
 }
 
 fn content_part_failure(

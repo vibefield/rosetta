@@ -8,5 +8,4 @@ export { SessionsColumn } from "./SessionsColumn";
 export type { SessionsColumnProps } from "./SessionsColumn";
 export type {
   SessionFacts,
-  SessionScope,
 } from "./types";

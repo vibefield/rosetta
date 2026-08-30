@@ -451,6 +451,11 @@ async fn sessions(
 ) -> Json<SessionsResponse> {
     let limit = clamp_limit(query.limit, DEFAULT_LIST_LIMIT) as usize;
     let mut sessions = state.hub.sessions();
+    // Child sessions are transcript structure, not browseable top-level
+    // history. Parent absence is the authoritative navigation fact; some
+    // native formats reveal an immediate parent before the denormalized root
+    // can be transitively refined. Children remain addressable by id.
+    sessions.retain(|session| session.parent_session_id.is_none());
     if let Some(project) = &query.project {
         sessions.retain(|session| session.project_id.as_deref() == Some(project));
     }

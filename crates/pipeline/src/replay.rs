@@ -540,6 +540,7 @@ fn open_file(
     };
 
     let mut ctx = NormalizeCtx::new(runtime.id.as_str(), source.session_id.as_str());
+    ctx.native_session_id = Some(source.native_session_id.clone());
     ctx.agent_version = source.agent_version.clone();
     ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
     ctx.src_cursor = Some(cursor.id);

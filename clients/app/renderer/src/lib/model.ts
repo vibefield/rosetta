@@ -137,7 +137,7 @@ export function buildProjectViewModel(
     (session) => projectKey(session) === projectRow.id,
   );
   const rootSessions = projectSessions.filter(
-    (session) => session.id === session.root_session_id,
+    (session) => session.parent_session_id === null,
   );
   const indexedSessionCount = projectSessions.filter(
     (session) => session.stream_state === "indexed",

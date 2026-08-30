@@ -56,6 +56,7 @@ fn context(path: &Path) -> (String, NormalizeCtx) {
     let native = skim.session_id.expect("native wire identity");
     let runtime_id = ids::runtime_id(adapter.kind(), DATA_ROOT);
     let mut ctx = NormalizeCtx::new(&runtime_id, ids::session_id(&runtime_id, &native));
+    ctx.native_session_id = Some(native.clone());
     ctx.state = adapter.init_state();
     (native, ctx)
 }
@@ -253,6 +254,12 @@ fn root_and_child_wires_have_separate_ordinals_and_state() {
             .any(|row| row.parent_tool_native_id.as_deref() == Some("call_mock_0005"))
     );
     assert!(child.iter().all(|row| row.parent_tool_native_id.is_none()));
+    let child_session_id = ids::session_id(&root_ctx.runtime_id, &child_native);
+    assert!(root_ops.iter().any(|op| matches!(
+        op,
+        IngestOp::ToolUpdate { patch, .. }
+            if patch.delegate_child_session_id.as_deref() == Some(child_session_id.as_str())
+    )));
 
     let root_state = KimiCodeAdapter
         .checkpoint_state(root_ctx.state.as_deref())

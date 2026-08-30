@@ -2158,6 +2158,33 @@ impl ToolInteraction {
             );
         }
 
+        if let Some(child_session_id) = patch
+            .delegate_child_session_id
+            .as_ref()
+            .filter(|id| !id.is_empty())
+        {
+            let ToolAction::Delegate {
+                child_session_id: current,
+                ..
+            } = &mut self.action
+            else {
+                return Err(CanonicalError::Invalid(
+                    "delegate child link applied to a non-delegate action".into(),
+                ));
+            };
+            let stamp = EvidenceStamp {
+                rank: 110,
+                order: evidence.clone(),
+            };
+            changed |= merge_optional_value(
+                current,
+                &Some(child_session_id.clone()),
+                state,
+                ToolField::ChildSessionId,
+                &stamp,
+            );
+        }
+
         if let Some(status) = patch.status {
             let stamp = EvidenceStamp {
                 rank: status_rank(status.basis),
@@ -3344,6 +3371,11 @@ pub struct ToolUpdatePatch {
     pub native_id: Option<String>,
     pub request: Option<ToolRequestPatch>,
     pub outcome: Option<ToolOutcomePatch>,
+    /// Sparse, user-facing linkage proven by a native spawn/result record.
+    /// Applied only to [`ToolAction::Delegate`], so adapters need not invent
+    /// request fields merely to attach a child after the opener was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_child_session_id: Option<String>,
     pub status: Option<ToolStatusFact>,
     pub failure: Option<ToolFailure>,
     pub timing: Option<ToolTiming>,
@@ -4185,6 +4217,56 @@ mod tests {
         };
         assert!(
             tool.apply_patch(&mut ToolFoldState::default(), &patch, &evidence("a", 1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn sparse_child_link_only_applies_to_delegate_actions() {
+        let mut delegate = ToolInteraction {
+            action: ToolAction::Delegate {
+                agent_kind: None,
+                name: None,
+                model: None,
+                mode: None,
+                objective: CanonicalText::inline("inspect the store").unwrap(),
+                child_session_id: None,
+                resume_id: None,
+                background: false,
+                orphan_result_summary: None,
+            },
+            ..ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "delegate")
+        };
+        let patch = ToolUpdatePatch {
+            delegate_child_session_id: Some("child-1".into()),
+            ..Default::default()
+        };
+        assert!(
+            delegate
+                .apply_patch(&mut ToolFoldState::default(), &patch, &evidence("a", 1))
+                .unwrap()
+        );
+        assert!(matches!(
+            delegate.action,
+            ToolAction::Delegate {
+                child_session_id: Some(ref id),
+                ..
+            } if id == "child-1"
+        ));
+
+        let mut shell = ToolInteraction {
+            action: ToolAction::Shell {
+                command: CanonicalText::inline("true").unwrap(),
+                cwd: None,
+                timeout_ms: None,
+                background: false,
+                outcome: None,
+            },
+            ..ToolInteraction::unknown("t2", CorrelationDerivation::NativeId, "shell")
+        };
+        assert!(
+            shell
+                .apply_patch(&mut ToolFoldState::default(), &patch, &evidence("a", 1))
                 .is_err()
         );
     }

@@ -3,14 +3,9 @@ import { censusProgress, isCensusRunning, isIngestActive, sessionCountLabel } fr
 import type { ProjectViewModel } from "../../lib/model";
 import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { ProjectSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader, ListToolbar, SegmentedControl, Veil } from "../ui";
+import { ListSummaryHeader, ListToolbar, Veil } from "../ui";
 import { SessionList } from "./SessionList";
-import type { SessionFacts, SessionScope } from "./types";
-
-const SESSION_SCOPE_OPTIONS = [
-  { value: "roots", label: "roots" },
-  { value: "all", label: "all" },
-] as const;
+import type { SessionFacts } from "./types";
 
 export interface SessionsColumnProps {
   readonly project: ProjectViewModel | null;
@@ -20,8 +15,6 @@ export interface SessionsColumnProps {
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly selectedSessionId: string | null;
   readonly usage: UsageResponse | null;
-  readonly sessionScope: SessionScope;
-  readonly onSessionScopeChange: (scope: SessionScope) => void;
   readonly activityGridStartTimestamp: number;
   readonly currentTimestamp: number;
   /** The daemon's cold-start block; null on a daemon too old to carry it. */
@@ -41,8 +34,6 @@ export function SessionsColumn({
   getRuntimeKind,
   selectedSessionId,
   usage,
-  sessionScope,
-  onSessionScopeChange,
   activityGridStartTimestamp,
   currentTimestamp,
   ingest,
@@ -78,17 +69,7 @@ export function SessionsColumn({
           onToggleWorktree={onToggleWorktree}
         />
       )}
-      <ListToolbar label={isSearching ? "ranked by hits" : "session threads"}>
-        {!isSearching && (
-          <SegmentedControl
-            value={sessionScope}
-            options={SESSION_SCOPE_OPTIONS}
-            accessibleLabel="Show session threads"
-            className="ah-sortseg"
-            onValueChange={onSessionScopeChange}
-          />
-        )}
-      </ListToolbar>
+      <ListToolbar label={isSearching ? "ranked by hits" : "session threads"} />
       <div className="ah-veilhost">
         {searchGroups === null ? (
           <SessionList

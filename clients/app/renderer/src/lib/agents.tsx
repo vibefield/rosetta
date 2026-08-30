@@ -6,8 +6,14 @@ import { AGENT_PATHS } from "./agent-paths";
 
 /** rosetta runtime kinds → bundled brand marks. */
 const KIND_TO_MARK: Record<string, string> = {
+  antigravity: "antigravity",
   "claude-code": "claudecode",
   codex: "codex",
+  grok: "grok",
+  hermes: "hermesagent",
+  "kimi-code": "kimi",
+  opencode: "opencode",
+  pi: "pi",
   cursor: "cursor",
   "gemini-cli": "geminicli",
   "github-copilot": "githubcopilot",
@@ -15,15 +21,6 @@ const KIND_TO_MARK: Record<string, string> = {
   windsurf: "windsurf",
   amp: "amp",
   cline: "cline",
-};
-
-const KIND_LABELS: Record<string, string> = {
-  antigravity: "Antigravity",
-  grok: "Grok",
-  hermes: "Hermes",
-  "kimi-code": "Kimi Code",
-  opencode: "OpenCode",
-  pi: "Pi",
 };
 
 export function markIdForKind(kind: string): string | null {
@@ -34,7 +31,6 @@ export function agentLabel(kind: string): string {
   const id = markIdForKind(kind);
   if (id) return AGENT_PATHS[id].label;
   return (
-    KIND_LABELS[kind] ??
     kind
       .split(/[-_]/)
       .filter(Boolean)
