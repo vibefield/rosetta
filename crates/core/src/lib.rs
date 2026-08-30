@@ -8,6 +8,7 @@ pub mod fold;
 pub mod ids;
 pub mod ops;
 pub mod rows;
+pub mod timeline;
 
 pub use assets::ImageAsset;
 pub use ops::IngestOp;
@@ -15,4 +16,11 @@ pub use rows::{
     DriftFact, EditKind, FileEditRow, GitCommitRow, MessageKind, MessageRow, Ms, PlanRow,
     ProjectRow, RuntimeRow, SessionRole, SessionRow, SessionTitleRow, SessionUsageRow, StreamState,
     TaskRow, TaskStatus, TitleKind, TokenSnapshot, ToolCall, WorkspaceObsRow,
+};
+pub use timeline::{
+    CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, EvidenceStamp,
+    GroupDerivation, GroupKind, NativeToolRef, Provenance, ResponseGroup, SearchLanes,
+    SourceIdentity, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
+    ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction, ToolMergeState, ToolMutation,
+    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
 };
