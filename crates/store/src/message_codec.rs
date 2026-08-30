@@ -151,7 +151,7 @@ pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
     let kind: String = row.get("type")?;
     let content: Option<String> = row.get("content")?;
     let detail = parse_detail(row)?;
-    let (tool, _) = tool_codec::decode(row)?;
+    let tool = tool_codec::decode(row)?;
     let body = match kind.as_str() {
         "user" => {
             let (member, attachments, citations) = prose_detail(detail)?;

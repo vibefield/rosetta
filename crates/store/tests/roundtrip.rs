@@ -206,6 +206,38 @@ fn install_cursor(store: &mut Store, path: &str) -> i64 {
         .id
 }
 
+fn assert_tool_reconciliation_is_ram_only(store: &Store) {
+    let private_tables: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE name IN (
+               'tool_update_fact', 'pending_merge', 'source_op', 'session_title_fact'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        private_tables, 0,
+        "normalized staging and late joins must not have a SQLite journal"
+    );
+
+    let private_columns: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('message')
+             WHERE name IN ('tool_open', 'tool_merge_state')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        private_columns, 0,
+        "opener copies and merge stamps must remain process-local"
+    );
+}
+
 #[test]
 fn private_cold_reconciliation_folds_cross_source_relations_once_in_ram() {
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
@@ -299,18 +331,16 @@ fn private_cold_reconciliation_folds_cross_source_relations_once_in_ram() {
         1,
         "only non-relational rows reach SQLite before the runtime closes"
     );
-    for table in ["tool_update_fact", "file_edit", "pending_merge"] {
-        assert_eq!(
-            store
-                .conn()
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .unwrap(),
-            0,
-            "{table} must not be used as a cold reconciliation queue"
-        );
-    }
+    assert_tool_reconciliation_is_ram_only(&store);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM file_edit", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "file edits must not be projected before their relation closes"
+    );
 
     let stats = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(stats.messages_inserted, 1);
@@ -320,20 +350,11 @@ fn private_cold_reconciliation_folds_cross_source_relations_once_in_ram() {
     assert_eq!(stats.usage_applied, 1);
     assert_eq!(stats.usage_unmatched, 0);
     assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
-    assert_eq!(stats.profile.bulk_tool_facts_written, 2);
     assert_eq!(stats.profile.message_lookup_nanos, 0);
     assert_eq!(stats.profile.tool_result_lookup_nanos, 0);
     assert_eq!(stats.profile.usage_lookup_nanos, 0);
     assert_eq!(stats.profile.usage_write_nanos, 0);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        2,
-        "native and source-finalization facts remain for future subtraction"
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(
         store
             .conn()
@@ -425,7 +446,6 @@ fn private_cold_reconciliation_discards_superseded_ram_generation() {
 
     let stats = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
-    assert_eq!(stats.profile.bulk_tool_facts_written, 2);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     let tool = entry_tool(&page[0]).unwrap();
     assert_eq!(tool.status.value, ToolStatus::Succeeded);
@@ -433,18 +453,7 @@ fn private_cold_reconciliation_discards_superseded_ram_generation() {
         panic!("expected the replacement shell action")
     };
     assert_eq!(command.as_preview(), "new command");
-    let generations: Vec<i64> = {
-        let mut statement = store
-            .conn()
-            .prepare("SELECT DISTINCT generation FROM tool_update_fact ORDER BY generation")
-            .unwrap();
-        statement
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap()
-    };
-    assert_eq!(generations, vec![2]);
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
@@ -521,17 +530,7 @@ fn private_cold_abandoned_replacement_keeps_buffered_active_generation() {
         panic!("expected the active shell action")
     };
     assert_eq!(command.as_preview(), "keep this command");
-    assert_eq!(
-        store
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM tool_update_fact WHERE generation = 2",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        0
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
@@ -610,7 +609,6 @@ fn private_cold_buffer_deduplicates_retries_and_rejects_source_conflicts() {
         .unwrap();
     let stats = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(stats.messages_inserted, 1, "the exact retry folds once");
-    assert_eq!(stats.profile.bulk_tool_facts_written, 1);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].timeline_id, "retry-call");
@@ -654,7 +652,6 @@ fn private_cold_duplicate_timeline_opener_uses_last_source_position() {
     let stats = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(stats.messages_inserted, 1);
     assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
-    assert_eq!(stats.profile.bulk_tool_facts_written, 2);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].timeline_id, "branched-call");
@@ -721,7 +718,6 @@ fn private_cold_append_refolds_existing_tool_once_per_correlation() {
     let stats = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(stats.messages_inserted, 0);
     assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
-    assert_eq!(stats.profile.bulk_tool_facts_written, 1);
     assert_eq!(stats.tool_results_merged, 1);
     assert_eq!(stats.tool_results_unmatched, 0);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
@@ -729,18 +725,11 @@ fn private_cold_append_refolds_existing_tool_once_per_correlation() {
         entry_tool(&page[0]).unwrap().status.value,
         ToolStatus::Failed
     );
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        3
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
-fn private_cold_replacement_subtracts_sibling_fact_in_ram() {
+fn private_cold_replacement_heals_from_sibling_replay_in_ram() {
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
     store.apply(&base_batch()).unwrap();
     let opener_cursor = install_cursor(&mut store, "opener.jsonl");
@@ -792,8 +781,8 @@ fn private_cold_replacement_subtracts_sibling_fact_in_ram() {
     );
 
     // The result source was rewritten and no longer contains its terminal
-    // fact. Its sibling-owned opener must be refolded from the surviving
-    // source-finalization evidence without a per-fact SQLite update loop.
+    // update. Replaying the affected sibling source reconstructs the opener;
+    // no per-fact SQLite subtraction exists.
     store
         .apply(&Batch {
             source: Some(SourceWrite {
@@ -806,14 +795,33 @@ fn private_cold_replacement_subtracts_sibling_fact_in_ram() {
             ..Batch::default()
         })
         .unwrap();
+
+    let mut replayed_opener = message("sibling-call", 0, MessageKind::ToolUse);
+    replayed_opener.content = None;
+    replayed_opener.tool = Some(shell_tool("sibling-tool", "true"));
+    replayed_opener.src_cursor = Some(opener_cursor);
+    replayed_opener.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![message_op(replayed_opener)],
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
     let stats = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
-    assert_eq!(stats.profile.bulk_tool_facts_written, 0);
     assert_eq!(stats.profile.tool_result_lookup_nanos, 0);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     let tool = entry_tool(&page[0]).unwrap();
     assert_eq!(tool.status.value, ToolStatus::Unknown);
     assert_eq!(tool.status.basis, StatusBasis::SourceFinalization);
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
@@ -848,14 +856,7 @@ fn private_cold_usage_preserves_pending_then_current_order_across_flushes() {
         .unwrap();
     let first = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(first.usage_unmatched, 1);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
 
     let mut opener = message("late-call", 0, MessageKind::ToolUse);
     opener.content = None;
@@ -877,14 +878,7 @@ fn private_cold_usage_preserves_pending_then_current_order_across_flushes() {
         .unwrap();
     let second = store.flush_bulk_reconciliation().unwrap();
     assert_eq!(second.usage_applied, 2);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(page[0].usage.input, Some(2));
 }
@@ -1109,7 +1103,7 @@ fn streamed_title_singletons_refine_meta_with_custom_precedence() {
 }
 
 #[test]
-fn explicit_meta_title_outranks_a_newer_stream_fallback() {
+fn explicit_title_outranks_a_newer_stream_fallback() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     store
@@ -1203,9 +1197,6 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
         .unwrap();
     assert_eq!(stats.messages_inserted, 1);
     assert_eq!(stats.profile.message_attempts, 1);
-    assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 1);
-    assert_eq!(stats.profile.pending_lookups, 0);
     assert_eq!(stats.profile.session_touch_attempts, 1);
 
     let stats = store
@@ -1229,7 +1220,8 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
     assert!(hits.is_empty());
     assert_eq!(queries::search(store.conn(), "cargo", 5).unwrap().len(), 1);
 
-    // A result with no matching call is retained until the call arrives.
+    // A result with no matching call waits only in process RAM until the call
+    // arrives. The raw ledger is the restart path; SQLite stays user-facing.
     let stats = store
         .apply(&Batch {
             ops: vec![status_update("toolu_missing", ToolStatus::Succeeded, 2)],
@@ -1239,16 +1231,7 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
         .unwrap();
     assert_eq!(stats.tool_results_unmatched, 1);
     assert_eq!(stats.profile.tool_result_attempts, 1);
-    assert_eq!(stats.profile.pending_queues, 0);
-    let pending: i64 = store
-        .conn()
-        .query_row(
-            "SELECT COUNT(*) FROM tool_update_fact WHERE correlation_key = 'toolu_missing'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(pending, 1);
+    assert_tool_reconciliation_is_ram_only(&store);
 
     let mut late_call = message("m-tool-late", 1, MessageKind::ToolUse);
     late_call.tool = Some(shell_tool("toolu_missing", "true"));
@@ -1261,19 +1244,8 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
         .unwrap();
     assert_eq!(stats.tool_results_merged, 1);
     assert_eq!(stats.profile.message_attempts, 1);
-    assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 1);
-    assert_eq!(stats.profile.pending_lookups, 0);
-    assert_eq!(stats.profile.pending_rows, 0);
-    assert_eq!(stats.profile.tool_result_attempts, 0);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    assert_eq!(stats.profile.tool_result_attempts, 1);
+    assert_tool_reconciliation_is_ram_only(&store);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     let late = page
         .iter()
@@ -1286,7 +1258,7 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
 }
 
 #[test]
-fn replacing_a_sibling_source_subtracts_its_tool_fact() {
+fn replacing_a_sibling_source_is_healed_by_affected_scope_replay() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     for path in ["p/opener.jsonl", "p/result.jsonl"] {
@@ -1394,9 +1366,8 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
     );
 
     // An empty replacement generation means the terminal record vanished.
-    // The completed opener source retains its low-authority finalization fact,
-    // so reconciliation returns to unknown rather than fabricating success or
-    // presenting a completed historical call as still pending.
+    // The store does not retain a shadow fact to subtract. The pipeline's
+    // affected-session healer replays the sibling opener from the raw ledger.
     store
         .apply(&Batch {
             source: Some(SourceWrite {
@@ -1421,22 +1392,46 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
             ..Batch::default()
         })
         .unwrap();
+
+    let mut replayed_opener = message("cross-source-tool", 0, MessageKind::ToolUse);
+    replayed_opener.tool = Some(shell_tool("cross-source-key", "true"));
+    replayed_opener.src_cursor = Some(opener_cursor.id);
+    replayed_opener.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![message_op(replayed_opener)],
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     let tool = entry_tool(&page[0]).cloned().unwrap();
     assert_eq!(tool.status.value, ToolStatus::Unknown);
     assert_eq!(tool.status.basis, StatusBasis::SourceFinalization);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
-fn empty_pending_table_is_checked_once_for_the_whole_batch() {
+fn ordinary_messages_need_no_reconciliation_storage() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     let ops = (0..16)
@@ -1457,13 +1452,12 @@ fn empty_pending_table_is_checked_once_for_the_whole_batch() {
         })
         .unwrap();
 
-    assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 16);
-    assert_eq!(stats.profile.pending_lookups, 0);
+    assert_eq!(stats.messages_inserted, 16);
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
-fn queued_tool_update_folds_from_the_typed_fact_table_inside_the_same_batch() {
+fn pre_opener_tool_update_folds_in_ram_inside_the_same_batch() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     let mut call = message("same-batch-call", 0, MessageKind::ToolUse);
@@ -1480,22 +1474,9 @@ fn queued_tool_update_folds_from_the_typed_fact_table_inside_the_same_batch() {
         })
         .unwrap();
 
-    assert_eq!(stats.tool_results_unmatched, 1);
+    assert_eq!(stats.tool_results_unmatched, 0);
     assert_eq!(stats.tool_results_merged, 1);
-    assert_eq!(stats.profile.pending_queues, 0);
-    assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 1);
-    assert_eq!(stats.profile.pending_lookups, 0);
-    assert_eq!(stats.profile.pending_rows, 0);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap(),
-        1
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(
         entry_tool(&page[0]).unwrap().status.value,
@@ -1504,7 +1485,7 @@ fn queued_tool_update_folds_from_the_typed_fact_table_inside_the_same_batch() {
 }
 
 #[test]
-fn every_pre_opener_tool_fact_is_retained_and_folded() {
+fn every_pre_opener_tool_update_is_folded_once_in_ram() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     let native_id = IngestOp::ToolUpdate {
@@ -1541,14 +1522,7 @@ fn every_pre_opener_tool_fact_is_retained_and_folded() {
     let tool = entry_tool(&page[0]).cloned().unwrap();
     assert_eq!(tool.native.id.as_deref(), Some("native-enriched"));
     assert_eq!(tool.status.value, ToolStatus::Succeeded);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        2
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
@@ -1571,19 +1545,12 @@ fn conflicting_payloads_at_one_evidence_position_fail_closed() {
         })
         .unwrap_err();
     assert!(matches!(error, StoreError::ProjectionInvalid { .. }));
-    assert!(error.to_string().contains("conflicting tool facts"));
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
+    assert!(error.to_string().contains("conflicting RAM tool updates"));
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
-fn unrelated_pending_target_does_not_force_message_lookups() {
+fn unrelated_ram_pending_target_does_not_change_other_messages() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     store
@@ -1611,17 +1578,8 @@ fn unrelated_pending_target_does_not_force_message_lookups() {
         })
         .unwrap();
 
-    assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 16);
-    assert_eq!(stats.profile.pending_lookups, 0);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
+    assert_eq!(stats.messages_inserted, 16);
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
@@ -1663,9 +1621,9 @@ fn pending_target_in_one_session_does_not_poison_another() {
         })
         .unwrap();
 
-    assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 8);
-    assert_eq!(stats.profile.pending_lookups, 0);
+    assert_eq!(stats.messages_inserted, 8);
+    assert_eq!(stats.usage_applied, 0);
+    assert_tool_reconciliation_is_ram_only(&store);
 }
 
 #[test]
@@ -2049,6 +2007,114 @@ fn session_usage_replaces_exactly_and_does_not_invent_messages() {
 }
 
 #[test]
+fn live_usage_waits_in_ram_until_its_response_arrives() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let stats = store
+        .apply(&Batch {
+            ops: vec![IngestOp::Usage {
+                session_id: "s1".into(),
+                response: "late-response".into(),
+                ts: 3_700_000,
+                model: Some("claude-opus-5".into()),
+                tokens: TokenSnapshot {
+                    input: Some(23),
+                    output: Some(5),
+                    ..Default::default()
+                },
+            }],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(stats.usage_unmatched, 1);
+    assert_tool_reconciliation_is_ram_only(&store);
+
+    let stats = store
+        .apply(&Batch {
+            ops: vec![message_op(message("late-response", 0, MessageKind::Agent))],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(stats.usage_applied, 1);
+    assert_eq!(stats.profile.usage_attempts, 1);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page[0].usage.input, Some(23));
+    assert_eq!(page[0].usage.output, Some(5));
+    assert_tool_reconciliation_is_ram_only(&store);
+}
+
+#[test]
+fn live_staging_deduplicates_exact_retries_and_rejects_conflicts_in_ram() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "ram-stage.jsonl");
+
+    let mut row = message("ram-staged", 0, MessageKind::User);
+    row.src_cursor = Some(cursor_id);
+    row.src_offset = Some(0);
+    let staged_op = message_op(row.clone());
+    let stage = |op| Batch {
+        ops: vec![op],
+        source: Some(SourceWrite {
+            cursor_id,
+            session_id: "s1".into(),
+            generation: 1,
+            first_sequence: 0,
+            mode: SourceMode::Stage,
+        }),
+        ..Batch::default()
+    };
+    store.apply(&stage(staged_op.clone())).unwrap();
+    store.apply(&stage(staged_op)).unwrap();
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message", [], |record| record
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_tool_reconciliation_is_ram_only(&store);
+
+    row.content = Some("different normalized payload".into());
+    let error = store.apply(&stage(message_op(row))).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::SourceConflict {
+            cursor_id: id,
+            generation: 1,
+            sequence: 0,
+        } if id == cursor_id
+    ));
+
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE timeline_id = 'ram-staged'",
+                [],
+                |record| record.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_tool_reconciliation_is_ram_only(&store);
+}
+
+#[test]
 fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
@@ -2214,15 +2280,15 @@ fn metadata_merges_are_independent_of_arrival_order() {
             )
             .unwrap();
         let child = queries::session(store.conn(), "s2").unwrap().unwrap();
-        let (meta_title, meta_title_at): (String, i64) = store
+        let (title, title_at): (String, i64) = store
             .conn()
             .query_row(
-                "SELECT meta_title, meta_title_at FROM session WHERE id = 's2'",
+                "SELECT title, title_at FROM session WHERE id = 's2'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        (name, roots, child, meta_title, meta_title_at)
+        (name, roots, child, title, title_at)
     }
 
     let forward = projected(false);
@@ -2314,7 +2380,7 @@ fn stream_state_updates_do_not_feed_projected_titles_back_as_evidence() {
     let (title, rank, at, state): (String, i64, i64, String) = store
         .conn()
         .query_row(
-            "SELECT meta_title, meta_title_rank, meta_title_at, stream_state
+            "SELECT title, title_rank, title_at, stream_state
              FROM session WHERE id = 's1'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -2349,13 +2415,11 @@ fn schema_mismatch_fails_closed_without_dropping_existing_data() {
     assert_eq!(value, "keep-me");
 }
 
-/// The staged-only invariant, pinned: the journal holds ONLY not-yet-active
-/// staged generations (empty in steady state), appends never journal, and a
-/// swap sweeps EVERY artifact kind an old generation projected — rows, FTS,
-/// small tables, bucket residue. A new table added without provenance fails
-/// here instead of silently corrupting swaps.
+/// The RAM-staged invariant, pinned: an incomplete generation changes no
+/// canonical row, activation sweeps every artifact kind an old generation
+/// projected, and no normalized staging table exists in SQLite.
 #[test]
-fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
+fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
     use rosetta_core::rows::{
         EditKind, FileEditRow, PlanRow, SessionUsageRow, TaskRow, TaskStatus, WorkspaceObsRow,
     };
@@ -2381,12 +2445,6 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
         .unwrap()
         .unwrap();
 
-    let journal_rows = |store: &Store| -> i64 {
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row.get(0))
-            .unwrap()
-    };
     let count = |store: &Store, sql: &str| -> i64 {
         store.conn().query_row(sql, [], |row| row.get(0)).unwrap()
     };
@@ -2472,8 +2530,8 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
             }),
         })
         .unwrap();
-    // Staged: journaled, projected NOTHING.
-    assert_eq!(journal_rows(&store), staged as i64);
+    // Staged in RAM, projected nothing, and serialized nowhere in SQLite.
+    assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 0);
 
     store
@@ -2489,14 +2547,20 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
             }),
         })
         .unwrap();
-    assert_eq!(journal_rows(&store), 0, "activation must prune the journal");
+    assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM file_edit"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 1);
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM session_title_fact"), 1);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'session_title_fact'"
+        ),
+        0
+    );
     assert_eq!(
         queries::session(store.conn(), "s1")
             .unwrap()
@@ -2532,7 +2596,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
         .unwrap();
     // Mid-stage: old generation still fully visible.
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
-    assert_eq!(journal_rows(&store), 1);
+    assert_tool_reconciliation_is_ram_only(&store);
 
     store
         .apply(&Batch {
@@ -2547,14 +2611,20 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
             }),
         })
         .unwrap();
-    assert_eq!(journal_rows(&store), 0);
+    assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM file_edit"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 0);
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM session_title_fact"), 0);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'session_title_fact'"
+        ),
+        0
+    );
     assert_eq!(
         queries::session(store.conn(), "s1").unwrap().unwrap().title,
         None
@@ -2581,7 +2651,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
         .unwrap();
     assert_eq!((min_ord, max_ord), (0, rows - 1), "ordinals stay dense");
 
-    // The hot path: appends project without journaling.
+    // The hot path: appends project directly.
     let mut m4 = message("g2-append", 9, MessageKind::User);
     m4.content = Some("appended".into());
     m4.src_cursor = Some(cursor.id);
@@ -2599,7 +2669,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
             }),
         })
         .unwrap();
-    assert_eq!(journal_rows(&store), 0, "appends never journal");
+    assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
 }
 
@@ -2697,14 +2767,7 @@ fn abandoning_an_unclean_generation_keeps_the_active_projection_and_drift() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(
         store
             .conn()

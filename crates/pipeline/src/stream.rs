@@ -340,7 +340,10 @@ fn ingest_file(
             checkpoint.session_id == file.session_id
                 && checkpoint.stream_id == file.stream_id
                 && checkpoint.normalizer_version == adapter.normalizer_version()
-                && checkpoint.source_generation >= active_generation
+                // An unactivated generation may have process-local tool join
+                // state. After restart, replay it from byte zero instead of
+                // pretending SQLite was its reconciliation journal.
+                && checkpoint.source_generation == active_generation
         })
         .and_then(|checkpoint| {
             adapter
@@ -480,7 +483,7 @@ fn ingest_file(
                 }
             }
         }
-        crate::project::enrich_workspace_ops(&mut ops);
+        crate::project::normalize_workspace_ops(&mut ops);
 
         let last_reading = *ctx.cumulative.last_reading();
         let adapter_state = adapter

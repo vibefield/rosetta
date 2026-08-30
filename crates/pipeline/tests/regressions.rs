@@ -541,7 +541,7 @@ fn codex_state_titles_merge_with_rollouts_and_update_incrementally() {
     let codex_title_meta: (Option<String>, i64) = store
         .conn()
         .query_row(
-            "SELECT meta_title, meta_title_rank FROM session WHERE id = ?1",
+            "SELECT title, title_rank FROM session WHERE id = ?1",
             [&session_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -665,7 +665,7 @@ fn copilot_workspace_title_merges_updates_and_survives_events() {
     let copilot_title_meta: (Option<String>, i64) = store
         .conn()
         .query_row(
-            "SELECT meta_title, meta_title_rank FROM session WHERE id = ?1",
+            "SELECT title, title_rank FROM session WHERE id = ?1",
             [&session_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1238,7 +1238,7 @@ fn incomplete_rewrite_keeps_the_previous_generation_visible_until_swap() {
 }
 
 #[test]
-fn expired_checkpoint_advances_past_an_abandoned_staged_generation() {
+fn expired_checkpoint_replays_past_a_lost_ram_generation() {
     let root = TempDir::new().unwrap();
     let relative = "projects/p/session-1.jsonl";
     let path = root.path().join(relative);
@@ -1246,7 +1246,8 @@ fn expired_checkpoint_advances_past_an_abandoned_staged_generation() {
         &path,
         &[claude_user("session-1", "old-u", "old", "/w/project")],
     );
-    let mut store = Store::open_in_memory().unwrap();
+    let projection = root.path().join("projection.sqlite");
+    let mut store = Store::open(&projection).unwrap();
     let runtime = runtime(&ClaudeCodeAdapter);
     let options = opts();
     let (_, files) = meta_ingest(
@@ -1295,16 +1296,9 @@ fn expired_checkpoint_advances_past_an_abandoned_staged_generation() {
         (1, 2)
     );
 
-    // Simulate an expired normalizer checkpoint and incompatible abandoned
-    // staged output. Recovery must allocate generation 3 rather than trying
-    // to reuse and collide with generation 2.
-    store
-        .conn()
-        .execute(
-            "UPDATE source_op SET op_json = '{}' WHERE cursor_id = ?1 AND generation = 2",
-            [staged.id],
-        )
-        .unwrap();
+    // Simulate a process exit (which deliberately loses RAM staging) plus an
+    // expired normalizer checkpoint. Recovery must replay from raw input and
+    // allocate generation 3 rather than pretending SQLite retained gen 2.
     store
         .conn()
         .execute(
@@ -1312,6 +1306,8 @@ fn expired_checkpoint_advances_past_an_abandoned_staged_generation() {
             [staged.id],
         )
         .unwrap();
+    drop(store);
+    let mut store = Store::open(&projection).unwrap();
     write_lines(
         &path,
         &[claude_user(

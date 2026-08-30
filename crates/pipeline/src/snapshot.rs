@@ -418,7 +418,7 @@ pub(crate) fn flush_chunk(
     instrument: &Instrument,
     report: &mut StreamReport,
 ) -> Result<bool, PipelineError> {
-    crate::project::enrich_workspace_ops(ops);
+    crate::project::normalize_workspace_ops(ops);
     let chunk = std::mem::take(ops);
     let first_sequence = *next_sequence;
     *next_sequence += chunk.len() as u64;

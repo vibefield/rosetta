@@ -1,14 +1,10 @@
 //! The write path: one batch, one transaction. Canonical rows, FTS entries,
 //! bucket corrections, drift aggregates, and the checkpoint CAS
 //! all commit together — aggregates can never drift from the rows they
-//! summarize, and a torn projection write can never exist. `source_op` is a
-//! STAGING BUFFER, not a representation: live replacements and replacements
-//! of an already-active source use it, then prune it at activation. A private
-//! cold build projects a source's first generation directly because there is
-//! no prior contribution to protect and the whole database remains
-//! unpublished until validation. The raw ledger (rosetta-capture) is the
-//! durable replay truth; the projection undoes a source's old contribution via
-//! provenance columns, never via a permanent op journal.
+//! summarize, and a torn projection write can never exist. Replacement input
+//! and late-arrival joins wait only in the Store's process-local RAM buffer.
+//! SQLite sees the final canonical rows plus the minimal durable cursor
+//! watermark; the raw ledger is the restart/replay truth.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -40,15 +36,15 @@ pub struct CheckpointUpdate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceMode {
-    /// Hold an incomplete replacement generation away from the published
-    /// projection. A private first-generation cold load may project it early;
-    /// that database has no readers and cannot be published before activation.
+    /// Hold an incomplete replacement generation in process RAM, away from the
+    /// published projection. A private first-generation cold load may project
+    /// it early because that database has no readers before validation.
     Stage,
     /// Extend the already-active generation and project only newly persisted ops.
     Append,
-    /// Persist the final ops, flip the active generation, and atomically rebuild.
+    /// Fold the RAM-staged ops, flip the active generation, and atomically rebuild.
     Activate,
-    /// Persist the final diagnostic ops, publish only drift, and discard the
+    /// Publish only final diagnostic drift and discard the
     /// unclean generation without disturbing the last active projection.
     Abandon,
 }
@@ -62,7 +58,7 @@ pub struct SourceWrite {
     pub mode: SourceMode,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Batch {
     pub ops: Vec<IngestOp>,
     pub checkpoints: Vec<CheckpointUpdate>,
@@ -89,9 +85,6 @@ pub struct ApplyStats {
     /// Generation transitions that actually removed a prior source
     /// contribution. A source's first generation takes the empty fast path.
     pub source_sweeps: u64,
-    /// JSON serialization plus writes to the temporary `source_op` staging
-    /// table. Zero on ordinary active-generation appends.
-    pub source_stage_nanos: u64,
     /// Canonical row projection, including generation activation/sweeps and
     /// live bucket repair, but excluding the SQLite transaction commit.
     pub canonical_apply_nanos: u64,
@@ -112,18 +105,11 @@ pub struct ApplyProfile {
     pub other_attempts: u64,
     pub session_touch_attempts: u64,
     pub session_touch_rows: u64,
-    pub pending_gate_checks: u64,
-    pub pending_lookup_skips: u64,
-    pub pending_lookups: u64,
-    pub pending_rows: u64,
-    pub pending_queues: u64,
     pub ordinal_lookups: u64,
     pub session_renumbers: u64,
     pub session_renumber_rows: u64,
     /// Tool correlations folded exactly once in RAM for a private cold build.
     pub bulk_tool_rows_reconciled: u64,
-    /// Reduced source-owned lifecycle facts persisted after the RAM fold.
-    pub bulk_tool_facts_written: u64,
     pub message_lookup_nanos: u64,
     pub message_write_nanos: u64,
     pub tool_result_lookup_nanos: u64,
@@ -131,15 +117,11 @@ pub struct ApplyProfile {
     pub usage_lookup_nanos: u64,
     pub usage_write_nanos: u64,
     pub session_touch_nanos: u64,
-    pub pending_gate_nanos: u64,
-    pub pending_lookup_nanos: u64,
-    pub pending_queue_nanos: u64,
     pub drift_apply_nanos: u64,
     pub other_apply_nanos: u64,
     pub ordinal_lookup_nanos: u64,
     pub session_renumber_nanos: u64,
     pub tool_reconcile_nanos: u64,
-    pub tool_fact_write_nanos: u64,
 }
 
 impl ApplyStats {
@@ -158,7 +140,6 @@ impl ApplyStats {
         self.drift_recorded += batch.drift_recorded;
         self.bucket_rebuilds += batch.bucket_rebuilds;
         self.source_sweeps += batch.source_sweeps;
-        self.source_stage_nanos += batch.source_stage_nanos;
         self.canonical_apply_nanos += batch.canonical_apply_nanos;
         self.sqlite_commit_nanos += batch.sqlite_commit_nanos;
         self.profile.merge_from(&batch.profile);
@@ -174,16 +155,10 @@ impl ApplyProfile {
         self.other_attempts += batch.other_attempts;
         self.session_touch_attempts += batch.session_touch_attempts;
         self.session_touch_rows += batch.session_touch_rows;
-        self.pending_gate_checks += batch.pending_gate_checks;
-        self.pending_lookup_skips += batch.pending_lookup_skips;
-        self.pending_lookups += batch.pending_lookups;
-        self.pending_rows += batch.pending_rows;
-        self.pending_queues += batch.pending_queues;
         self.ordinal_lookups += batch.ordinal_lookups;
         self.session_renumbers += batch.session_renumbers;
         self.session_renumber_rows += batch.session_renumber_rows;
         self.bulk_tool_rows_reconciled += batch.bulk_tool_rows_reconciled;
-        self.bulk_tool_facts_written += batch.bulk_tool_facts_written;
         self.message_lookup_nanos += batch.message_lookup_nanos;
         self.message_write_nanos += batch.message_write_nanos;
         self.tool_result_lookup_nanos += batch.tool_result_lookup_nanos;
@@ -191,15 +166,11 @@ impl ApplyProfile {
         self.usage_lookup_nanos += batch.usage_lookup_nanos;
         self.usage_write_nanos += batch.usage_write_nanos;
         self.session_touch_nanos += batch.session_touch_nanos;
-        self.pending_gate_nanos += batch.pending_gate_nanos;
-        self.pending_lookup_nanos += batch.pending_lookup_nanos;
-        self.pending_queue_nanos += batch.pending_queue_nanos;
         self.drift_apply_nanos += batch.drift_apply_nanos;
         self.other_apply_nanos += batch.other_apply_nanos;
         self.ordinal_lookup_nanos += batch.ordinal_lookup_nanos;
         self.session_renumber_nanos += batch.session_renumber_nanos;
         self.tool_reconcile_nanos += batch.tool_reconcile_nanos;
-        self.tool_fact_write_nanos += batch.tool_fact_write_nanos;
     }
 }
 
@@ -237,18 +208,18 @@ fn profile_ordinal_lookup<T>(
 
 mod bulk_reconcile;
 mod metadata;
+mod ram_reconcile;
 mod rows;
 
 pub(crate) use bulk_reconcile::{
     BulkReconciliationBuffer, BulkReconciliationDelta, BulkReconciliationPlan,
 };
-use metadata::{
-    apply_project, apply_runtime, apply_session, apply_session_title, refresh_session_title,
-};
+use metadata::{apply_project, apply_runtime, apply_session, apply_session_title};
+pub(crate) use ram_reconcile::RamReconciliationBuffer;
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, PendingGate, apply_message, apply_tool_update, apply_usage, finalize_source_tools,
-    mark_bucket, queue_pending, rebuild_bucket, remove_source_tool_facts, touch_session,
+    BucketKey, apply_message, apply_tool_updates, apply_usage, finalize_source_tools, mark_bucket,
+    rebuild_bucket, touch_session,
 };
 
 pub(crate) fn apply_bulk_reconciliation(
@@ -564,61 +535,8 @@ fn sqlite_u64(cursor_id: i64, label: &str, value: u64) -> Result<i64, StoreError
     })
 }
 
-/// Persist each normalized op before it can affect the projection. A repeated
-/// key with byte-identical JSON is an at-least-once retry; a different payload
-/// at the same source position is a deterministic-normalizer violation.
-fn persist_source_ops(
-    tx: &Transaction,
-    source: &SourceWrite,
-    ops: &[IngestOp],
-    defer_bulk_reconciliation: bool,
-) -> Result<(), StoreError> {
-    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
-    for (index, op) in ops.iter().enumerate() {
-        let sequence = source
-            .first_sequence
-            .checked_add(index as u64)
-            .ok_or_else(|| StoreError::SourceState {
-                cursor_id: source.cursor_id,
-                message: "source sequence overflowed".to_string(),
-            })?;
-        if defer_bulk_reconciliation && bulk_reconcile::defers(op) {
-            continue;
-        }
-        let sequence_sql = sqlite_u64(source.cursor_id, "sequence", sequence)?;
-        let json = serde_json::to_string(op)?;
-        let changed = tx
-            .prepare_cached(
-                "INSERT INTO source_op (cursor_id, generation, sequence, op_json)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(cursor_id, generation, sequence) DO NOTHING",
-            )?
-            .execute(params![source.cursor_id, generation, sequence_sql, json])?;
-        if changed == 1 {
-            continue;
-        }
-        let existing: String = tx
-            .prepare_cached(
-                "SELECT op_json FROM source_op
-                 WHERE cursor_id = ?1 AND generation = ?2 AND sequence = ?3",
-            )?
-            .query_row(params![source.cursor_id, generation, sequence_sql], |row| {
-                row.get(0)
-            })?;
-        if existing != json {
-            return Err(StoreError::SourceConflict {
-                cursor_id: source.cursor_id,
-                generation: source.generation,
-                sequence,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Project a source chunk without serializing it through `source_op`. This is
-/// used for active-generation appends and for a source's first generation in
-/// a private cold build. Message ordinals are collision-free while chunks
+/// Project an already-active append, a private first generation, or a complete
+/// RAM-staged activation. Message ordinals are collision-free while chunks
 /// arrive and are canonicalized once the generation activates.
 struct DirectProjection<'a> {
     preserve_message_ordinals: bool,
@@ -633,13 +551,22 @@ fn project_source_ops(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
-    pending_gate: &mut PendingGate,
     defer_bulk_reconciliation: bool,
     mut projection: DirectProjection<'_>,
 ) -> Result<(), StoreError> {
     let mut next_ordinals: BTreeMap<String, i64> = BTreeMap::new();
+    let mut tool_updates = Vec::new();
+    let mut usage_merges = Vec::new();
     for op in ops {
         if defer_bulk_reconciliation && bulk_reconcile::defers(op) {
+            continue;
+        }
+        if matches!(op, IngestOp::ToolUpdate { .. }) {
+            tool_updates.push(op);
+            continue;
+        }
+        if matches!(op, IngestOp::Usage { .. }) {
+            usage_merges.push(op);
             continue;
         }
         if let IngestOp::Message(row) = op {
@@ -695,7 +622,6 @@ fn project_source_ops(
                 stats,
                 maintenance,
                 dirty_buckets,
-                pending_gate,
                 projection.effects.as_deref_mut(),
             )?;
         } else {
@@ -706,31 +632,23 @@ fn project_source_ops(
                 stats,
                 maintenance,
                 dirty_buckets,
-                pending_gate,
                 projection.effects.as_deref_mut(),
             )?;
         }
     }
-    Ok(())
-}
-
-fn staged_ops(
-    tx: &Transaction,
-    cursor_id: i64,
-    generation: i64,
-) -> Result<Vec<IngestOp>, StoreError> {
-    let mut stmt = tx.prepare_cached(
-        "SELECT op_json FROM source_op
-         WHERE cursor_id = ?1 AND generation = ?2 ORDER BY sequence",
-    )?;
-    let rows = stmt.query_map(params![cursor_id, generation], |row| {
-        row.get::<_, String>(0)
-    })?;
-    let mut ops = Vec::new();
-    for row in rows {
-        ops.push(serde_json::from_str(&row?)?);
+    apply_tool_updates(tx, &tool_updates, stats, projection.effects.as_deref_mut())?;
+    for op in usage_merges {
+        apply_op(
+            tx,
+            op,
+            Some(source.cursor_id),
+            stats,
+            maintenance,
+            dirty_buckets,
+            projection.effects.as_deref_mut(),
+        )?;
     }
-    Ok(ops)
+    Ok(())
 }
 
 /// An initial generation has no old contribution to remove. Every branch is
@@ -747,9 +665,7 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workspace_obs WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
-               EXISTS(SELECT 1 FROM session_title_fact WHERE src_cursor = ?1 LIMIT 1) OR
-               EXISTS(SELECT 1 FROM tool_update_fact WHERE src_cursor = ?1 LIMIT 1) OR
-               EXISTS(SELECT 1 FROM pending_merge WHERE src_cursor = ?1 LIMIT 1)",
+               EXISTS(SELECT 1 FROM session       WHERE title_src_cursor = ?1 LIMIT 1)",
         )?
         .query_row(params![cursor_id], |row| row.get(0))?;
     Ok(found != 0)
@@ -765,7 +681,6 @@ fn remove_cursor_projection(
     cursor_id: i64,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
-    defer_bulk_reconciliation: bool,
 ) -> Result<(), StoreError> {
     let session_id: String = tx
         .prepare_cached("SELECT session_id FROM ingest_cursor WHERE id = ?1")?
@@ -795,7 +710,6 @@ fn remove_cursor_projection(
             );
         }
     }
-    remove_source_tool_facts(tx, cursor_id, !defer_bulk_reconciliation)?;
     for sql in [
         "DELETE FROM file_edit WHERE src_cursor = ?1",
         "DELETE FROM git_commit WHERE src_cursor = ?1",
@@ -803,8 +717,6 @@ fn remove_cursor_projection(
         "DELETE FROM plan WHERE src_cursor = ?1",
         "DELETE FROM workspace_obs WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
-        "DELETE FROM session_title_fact WHERE src_cursor = ?1",
-        "DELETE FROM pending_merge WHERE src_cursor = ?1",
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
     }
@@ -842,7 +754,12 @@ fn remove_cursor_projection(
     }
     tx.prepare_cached("DELETE FROM message WHERE src_cursor = ?1")?
         .execute(params![cursor_id])?;
-    refresh_session_title(tx, &session_id)?;
+    tx.prepare_cached(
+        "UPDATE session
+         SET title = NULL, title_rank = 0, title_at = NULL, title_src_cursor = NULL
+         WHERE id = ?1 AND title_src_cursor = ?2",
+    )?
+    .execute(params![session_id, cursor_id])?;
     Ok(())
 }
 
@@ -1000,32 +917,23 @@ fn set_active_generation(
     Ok(())
 }
 
-/// Activation with a staged-only journal: sweep this cursor's old
-/// contribution by provenance, project the staged generation, renumber the
-/// session, and PRUNE the journal — `source_op` holds
-/// nothing for active generations. Drift is additive-only: what was observed
-/// stays observed; a rewrite does not un-observe it.
+/// Atomically activate the complete generation assembled in RAM: sweep this
+/// cursor's old contribution by provenance, project the resolved input, and
+/// renumber the session. Drift is additive-only: what was observed stays
+/// observed; a rewrite does not un-observe it.
 #[allow(clippy::too_many_arguments)]
 fn activate_cursor(
     tx: &Transaction,
     source: &SourceWrite,
+    staged: &[IngestOp],
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
-    pending_gate: &mut PendingGate,
     defer_bulk_reconciliation: bool,
     effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
-    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
-    let staged = staged_ops(tx, source.cursor_id, generation)?;
     if cursor_has_projection(tx, source.cursor_id)? {
-        remove_cursor_projection(
-            tx,
-            source.cursor_id,
-            maintenance,
-            dirty_buckets,
-            defer_bulk_reconciliation,
-        )?;
+        remove_cursor_projection(tx, source.cursor_id, maintenance, dirty_buckets)?;
         stats.source_sweeps += 1;
     }
 
@@ -1040,8 +948,12 @@ fn activate_cursor(
             .query_row(params![source.session_id], |row| row.get(0))?)
     })?;
     let mut edits = Vec::new();
-    let mut merges = Vec::new();
-    for op in &staged {
+    let mut tool_updates = Vec::new();
+    let mut usage_merges = Vec::new();
+    for op in staged {
+        if defer_bulk_reconciliation && bulk_reconcile::defers(op) {
+            continue;
+        }
         match op {
             IngestOp::Message(row) => {
                 let mut row = (**row).clone();
@@ -1055,18 +967,11 @@ fn activate_cursor(
                 // Effects are suppressed for every per-row apply in this
                 // block: rows carry temporary ordinals until the renumber
                 // below, and none of that may leak into the mutation log.
-                apply_message(
-                    tx,
-                    &row,
-                    stats,
-                    maintenance,
-                    dirty_buckets,
-                    pending_gate,
-                    None,
-                )?;
+                apply_message(tx, &row, stats, maintenance, dirty_buckets, None)?;
             }
             IngestOp::FileEdit(_) => edits.push(op),
-            IngestOp::ToolUpdate { .. } | IngestOp::Usage { .. } => merges.push(op),
+            IngestOp::ToolUpdate { .. } => tool_updates.push(op),
+            IngestOp::Usage { .. } => usage_merges.push(op),
             _ => apply_op(
                 tx,
                 op,
@@ -1074,12 +979,11 @@ fn activate_cursor(
                 stats,
                 maintenance,
                 dirty_buckets,
-                pending_gate,
                 None,
             )?,
         }
     }
-    for op in edits.into_iter().chain(merges) {
+    for op in edits {
         apply_op(
             tx,
             op,
@@ -1087,7 +991,18 @@ fn activate_cursor(
             stats,
             maintenance,
             dirty_buckets,
-            pending_gate,
+            None,
+        )?;
+    }
+    apply_tool_updates(tx, &tool_updates, stats, None)?;
+    for op in usage_merges {
+        apply_op(
+            tx,
+            op,
+            Some(source.cursor_id),
+            stats,
+            maintenance,
+            dirty_buckets,
             None,
         )?;
     }
@@ -1097,14 +1012,12 @@ fn activate_cursor(
     }
 
     profile_renumber_session(tx, &source.session_id, stats)?;
-    tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
-        .execute(params![source.cursor_id])?;
 
     // A swap is one mutation-log entry: the sweep marker. Subscribers take a
     // replacement snapshot, which sees the renumbered rows — the mirror still
     // learns precisely which rows to reload from the touch notes.
     if let Some(fx) = effects {
-        for op in &staged {
+        for op in staged {
             note_touch(fx, op);
         }
         fx.touched_sessions.insert(source.session_id.clone());
@@ -1120,17 +1033,14 @@ fn activate_cursor(
 /// those facts before pruning every abandoned staged row for this cursor.
 fn abandon_cursor(
     tx: &Transaction,
-    source: &SourceWrite,
+    ops: &[IngestOp],
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
-    let generation = sqlite_u64(source.cursor_id, "generation", source.generation)?;
-    for op in staged_ops(tx, source.cursor_id, generation)? {
+    for op in ops {
         if let IngestOp::Drift(fact) = op {
-            apply_drift(tx, &fact, stats)?;
+            apply_drift(tx, fact, stats)?;
         }
     }
-    tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
-        .execute(params![source.cursor_id])?;
     Ok(())
 }
 
@@ -1226,7 +1136,6 @@ fn apply_op(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
-    pending_gate: &mut PendingGate,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     if let Some(fx) = effects.as_deref_mut() {
@@ -1240,36 +1149,14 @@ fn apply_op(
         IngestOp::SessionTitle(row) => {
             profile_other(stats, || apply_session_title(tx, row, src_cursor))?
         }
-        IngestOp::Message(row) => apply_message(
-            tx,
-            row,
-            stats,
-            maintenance,
-            dirty_buckets,
-            pending_gate,
-            effects,
-        )?,
-        IngestOp::ToolUpdate {
-            session_id,
-            correlation_key,
-            evidence,
-            patch,
-            at,
-        } => {
-            apply_tool_update(
-                tx,
-                session_id,
-                correlation_key,
-                evidence,
-                patch,
-                *at,
-                src_cursor,
-                stats,
-                effects,
-            )?;
-            // The closed fact table is itself the waiting room. It keeps
-            // every evidence tuple (not only the newest target) and the
-            // opener folds all active facts when it arrives.
+        IngestOp::Message(row) => {
+            apply_message(tx, row, stats, maintenance, dirty_buckets, effects)?
+        }
+        IngestOp::ToolUpdate { .. } => {
+            apply_tool_updates(tx, std::slice::from_ref(&op), stats, effects)?;
+            // Unmatched lifecycle noise remains in the raw ledger. Source
+            // batches order tool updates after openers, and a generation
+            // replay re-derives the resolved row when a source is replaced.
         }
         IngestOp::Usage {
             session_id,
@@ -1278,7 +1165,7 @@ fn apply_op(
             model,
             tokens,
         } => {
-            if !apply_usage(
+            let _ = apply_usage(
                 tx,
                 session_id,
                 response,
@@ -1289,9 +1176,7 @@ fn apply_op(
                 maintenance,
                 dirty_buckets,
                 effects,
-            )? {
-                queue_pending(tx, op, src_cursor, stats, pending_gate)?;
-            }
+            )?;
         }
         IngestOp::SessionUsage(row) => {
             apply_session_usage(tx, row, src_cursor, stats, maintenance, dirty_buckets)?
@@ -1319,15 +1204,24 @@ pub(crate) fn apply_batch(
     // A private projection has no readers. Keep relational lifecycle fragments
     // out of SQLite until the runtime closes, then fold each correlation once
     // in RAM and write only its final canonical row. Progressive/public and
-    // live paths retain transaction-local reconciliation semantics.
+    // live paths use the Store's process-local reconciliation buffer.
     let defer_bulk_reconciliation = bulk_load && !progressive_public;
     let mut stats = ApplyStats::default();
     let mut dirty_buckets = BTreeSet::new();
-    let mut pending_gate = PendingGate::default();
     match &batch.source {
         None => {
             let started = Instant::now();
+            let mut tool_updates = Vec::new();
+            let mut usage_merges = Vec::new();
             for op in &batch.ops {
+                if matches!(op, IngestOp::ToolUpdate { .. }) {
+                    tool_updates.push(op);
+                    continue;
+                }
+                if matches!(op, IngestOp::Usage { .. }) {
+                    usage_merges.push(op);
+                    continue;
+                }
                 apply_op(
                     tx,
                     op,
@@ -1335,7 +1229,18 @@ pub(crate) fn apply_batch(
                     &mut stats,
                     maintenance,
                     &mut dirty_buckets,
-                    &mut pending_gate,
+                    effects.as_deref_mut(),
+                )?;
+            }
+            apply_tool_updates(tx, &tool_updates, &mut stats, effects.as_deref_mut())?;
+            for op in usage_merges {
+                apply_op(
+                    tx,
+                    op,
+                    None,
+                    &mut stats,
+                    maintenance,
+                    &mut dirty_buckets,
                     effects.as_deref_mut(),
                 )?;
             }
@@ -1417,7 +1322,6 @@ pub(crate) fn apply_batch(
                                 source.cursor_id,
                                 maintenance,
                                 &mut dirty_buckets,
-                                defer_bulk_reconciliation,
                             )?;
                             stats.source_sweeps += 1;
                         }
@@ -1430,7 +1334,6 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
-                            &mut pending_gate,
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: false,
@@ -1453,8 +1356,6 @@ pub(crate) fn apply_batch(
                             }
                             // A private build keeps collision-free provisional
                             // ordinals until one set-based bulk-finalize pass.
-                            tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
-                                .execute(params![source.cursor_id])?;
                         }
                     }
                     SourceMode::Abandon => {
@@ -1474,24 +1375,18 @@ pub(crate) fn apply_batch(
                                 source.cursor_id,
                                 maintenance,
                                 &mut dirty_buckets,
-                                defer_bulk_reconciliation,
                             )?;
                             stats.source_sweeps += 1;
                         }
-                        tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
-                            .execute(params![source.cursor_id])?;
                     }
                     SourceMode::Append => unreachable!("append excluded from cold generation"),
                 }
                 stats.canonical_apply_nanos += elapsed_nanos(started);
             } else {
                 match source.mode {
-                    // Staged generations are the ONLY thing the journal holds.
-                    SourceMode::Stage => {
-                        let started = Instant::now();
-                        persist_source_ops(tx, source, &batch.ops, defer_bulk_reconciliation)?;
-                        stats.source_stage_nanos += elapsed_nanos(started);
-                    }
+                    // Store::apply already retained this generation's ops in
+                    // process RAM. Only the cursor watermark commits here.
+                    SourceMode::Stage => {}
                     // The hot path projects directly — replay idempotence comes
                     // from deterministic ids and identity indexes, not a journal.
                     SourceMode::Append => {
@@ -1503,7 +1398,6 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
-                            &mut pending_gate,
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: true,
@@ -1513,18 +1407,15 @@ pub(crate) fn apply_batch(
                         stats.canonical_apply_nanos += elapsed_nanos(started);
                     }
                     SourceMode::Activate => {
-                        let started = Instant::now();
-                        persist_source_ops(tx, source, &batch.ops, defer_bulk_reconciliation)?;
-                        stats.source_stage_nanos += elapsed_nanos(started);
                         set_active_generation(tx, source, active_generation)?;
                         let started = Instant::now();
                         activate_cursor(
                             tx,
                             source,
+                            &batch.ops,
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
-                            &mut pending_gate,
                             defer_bulk_reconciliation,
                             effects,
                         )?;
@@ -1532,10 +1423,7 @@ pub(crate) fn apply_batch(
                     }
                     SourceMode::Abandon => {
                         let started = Instant::now();
-                        persist_source_ops(tx, source, &batch.ops, defer_bulk_reconciliation)?;
-                        stats.source_stage_nanos += elapsed_nanos(started);
-                        let started = Instant::now();
-                        abandon_cursor(tx, source, &mut stats)?;
+                        abandon_cursor(tx, &batch.ops, &mut stats)?;
                         stats.canonical_apply_nanos += elapsed_nanos(started);
                     }
                 }

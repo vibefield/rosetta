@@ -23,6 +23,21 @@ use rosetta_pipeline::{
 use rosetta_store::{Store, queries};
 use tempfile::TempDir;
 
+fn assert_ram_only_reconciliation(store: &Store) {
+    let private_objects: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE name IN (
+               'source_op', 'pending_merge', 'tool_update_fact', 'session_title_fact'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(private_objects, 0);
+}
+
 struct FakeDbAgent;
 
 impl AgentAdapter for FakeDbAgent {
@@ -361,12 +376,7 @@ fn database_sessions_flow_end_to_end() {
         queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
         0
     );
-    let journal: i64 = h
-        .store
-        .conn()
-        .query_row("SELECT COUNT(*) FROM source_op", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(journal, 0, "snapshot swaps leave the journal empty too");
+    assert_ram_only_reconciliation(&h.store);
 }
 
 #[test]
@@ -642,14 +652,7 @@ fn repeated_hard_snapshot_generations_are_abandoned_without_staging_growth() {
         )
         .unwrap();
         assert_eq!(report.hard_errors, 1);
-        assert_eq!(
-            h.store
-                .conn()
-                .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
+        assert_ram_only_reconciliation(&h.store);
         let cursor = queries::cursor_state(h.store.conn(), &h.runtime.id, &path)
             .unwrap()
             .unwrap();

@@ -127,6 +127,20 @@ fn assert_plan_uses(conn: &Connection, sql: &str, index: &str) {
     );
 }
 
+fn assert_ram_only_reconciliation_schema(conn: &Connection) {
+    let private_objects: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE name IN (
+               'source_op', 'pending_merge', 'tool_update_fact', 'session_title_fact'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(private_objects, 0);
+}
+
 #[test]
 fn reconciliation_and_bucket_queries_have_matching_indexes() {
     let store = Store::open_in_memory().unwrap();
@@ -137,7 +151,6 @@ fn reconciliation_and_bucket_queries_have_matching_indexes() {
         ("task", "task_src"),
         ("plan", "plan_src"),
         ("workspace_obs", "workspace_obs_src"),
-        ("pending_merge", "pending_merge_src"),
     ] {
         assert_plan_uses(
             store.conn(),
@@ -178,16 +191,7 @@ fn reconciliation_and_bucket_queries_have_matching_indexes() {
            AND type = 'tool_use'",
         "message_tool_correlation",
     );
-    let duplicate: i64 = store
-        .conn()
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_schema
-             WHERE type = 'index' AND name = 'source_op_cursor_generation'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(duplicate, 0, "the WITHOUT ROWID primary key is sufficient");
+    assert_ram_only_reconciliation_schema(store.conn());
 }
 
 #[test]
@@ -405,14 +409,14 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
 }
 
 #[test]
-fn cold_first_generation_projects_without_the_source_journal() {
+fn cold_first_generation_projects_without_serialized_staging() {
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
     store.apply(&base_batch()).unwrap();
     let cursor_id = install_cursor(&mut store, "cold-first.jsonl");
 
     let mut first = message("cold-first", 0, 1_000);
     first.src_cursor = Some(cursor_id);
-    let staged = store
+    store
         .apply(&Batch {
             ops: vec![message_op(first)],
             checkpoints: vec![],
@@ -425,15 +429,7 @@ fn cold_first_generation_projects_without_the_source_journal() {
             }),
         })
         .unwrap();
-    assert_eq!(staged.source_stage_nanos, 0);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    assert_ram_only_reconciliation_schema(store.conn());
     assert_eq!(
         store
             .conn()
@@ -462,7 +458,6 @@ fn cold_first_generation_projects_without_the_source_journal() {
             }),
         })
         .unwrap();
-    assert_eq!(activated.source_stage_nanos, 0);
     assert_eq!(activated.profile.session_renumbers, 0);
     assert_eq!(
         store
@@ -619,7 +614,7 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
 }
 
 #[test]
-fn cold_replacement_after_activation_still_swaps_from_the_journal() {
+fn cold_replacement_after_activation_swaps_from_ram() {
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
     store.apply(&base_batch()).unwrap();
     let cursor_id = install_cursor(&mut store, "cold-rewrite.jsonl");
@@ -655,18 +650,18 @@ fn cold_replacement_after_activation_still_swaps_from_the_journal() {
             }),
         })
         .unwrap();
-    let (old_visible, replacement_visible, staged): (i64, i64, i64) = store
+    let (old_visible, replacement_visible): (i64, i64) = store
         .conn()
         .query_row(
             "SELECT
                (SELECT COUNT(*) FROM message WHERE timeline_id = 'coldold'),
-               (SELECT COUNT(*) FROM message WHERE timeline_id = 'coldreplacement'),
-               (SELECT COUNT(*) FROM source_op)",
+               (SELECT COUNT(*) FROM message WHERE timeline_id = 'coldreplacement')",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((old_visible, replacement_visible, staged), (1, 0, 1));
+    assert_eq!((old_visible, replacement_visible), (1, 0));
+    assert_ram_only_reconciliation_schema(store.conn());
 
     let activated = store
         .apply(&Batch {
@@ -682,14 +677,7 @@ fn cold_replacement_after_activation_still_swaps_from_the_journal() {
         })
         .unwrap();
     assert_eq!(activated.source_sweeps, 1);
-    assert_eq!(
-        store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    assert_ram_only_reconciliation_schema(store.conn());
     store.finish_bulk_load().unwrap();
     assert!(
         queries::search(store.conn(), "coldold", 10)

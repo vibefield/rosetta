@@ -721,7 +721,7 @@ fn system_compaction_becomes_a_closed_notice() {
 }
 
 #[test]
-fn every_ai_title_projects_as_a_ranked_session_title_fact() {
+fn every_ai_title_projects_as_a_ranked_session_title_candidate() {
     let (ops, _) = run(&[
         json!({"type": "ai-title", "aiTitle": "first guess", "sessionId": "session-under-test"}),
         json!({"type": "ai-title", "aiTitle": "better title", "sessionId": "session-under-test"}),

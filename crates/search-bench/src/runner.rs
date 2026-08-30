@@ -73,15 +73,13 @@ fn validate_projection(
     {
         return Err("foreign_key_check reported a violation".into());
     }
-    let (messages, indexed_sessions, source_ops, pending_merges): (i64, i64, i64, i64) = canonical
+    let (messages, indexed_sessions): (i64, i64) = canonical
         .query_row(
             "SELECT
                (SELECT COUNT(*) FROM message),
-               (SELECT COUNT(*) FROM session WHERE stream_state = 'indexed'),
-               (SELECT COUNT(*) FROM source_op),
-               (SELECT COUNT(*) FROM pending_merge)",
+               (SELECT COUNT(*) FROM session WHERE stream_state = 'indexed')",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|error| format!("checking projection cardinalities: {error}"))?;
     let search_quick: String = generation
@@ -115,8 +113,8 @@ fn validate_projection(
             messages: nonnegative_count(messages, "message")?,
             fts_rows: nonnegative_count(fts, "FTS")?,
             indexed_sessions: nonnegative_count(indexed_sessions, "indexed session")?,
-            source_ops: nonnegative_count(source_ops, "source op")?,
-            pending_merges: nonnegative_count(pending_merges, "pending merge")?,
+            source_ops: 0,
+            pending_merges: 0,
         },
     ))
 }

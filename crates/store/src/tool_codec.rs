@@ -1,11 +1,11 @@
-//! Lossless codec between the closed Rust tool contract and schema-8 columns.
+//! Lossless codec between the closed Rust tool contract and canonical columns.
 //! `tool_detail` is a serialized `ToolAction`, never a native request/result.
 
 use std::error::Error;
 
 use rosetta_core::{
     CorrelationDerivation, FailureKind, NativeToolRef, StatusBasis, ToolAction, ToolCorrelation,
-    ToolFailure, ToolInteraction, ToolMergeState, ToolStatus, ToolStatusFact, ToolTiming,
+    ToolFailure, ToolInteraction, ToolStatus, ToolStatusFact, ToolTiming,
 };
 use rusqlite::Row;
 use rusqlite::types::Type;
@@ -24,7 +24,6 @@ pub(crate) struct EncodedTool {
     pub status: Option<&'static str>,
     pub status_basis: Option<&'static str>,
     pub detail: Option<String>,
-    pub merge_state: Option<String>,
     pub error_kind: Option<&'static str>,
     pub error_summary: Option<String>,
     pub diagnostic: Option<String>,
@@ -33,10 +32,7 @@ pub(crate) struct EncodedTool {
     pub duration_ms: Option<i64>,
 }
 
-pub(crate) fn encode(
-    tool: Option<&ToolInteraction>,
-    merge_state: Option<&ToolMergeState>,
-) -> Result<EncodedTool, StoreError> {
+pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool, StoreError> {
     let Some(tool) = tool else {
         return Ok(EncodedTool::default());
     };
@@ -48,7 +44,6 @@ pub(crate) fn encode(
         .map_err(|_| StoreError::ProjectionInvalid {
             message: "tool duration exceeds SQLite integer range".into(),
         })?;
-    let empty_merge_state = ToolMergeState::default();
     Ok(EncodedTool {
         correlation_key: Some(tool.correlation.key.clone()),
         correlation_kind: Some(correlation_name(tool.correlation.derivation)),
@@ -60,9 +55,6 @@ pub(crate) fn encode(
         status: Some(status_name(tool.status.value)),
         status_basis: Some(status_basis_name(tool.status.basis)),
         detail: Some(serde_json::to_string(&tool.action)?),
-        merge_state: Some(serde_json::to_string(
-            merge_state.unwrap_or(&empty_merge_state),
-        )?),
         error_kind: tool
             .failure
             .as_ref()
@@ -97,23 +89,18 @@ fn required<T>(value: Option<T>, column: &'static str) -> rusqlite::Result<T> {
     })
 }
 
-pub(crate) fn decode(
-    row: &Row<'_>,
-) -> rusqlite::Result<(Option<ToolInteraction>, Option<ToolMergeState>)> {
+pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<Option<ToolInteraction>> {
     let correlation_key: Option<String> = row.get("tool_correlation_key")?;
     let Some(correlation_key) = correlation_key else {
-        return Ok((None, None));
+        return Ok(None);
     };
     let correlation_kind: String = row.get("tool_correlation_kind")?;
     let name: String = row.get("tool_name")?;
     let status: String = row.get("tool_status")?;
     let status_basis: String = row.get("tool_status_basis")?;
     let detail: String = row.get("tool_detail")?;
-    let merge_state: String = row.get("tool_merge_state")?;
     let action: ToolAction =
         serde_json::from_str(&detail).map_err(|error| decode_error(0, error))?;
-    let merge_state: ToolMergeState =
-        serde_json::from_str(&merge_state).map_err(|error| decode_error(0, error))?;
     let failure_kind: Option<String> = row.get("tool_error_kind")?;
     let failure = failure_kind
         .map(|kind| -> rusqlite::Result<ToolFailure> {
@@ -137,34 +124,25 @@ pub(crate) fn decode(
             completed_at,
             duration_ms,
         });
-    Ok((
-        Some(ToolInteraction {
-            correlation: ToolCorrelation {
-                key: correlation_key,
-                derivation: parse_correlation(&correlation_kind)?,
-            },
-            native: NativeToolRef {
-                id: row.get("tool_native_id")?,
-                namespace: row.get("tool_namespace")?,
-                name,
-                provider: row.get("tool_provider")?,
-            },
-            status: ToolStatusFact {
-                value: parse_status(&status)?,
-                basis: parse_status_basis(&status_basis)?,
-            },
-            action,
-            failure,
-            timing,
-        }),
-        Some(merge_state),
-    ))
-}
-
-pub(crate) fn decode_open(row: &Row<'_>) -> rusqlite::Result<Option<ToolInteraction>> {
-    row.get::<_, Option<String>>("tool_open")?
-        .map(|json| serde_json::from_str(&json).map_err(|error| decode_error(0, error)))
-        .transpose()
+    Ok(Some(ToolInteraction {
+        correlation: ToolCorrelation {
+            key: correlation_key,
+            derivation: parse_correlation(&correlation_kind)?,
+        },
+        native: NativeToolRef {
+            id: row.get("tool_native_id")?,
+            namespace: row.get("tool_namespace")?,
+            name,
+            provider: row.get("tool_provider")?,
+        },
+        status: ToolStatusFact {
+            value: parse_status(&status)?,
+            basis: parse_status_basis(&status_basis)?,
+        },
+        action,
+        failure,
+        timing,
+    }))
 }
 
 pub(crate) const fn correlation_name(value: CorrelationDerivation) -> &'static str {

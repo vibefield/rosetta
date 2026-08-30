@@ -18,10 +18,9 @@ pub use rows::{
     TaskRow, TaskStatus, TitleKind, TokenSnapshot, ToolCall, WorkspaceObsRow,
 };
 pub use timeline::{
-    CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, EvidenceStamp,
-    FailureKind, GroupDerivation, GroupKind, MessageDetail, NativeToolRef, Provenance,
-    ResponseGroup, SearchLanes, SourceIdentity, StatusBasis, TimelineBody, TimelineEntry,
-    TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction,
-    ToolMergeState, ToolMutation, ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact,
-    ToolTiming, ToolUpdatePatch,
+    CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, FailureKind,
+    GroupDerivation, GroupKind, MessageDetail, NativeToolRef, Provenance, ResponseGroup,
+    SearchLanes, SourceIdentity, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup,
+    ToolAction, ToolActionKind, ToolCorrelation, ToolFailure, ToolFoldState, ToolInteraction,
+    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
 };

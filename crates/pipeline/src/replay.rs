@@ -571,7 +571,8 @@ fn flush_chunk(
     report: &mut RebuildReport,
     instrument: &Instrument,
 ) -> Result<(), PipelineError> {
-    let ops = std::mem::take(&mut file.ops);
+    let mut ops = std::mem::take(&mut file.ops);
+    crate::project::normalize_workspace_ops(&mut ops);
     let first_sequence = file.next_sequence;
     file.next_sequence += ops.len() as u64;
 

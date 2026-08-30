@@ -203,9 +203,10 @@ pub struct SessionRow {
     pub stream_state: StreamState,
 }
 
-/// One bounded meta-phase title candidate. The store retains the best answer
-/// by [`TitleKind`] and native timestamp; streamed singleton rows can refine
-/// the same public `session.title` with identical precedence rules.
+/// One bounded title candidate for the transaction-local fold. The store
+/// compares it by [`TitleKind`] and native timestamp, persists only the
+/// selected public `session.title`, and leaves losing candidates in the raw
+/// ledger/process RAM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SessionTitleRow {

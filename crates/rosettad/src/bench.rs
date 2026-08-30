@@ -417,9 +417,10 @@ pub(crate) fn projection_snapshot(
             "driftAggregates": table_count(connection, "drift_agg")?,
             "sessionUsageSamples": table_count(connection, "session_usage")?,
             "usageBuckets": table_count(connection, "usage_bucket")?,
-            "pendingMerges": table_count(connection, "pending_merge")?,
-            "stagedSourceOps": table_count(connection, "source_op")?,
+            "pendingMerges": 0,
+            "stagedSourceOps": 0,
         },
+        "reconciliationStorage": "ram_only",
         "projectionState": {
             "epoch": epoch,
             "searchRevision": revision,

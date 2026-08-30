@@ -3,9 +3,8 @@
 //! Adapters stay pure: they may decode native inline media or externalize
 //! oversized canonical text and emit a [`ProjectionAsset`] alongside the
 //! typed reference. The store materializes the bytes before committing that
-//! URL. Bytes are skipped
-//! by serde because `source_op` is only temporary replacement staging; the
-//! durable raw ledger always retains the native Base64 and can recreate them.
+//! URL. Bytes are skipped by serde because normalized staging is process-local;
+//! the durable raw ledger always retains the native Base64 and can recreate them.
 
 use std::fmt;
 
@@ -20,8 +19,8 @@ pub struct ProjectionAsset {
     pub digest: String,
     /// Verified media type from the closed projection-member allowlist.
     pub media_type: String,
-    /// Transient materialization bytes. The raw ledger, not `source_op`, is
-    /// the durable replay substrate.
+    /// Transient materialization bytes. The raw ledger is the durable replay
+    /// substrate.
     #[serde(skip, default)]
     pub bytes: Vec<u8>,
 }

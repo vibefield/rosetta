@@ -99,7 +99,7 @@ impl fmt::Display for StoreError {
                 sequence,
             } => write!(
                 f,
-                "source op conflict at cursor {cursor_id}, generation {generation}, sequence {sequence}"
+                "RAM-staged source conflict at cursor {cursor_id}, generation {generation}, sequence {sequence}"
             ),
             Self::SourceState { cursor_id, message } => {
                 write!(f, "invalid source state for cursor {cursor_id}: {message}")
@@ -140,6 +140,10 @@ pub struct Store {
     /// The buffer follows committed source generations, then folds each tool
     /// correlation once before emitting final canonical rows to SQLite.
     bulk_reconciliation: apply::BulkReconciliationBuffer,
+    /// Cross-file lifecycle fragments that have not met their opener yet.
+    /// This is intentionally process-local: raw-ledger replay, not SQLite, is
+    /// the recovery path after restart.
+    ram_reconciliation: apply::RamReconciliationBuffer,
     /// An abandoned generation means the private projection was built from an
     /// incomplete source. Keep accepting batches so callers can finish their
     /// diagnostic pass, but never allow that scratch file to be published.
@@ -183,6 +187,7 @@ impl Store {
             assets: assets::AssetStore::for_projection(path),
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
+            ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -200,6 +205,7 @@ impl Store {
             assets: assets::AssetStore::in_memory(),
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
+            ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -227,6 +233,7 @@ impl Store {
                 StoreMode::Progressive
             },
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
+            ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -286,6 +293,7 @@ impl Store {
             assets,
             mode: StoreMode::Bulk,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
+            ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -298,16 +306,16 @@ impl Store {
         let asset_stats = self
             .assets
             .materialize_batch(batch, self.mode != StoreMode::Bulk)?;
+        let ram_delta = self.ram_reconciliation.prepare(
+            &self.conn,
+            batch,
+            matches!(self.mode, StoreMode::Bulk | StoreMode::Progressive),
+            self.mode != StoreMode::Bulk,
+        )?;
+        let projected_batch = self.ram_reconciliation.projected_batch(batch, &ram_delta);
+        let canonical_batch = projected_batch.as_ref().unwrap_or(batch);
         let bulk_delta = if self.mode == StoreMode::Bulk {
-            // The old generation remains canonical while a replacement is
-            // merely staged. Capture correlations whose source-owned facts
-            // disappear only at the committed activation boundary; Abandon
-            // must leave both SQLite and the RAM buffer on the old generation.
-            let capture_replacement = batch
-                .source
-                .as_ref()
-                .is_some_and(|source| source.mode == SourceMode::Activate);
-            apply::BulkReconciliationDelta::from_batch(batch, &self.conn, capture_replacement)?
+            apply::BulkReconciliationDelta::from_batch(batch, &self.conn, false)?
         } else {
             None
         };
@@ -317,7 +325,7 @@ impl Store {
         let mut fresh = self.effects.is_some().then(Effects::default);
         let tx = self.conn.transaction()?;
         let search_before = if self.mode == StoreMode::Live {
-            Some(search_sync::before_batch(&tx, batch)?)
+            Some(search_sync::before_batch(&tx, canonical_batch)?)
         } else {
             None
         };
@@ -328,19 +336,20 @@ impl Store {
         let bulk_load = matches!(self.mode, StoreMode::Bulk | StoreMode::Progressive);
         let mut stats = apply::apply_batch(
             &tx,
-            batch,
+            canonical_batch,
             maintenance,
             bulk_load,
             self.mode == StoreMode::Progressive,
             fresh.as_mut(),
         )?;
+        let ram_outcome = self.ram_reconciliation.resolve(&tx, &ram_delta)?;
         stats.projection_assets = asset_stats.assets;
         stats.asset_files_written = asset_stats.files_written;
         stats.asset_files_reused = asset_stats.files_reused;
         stats.asset_bytes = asset_stats.bytes;
         stats.asset_write_nanos = asset_stats.nanos;
         if let Some(search_before) = search_before {
-            search_sync::record_batch(&tx, batch, search_before)?;
+            search_sync::record_batch(&tx, canonical_batch, search_before)?;
         }
         let started = Instant::now();
         tx.commit()?;
@@ -348,6 +357,8 @@ impl Store {
         if let Some(delta) = bulk_delta {
             self.bulk_reconciliation.commit(delta);
         }
+        self.ram_reconciliation.commit(ram_outcome);
+        self.ram_reconciliation.commit_delta(&ram_delta);
         if bulk_load
             && matches!(
                 batch.source.as_ref().map(|source| source.mode),

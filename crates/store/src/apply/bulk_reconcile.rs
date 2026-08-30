@@ -5,28 +5,27 @@
 //! for every lifecycle fragment therefore buys no correctness. This buffer is
 //! generation-aware: committed source batches contribute closed canonical ops;
 //! once every source for a runtime is sealed, all correlations are folded in
-//! RAM and each final tool row is written exactly once. Reduced source-owned
-//! facts are still persisted so later live generation replacement can subtract
-//! one source without replaying the whole ledger.
+//! RAM and each final tool row is written exactly once. The resolved row is the
+//! only lifecycle representation written to SQLite; source replacement heals
+//! affected sessions by replaying their raw-ledger sources.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
 
 use rusqlite::{Connection, Transaction, params};
 
 use rosetta_core::timeline::StatusBasis;
 use rosetta_core::{
-    EvidenceOrder, IngestOp, SourceIdentity, TimelineBody, TimelineEntry, ToolInteraction,
-    ToolMergeState, ToolStatus, ToolStatusFact, ToolUpdatePatch,
+    EvidenceOrder, IngestOp, SourceIdentity, TimelineBody, TimelineEntry, ToolFoldState,
+    ToolInteraction, ToolStatus, ToolStatusFact, ToolUpdatePatch,
 };
 
 use crate::StoreError;
 
 use super::rows::{
-    BULK_MAINTENANCE, BucketKey, PendingGate, apply_reconciled_tool_message, persist_tool_fact,
-    touch_session, update_reconciled_tool,
+    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, apply_usage, touch_session,
+    update_reconciled_tool,
 };
-use super::{ApplyStats, Batch, SourceMode, apply_op, elapsed_nanos, profile_ordinal_lookup};
+use super::{ApplyStats, Batch, SourceMode, apply_op, profile_ordinal_lookup};
 
 #[derive(Debug)]
 enum DeferredOp {
@@ -53,14 +52,13 @@ pub(crate) struct BulkReconciliationDelta {
     /// time merely to maintain the RAM buffer.
     fingerprints: BTreeMap<u64, OpFingerprint>,
     deferred: BTreeMap<u64, DeferredOp>,
-    invalidated: BTreeSet<ToolKey>,
 }
 
 impl BulkReconciliationDelta {
     pub(crate) fn from_batch(
         batch: &Batch,
-        conn: &Connection,
-        capture_replacement: bool,
+        _conn: &Connection,
+        _capture_replacement: bool,
     ) -> Result<Option<Self>, StoreError> {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
@@ -122,13 +120,6 @@ impl BulkReconciliationDelta {
             );
             deferred_ops.insert(sequence, deferred_op);
         }
-        let invalidated = if capture_replacement
-            && matches!(source.mode, SourceMode::Stage | SourceMode::Activate)
-        {
-            replacement_invalidations(conn, source.cursor_id, source.generation)?
-        } else {
-            BTreeSet::new()
-        };
         Ok(Some(Self {
             cursor_id: source.cursor_id,
             generation: source.generation,
@@ -136,45 +127,8 @@ impl BulkReconciliationDelta {
             activation_end,
             fingerprints,
             deferred: deferred_ops,
-            invalidated,
         }))
     }
-}
-
-fn replacement_invalidations(
-    conn: &Connection,
-    cursor_id: i64,
-    generation: u64,
-) -> Result<BTreeSet<ToolKey>, StoreError> {
-    let active: i64 = conn
-        .prepare_cached("SELECT active_generation FROM ingest_cursor WHERE id = ?1")?
-        .query_row(params![cursor_id], |row| row.get(0))?;
-    let active = u64::try_from(active).map_err(|_| StoreError::SourceState {
-        cursor_id,
-        message: "active generation is negative while capturing tool invalidations".into(),
-    })?;
-    if active == 0 || generation <= active {
-        return Ok(BTreeSet::new());
-    }
-    let mut statement = conn.prepare(
-        "SELECT DISTINCT f.session_id, f.correlation_key
-         FROM tool_update_fact f
-         JOIN message m
-           ON m.session_id = f.session_id
-          AND m.tool_correlation_key = f.correlation_key
-          AND m.type = 'tool_use'
-         WHERE f.src_cursor = ?1
-           AND (m.src_cursor IS NULL OR m.src_cursor != ?1)
-         ORDER BY f.session_id, f.correlation_key",
-    )?;
-    Ok(statement
-        .query_map(params![cursor_id], |row| {
-            Ok(ToolKey {
-                session_id: row.get(0)?,
-                correlation_key: row.get(1)?,
-            })
-        })?
-        .collect::<Result<BTreeSet<_>, _>>()?)
 }
 
 pub(super) fn defers(op: &IngestOp) -> bool {
@@ -195,7 +149,6 @@ struct BufferedSource {
     activation_end: Option<u64>,
     fingerprints: BTreeMap<u64, OpFingerprint>,
     deferred: BTreeMap<u64, DeferredOp>,
-    invalidated: BTreeSet<ToolKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +163,6 @@ impl BufferedSource {
             activation_end: (mode == SourceMode::Append).then_some(0),
             fingerprints: BTreeMap::new(),
             deferred: BTreeMap::new(),
-            invalidated: BTreeSet::new(),
         }
     }
 }
@@ -224,6 +176,9 @@ struct SourceKey {
 #[derive(Debug, Default)]
 pub(crate) struct BulkReconciliationBuffer {
     sources: BTreeMap<SourceKey, BufferedSource>,
+    /// Usage snapshots whose response row has not appeared yet. This is the
+    /// cold-build counterpart to the Store's live RAM waiting room.
+    pending_usage: BTreeMap<UsageKey, BufferedTail>,
 }
 
 impl BulkReconciliationBuffer {
@@ -264,6 +219,11 @@ impl BulkReconciliationBuffer {
             return;
         }
 
+        if delta.mode == SourceMode::Activate {
+            self.pending_usage
+                .retain(|_, pending| pending.cursor_id != delta.cursor_id);
+        }
+
         // A newer incomplete generation supersedes only another incomplete
         // attempt. The last activated generation remains available until the
         // replacement's Activate transaction commits; Abandon therefore falls
@@ -289,7 +249,6 @@ impl BulkReconciliationBuffer {
         for (sequence, op) in delta.deferred {
             source.deferred.entry(sequence).or_insert(op);
         }
-        source.invalidated.extend(delta.invalidated);
         if delta.mode == SourceMode::Activate {
             source.activation_end = Some(delta.activation_end);
         } else if delta.mode == SourceMode::Append && source.activation_end.is_none() {
@@ -332,6 +291,7 @@ impl BulkReconciliationBuffer {
 
         let mut openers: BTreeMap<ToolKey, BufferedOpener> = BTreeMap::new();
         let mut new_facts: BTreeMap<FactKey, BufferedFact> = BTreeMap::new();
+        let prior_usage = self.pending_usage.values().cloned().collect::<Vec<_>>();
         let mut tail = Vec::new();
         let mut native_updates = Vec::new();
         let mut session_touches = BTreeMap::new();
@@ -424,7 +384,6 @@ impl BulkReconciliationBuffer {
                                 evidence: evidence.clone(),
                                 patch: (**patch).clone(),
                                 at: *at,
-                                src_cursor: Some(source_key.cursor_id),
                             },
                         )?;
                     }
@@ -459,24 +418,14 @@ impl BulkReconciliationBuffer {
                         ..ToolUpdatePatch::default()
                     },
                     at: None,
-                    src_cursor: Some(finalization.cursor_id),
                 },
             )?;
         }
 
-        let invalidated = source_keys.iter().flat_map(|source_key| {
-            self.sources
-                .get(source_key)
-                .expect("selected source exists")
-                .invalidated
-                .iter()
-                .cloned()
-        });
         let targets = openers
             .keys()
             .cloned()
             .chain(native_updates.iter().map(|(key, _)| key.clone()))
-            .chain(invalidated)
             .collect::<BTreeSet<_>>();
         let existing_openers = load_existing_openers(conn, &targets)?;
         for (key, opener) in &openers {
@@ -495,15 +444,8 @@ impl BulkReconciliationBuffer {
             }
         }
 
-        // A runtime normally flushes once and this scan is empty. Retaining
-        // previously reduced facts makes a later private append correct too:
-        // scan once, fold in RAM once, and update each affected row once.
-        let mut all_facts = load_existing_facts(conn, &targets)?;
-        for fact in new_facts.values().cloned() {
-            insert_fact(&mut all_facts, fact)?;
-        }
         let mut facts_by_tool: BTreeMap<ToolKey, Vec<&BufferedFact>> = BTreeMap::new();
-        for fact in all_facts.values() {
+        for fact in new_facts.values() {
             facts_by_tool
                 .entry(fact.key.clone())
                 .or_default()
@@ -514,12 +456,11 @@ impl BulkReconciliationBuffer {
             let TimelineBody::ToolUse { tool } = &opener.row.body else {
                 unreachable!("buffered opener remains a tool row")
             };
-            let (resolved, state) = resolve_tool(key, (**tool).clone(), facts_by_tool.get(key))?;
+            let resolved = resolve_tool(key, (**tool).clone(), facts_by_tool.get(key))?;
             messages.push(ResolvedToolMessage {
                 order: opener.order.clone(),
                 row: opener.row.clone(),
                 tool: resolved,
-                state,
                 known_absent: !existing_openers.contains_key(key),
             });
         }
@@ -531,15 +472,20 @@ impl BulkReconciliationBuffer {
             let Some(opener) = existing_openers.get(key) else {
                 continue;
             };
-            let (tool, state) = resolve_tool(key, opener.tool.clone(), facts_by_tool.get(key))?;
+            let tool = resolve_tool(key, opener.tool.clone(), facts_by_tool.get(key))?;
             existing.push(ResolvedExistingTool {
                 message_id: opener.message_id,
                 tool,
-                state,
             });
         }
         messages.sort_by(|left, right| left.order.cmp(&right.order));
         tail.sort_by(|left, right| left.order.cmp(&right.order));
+        // A fragment retained from an earlier committed flush happened before
+        // every fragment in this flush, regardless of lexical source path.
+        // Preserve that commit order so the newest usage snapshot wins.
+        let mut ordered_tail = prior_usage;
+        ordered_tail.extend(tail);
+        let tail = ordered_tail;
 
         // A response-level usage correction targeting a tool row in this same
         // cold plan is part of the row's final value, not a reason to insert
@@ -559,9 +505,9 @@ impl BulkReconciliationBuffer {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let pending_usage = load_pending_usage_targets(conn, &message_indexes)?;
         let mut remaining_tail = Vec::with_capacity(tail.len());
         let mut folded_usage = 0_u64;
+        let mut usage_seen = BTreeSet::new();
         for buffered in tail {
             let IngestOp::Usage {
                 session_id,
@@ -574,14 +520,14 @@ impl BulkReconciliationBuffer {
                 remaining_tail.push(buffered);
                 continue;
             };
+            usage_seen.insert(UsageKey {
+                session_id: session_id.clone(),
+                response: response.clone(),
+            });
             let Some(index) = message_indexes.get(&(session_id.clone(), response.clone())) else {
                 remaining_tail.push(buffered);
                 continue;
             };
-            if pending_usage.contains(&(session_id.clone(), response.clone())) {
-                remaining_tail.push(buffered);
-                continue;
-            }
             let message = &mut messages[*index].row;
             message.usage = *tokens;
             if let Some(model) = model {
@@ -610,19 +556,26 @@ impl BulkReconciliationBuffer {
             source_keys,
             messages,
             existing,
-            facts: new_facts.into_values().collect(),
             tail,
             native_updates: native_update_count,
             matched_updates,
             unmatched_updates,
             session_touches,
             folded_usage,
+            usage_seen,
+            unmatched_usage: BTreeMap::new(),
         })
     }
 
     pub(crate) fn committed(&mut self, plan: &BulkReconciliationPlan) {
         for source_key in &plan.source_keys {
             self.sources.remove(source_key);
+        }
+        for key in &plan.usage_seen {
+            self.pending_usage.remove(key);
+        }
+        for (key, pending) in &plan.unmatched_usage {
+            self.pending_usage.insert(key.clone(), pending.clone());
         }
     }
 }
@@ -664,7 +617,6 @@ struct BufferedFact {
     evidence: EvidenceOrder,
     patch: ToolUpdatePatch,
     at: Option<i64>,
-    src_cursor: Option<i64>,
 }
 
 fn insert_fact(
@@ -714,7 +666,12 @@ fn load_existing_openers(
     }
     let mut result = BTreeMap::new();
     let mut statement = conn.prepare(
-        "SELECT id, timeline_id, session_id, tool_correlation_key, tool_open
+        "SELECT id, timeline_id, session_id,
+                tool_correlation_key, tool_correlation_kind, tool_native_id,
+                tool_namespace, tool_provider, tool_name, tool_kind, tool_status,
+                tool_status_basis, tool_detail, tool_error_kind,
+                tool_error_summary, tool_diagnostic, tool_started_at,
+                tool_completed_at, tool_duration_ms
          FROM message
          WHERE type = 'tool_use'
          ORDER BY session_id, tool_correlation_key",
@@ -725,11 +682,11 @@ fn load_existing_openers(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
+            crate::tool_codec::decode(row)?,
         ))
     })?;
     for row in rows {
-        let (message_id, timeline_id, session_id, correlation_key, tool_open) = row?;
+        let (message_id, timeline_id, session_id, correlation_key, tool) = row?;
         let key = ToolKey {
             session_id,
             correlation_key,
@@ -737,7 +694,9 @@ fn load_existing_openers(
         if !targets.contains(&key) {
             continue;
         }
-        let tool: ToolInteraction = serde_json::from_str(&tool_open)?;
+        let tool = tool.ok_or_else(|| StoreError::ProjectionInvalid {
+            message: format!("stored tool row {timeline_id} has no public interaction"),
+        })?;
         if tool.correlation.key != key.correlation_key {
             return Err(StoreError::ProjectionInvalid {
                 message: format!(
@@ -758,113 +717,11 @@ fn load_existing_openers(
     Ok(result)
 }
 
-fn load_existing_facts(
-    conn: &Connection,
-    targets: &BTreeSet<ToolKey>,
-) -> Result<BTreeMap<FactKey, BufferedFact>, StoreError> {
-    if targets.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let mut result = BTreeMap::new();
-    let mut statement = conn.prepare(
-        "SELECT session_id, correlation_key, source_identity, generation,
-                record_offset, mutation_index, patch, at, src_cursor
-         FROM tool_update_fact
-         ORDER BY session_id, correlation_key, source_identity,
-                  generation, record_offset, mutation_index",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, String>(6)?,
-            row.get::<_, Option<i64>>(7)?,
-            row.get::<_, Option<i64>>(8)?,
-        ))
-    })?;
-    for row in rows {
-        let (
-            session_id,
-            correlation_key,
-            source_identity,
-            generation,
-            record_offset,
-            mutation_index,
-            patch,
-            at,
-            src_cursor,
-        ) = row?;
-        let key = ToolKey {
-            session_id,
-            correlation_key,
-        };
-        if !targets.contains(&key) {
-            continue;
-        }
-        let evidence = EvidenceOrder {
-            source_identity: SourceIdentity(source_identity),
-            generation: u64::try_from(generation).map_err(|_| StoreError::ProjectionInvalid {
-                message: "stored cold tool fact has a negative generation".into(),
-            })?,
-            record_offset: u64::try_from(record_offset).map_err(|_| {
-                StoreError::ProjectionInvalid {
-                    message: "stored cold tool fact has a negative record offset".into(),
-                }
-            })?,
-            mutation_index: u32::try_from(mutation_index).map_err(|_| {
-                StoreError::ProjectionInvalid {
-                    message: "stored cold tool fact has an invalid mutation index".into(),
-                }
-            })?,
-        };
-        insert_fact(
-            &mut result,
-            BufferedFact {
-                key,
-                evidence,
-                patch: serde_json::from_str(&patch)?,
-                at,
-                src_cursor,
-            },
-        )?;
-    }
-    Ok(result)
-}
-
-fn load_pending_usage_targets(
-    conn: &Connection,
-    message_indexes: &BTreeMap<(String, String), usize>,
-) -> Result<BTreeSet<(String, String)>, StoreError> {
-    if message_indexes.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let mut result = BTreeSet::new();
-    let mut statement = conn.prepare(
-        "SELECT session_id, target
-         FROM pending_merge
-         WHERE kind = 'usage'
-         ORDER BY session_id, target",
-    )?;
-    for row in statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })? {
-        let key = row?;
-        if message_indexes.contains_key(&key) {
-            result.insert(key);
-        }
-    }
-    Ok(result)
-}
-
 fn resolve_tool(
     key: &ToolKey,
     mut tool: ToolInteraction,
     updates: Option<&Vec<&BufferedFact>>,
-) -> Result<(ToolInteraction, ToolMergeState), StoreError> {
+) -> Result<ToolInteraction, StoreError> {
     tool.validate()
         .map_err(|error| StoreError::ProjectionInvalid {
             message: format!(
@@ -872,7 +729,7 @@ fn resolve_tool(
                 key.session_id, key.correlation_key
             ),
         })?;
-    let mut state = ToolMergeState::default();
+    let mut state = ToolFoldState::default();
     if let Some(updates) = updates {
         for fact in updates {
             tool.apply_patch(&mut state, &fact.patch, &fact.evidence)
@@ -884,7 +741,7 @@ fn resolve_tool(
                 })?;
         }
     }
-    Ok((tool, state))
+    Ok(tool)
 }
 
 #[derive(Debug)]
@@ -892,7 +749,6 @@ struct ResolvedToolMessage {
     order: SourceOrder,
     row: TimelineEntry,
     tool: ToolInteraction,
-    state: ToolMergeState,
     known_absent: bool,
 }
 
@@ -900,14 +756,19 @@ struct ResolvedToolMessage {
 struct ResolvedExistingTool {
     message_id: i64,
     tool: ToolInteraction,
-    state: ToolMergeState,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BufferedTail {
     cursor_id: i64,
     order: SourceOrder,
     op: IngestOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct UsageKey {
+    session_id: String,
+    response: String,
 }
 
 #[derive(Debug, Default)]
@@ -915,13 +776,14 @@ pub(crate) struct BulkReconciliationPlan {
     source_keys: BTreeSet<SourceKey>,
     messages: Vec<ResolvedToolMessage>,
     existing: Vec<ResolvedExistingTool>,
-    facts: Vec<BufferedFact>,
     tail: Vec<BufferedTail>,
     native_updates: u64,
     matched_updates: u64,
     unmatched_updates: u64,
     session_touches: BTreeMap<String, i64>,
     folded_usage: u64,
+    usage_seen: BTreeSet<UsageKey>,
+    unmatched_usage: BTreeMap<UsageKey, BufferedTail>,
 }
 
 impl BulkReconciliationPlan {
@@ -942,26 +804,9 @@ pub(crate) fn apply_plan(
     stats.usage_applied = plan.folded_usage;
     stats.profile.bulk_tool_rows_reconciled =
         plan.messages.len().saturating_add(plan.existing.len()) as u64;
-    let started = Instant::now();
-    for fact in &plan.facts {
-        if persist_tool_fact(
-            tx,
-            &fact.key.session_id,
-            &fact.key.correlation_key,
-            &fact.evidence,
-            &fact.patch,
-            fact.at,
-            fact.src_cursor,
-        )? {
-            stats.profile.bulk_tool_facts_written =
-                stats.profile.bulk_tool_facts_written.saturating_add(1);
-        }
-    }
-    stats.profile.tool_fact_write_nanos = elapsed_nanos(started);
 
     let mut next_ordinals = BTreeMap::new();
     let mut dirty_buckets = BTreeSet::<BucketKey>::new();
-    let mut pending_gate = PendingGate::default();
     for message in &mut plan.messages {
         let next = match next_ordinals.get_mut(&message.row.session_id) {
             Some(next) => next,
@@ -993,24 +838,45 @@ pub(crate) fn apply_plan(
             tx,
             &message.row,
             &message.tool,
-            &message.state,
             message.known_absent,
             &mut stats,
             BULK_MAINTENANCE,
             &mut dirty_buckets,
-            &mut pending_gate,
         )?;
     }
     for existing in &plan.existing {
-        update_reconciled_tool(
-            tx,
-            existing.message_id,
-            &existing.tool,
-            &existing.state,
-            &mut stats,
-        )?;
+        update_reconciled_tool(tx, existing.message_id, &existing.tool, &mut stats)?;
     }
     for tail in &plan.tail {
+        if let IngestOp::Usage {
+            session_id,
+            response,
+            ts,
+            model,
+            tokens,
+        } = &tail.op
+        {
+            let key = UsageKey {
+                session_id: session_id.clone(),
+                response: response.clone(),
+            };
+            plan.usage_seen.insert(key.clone());
+            if !apply_usage(
+                tx,
+                session_id,
+                response,
+                *ts,
+                model.as_deref(),
+                tokens,
+                &mut stats,
+                BULK_MAINTENANCE,
+                &mut dirty_buckets,
+                None,
+            )? {
+                plan.unmatched_usage.insert(key, tail.clone());
+            }
+            continue;
+        }
         apply_op(
             tx,
             &tail.op,
@@ -1018,7 +884,6 @@ pub(crate) fn apply_plan(
             &mut stats,
             BULK_MAINTENANCE,
             &mut dirty_buckets,
-            &mut pending_gate,
             None,
         )?;
     }

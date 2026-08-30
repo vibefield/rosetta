@@ -69,9 +69,9 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
     tx.prepare_cached(
         "INSERT INTO session
            (id, native_session_id, runtime_id, project_id, parent_session_id,
-            root_session_id, role, title, meta_title, meta_title_rank, meta_title_at,
+            root_session_id, role, title, title_rank, title_at, title_src_cursor,
             summary, started_at, updated_at, stream_state, project_assigned_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, 0, NULL, ?8, ?9, ?10,
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0, NULL, NULL, ?8, ?9, ?10,
                  ?11, CASE WHEN ?4 IS NULL THEN NULL ELSE ?9 END)
          ON CONFLICT(id) DO UPDATE SET
            project_id = CASE
@@ -130,7 +130,7 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
         row.stream_state.as_str(),
     ])?;
     if let Some(title) = &row.title {
-        insert_session_title_fact(
+        select_session_title(
             tx,
             &SessionTitleRow {
                 session_id: row.id.clone(),
@@ -141,7 +141,6 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
             None,
         )?;
     }
-    refresh_session_title(tx, &row.id)?;
     Ok(())
 }
 
@@ -150,20 +149,32 @@ pub(super) fn apply_session_title(
     row: &SessionTitleRow,
     src_cursor: Option<i64>,
 ) -> Result<(), StoreError> {
-    insert_session_title_fact(tx, row, src_cursor)?;
-    refresh_session_title(tx, &row.session_id)?;
-    Ok(())
+    select_session_title(tx, row, src_cursor)
 }
 
-fn insert_session_title_fact(
+/// Compare one bounded title candidate with the selected public title and
+/// retain only the winner. SQLite never becomes a durable candidate journal;
+/// the raw ledger and same-session replay recover a prior losing candidate
+/// after source replacement.
+fn select_session_title(
     tx: &Transaction,
     row: &SessionTitleRow,
     src_cursor: Option<i64>,
 ) -> Result<(), StoreError> {
     tx.prepare_cached(
-        "INSERT OR IGNORE INTO session_title_fact
-           (session_id, title, rank, at, src_cursor)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "UPDATE session
+         SET title = ?2, title_rank = ?3, title_at = ?4, title_src_cursor = ?5
+         WHERE id = ?1 AND (
+           title IS NULL OR
+           ?3 > title_rank OR
+           (?3 = title_rank AND (
+             title_at IS NULL OR
+             ?4 > title_at OR
+             (?4 = title_at AND ?2 < title) OR
+             (?4 = title_at AND ?2 = title
+                AND title_src_cursor IS NOT NULL AND ?5 IS NULL)
+           ))
+         )",
     )?
     .execute(params![
         row.session_id,
@@ -172,40 +183,5 @@ fn insert_session_title_fact(
         row.at,
         src_cursor,
     ])?;
-    Ok(())
-}
-
-/// Reconcile the public session title from active source-owned and direct
-/// candidates. Timeline narrowing turns native title records into
-/// `SessionTitle` facts before SQLite, so title candidates never live in the
-/// closed message table. Equal confidence prefers native recency, then a
-/// stable lexical tie rather than ingestion order.
-pub(super) fn refresh_session_title(tx: &Transaction, session_id: &str) -> Result<(), StoreError> {
-    let candidate = tx
-        .prepare_cached(
-            "SELECT title, rank, at
-             FROM session_title_fact
-             WHERE session_id = ?1
-             ORDER BY rank DESC, at DESC, title ASC
-             LIMIT 1",
-        )?
-        .query_row(params![session_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .optional()?;
-    let (title, rank, at) = match candidate {
-        Some((title, rank, at)) => (Some(title), rank, Some(at)),
-        None => (None, 0, None),
-    };
-    tx.prepare_cached(
-        "UPDATE session
-         SET title = ?2, meta_title = ?2, meta_title_rank = ?3, meta_title_at = ?4
-         WHERE id = ?1",
-    )?
-    .execute(params![session_id, title, rank, at])?;
     Ok(())
 }

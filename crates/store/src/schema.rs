@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -72,11 +72,13 @@ CREATE TABLE IF NOT EXISTS session (
   root_session_id   TEXT NOT NULL REFERENCES session(id),
   role              TEXT NOT NULL DEFAULT 'main',
   title             TEXT,
-  -- Best bounded meta answer. Streamed title singleton rows may refine the
-  -- public title; this is their deterministic fallback after a source sweep.
-  meta_title        TEXT,
-  meta_title_rank   INTEGER NOT NULL DEFAULT 0,
-  meta_title_at     INTEGER,
+  -- Minimal provenance for the one selected user-facing title. Losing title
+  -- candidates remain in process RAM/the raw ledger; they are never a second
+  -- durable fact set. Same-session sibling replay restores the next winner
+  -- when a source generation disappears.
+  title_rank        INTEGER NOT NULL DEFAULT 0 CHECK (title_rank BETWEEN 0 AND 3),
+  title_at          INTEGER,
+  title_src_cursor  INTEGER,
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
@@ -85,26 +87,6 @@ CREATE TABLE IF NOT EXISTS session (
   -- Earlier observations may refine the assignment; later cwd changes may not.
   project_assigned_at INTEGER
 );
-
--- Source-owned title candidates. `refresh_session_title` is the sole
--- consumer: it deterministically selects one bounded candidate for the
--- public session row. Keeping provenance here lets generation replacement
--- subtract a vanished title without putting title records back into the
--- closed timeline table.
-CREATE TABLE IF NOT EXISTS session_title_fact (
-  id         INTEGER PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES session(id),
-  title      TEXT NOT NULL,
-  rank       INTEGER NOT NULL CHECK (rank BETWEEN 1 AND 3),
-  at         INTEGER NOT NULL,
-  src_cursor INTEGER REFERENCES ingest_cursor(id)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS session_title_fact_identity
-  ON session_title_fact(
-    session_id, title, rank, at, COALESCE(src_cursor, -1)
-  );
-CREATE INDEX IF NOT EXISTS session_title_fact_src
-  ON session_title_fact(src_cursor);
 
 CREATE TABLE IF NOT EXISTS workspace_obs (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -156,36 +138,6 @@ CREATE TABLE IF NOT EXISTS ingest_cursor (
   UNIQUE (runtime_id, path)
 );
 
--- STAGING BUFFER, not a representation (rule 4): holds only not-yet-active
--- replacement generations and is pruned at activation. A source's first
--- generation projects directly when building a private cold database; there
--- is no old contribution to protect and the database cannot be published
--- before activation and validation. The raw ledger (rosetta-capture) is the
--- durable replay truth; replacements sweep old contributions by src_cursor
--- provenance instead of retaining a permanent op journal. Empty in steady state.
-CREATE TABLE IF NOT EXISTS source_op (
-  cursor_id   INTEGER NOT NULL REFERENCES ingest_cursor(id),
-  generation INTEGER NOT NULL,
-  sequence   INTEGER NOT NULL,
-  op_json    TEXT NOT NULL,
-  PRIMARY KEY (cursor_id, generation, sequence)
-) WITHOUT ROWID;
--- The WITHOUT ROWID primary key already is the cursor/generation/sequence
--- index. A duplicate secondary index doubles staged-generation write work.
-
--- Out-of-order enrichments wait here until their message/tool call exists.
--- This is derived projection state, not a replay representation; generation
--- sweeps remove pending rows by provenance just like the other small tables.
-CREATE TABLE IF NOT EXISTS pending_merge (
-  kind       TEXT NOT NULL,
-  session_id TEXT NOT NULL REFERENCES session(id),
-  target     TEXT NOT NULL,
-  op_json    TEXT NOT NULL,
-  src_cursor INTEGER REFERENCES ingest_cursor(id),
-  PRIMARY KEY (kind, session_id, target)
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS pending_merge_src ON pending_merge(src_cursor);
-
 CREATE TABLE IF NOT EXISTS message (
   id             INTEGER PRIMARY KEY,
   timeline_id    TEXT NOT NULL UNIQUE,
@@ -224,10 +176,6 @@ CREATE TABLE IF NOT EXISTS message (
                     ('request_observed','native_state','native_terminal_record',
                      'ground_truth_protocol','source_finalization')),
   tool_detail    TEXT CHECK (tool_detail IS NULL OR json_valid(tool_detail)),
-  -- Private closed opener used to replay active typed facts when a sibling
-  -- source generation is replaced. Never exposed by queries or search.
-  tool_open      TEXT CHECK (tool_open IS NULL OR json_valid(tool_open)),
-  tool_merge_state TEXT CHECK (tool_merge_state IS NULL OR json_valid(tool_merge_state)),
   tool_error_kind TEXT CHECK (tool_error_kind IS NULL OR tool_error_kind IN
                     ('permission','not_found','invalid_input','exit_nonzero',
                      'timeout','cancelled','provider','unknown')),
@@ -250,14 +198,13 @@ CREATE TABLE IF NOT EXISTS message (
           AND tool_correlation_key IS NOT NULL AND tool_correlation_kind IS NOT NULL
           AND tool_name IS NOT NULL AND tool_kind IS NOT NULL
           AND tool_status IS NOT NULL AND tool_status_basis IS NOT NULL
-          AND tool_detail IS NOT NULL AND tool_open IS NOT NULL
-          AND tool_merge_state IS NOT NULL
+          AND tool_detail IS NOT NULL
           AND json_extract(tool_detail, '$.type') = tool_kind)
       OR (type != 'tool_use' AND tool_correlation_key IS NULL
           AND tool_correlation_kind IS NULL AND tool_native_id IS NULL
           AND tool_namespace IS NULL AND tool_provider IS NULL AND tool_name IS NULL
           AND tool_kind IS NULL AND tool_status IS NULL AND tool_status_basis IS NULL
-          AND tool_detail IS NULL AND tool_open IS NULL AND tool_merge_state IS NULL
+          AND tool_detail IS NULL
           AND parent_tool_native_id IS NULL
           AND tool_error_kind IS NULL AND tool_error_summary IS NULL
           AND tool_diagnostic IS NULL AND tool_started_at IS NULL
@@ -286,28 +233,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS message_tool_correlation
 CREATE UNIQUE INDEX IF NOT EXISTS message_response_block
   ON message(session_id, response_id, block_index) WHERE response_id IS NOT NULL;
 
--- Active, reduced lifecycle evidence. This is not a native-op journal: each
--- row contains only the closed ToolUpdatePatch and exists solely so source
--- generation replacement can subtract a sibling-owned fact and deterministically
--- rebuild the correlated tool row from `tool_open` plus the remaining facts.
-CREATE TABLE IF NOT EXISTS tool_update_fact (
-  session_id       TEXT NOT NULL REFERENCES session(id),
-  correlation_key  TEXT NOT NULL,
-  source_identity  TEXT NOT NULL,
-  generation       INTEGER NOT NULL CHECK (generation >= 0),
-  record_offset    INTEGER NOT NULL CHECK (record_offset >= 0),
-  mutation_index   INTEGER NOT NULL CHECK (mutation_index >= 0),
-  patch             TEXT NOT NULL CHECK (json_valid(patch)),
-  at                INTEGER,
-  src_cursor        INTEGER REFERENCES ingest_cursor(id),
-  PRIMARY KEY (
-    session_id, correlation_key, source_identity,
-    generation, record_offset, mutation_index
-  )
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS tool_update_fact_target
-  ON tool_update_fact(session_id, correlation_key);
-CREATE INDEX IF NOT EXISTS tool_update_fact_src ON tool_update_fact(src_cursor);
 -- Generation activation and rewrite reconciliation are provenance lookups.
 -- Without this index, activating each source scans the entire growing table.
 CREATE INDEX IF NOT EXISTS message_src ON message(src_cursor);
@@ -443,6 +368,7 @@ pub(crate) const BULK_CREATE_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS session_parent  ON session(parent_session_id);
+CREATE INDEX IF NOT EXISTS session_title_src ON session(title_src_cursor);
 CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at);
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(

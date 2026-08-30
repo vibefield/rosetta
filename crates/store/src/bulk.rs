@@ -61,21 +61,18 @@ pub(crate) fn finish_progressive_pragmas(conn: &Connection) -> Result<(), StoreE
 }
 
 /// Refuse to materialize/publish a scratch database while any source is still
-/// between generations. The direct first-generation cold path has no
-/// `source_op` rows, so the cursor generation check is independently required.
+/// between generations. Normalized staging is process-local, so the durable
+/// cursor watermark is the publication gate.
 pub(crate) fn validate_complete(conn: &Connection) -> Result<(), StoreError> {
-    let staged: i64 = conn.query_row("SELECT COUNT(*) FROM source_op", [], |row| row.get(0))?;
     let incomplete: i64 = conn.query_row(
         "SELECT COUNT(*) FROM ingest_cursor
          WHERE active_generation != highest_generation",
         [],
         |row| row.get(0),
     )?;
-    if staged != 0 || incomplete != 0 {
+    if incomplete != 0 {
         return Err(StoreError::BulkLoadState {
-            message: format!(
-                "cold rebuild has {staged} staged ops and {incomplete} incomplete source generations"
-            ),
+            message: format!("cold rebuild has {incomplete} incomplete source generations"),
         });
     }
     Ok(())

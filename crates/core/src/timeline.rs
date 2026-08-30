@@ -2116,7 +2116,7 @@ impl ToolInteraction {
     /// stronger fact; byte-identical replay of the same evidence is a no-op.
     pub fn apply_patch(
         &mut self,
-        state: &mut ToolMergeState,
+        state: &mut ToolFoldState,
         patch: &ToolUpdatePatch,
         evidence: &EvidenceOrder,
     ) -> Result<bool, CanonicalError> {
@@ -2310,8 +2310,7 @@ enum ToolPatchPhase {
     Outcome,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ToolField {
     NativeId,
     LifecycleStatus,
@@ -2393,7 +2392,7 @@ enum ToolField {
     Fields,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolFieldStamp {
     field: ToolField,
     stamp: EvidenceStamp,
@@ -2407,7 +2406,7 @@ fn stamp_wins(current: Option<&EvidenceStamp>, incoming: &EvidenceStamp) -> bool
 }
 
 fn update_field_stamp(
-    state: &mut ToolMergeState,
+    state: &mut ToolFoldState,
     field: ToolField,
     incoming: &EvidenceStamp,
 ) -> bool {
@@ -2436,7 +2435,7 @@ fn update_field_stamp(
 fn merge_required_value<T: Clone + PartialEq>(
     current: &mut T,
     incoming: &T,
-    state: &mut ToolMergeState,
+    state: &mut ToolFoldState,
     field: ToolField,
     stamp: &EvidenceStamp,
 ) -> bool {
@@ -2452,7 +2451,7 @@ fn merge_required_value<T: Clone + PartialEq>(
 fn merge_optional_value<T: Clone + PartialEq>(
     current: &mut Option<T>,
     incoming: &Option<T>,
-    state: &mut ToolMergeState,
+    state: &mut ToolFoldState,
     field: ToolField,
     stamp: &EvidenceStamp,
 ) -> bool {
@@ -2472,7 +2471,7 @@ fn merge_action_fields(
     current: &mut ToolAction,
     incoming: &ToolAction,
     phase: ToolPatchPhase,
-    state: &mut ToolMergeState,
+    state: &mut ToolFoldState,
     stamp: &EvidenceStamp,
 ) -> bool {
     if current.kind() == ToolActionKind::Unknown && incoming.kind() != ToolActionKind::Unknown {
@@ -3313,9 +3312,8 @@ pub struct EvidenceOrder {
     pub mutation_index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct EvidenceStamp {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvidenceStamp {
     pub rank: u16,
     pub order: EvidenceOrder,
 }
@@ -3359,26 +3357,12 @@ pub struct ToolUpdatePatch {
     pub timing: Option<ToolTiming>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolMutation {
-    Opened {
-        entry: Box<TimelineEntry>,
-        evidence: EvidenceOrder,
-    },
-    Updated {
-        session_id: String,
-        correlation_key: String,
-        evidence: EvidenceOrder,
-        patch: Box<ToolUpdatePatch>,
-    },
-}
-
-/// Private deterministic merge stamps. Values remain in the closed public
-/// action; this state stores only one evidence stamp per canonical field.
-/// Sorted storage makes byte serialization independent of arrival order.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolMergeState {
+/// Process-local deterministic merge stamps. Values remain in the closed
+/// user-facing action; this state stores one evidence stamp per canonical
+/// field and intentionally implements no serialization trait.
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolFoldState {
     fields: Vec<ToolFieldStamp>,
 }
 
@@ -4153,7 +4137,7 @@ mod tests {
         };
 
         let mut forward = opener.clone();
-        let mut forward_state = ToolMergeState::default();
+        let mut forward_state = ToolFoldState::default();
         assert!(
             forward
                 .apply_patch(&mut forward_state, &weak, &evidence("b", 9))
@@ -4171,7 +4155,7 @@ mod tests {
         );
 
         let mut reverse = opener;
-        let mut reverse_state = ToolMergeState::default();
+        let mut reverse_state = ToolFoldState::default();
         reverse
             .apply_patch(&mut reverse_state, &terminal, &evidence("a", 1))
             .unwrap();
@@ -4208,7 +4192,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            tool.apply_patch(&mut ToolMergeState::default(), &patch, &evidence("a", 1))
+            tool.apply_patch(&mut ToolFoldState::default(), &patch, &evidence("a", 1))
                 .is_err()
         );
     }
@@ -4254,7 +4238,7 @@ mod tests {
         let newer = request("newer command", None, Some(30_000), true);
 
         let mut forward = opener();
-        let mut forward_state = ToolMergeState::default();
+        let mut forward_state = ToolFoldState::default();
         forward
             .apply_patch(&mut forward_state, &newer, &evidence("a", 10))
             .unwrap();
@@ -4263,7 +4247,7 @@ mod tests {
             .unwrap();
 
         let mut reverse = opener();
-        let mut reverse_state = ToolMergeState::default();
+        let mut reverse_state = ToolFoldState::default();
         reverse
             .apply_patch(&mut reverse_state, &older, &evidence("a", 5))
             .unwrap();
@@ -4321,7 +4305,7 @@ mod tests {
             ..Default::default()
         };
         tool.apply_patch(
-            &mut ToolMergeState::default(),
+            &mut ToolFoldState::default(),
             &patch,
             &evidence("result", 1),
         )

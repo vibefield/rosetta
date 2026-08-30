@@ -26,6 +26,7 @@ struct Snapshot {
     fts_hits: usize,
     tokens: i64,
     projects: i64,
+    workspace_repos: i64,
 }
 
 fn snapshot(store: &Store) -> Snapshot {
@@ -49,6 +50,7 @@ fn snapshot(store: &Store) -> Snapshot {
             .len(),
         tokens: one("SELECT SUM(COALESCE(in_tokens,0) + COALESCE(out_tokens,0)) FROM usage_bucket"),
         projects: one("SELECT COUNT(*) FROM project"),
+        workspace_repos: one("SELECT COUNT(*) FROM workspace_obs WHERE git_repo IS NOT NULL"),
     }
 }
 
@@ -141,11 +143,18 @@ fn ingest_then_lose_the_sources() -> Ledgered {
 
     // Append after the rewrite so the surviving generation grows further.
     let native = &victim.native_session_id;
+    let workspace = root.join("workspace-probe");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(
+        workspace.join(".git/config"),
+        "[remote \"origin\"]\n  url = git@example.com:acme/replay-probe.git\n",
+    )
+    .unwrap();
     let line = serde_json::json!({
         "type": "user", "sessionId": native,
         "uuid": "00000000-0000-4000-8000-00000000feed",
         "parentUuid": null, "isSidechain": false, "userType": "external",
-        "timestamp": "2026-05-01T00:00:00.000Z", "cwd": "/tmp/bench/project-0",
+        "timestamp": "2026-05-01T00:00:00.000Z", "cwd": workspace.to_string_lossy(),
         "gitBranch": "main", "version": "2.1.240",
         "message": {"role": "user", "content": "citlalicue synthetic rebuild probe"},
     });
@@ -168,6 +177,10 @@ fn ingest_then_lose_the_sources() -> Ledgered {
 
     let original = snapshot(&store);
     assert!(original.messages > 0 && original.fts_hits > 0 && original.tokens > 0);
+    assert_eq!(
+        original.workspace_repos, 0,
+        "stream projection must not enrich raw workspace rows from today's checkout"
+    );
 
     // The agent GC's everything. The projection is about to be dropped too.
     std::fs::remove_dir_all(&root).unwrap();
@@ -326,15 +339,18 @@ fn rebuild_never_activates_a_generation_that_normalizes_with_hard_errors() {
         )
         .unwrap();
     assert_eq!(state, "streaming");
-    assert_eq!(
-        rebuilt
-            .conn()
-            .query_row("SELECT COUNT(*) FROM source_op", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0,
-        "abandoned rebuild staging must be pruned"
-    );
+    let private_objects: i64 = rebuilt
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE name IN (
+               'source_op', 'pending_merge', 'tool_update_fact', 'session_title_fact'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(private_objects, 0, "rebuild staging must be RAM-only");
 }
 
 #[test]

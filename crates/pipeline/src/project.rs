@@ -15,18 +15,20 @@ pub(crate) fn project(cwd: &str) -> ProjectRow {
     }
 }
 
-pub(crate) fn enrich_workspace_ops(ops: &mut [IngestOp]) {
+/// Apply only deterministic, replayable workspace normalization. Local Git
+/// discovery belongs to the meta capture (whose resulting ProjectRow is
+/// written into the raw ledger); it must not silently enrich a streamed row
+/// because that filesystem state is absent during ledger-only rebuild.
+pub(crate) fn normalize_workspace_ops(ops: &mut [IngestOp]) {
     for op in ops {
         let IngestOp::WorkspaceObs(row) = op else {
             continue;
         };
         row.cwd = ids::normalize_root(&row.cwd);
-        // A native adapter may report a shorthand such as `owner/repo`, while
-        // another reports the remote URL. Prefer the local repository's
-        // sanitized origin whenever it is available so both observations fold
-        // to one project identity. Sanitize the native fallback as well.
-        let reported = row.git_repo.take().map(|value| sanitize_remote(&value));
-        row.git_repo = git_identity(&row.cwd).or(reported);
+        // A native adapter may report a shorthand or a credential-bearing
+        // remote. Sanitize what the record actually carried, but never consult
+        // today's local checkout while projecting a historical raw record.
+        row.git_repo = row.git_repo.take().map(|value| sanitize_remote(&value));
     }
 }
 
@@ -158,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_observation_prefers_local_canonical_remote() {
+    fn workspace_observation_uses_only_replayable_native_identity() {
         let root = TempDir::new().unwrap();
         std::fs::create_dir(root.path().join(".git")).unwrap();
         std::fs::write(
@@ -175,10 +177,38 @@ mod tests {
                 git_repo: Some("acme/repo".to_owned()),
             },
         )];
-        enrich_workspace_ops(&mut ops);
+        normalize_workspace_ops(&mut ops);
         let IngestOp::WorkspaceObs(row) = &ops[0] else {
             unreachable!()
         };
-        assert_eq!(row.git_repo.as_deref(), Some("example.com:acme/repo"));
+        assert_eq!(row.git_repo.as_deref(), Some("acme/repo"));
+    }
+
+    #[test]
+    fn workspace_observation_never_invents_identity_from_today_checkout() {
+        let root = TempDir::new().unwrap();
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        std::fs::write(
+            root.path().join(".git/config"),
+            "[remote \"origin\"]\n  url = git@example.com:acme/repo.git\n",
+        )
+        .unwrap();
+        let mut ops = vec![IngestOp::WorkspaceObs(
+            rosetta_core::rows::WorkspaceObsRow {
+                session_id: "s".to_owned(),
+                at: 0,
+                cwd: root.path().to_string_lossy().into_owned(),
+                git_branch: None,
+                git_repo: None,
+            },
+        )];
+
+        normalize_workspace_ops(&mut ops);
+
+        let IngestOp::WorkspaceObs(row) = &ops[0] else {
+            unreachable!()
+        };
+        assert_eq!(row.cwd, ids::normalize_root(&root.path().to_string_lossy()));
+        assert_eq!(row.git_repo, None);
     }
 }
