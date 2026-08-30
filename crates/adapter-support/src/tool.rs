@@ -12,6 +12,7 @@ use rosetta_core::timeline::{
     ResourceRef, StatusBasis, ToolAction, ToolActionKind, ToolCorrelation, ToolInteraction,
     ToolStatus, ToolStatusFact,
 };
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VersionRange {
@@ -303,6 +304,78 @@ pub fn url(value: impl Into<String>) -> Result<ResourceRef, ProjectionError> {
     Ok(ResourceRef::Url {
         url: bounded_scalar("URL", value)?,
     })
+}
+
+/// First non-empty string at one of the adapter-declared top-level keys.
+/// The keys are supplied by the owning adapter; shared code never embeds a
+/// vendor field name.
+pub fn first_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+    })
+}
+
+pub fn first_bool(value: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_bool))
+}
+
+pub fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|candidate| {
+            candidate.as_u64().or_else(|| {
+                candidate
+                    .as_i64()
+                    .and_then(|number| u64::try_from(number).ok())
+            })
+        })
+    })
+}
+
+pub fn string_values(value: &Value, keys: &[&str], limit: usize) -> Vec<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .take(limit)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Resolve a source path lexically against the timestamped cwd.  This never
+/// reads the live filesystem or follows symlinks.
+pub fn lexical_resource(
+    path: impl Into<String>,
+    cwd: Option<&str>,
+    is_directory: bool,
+) -> Result<ResourceRef, ProjectionError> {
+    let path = path.into();
+    let portable = path.replace('\\', "/");
+    let absolute = portable.starts_with('/')
+        || portable
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':');
+    let (path, resolved) = if absolute {
+        (rosetta_core::ids::normalize_root(&portable), true)
+    } else if let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty()) {
+        (
+            rosetta_core::ids::normalize_root(&format!("{cwd}/{portable}")),
+            true,
+        )
+    } else {
+        (rosetta_core::ids::normalize_root(&portable), false)
+    };
+    if is_directory {
+        directory(path, resolved)
+    } else {
+        file(path, resolved)
+    }
 }
 
 pub fn open_interaction(
