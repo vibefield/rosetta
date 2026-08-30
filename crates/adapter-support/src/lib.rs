@@ -6,6 +6,7 @@
 
 pub mod adapter;
 pub mod time;
+pub mod tool;
 
 pub use adapter::{
     AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, SkimResult, SnapshotPlan,
