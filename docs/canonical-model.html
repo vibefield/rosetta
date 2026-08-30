@@ -13,6 +13,9 @@
     --copper-bg: rgba(161, 78, 40, .08);
     --teal: #1F6E63;
     --teal-bg: rgba(31, 110, 99, .08);
+    --code-bg: #23262B;
+    --code-ink: #F6F4EF;
+    --code-comment: #AEB3BA;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -26,6 +29,9 @@
       --copper-bg: rgba(211, 128, 90, .12);
       --teal: #55A99B;
       --teal-bg: rgba(85, 169, 155, .12);
+      --code-bg: #111318;
+      --code-ink: #E6E4DF;
+      --code-comment: #8E949D;
     }
   }
   :root[data-theme="dark"] {
@@ -39,6 +45,9 @@
     --copper-bg: rgba(211, 128, 90, .12);
     --teal: #55A99B;
     --teal-bg: rgba(85, 169, 155, .12);
+    --code-bg: #111318;
+    --code-ink: #E6E4DF;
+    --code-comment: #8E949D;
   }
 
   * { box-sizing: border-box; }
@@ -184,6 +193,37 @@
   .job .reads { display: flex; gap: 6px; flex-wrap: wrap; }
   .job .reads .cchip { color: var(--ink); }
 
+  /* ---------- canonical message contract ---------- */
+  .decision {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px; margin: 18px 0 0;
+  }
+  .decision > div {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .decision b {
+    display: block; margin-bottom: 4px; font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--copper);
+  }
+  .decision span { display: block; color: var(--muted); font-size: 13px; }
+  .callout {
+    margin: 18px 0; padding: 15px 18px; border-left: 3px solid var(--teal);
+    border-radius: 0 7px 7px 0; background: var(--teal-bg); color: var(--muted);
+    max-width: 100ch;
+  }
+  .callout strong { color: var(--ink); }
+  .callout.copper { border-left-color: var(--copper); background: var(--copper-bg); }
+  pre.schema {
+    background: var(--code-bg); color: var(--code-ink); border-radius: 10px; padding: 20px 22px;
+    overflow-x: auto; font: 11.5px/1.6 'JetBrains Mono', monospace;
+  }
+  pre.schema .comment { color: var(--code-comment); }
+  .keep { color: var(--teal); font-weight: 600; }
+  .drop { color: var(--copper); font-weight: 600; }
+  .mono { font-family: 'JetBrains Mono', monospace; font-size: .88em; }
+  .small { color: var(--muted); font-size: 12px; }
+
   footer.note {
     margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
     font-size: 13px; color: var(--muted); max-width: 90ch;
@@ -197,10 +237,11 @@
     <p class="sub">One canonical projection over every agent's ground truth — eleven entities, checked
     against the nine captured <span style="font-family:'JetBrains Mono',monospace;font-size:.88em">groundtruth.json</span>
     packs (gemini and cursor pending). Sessions group under projects, transcripts flatten into typed
-    timeline rows, and heavy aggregates live in materialized caches updated at ingest.</p>
+    timeline rows, native tool dialects collapse into user-facing semantic actions, and heavy
+    aggregates live in materialized caches updated at ingest.</p>
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
-      <span class="cu">split blocks · merge tool results · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
+      <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
     <div class="status"><b>Implementation checkpoint · 2026-08-29.</b> All eleven logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
       bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 7 includes
@@ -212,7 +253,10 @@
       message rows retain stable service URLs and the raw ledger remains lossless. FTS5 is a detached disposable generation built asynchronously after canonical
       validation, then repaired from a coalesced session set. Ordinary schema mismatches fail closed.
       The in-process hot tier, subscription hub, HTTP/WebSocket transport, and generated clients exist.
-      The full adapter/visibility audit is in <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
+      <b>Schema 7 still stores native tool input, result, and payload opaquely.</b> The strict message/tool
+      contract below is the ratified target for the next projection schema; it is not yet the shipped
+      wire or SQLite shape. The full adapter/visibility audit is in
+      <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
   </div>
 
   <div class="legend">
@@ -348,9 +392,9 @@
         <rect x="430" y="270" width="340" height="200" rx="6" fill="var(--card)" stroke="currentColor" stroke-width="1.5"/>
         <text x="446" y="294" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">message — flattened timeline row</text>
         <text x="446" y="316" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">timeline_id · uuid · parent_uuid</text>
-        <text x="446" y="334" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">ordinal · ts · model · effort</text>
-        <text x="446" y="352" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">content — FTS target</text>
-        <text x="446" y="370" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">tool_use{name·input·result·payload}</text>
+        <text x="446" y="334" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">turn · response · block · ordinal</text>
+        <text x="446" y="352" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">prose · typed attachments/notices</text>
+        <text x="446" y="370" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">tool_use{status · semantic action}</text>
         <text x="446" y="388" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">usage — per-turn deltas</text>
         <text x="446" y="406" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">branch_tool_id ⟶ subagent anchor</text>
         <!-- type chips -->
@@ -364,7 +408,7 @@
           <rect x="446" y="444" width="66" height="20" rx="10" fill="var(--chip)"/>
           <text x="479" y="458" text-anchor="middle" fill="currentColor">tool_use</text>
           <rect x="520" y="444" width="58" height="20" rx="10" fill="var(--chip)"/>
-          <text x="549" y="458" text-anchor="middle" fill="currentColor">system</text>
+          <text x="549" y="458" text-anchor="middle" fill="currentColor">notice</text>
           <rect x="586" y="444" width="66" height="20" rx="10" fill="var(--chip)"/>
           <text x="619" y="458" text-anchor="middle" fill="currentColor">summary</text>
         </g>
@@ -500,20 +544,23 @@
       <header><h3>message</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="ph ph-live">live</span></span></header>
       <div class="fields">
         <span class="f">timeline_id</span><span class="n">stable, unique in session — native uuids aren't</span>
-        <span class="f">type</span><span class="n">user | agent | thinking | tool_use | system | summary</span>
-        <span class="f">subtype</span><span class="n">system only: compaction · truncation · model_change · mode_change · handoff · error</span>
+        <span class="f">type</span><span class="n">user | agent | thinking | tool_use | notice | summary</span>
+        <span class="f">turn · response · block</span><span class="n">stable grouping and source order — the UI never guesses from adjacency</span>
         <span class="f">uuid · parent_uuid</span><span class="n">native threading, preserved</span>
         <span class="f">ordinal · ts</span><span class="n">position + timestamp — presentation order ONLY; live delivery sequences on the hub's (epoch, mutation_seq), because tool-result merges mutate earlier rows</span>
         <span class="f">model · effort</span><span class="n">per-row observations — both change mid-session</span>
-        <span class="f">content</span><span class="n">text — the FTS target</span>
-        <span class="f">tool_use</span><span class="n">{name, input, result, payload, is_error} — the call, its result text, AND the structured result payload merged into one row by tool id; payload stays an opaque value (spaghetti scar); pending until the result lands</span>
+        <span class="f">body</span><span class="n">a generated discriminated union; prose is text, notices are typed, empty/redacted thinking is omitted</span>
+        <span class="f cu">tool_use</span><span class="n">{native_name, status, action, failure, timing}; action is a closed semantic union — never native input/result/payload JSON</span>
+        <span class="f">attachments[]</span><span class="n">typed image · document · audio · video · file references; inline bytes become content-addressed members</span>
         <span class="f">usage</span><span class="n">per-turn normalized deltas</span>
         <span class="f">branch_tool_id</span><span class="n">anchors a spawned subagent thread to its tool_use row</span>
         <span class="f">provenance</span><span class="n">agent version + raw ledger refs</span>
       </div>
       <div class="evidence"><b>Ratification:</b> grok, copilot, and kimi are natively flat event streams;
       codex <span class="f">response_item</span>s map 1:1; claude-code assistant blocks are split — the
-      transform spaghetti's <span class="f">SessionMessage</span> already proved out.</div>
+      transform spaghetti's <span class="f">SessionMessage</span> already proved out. The semantic tool
+      union is ratified against all nine captured adapters; unregistered tools narrow to
+      <span class="f">unknown</span> without failing the record.</div>
       <div class="consumers-line"><span class="cchip">FTS</span><span class="cchip">agent-view</span></div>
     </div>
 
@@ -626,7 +673,9 @@
   <h2>Message rows — the flattened taxonomy</h2>
   <p class="h2-note">One block per row, tool results merged into their <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">tool_use</span> row.
   Most agents are already flat; claude-code is the one that packs blocks inside assistant messages, and the
-  split transform un-packs it to match everyone else.</p>
+  split transform un-packs it to match everyone else. Native role labels are evidence, not authority:
+  a source row called <span class="mono">user</span> is canonical user prose only when it was authored by
+  the human.</p>
 
   <div class="tbl-scroll">
   <table>
@@ -636,37 +685,686 @@
     <tbody>
       <tr>
         <td class="rt">user</td>
-        <td>prompt text, pasted content, attachments</td>
+        <td>human-authored prompt text and typed attachments; never tool results, injected environment
+        context, developer prompts, or transport envelopes</td>
         <td><span class="native">claude-code user line · codex message(role=user) item</span></td>
       </tr>
       <tr>
         <td class="rt">agent</td>
-        <td>response text · model · effort · per-turn usage</td>
+        <td>assistant-authored prose · typed attachments · model · effort · per-turn usage</td>
         <td><span class="native">copilot assistant.message · grok agent_message_chunk · claude-code text block (split)</span></td>
       </tr>
       <tr>
         <td class="rt">thinking</td>
-        <td>reasoning text, own row — never embedded in the parent</td>
+        <td>non-empty, plain, user-visible reasoning text, collapsed by default; encrypted, redacted,
+        signature-only, and empty blocks remain ledger-only</td>
         <td><span class="native">codex reasoning item · copilot assistant.reasoning · grok agent_thought_chunk</span></td>
       </tr>
       <tr>
         <td class="rt">tool_use</td>
-        <td>name · input · merged result text + structured payload · is_error; spawn anchor for subagents</td>
+        <td>native name · status · one typed semantic action · bounded failure · timing; the native call
+        and result fold into this one row</td>
         <td><span class="native">codex function_call + function_call_output · grok tool_call + tool_call_update · copilot external_tool.requested/completed · claude-code tool_use + tool_result (correlated by id)</span></td>
       </tr>
       <tr>
-        <td class="rt">system</td>
-        <td>lifecycle, by subtype: compaction · truncation · model_change · mode_change · handoff · error</td>
+        <td class="rt">notice</td>
+        <td>a closed lifecycle union: compaction · truncation · model/mode/workspace change · permission
+        decision · handoff · runtime error; no arbitrary system text</td>
         <td><span class="native">copilot session.* events · grok auto_compact_* · pi compaction · claude-code system(subtype)</span></td>
       </tr>
       <tr>
         <td class="rt">summary</td>
-        <td>compaction summaries, branch summaries, ai titles</td>
+        <td>compaction, branch, or handoff summary text; generated/custom titles refine
+        <span class="mono">session.title</span> instead of becoming timeline rows</td>
         <td><span class="native">claude-code summary records · pi branch_summary · grok compaction-checkpoints</span></td>
       </tr>
     </tbody>
   </table>
   </div>
+
+  <!-- ================================================================ -->
+  <h2 id="canonical-message-boundary">The canonical message boundary</h2>
+  <p class="h2-note">The raw ledger is the complete forensic record. The canonical projection is the
+  user-facing explanation of what happened. A native object is therefore not canonical merely because
+  it parsed successfully.</p>
+
+  <div class="callout copper"><strong>Measured reason to close the gap.</strong> After inline images were
+  externalized, the audited Claude transcript still held 14.67 MiB of classified message text. Read,
+  Edit, Bash, and Write accounted for 12.60 MiB (85.9%); literal duplicate input/result/payload pairs
+  accounted for about 5.7 MiB. The three tool columns alternated between plain text, JSON objects,
+  JSON encoded as strings, and null. Those values are both storage waste and an impossible presentation
+  contract. The source evidence is recorded in <span class="mono">message-payload-weight.html</span> and
+  <span class="mono">message-schema-matrix.html</span>.</div>
+
+  <div class="tbl-scroll">
+  <table style="min-width:900px">
+    <thead><tr><th>measured payload class</th><th>audited bytes</th><th>canonical treatment</th></tr></thead>
+    <tbody>
+      <tr><td class="rt">Read content copies</td><td>3.91 MiB</td><td><span class="drop">drop</span> raw and numbered bodies; keep path/range</td></tr>
+      <tr><td class="rt">Edit old/new/original/patch copies</td><td>3.53 MiB</td><td>derive <span class="keep">one unified diff</span> per changed path; discard every source copy</td></tr>
+      <tr><td class="rt">Bash output</td><td>1.88 MiB</td><td><span class="drop">drop successful output</span>; failure-only diagnostic is hard-bounded</td></tr>
+      <tr><td class="rt">Bash command</td><td>0.39 MiB</td><td><span class="keep">keep once</span> as command intent</td></tr>
+      <tr><td class="rt">Write content copies</td><td>1.84 MiB</td><td>derive one create/update diff; large diff becomes one member</td></tr>
+      <tr><td class="rt">Human + assistant chat</td><td>1.25 MiB</td><td><span class="keep">preserve fully</span>; this is the product, not noise</td></tr>
+      <tr><td class="rt">Delegation prompt copies</td><td>0.71 MiB</td><td>keep one objective and child-session link; drop the duplicate</td></tr>
+      <tr><td class="rt">Workflow script</td><td>0.28 MiB</td><td>keep workflow name/path/objective; <span class="drop">drop inline source</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">This is evidence from one large Claude file, not a roster-wide savings forecast.
+  The action contract is roster-wide; byte and time claims require a frozen before/after ledger campaign.</p>
+
+  <div class="decision">
+    <div><b>LEDGER IS COMPLETE</b><span>Raw bytes, checksums, unknown fields, successful command output,
+    and dropped tool bodies remain replayable.</span></div>
+    <div><b>PROJECTION ANSWERS USERS</b><span>Keep the target, intent, state change, outcome status, and
+    user-authored content. Discard transport and model-context noise.</span></div>
+    <div><b>NO NATIVE JSON ESCAPE HATCH</b><span>Adapters construct Rust variants. Core and protocol expose
+    generated discriminated unions, never <span class="mono">serde_json::Value</span>.</span></div>
+    <div><b>NARROWING NEVER BLOCKS INGEST</b><span>Unfamiliar shapes become a bounded
+    <span class="mono">unknown</span> action plus drift evidence; the record still commits.</span></div>
+  </div>
+
+  <p>The public wire contract is an envelope plus a closed body union. The source's role string cannot
+  select a variant by itself: adapters must establish who authored prose and whether a machine record is
+  a tool completion, notice, summary, or ledger-only context.</p>
+
+  <pre class="schema">struct TimelineEntry {
+  timeline_id: TimelineId,
+  session_id: SessionId,
+  ordinal: i64,
+  turn_id: String,               <span class="comment">// one human→assistant turn; derived if absent</span>
+  response_id: Option&lt;String&gt;,   <span class="comment">// required for agent/thinking/tool rows</span>
+  block_index: Option&lt;u32&gt;,      <span class="comment">// required with response_id</span>
+  native_id: Option&lt;String&gt;,
+  parent_native_id: Option&lt;String&gt;,
+  at: Option&lt;Ms&gt;,
+  model: Option&lt;String&gt;,
+  effort: Option&lt;String&gt;,
+  body: TimelineBody,
+  usage: TokenSnapshot,
+  provenance: Provenance,
+}
+
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TimelineBody {
+  User      { text: CanonicalText, attachments: Vec&lt;AttachmentRef&gt; },
+  Agent     { text: CanonicalText, attachments: Vec&lt;AttachmentRef&gt; },
+  Thinking  { text: CanonicalText },
+  ToolUse   { tool: ToolInteraction },
+  Notice    { notice: Notice },
+  Summary   { purpose: SummaryPurpose, text: CanonicalText },
+}
+
+struct ToolInteraction {
+  native_id: Option&lt;String&gt;,     <span class="comment">// result correlation only</span>
+  native_name: String,           <span class="comment">// audit label, not a rendering schema</span>
+  status: ToolStatus,
+  action: ToolAction,            <span class="comment">// closed user-facing union below</span>
+  failure: Option&lt;ToolFailure&gt;,
+  timing: Option&lt;ToolTiming&gt;,
+}
+
+enum ToolStatus { Pending, Running, Succeeded, Failed, Denied,
+                  Cancelled, TimedOut, Interrupted, Unknown }
+enum FailureKind { Permission, NotFound, InvalidInput, ExitNonZero,
+                   Timeout, Cancelled, Provider, Unknown }
+struct ToolTiming { started_at: Option&lt;Ms&gt;, completed_at: Option&lt;Ms&gt;,
+                    duration_ms: Option&lt;u64&gt; }
+
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Notice {
+  Compaction { reason: Option&lt;String&gt; },
+  Truncation { scope: TruncationScope, omitted_count: Option&lt;u64&gt; },
+  ModelChanged { from: Option&lt;String&gt;, to: String },
+  ModeChanged { from: Option&lt;ExecutionMode&gt;, to: ExecutionMode },
+  WorkspaceChanged { cwd: String, git_branch: Option&lt;String&gt; },
+  PermissionDecision { decision: PermissionOutcome, scope: Option&lt;String&gt; },
+  Handoff { to_session_id: Option&lt;SessionId&gt;, to_agent: Option&lt;String&gt; },
+  RuntimeError { kind: RuntimeErrorKind, summary: String }, <span class="comment">// summary ≤ 512 bytes</span>
+}
+enum SummaryPurpose { Compaction, Branch, Handoff, Session }</pre>
+
+  <p class="small"><b>Invariant:</b> user/agent/summary text is human-readable text, never serialized JSON.
+  Empty or redacted thinking does not create a timeline row. Tool starts and completions merge by native
+  id into one <span class="mono">ToolInteraction</span>; completion can change status, timing, failure,
+  and the typed action's outcome, but cannot attach a native result blob. Every row has a deterministic
+  turn id; agent, thinking, and tool rows also have a deterministic response id and block index, synthesized
+  from native response boundaries when the source does not supply them. Dropping an empty/redacted block
+  or machine wrapper never drops its usage/model/timing fact: response-owned facts reattach to the response,
+  and otherwise become replacement-keyed <span class="mono">session_usage</span>.</p>
+
+  <!-- ================================================================ -->
+  <h2 id="tool-actions">Universal tool actions — keep what answers a user</h2>
+  <p class="h2-note">A tool family is defined by the question its card answers, not by a vendor name.
+  “Result” is not a universal field: each action owns a small typed outcome. Fields listed under discard
+  remain available only in the raw ledger.</p>
+
+  <div class="tbl-scroll">
+  <table style="min-width:1080px">
+    <thead><tr><th>canonical action</th><th>question it answers</th><th>keep</th><th>discard</th><th>search</th></tr></thead>
+    <tbody>
+      <tr><td class="rt">file_read</td><td>What did the agent inspect?</td>
+        <td><span class="keep">path</span>, optional requested line/page range, media kind, native truncation flag</td>
+        <td><span class="drop">file content, numbered content, byte/line counts, duplicate raw result, success prose</span></td><td>path</td></tr>
+      <tr><td class="rt">file_list</td><td>Where did it look?</td>
+        <td><span class="keep">directory</span>, depth/filter, entry count</td>
+        <td><span class="drop">directory listing body and per-entry metadata</span></td><td>directory · filter</td></tr>
+      <tr><td class="rt">file_search</td><td>What did it search for, and where?</td>
+        <td><span class="keep">query/pattern</span>, roots, glob/type filters, counts, at most 20 matching paths</td>
+        <td><span class="drop">matched line bodies, context windows, duplicated display text</span></td><td>query · roots · paths</td></tr>
+      <tr><td class="rt">code_lookup</td><td>Which symbol or diagnostic did it inspect?</td>
+        <td><span class="keep">operation</span>, symbol/query, path, at most 20 locations/diagnostics</td>
+        <td><span class="drop">server envelopes and full source excerpts</span></td><td>symbol · path</td></tr>
+      <tr><td class="rt">file_change</td><td>What file changed, and how?</td>
+        <td><span class="keep">create/update/delete/move</span>, path(s), exactly one canonical unified diff,
+        line counts</td><td><span class="drop">whole old/new files, originalFile, duplicate old/new strings,
+        structuredPatch copies, acknowledgements</span></td><td>path · diff</td></tr>
+      <tr><td class="rt">shell</td><td>What command did it run, and did it work?</td>
+        <td><span class="keep">command</span>, cwd, timeout/background intent, exit/signal/duration/process id</td>
+        <td><span class="drop">successful stdout/stderr, duplicated output, terminal decoration, git metadata copies</span></td><td>command · cwd</td></tr>
+      <tr><td class="rt">process</td><td>What happened to a long-running process?</td>
+        <td><span class="keep">wait/input/stop/inspect</span>, process/task id, bounded input, final status</td>
+        <td><span class="drop">poll output and repeated snapshots</span></td><td>process id · input</td></tr>
+      <tr><td class="rt">web_search</td><td>What did it search on the web?</td>
+        <td><span class="keep">query</span>, domain filters, result count, at most 10 title/URL source refs</td>
+        <td><span class="drop">snippets, page bodies, provider ranking envelopes</span></td><td>query · domains · URLs</td></tr>
+      <tr><td class="rt">web_fetch</td><td>Which page did it retrieve?</td>
+        <td><span class="keep">URL</span>, purpose, final URL/title/status</td>
+        <td><span class="drop">page text, HTML, readability output, repeated prompt context</span></td><td>URL · purpose · title</td></tr>
+      <tr><td class="rt">delegate</td><td>What work was handed to which agent?</td>
+        <td><span class="keep">agent kind/name/model/mode</span>, objective once, child session link, resume/background,
+        status and bounded result summary only when no child transcript exists</td>
+        <td><span class="drop">duplicate full prompt, tmux/pane/color ids, copied child transcript</span></td><td>objective · agent</td></tr>
+      <tr><td class="rt">task</td><td>What task changed?</td>
+        <td><span class="keep">operation</span>, task id, subject/description, status, owner, blocker ids</td>
+        <td><span class="drop">acknowledgements and duplicated full task lists</span></td><td>subject · owner</td></tr>
+      <tr><td class="rt">collaborate</td><td>Who was contacted or coordinated?</td>
+        <td><span class="keep">send/create/delete/list</span>, recipient/team, summary/body once, linked session,
+        delivery status, bounded participant refs for list operations</td><td><span class="drop">routing envelopes, colors and repeated message copies</span></td><td>recipient · summary/body</td></tr>
+      <tr><td class="rt">question</td><td>What choice was put to the user?</td>
+        <td><span class="keep">questions, options, multi-select flag and answers</span></td>
+        <td><span class="drop">provider form envelopes and duplicated rendered prompt</span></td><td>question · answer</td></tr>
+      <tr><td class="rt">skill</td><td>Which reusable capability ran?</td>
+        <td><span class="keep">skill name</span>, bounded arguments, status</td><td><span class="drop">loaded skill body and success acknowledgement</span></td><td>name · arguments</td></tr>
+      <tr><td class="rt">workflow</td><td>Which workflow ran?</td>
+        <td><span class="keep">name/path</span>, arguments, objective, resume id, background/status</td>
+        <td><span class="drop">inline script source, copied prompt and execution output</span></td><td>name · path · objective</td></tr>
+      <tr><td class="rt">schedule</td><td>What was scheduled or cancelled?</td>
+        <td><span class="keep">create/delete/list/wake</span>, schedule id, due/delay, reason/objective, status</td>
+        <td><span class="drop">scheduler envelopes and no-op acknowledgements</span></td><td>reason · id</td></tr>
+      <tr><td class="rt">artifact</td><td>What user-visible thing was produced or sent?</td>
+        <td><span class="keep">operation/kind/name</span>, path/URL/asset ref, description or generation prompt,
+        media metadata, status</td><td><span class="drop">base64 bytes, duplicate file content and provider response</span></td><td>name · path/URL · description</td></tr>
+      <tr><td class="rt">tool_discovery</td><td>What capability did the agent look for?</td>
+        <td><span class="keep">query</span>, count, at most 20 matched canonical/native names</td>
+        <td><span class="drop">tool schemas and registry payloads</span></td><td>query · names</td></tr>
+      <tr><td class="rt">mode</td><td>What execution mode or workspace changed?</td>
+        <td><span class="keep">enter/exit</span>, plan/review/worktree mode, workspace name/path, status</td>
+        <td><span class="drop">allowed-prompt policy blobs and repeated plan body</span></td><td>mode · workspace</td></tr>
+      <tr><td class="rt">finding</td><td>What finding did the agent report?</td>
+        <td><span class="keep">each severity/title</span>, bounded summary, resource refs, total count</td>
+        <td><span class="drop">internal scoring and provider envelopes</span></td><td>title · summary · resources</td></tr>
+      <tr><td class="rt">notification</td><td>What was sent outside the transcript?</td>
+        <td><span class="keep">channel/destination</span>, bounded message/feedback summary, delivery status</td>
+        <td><span class="drop">credentials, delivery internals and duplicate request/response</span></td><td>destination · summary</td></tr>
+      <tr><td class="rt">structured_output</td><td>What structured answer was produced for the user?</td>
+        <td><span class="keep">title/summary</span>, bounded typed fields, lists/tables and resource refs</td>
+        <td><span class="drop">schema/debug envelopes; values are converted to the canonical document tree, never copied as native JSON</span></td><td>rendered scalar text</td></tr>
+      <tr><td class="rt">external</td><td>What registered plugin/MCP operation ran?</td>
+        <td><span class="keep">provider/operation</span>, declared subject, bounded scalar display fields and resource refs</td>
+        <td><span class="drop">undeclared fields, nested objects, raw arguments/results</span></td><td>only registry-declared fields</td></tr>
+      <tr><td class="rt">unknown</td><td>What unfamiliar tool ran?</td>
+        <td><span class="keep">native name and status only</span>, plus ledger provenance/drift outside the card</td>
+        <td><span class="drop">all unreviewed input/result/payload values</span></td><td>native name</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="small" style="margin-top:14px">The exact public field contract is below. Variant status,
+  failure, and timing stay in <span class="mono">ToolInteraction</span>; each action contains only its
+  request identity and useful typed outcome.</p>
+
+  <pre class="schema">#[serde(tag = "type", rename_all = "snake_case")]
+enum ToolAction {
+  FileRead {
+    targets: Vec&lt;ReadTarget&gt;,              <span class="comment">// path + optional line/page range</span>
+    outcome: Option&lt;ReadOutcome&gt;,           <span class="comment">// native truncation flag only; never body</span>
+  },
+  FileList {
+    directory: ResourceRef, depth: Option&lt;u32&gt;, filter: Option&lt;String&gt;,
+    outcome: Option&lt;ListOutcome&gt;,           <span class="comment">// entry_count</span>
+  },
+  FileSearch {
+    query: String, mode: FileSearchMode, roots: Vec&lt;ResourceRef&gt;,
+    filters: Vec&lt;SearchFilter&gt;, outcome: Option&lt;SearchOutcome&gt;,
+  },                                         <span class="comment">// total counts + first 20 paths</span>
+  CodeLookup {
+    operation: CodeLookupOp, query: String, path: Option&lt;ResourceRef&gt;,
+    outcome: Option&lt;LocationOutcome&gt;,        <span class="comment">// first 20 locations</span>
+  },
+  FileChange {
+    changes: Vec&lt;FileDelta&gt;,                <span class="comment">// every changed path; one diff each</span>
+  },
+  Shell {
+    command: CanonicalText, cwd: Option&lt;ResourceRef&gt;,
+    timeout_ms: Option&lt;u64&gt;, background: bool,
+    outcome: Option&lt;ShellOutcome&gt;,           <span class="comment">// exit/signal/duration/process id</span>
+  },
+  Process {
+    operation: ProcessOp, process_id: String, input: Option&lt;CanonicalText&gt;,
+    outcome: Option&lt;ProcessOutcome&gt;,
+  },
+  WebSearch {
+    query: String, allowed_domains: Vec&lt;String&gt;, blocked_domains: Vec&lt;String&gt;,
+    outcome: Option&lt;WebSearchOutcome&gt;,       <span class="comment">// count + first 10 title/URL refs</span>
+  },
+  WebFetch {
+    url: ResourceRef, purpose: Option&lt;String&gt;, outcome: Option&lt;FetchOutcome&gt;,
+  },                                         <span class="comment">// final URL/title/status; no page</span>
+  Delegate {
+    agent_kind: Option&lt;String&gt;, name: Option&lt;String&gt;, model: Option&lt;String&gt;,
+    mode: Option&lt;String&gt;,
+    objective: CanonicalText, child_session_id: Option&lt;SessionId&gt;,
+    resume_id: Option&lt;String&gt;, background: bool,
+    orphan_result_summary: Option&lt;CanonicalText&gt;,
+  },
+  Task {
+    operation: TaskOp, task_id: Option&lt;String&gt;, subject: Option&lt;String&gt;,
+    description: Option&lt;CanonicalText&gt;, status: Option&lt;TaskStatus&gt;,
+    owner: Option&lt;String&gt;, blocker_ids: Vec&lt;String&gt;,
+  },
+  Collaborate {
+    operation: CollaborationOp, recipient: Option&lt;String&gt;, team: Option&lt;String&gt;,
+    summary: Option&lt;String&gt;, body: Option&lt;CanonicalText&gt;,
+    linked_session_id: Option&lt;SessionId&gt;, delivery_id: Option&lt;String&gt;,
+    outcome: Option&lt;CollaborationOutcome&gt;,
+  },
+  Question {
+    questions: Vec&lt;UserQuestion&gt;, answers: Vec&lt;UserAnswer&gt;,
+  },
+  Skill { name: String, arguments: Option&lt;CanonicalText&gt; },
+  Workflow {
+    name: String, path: Option&lt;ResourceRef&gt;, arguments: Option&lt;CanonicalText&gt;,
+    objective: Option&lt;CanonicalText&gt;, resume_id: Option&lt;String&gt;, background: bool,
+  },
+  Schedule {
+    operation: ScheduleOp, schedule_id: Option&lt;String&gt;, due_at: Option&lt;Ms&gt;,
+    delay_ms: Option&lt;u64&gt;, reason: Option&lt;String&gt;,
+    objective: Option&lt;CanonicalText&gt;,
+  },
+  Artifact {
+    operation: ArtifactOp, artifact_kind: ArtifactKind, name: Option&lt;String&gt;,
+    description: Option&lt;CanonicalText&gt;, resources: Vec&lt;ResourceRef&gt;,
+    media: Option&lt;MediaMetadata&gt;,
+  },
+  ToolDiscovery {
+    query: String, matches: Vec&lt;String&gt;, total_count: u64,
+  },
+  Mode {
+    operation: ModeOp, mode: ExecutionMode, workspace: Option&lt;ResourceRef&gt;,
+  },
+  Finding { findings: Vec&lt;FindingItem&gt;, total_count: u64 },
+  Notification {
+    channel: Option&lt;String&gt;, destination: Option&lt;String&gt;,
+    summary: CanonicalText, delivery_id: Option&lt;String&gt;,
+  },
+  StructuredOutput { document: CanonicalDocument },
+  External {
+    provider: Option&lt;String&gt;, operation: String, subject: Option&lt;String&gt;,
+    fields: Vec&lt;DisplayField&gt;, resources: Vec&lt;ResourceRef&gt;,
+  },
+  Unknown {},                               <span class="comment">// native name/status are in the envelope</span>
+}
+
+struct FileDelta {
+  operation: FileChangeOp,                  <span class="comment">// create/update/delete/move</span>
+  path: ResourceRef,
+  destination: Option&lt;ResourceRef&gt;,
+  diff: Option&lt;CanonicalText&gt;,              <span class="comment">// unified diff, exactly one representation</span>
+  lines_added: Option&lt;u64&gt;,
+  lines_removed: Option&lt;u64&gt;,
+}
+
+struct UserQuestion {
+  id: String, prompt: CanonicalText, header: Option&lt;String&gt;,
+  options: Vec&lt;QuestionOption&gt;, allow_multiple: bool,
+}
+struct UserAnswer { question_id: String, values: Vec&lt;CanonicalText&gt; }</pre>
+
+  <div class="callout"><strong>One-diff rule.</strong> For each changed path, prefer a native
+  post-execution patch that describes the actual change; otherwise derive a unified diff from verified
+  old/new values, or a create/delete diff from the one available body. Normalize headers and line endings
+  deterministically, compute line counts from that same diff, then discard every old/new/original/content/
+  hunk copy. If the source cannot prove a diff, retain path + operation + known counts with
+  <span class="mono">diff = None</span>; never relabel a whole file or acknowledgement as a diff.</div>
+
+  <div class="callout"><strong>Shell-output decision.</strong> Successful stdout and stderr are never
+  canonical. For failed, denied, interrupted, or timed-out actions, the normalizer may retain a typed
+  failure and at most 4 KiB / 40 lines of deterministic diagnostic text, preferring structured error or
+  stderr. This is the only command-output exception; it explains a failure without recreating a terminal
+  archive. The UI keeps it collapsed.</div>
+
+  <h3 style="font-family:Spectral,Georgia,serif;font-size:19px;margin-top:30px">Shared value types and bounds</h3>
+  <pre class="schema">enum CanonicalText {
+  Inline { text: String },                  <span class="comment">// ≤ 32 KiB UTF-8</span>
+  Member { asset: AssetRef, preview: String, byte_len: u64 }, <span class="comment">// preview ≤ 2 KiB</span>
+}                                          <span class="comment">// full user-critical text, content-addressed</span>
+
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResourceRef {
+  File { path: String, resolved: bool },     <span class="comment">// lexical absolute path when cwd is known</span>
+  Directory { path: String, resolved: bool },
+  Url { url: String },
+  Session { id: SessionId },
+  Task { id: String },
+  Process { id: String },
+  Asset { asset: AssetRef },
+}
+
+struct AssetRef {
+  url: String,                              <span class="comment">// relocatable /api/assets/… URL</span>
+  digest: String, media_type: String, byte_len: u64,
+}
+
+struct AttachmentRef {
+  kind: AttachmentKind,                    <span class="comment">// image/document/audio/video/file</span>
+  name: Option&lt;String&gt;,
+  media_type: Option&lt;String&gt;,
+  byte_len: Option&lt;u64&gt;,
+  source: ResourceRef,                     <span class="comment">// asset URL, file path, or web URL</span>
+  dimensions: Option&lt;Dimensions&gt;,
+}
+
+struct ReadTarget {
+  resource: ResourceRef,
+  range: Option&lt;SourceRange&gt;,               <span class="comment">// requested start/end; never inferred</span>
+  media_kind: Option&lt;AttachmentKind&gt;,
+}
+struct SourceRange { unit: RangeUnit, start: u64, count: Option&lt;u64&gt; }
+                                             <span class="comment">// start is canonical one-based</span>
+struct SearchFilter { kind: SearchFilterKind, value: String }
+struct SourceLocation { resource: ResourceRef, line: Option&lt;u64&gt;,
+                        column: Option&lt;u64&gt;, summary: Option&lt;String&gt; }
+struct WebSource { title: Option&lt;String&gt;, url: String }
+struct QuestionOption { id: String, label: String, description: Option&lt;String&gt; }
+struct MediaMetadata { media_type: Option&lt;String&gt;, width: Option&lt;u32&gt;,
+                       height: Option&lt;u32&gt;, duration_ms: Option&lt;u64&gt; }
+
+struct ToolFailure {
+  kind: FailureKind,
+  summary: Option&lt;String&gt;,                 <span class="comment">// ≤ 512 UTF-8 bytes</span>
+  diagnostic: Option&lt;String&gt;,              <span class="comment">// ≤ 4 KiB AND ≤ 40 lines</span>
+}
+
+struct DisplayField {
+  role: FieldRole,                          <span class="comment">// subject/target/filter/parameter/outcome</span>
+  label: String,
+  value: DisplayValue,
+}
+enum DisplayValue {
+  Text(String), Number(String), Boolean(bool), Resource(ResourceRef), <span class="comment">// exact JSON number text</span>
+  List(Vec&lt;DisplayScalar&gt;),                <span class="comment">// scalar values only</span>
+}
+enum DisplayScalar { Text(String), Number(String), Boolean(bool) }
+
+enum CanonicalDocument {
+  Inline { title: Option&lt;String&gt;, summary: Option&lt;CanonicalText&gt;,
+           blocks: Vec&lt;DocumentBlock&gt;, resources: Vec&lt;ResourceRef&gt; },
+  Member { asset: AssetRef, title: Option&lt;String&gt;, preview: String },
+}
+enum DocumentBlock {
+  Field(DisplayField),
+  List { heading: Option&lt;String&gt;, items: Vec&lt;DisplayScalar&gt; },
+  Table { heading: Option&lt;String&gt;, columns: Vec&lt;String&gt;,
+          rows: Vec&lt;Vec&lt;DisplayScalar&gt;&gt;, total_rows: u64 },
+  Section { heading: String, blocks: Vec&lt;DocumentBlock&gt; }, <span class="comment">// maximum depth 4</span>
+}
+
+struct ReadOutcome { truncated: bool }
+struct ListOutcome { entry_count: u64 }
+struct SearchOutcome { match_count: u64, file_count: u64,
+                       paths: Vec&lt;ResourceRef&gt;, total_paths: u64 }
+struct LocationOutcome { locations: Vec&lt;SourceLocation&gt;, total_count: u64 }
+struct ShellOutcome { exit_code: Option&lt;i32&gt;, signal: Option&lt;String&gt;,
+                      process_id: Option&lt;String&gt; }
+struct ProcessOutcome { state: ProcessState }
+struct CollaborationOutcome { participants: Vec&lt;CollaboratorRef&gt;, total_count: u64 }
+struct CollaboratorRef { name: String, role: Option&lt;String&gt;,
+                         session_id: Option&lt;SessionId&gt;, state: ParticipantState }
+struct FindingItem { severity: FindingSeverity, title: String,
+                     summary: Option&lt;CanonicalText&gt;, resources: Vec&lt;ResourceRef&gt; }
+struct WebSearchOutcome { sources: Vec&lt;WebSource&gt;, total_count: u64 }
+struct FetchOutcome { final_url: Option&lt;String&gt;, title: Option&lt;String&gt;,
+                      http_status: Option&lt;u16&gt; }</pre>
+
+  <p class="small">File and directory paths resolve lexically against the adapter's timestamped cwd
+  when available; normalization never touches the live filesystem or follows symlinks. If cwd is unknown,
+  the source spelling is retained with <span class="mono">resolved = false</span> rather than guessed.</p>
+
+  <div class="decision">
+    <div><b>NO SILENT LOSS OF IMPORTANT TEXT</b><span>Commands, diffs, collaboration bodies, structured
+    answers, and user/agent prose cross the inline limit by becoming immutable content-addressed members,
+    not by truncation.</span></div>
+    <div><b>BOUNDED COLLECTIONS</b><span>Search locations and tool names: 20. Web sources: 10. External
+    display fields: 24. Every reduced list also stores <span class="mono">total_count</span>. Canonical
+    documents over 32 KiB become typed members instead of losing blocks or rows.</span></div>
+    <div><b>BOUNDED EXTERNAL VALUES</b><span>Registry fields are scalar or flat scalar lists; labels are
+    128 bytes, strings 1 KiB, lists 20 values. No arbitrary nesting crosses the boundary.</span></div>
+    <div><b>BOUNDED CORE SCALARS</b><span>Ids/names are at most 512 bytes; path, URL, query, subject,
+    option, and other scalar fields are at most 16 KiB. Overflow makes the action unknown + drift
+    instead of saving a misleading truncation.</span></div>
+    <div><b>DETERMINISTIC REDUCTION</b><span>UTF-8 boundaries, list ordering, diagnostic selection, diff
+    generation, and previews are pure/versioned. Same ledger + version produces byte-identical rows.</span></div>
+  </div>
+
+  <p class="small"><b>CanonicalDocument is a narrow exception, not a payload wrapper.</b> It is legal
+  only for a tool whose declared product is a user-visible structured answer. Its converter emits the
+  fixed field/list/table/section tree above, externalizes binary members, and drops schema/debug wrappers.
+  Core validation rejects attempts to place a native tool request, response, or arbitrary object inside
+  it. Registered <span class="mono">external</span> actions are stricter: only their reviewed scalar fields
+  and resources cross the boundary.</p>
+  <p class="small"><b>One semantic role, one value.</b> If native fields repeat the same meaning across
+  request/result/payload, the projector applies a documented precedence and stores one. For delegation
+  and workflows, prefer an explicit description/summary over the full prompt; use the prompt only as the
+  fallback objective. For result-derived facts, prefer the post-execution value over the requested value.</p>
+  <p class="small"><b>Distilled entities remain authoritative.</b> The same native record may emit a
+  minimal timeline action plus a canonical <span class="mono">task</span>, <span class="mono">plan</span>,
+  <span class="mono">file_edit</span>, child-session link, artifact member, or derived commit. A tool card
+  keeps the small identity/snapshot needed to explain the event; full task lists, plan bodies, edit source
+  copies, and child transcripts belong to their named entity or the ledger, never a hidden payload.</p>
+
+  <!-- ================================================================ -->
+  <h2 id="native-tool-mapping">Native tool mapping — all captured adapters</h2>
+  <p class="h2-note">Names below select a semantic projector inside their owning adapter. They never
+  leak into shared code. Open plugin/function vocabularies require an explicit registered projector;
+  otherwise they safely produce <span class="mono">unknown</span>.</p>
+
+  <div class="tbl-scroll">
+  <table style="min-width:1120px">
+    <thead><tr><th>agent</th><th>native names → canonical actions</th><th>open-vocabulary rule</th></tr></thead>
+    <tbody>
+      <tr><td class="rt">antigravity</td><td><span class="native">view_file → file_read · list_dir → file_list · find_by_name → file_search · run_command → shell</span></td><td>unseen name → unknown + drift</td></tr>
+      <tr><td class="rt">claude-code</td><td><span class="native">Read → file_read · Glob/Grep → file_search · Write/Edit/NotebookEdit → file_change · Bash/PowerShell/Monitor → shell · KillShell → process · Task/Agent → delegate · TodoWrite/TaskCreate/TaskUpdate/TaskList/TaskOutput/TaskStop/TaskGet → task · WebSearch/WebFetch → web_search/web_fetch · AskUserQuestion → question · Skill → skill · Workflow → workflow · Cron*/ScheduleWakeup → schedule · Artifact/SendUserFile → artifact · ToolSearch → tool_discovery · Enter/ExitPlanMode + Enter/ExitWorktree → mode · SendMessage/ListAgents/TeamCreate/TeamDelete → collaborate · ReportFindings → finding · PushNotification/SendFeedback → notification · StructuredOutput → structured_output · LSP → code_lookup</span></td><td><span class="native">mcp__server__tool</span> requires a registered external projector; else unknown</td></tr>
+      <tr><td class="rt">codex</td><td><span class="native">exec_command/local_shell_call → shell · write_stdin → process · apply_patch → file_change · view_image → file_read · web_search_call → web_search · image_generation_call → artifact · tool_search_call → tool_discovery</span></td><td>function/custom/MCP call names use adapter registry; else unknown</td></tr>
+      <tr><td class="rt">copilot</td><td><span class="native">bash fixture → shell; built-in request/completion pairs use the adapter registry</span></td><td>MCP server/tool metadata → registered external; unknown names stay bounded</td></tr>
+      <tr><td class="rt">grok</td><td><span class="native">read_file → file_read · list_dir → file_list · grep → file_search · search_replace/write → file_change · run_terminal_command → shell · get_command_or_subagent_output/kill_command_or_subagent → process or delegate by target · todo_write → task · web_fetch → web_fetch</span></td><td>dynamic tool calls require registered projection; else unknown</td></tr>
+      <tr><td class="rt">hermes</td><td><span class="native">terminal → shell</span></td><td>OpenAI-style function names require registered projection; else unknown</td></tr>
+      <tr><td class="rt">kimi-code</td><td><span class="native">Read/ReadMediaFile → file_read · Grep → file_search · Edit/Write → file_change · Bash → shell · FetchURL → web_fetch · Agent → delegate · TodoList → task</span></td><td>unseen name → unknown + drift</td></tr>
+      <tr><td class="rt">opencode</td><td><span class="native">bash fixture → shell; tool-part state/start/finish/error merge into one action</span></td><td>tool-part names use adapter registry; else unknown</td></tr>
+      <tr><td class="rt">pi</td><td><span class="native">bash/BashExecution → shell</span></td><td>toolCall/toolResult name vocabulary uses adapter registry; else unknown</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="small">This table is a mapping, not an exhaustive source schema. Native parsers continue to
+  accept and drift-report unknown fields. Gemini and Cursor must be mapped before their adapters can
+  activate this projection version.</p>
+
+  <!-- ================================================================ -->
+  <h2 id="typed-message-storage">Storage and search contract for typed messages</h2>
+  <p class="h2-note">SQLite may store a typed union as JSON text; the escape hatch is the producer type,
+  not the SQL affinity. Only a closed Rust enum can serialize <span class="mono">detail</span>. Store reads
+  deserialize it back into that enum, and the generated protocol returns the same discriminated union.
+  No adapter, query, or client receives a generic JSON value. A content member is written to a private
+  name, verified, and durably renamed before the referencing row commits; search resolves full member
+  text only after that commit. The member is part of the same disposable projection, not a third source
+  of truth.</p>
+
+  <pre class="schema">enum ToolMutation {
+  Started { entry: TimelineEntry },         <span class="comment">// body = ToolUse(pending/running)</span>
+  Completed {
+    session_id: SessionId,
+    native_id: String,
+    status: TerminalToolStatus,
+    patch: Option&lt;ToolActionPatch&gt;,         <span class="comment">// closed enum parallel to ToolAction</span>
+    failure: Option&lt;ToolFailure&gt;,
+    timing: Option&lt;ToolTiming&gt;,
+  },
+}
+
+enum TerminalToolStatus { Succeeded, Failed, Denied, Cancelled,
+                          TimedOut, Interrupted, Unknown }
+
+<span class="comment">// ToolActionPatch contains result-owned fields only: counts/locations, one diff,</span>
+<span class="comment">// exit state, source refs, delivery state, answers, or canonical document blocks.</span>
+<span class="comment">// It has no Text/Json/Generic variant. The store rejects a family mismatch.</span></pre>
+
+  <pre class="schema">#[serde(tag = "type", rename_all = "snake_case")]
+enum MessageDetail {                         <span class="comment">// the only producer of message.detail</span>
+  Prose { text_member: Option&lt;AssetRef&gt;, attachments: Vec&lt;AttachmentRef&gt; },
+  Thinking { text_member: Option&lt;AssetRef&gt; },
+  Notice { notice: Notice },
+  Summary { purpose: SummaryPurpose, text_member: Option&lt;AssetRef&gt; },
+}</pre>
+
+  <p class="small">An out-of-order completion waits in <span class="mono">pending_merge</span> as this
+  typed mutation. When its start lands, the store validates the action family and applies the patch.
+  Unsupported result shapes omit the unfamiliar outcome and emit drift at normalization time; they never
+  wait as opaque JSON or erase a typed request.
+  A live call may remain pending/running, but a fully indexed source with no completion finalizes it as
+  <span class="mono">unknown</span>, never inferred success. An unmatched completion becomes drift plus
+  ledger provenance rather than a fabricated timeline row.</p>
+
+  <pre class="ddl"><span class="c">-- Target replacement for the schema-7 message tool columns; not shipped yet.</span>
+CREATE TABLE <b>message</b> (
+  id               INTEGER PRIMARY KEY,
+  timeline_id      TEXT NOT NULL UNIQUE,
+  session_id       TEXT NOT NULL REFERENCES session(id),
+  ordinal          INTEGER NOT NULL,
+  turn_id          TEXT NOT NULL,
+  response_id      TEXT,
+  block_index      INTEGER,
+  type             TEXT NOT NULL CHECK (type IN
+                     ('user','agent','thinking','tool_use','notice','summary')),
+  uuid             TEXT,
+  parent_uuid      TEXT,
+  ts               INTEGER,
+  model            TEXT,
+  effort           TEXT,
+  content          TEXT,                   <span class="c">-- inline prose or member preview; never JSON</span>
+  detail           TEXT CHECK (detail IS NULL OR json_valid(detail)),
+                                              <span class="c">-- closed MessageDetail enum</span>
+  tool_id          TEXT,                   <span class="c">-- native merge key</span>
+  tool_name        TEXT,                   <span class="c">-- audit/display label only</span>
+  tool_kind        TEXT,                   <span class="c">-- semantic ToolAction tag</span>
+  tool_status      TEXT CHECK (tool_status IS NULL OR tool_status IN
+                     ('pending','running','succeeded','failed','denied','cancelled',
+                      'timed_out','interrupted','unknown')),
+  tool_detail      TEXT CHECK (tool_detail IS NULL OR json_valid(tool_detail)),
+                                              <span class="c">-- closed ToolAction enum</span>
+  tool_error_kind  TEXT,
+  tool_error_summary TEXT,                 <span class="c">-- ≤ 512 UTF-8 bytes</span>
+  tool_diagnostic  TEXT,                   <span class="c">-- ≤ 4 KiB and ≤ 40 lines</span>
+  tool_started_at  INTEGER,
+  tool_completed_at INTEGER,
+  tool_duration_ms INTEGER,
+  branch_tool_id   TEXT,
+  in_tokens        INTEGER,
+  out_tokens       INTEGER,
+  cache_r_tokens   INTEGER,
+  cache_w_tokens   INTEGER,
+  think_tokens     INTEGER,
+  agent_version    TEXT,
+  src_cursor       INTEGER REFERENCES ingest_cursor(id),
+  src_offset       INTEGER,
+  UNIQUE (session_id, ordinal),
+  CHECK ((type = 'tool_use' AND content IS NULL AND detail IS NULL
+          AND tool_name IS NOT NULL AND tool_kind IS NOT NULL
+          AND tool_status IS NOT NULL AND tool_detail IS NOT NULL
+          AND json_extract(tool_detail, '$.type') = tool_kind)
+      OR (type != 'tool_use' AND tool_id IS NULL AND tool_name IS NULL
+          AND tool_kind IS NULL AND tool_status IS NULL AND tool_detail IS NULL
+          AND tool_error_kind IS NULL AND tool_error_summary IS NULL
+          AND tool_diagnostic IS NULL AND tool_started_at IS NULL
+          AND tool_completed_at IS NULL AND tool_duration_ms IS NULL)),
+  CHECK ((type IN ('user','agent','thinking') AND content IS NOT NULL)
+      OR (type = 'summary' AND content IS NOT NULL AND detail IS NOT NULL)
+      OR (type = 'notice' AND content IS NULL AND detail IS NOT NULL)
+      OR (type = 'tool_use' AND content IS NULL)),
+  CHECK ((type IN ('agent','thinking','tool_use') AND response_id IS NOT NULL
+          AND block_index IS NOT NULL)
+      OR type IN ('user','notice','summary')),
+  CHECK (tool_error_summary IS NULL OR tool_error_kind IS NOT NULL),
+  CHECK (tool_diagnostic IS NULL OR tool_error_kind IS NOT NULL)
+);
+
+<span class="c">-- Detached search receives explicit semantic fields, never serialized JSON.</span>
+CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
+  prose,                                    <span class="c">-- user/agent/summary; thinking is opt-in</span>
+  target,                                   <span class="c">-- path · URL · recipient · resource</span>
+  intent,                                   <span class="c">-- command · query · objective · subject</span>
+  change,                                   <span class="c">-- one canonical diff</span>
+  content=''
+);</pre>
+
+  <div class="decision">
+    <div><b>SEARCHED</b><span>User/assistant prose, summary text, paths, URLs, commands, queries, task
+    subjects, delegation objectives, collaboration bodies, structured answers, and canonical diffs.</span></div>
+    <div><b>NOT SEARCHED</b><span>Read bodies, shell output, fetched pages, success acknowledgements,
+    injected prompts/environment, transport metadata, raw external arguments/results, and empty thinking.</span></div>
+    <div><b>CLIENT CONTRACT</b><span>Render by <span class="mono">body.type</span> and
+    <span class="mono">tool.action.type</span>. No “first string field,” JSON parse attempts, or native
+    tool-name switches in the presentation layer.</span></div>
+    <div><b>LIVE MERGE</b><span>A start inserts pending/running semantic request fields. Its completion
+    patches only status, timing, typed outcome, and bounded failure in the same row.</span></div>
+  </div>
+
+  <h3 style="font-family:Spectral,Georgia,serif;font-size:19px;margin-top:30px">Unknown and drift policy</h3>
+  <p>A raw parser remains permissive. The adapter then attempts a named semantic projector. Unknown
+  extra fields are drift, not a reason to discard already-proven semantic fields. If a known request can
+  establish its required identity (for example Bash command or Read path), its typed action survives even
+  when the completion shape is new: independently reliable status/timing still merge, the unfamiliar
+  outcome is omitted, and drift points to the ledger sample. <span class="mono">ToolAction::Unknown</span>
+  is reserved for an unregistered tool or a request whose minimum identity cannot be established.</p>
+  <p>Either path increments an aggregated <span class="mono">projection_unknown</span> drift fact keyed by
+  runtime/version/name/phase/shape hash and records one bounded ledger sample reference. It never stores
+  the rejected object, invents a user-facing field, erases an earlier typed request, or aborts the record,
+  session, or batch. Once a projector is added and its normalizer version bumps, replay recovers the richer
+  action from the ledger.</p>
+
+  <h3 style="font-family:Spectral,Georgia,serif;font-size:19px;margin-top:30px">Activation gate</h3>
+  <div class="jobs">
+    <div class="job"><h3>1 · Prove the projectors</h3><p>Add typed fixture cases for every mapped family
+    in every captured adapter. Differential replay must show no user/agent prose loss, one tool row per
+    call, deterministic ids/order, and only declared fields crossing the boundary.</p></div>
+    <div class="job"><h3>2 · Prove reduction</h3><p>On one frozen checksummed ledger, assert that Read
+    contents, successful shell output, whole-file copies, native payload keys, and exact duplicate pairs
+    are absent from SQLite and FTS. Report DB/member/FTS bytes by semantic family plus normalize,
+    canonical-apply, search-build, whole-wall, and peak-RSS deltas from the paired run; estimates do not count.</p></div>
+    <div class="job"><h3>3 · Prove product behavior</h3><p>Generated TypeScript must contain no generic
+    tool JSON. The timeline renders all variants without native-key sniffing; search fixtures prove each
+    allowlisted semantic field and exclude every discarded field. Human/assistant prose queries retain
+    their hit identities; tool-noise queries are intentionally re-baselined rather than forced to match
+    schema 7's ranking digest.</p></div>
+    <div class="job"><h3>4 · Activate atomically</h3><p>Land common types, all nine adapter projectors,
+    store/search consumers, protocol, client, and schema-version fail-closed behavior before publishing
+    the new projection. Rebuild privately from the unchanged ledger; do not migrate schema 7 rows.</p></div>
+  </div>
+  <p class="small">Activation is a reviewed canonical/search semantics change, not a performance-only
+  optimization: the new allowlist and exclusion oracle must be approved explicitly. After that baseline
+  is frozen, every optimization inside the new schema again requires equal logical counts and ranked
+  digests under the repository's ordinary campaign rule.</p>
 
   <!-- ================================================================ -->
   <h2>Parse &amp; write strategy — discover, meta ingest, stream</h2>
@@ -781,11 +1479,11 @@
   </div>
 
   <!-- ================================================================ -->
-  <h2>The SQLite projection</h2>
-  <p class="h2-note">The canonical model as a compact DDL excerpt — one WAL database, grouped by the
-  ingest phase that fills each table. Search has its own disposable SQLite generation. Ids are blake3
-  hex, times are unix milliseconds, and structured values are JSON text. Both projections rebuild
-  from canonical rows or the ledger; only the ledger is precious.</p>
+  <h2>The shipped SQLite projection</h2>
+  <p class="h2-note">This is the schema-7 implementation snapshot, retained here so the document stays
+  honest about running code. Its opaque tool columns are the gap replaced by the target message DDL
+  above. The next version is a private rebuild from the ledger, never an in-place migration. Search has
+  its own disposable SQLite generation; only the ledger is precious.</p>
 
   <pre class="ddl"><span class="c">PRAGMA journal_mode = WAL;
 PRAGMA synchronous  = NORMAL;
@@ -905,7 +1603,7 @@ CREATE TABLE <b>message</b> (
   timeline_id    TEXT NOT NULL UNIQUE,      <span class="c">-- stable blake3; native uuids aren't unique</span>
   session_id     TEXT NOT NULL REFERENCES session(id),
   ordinal        INTEGER NOT NULL,
-  type           TEXT NOT NULL,             <span class="c">-- 'user'|'agent'|'thinking'|'tool_use'|'system'|'summary'</span>
+  type           TEXT NOT NULL,             <span class="c">-- schema 7: 'user'|'agent'|'thinking'|'tool_use'|'system'|'summary'</span>
   subtype        TEXT,                      <span class="c">-- system only: 'compaction'|'truncation'|'model_change'|…</span>
   uuid           TEXT,                      <span class="c">-- native id</span>
   parent_uuid    TEXT,                      <span class="c">-- native threading</span>
@@ -915,9 +1613,9 @@ CREATE TABLE <b>message</b> (
   content        TEXT,                      <span class="c">-- the FTS target</span>
   tool_id        TEXT,                      <span class="c">-- merge key: the result row folds in here</span>
   tool_name      TEXT,
-  tool_input     TEXT,                      <span class="c">-- JSON</span>
-  tool_result    TEXT,                      <span class="c">-- result text; NULL until it lands</span>
-  tool_payload   TEXT,                      <span class="c">-- JSON; verified binary members become stable asset URLs</span>
+  tool_input     TEXT,                      <span class="c">-- LEGACY: opaque native JSON</span>
+  tool_result    TEXT,                      <span class="c">-- LEGACY: native result text; NULL until it lands</span>
+  tool_payload   TEXT,                      <span class="c">-- LEGACY: opaque native JSON; verified binaries are URLs</span>
   tool_is_error  INTEGER,
   branch_tool_id TEXT,                      <span class="c">-- anchors a spawned subagent thread</span>
   in_tokens      INTEGER,                   <span class="c">-- per-turn deltas (cumulative sources normalized first)</span>
@@ -936,9 +1634,9 @@ CREATE INDEX message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
 );                                             <span class="c">-- equality keys precede the timestamp range</span>
 
-<span class="c">-- No FTS table lives in the canonical database. The detached generation owns
+<span class="c">-- No FTS table lives in the canonical database. The schema-7 detached generation owns
 -- search_document metadata plus a contentless message_fts(content, tool_input,
--- tool_result). Its search_state records projection_epoch + revision. The worker
+-- tool_result). The typed target replaces these with prose/target/intent/change. Its search_state records projection_epoch + revision. The worker
 -- builds privately, validates, fsyncs, and atomically selects it through CURRENT.</span>
 
 CREATE TABLE <b>file_edit</b> (
@@ -1089,10 +1787,11 @@ ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pr
   <div class="jobs">
     <div class="job">
       <h3>Full-text search</h3>
-      <p>Search across everything every agent ever said or did.</p>
+      <p>Search human and assistant prose plus the explicit semantic fields that describe what an
+      agent did — without indexing tool-result noise.</p>
       <div class="reads">
-        <span class="cchip">message.content</span>
-        <span class="cchip">tool_use input/result</span>
+        <span class="cchip">prose</span><span class="cchip">target</span>
+        <span class="cchip">intent</span><span class="cchip">change</span>
       </div>
     </div>
     <div class="job">
@@ -1110,7 +1809,9 @@ ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pr
     Iron rule 4 holds throughout, one level further than usual: the in-process hot tier rebuilds from
     this projection, and the projection — caches and cursors included — rebuilds from the append-only
     ledger. Tables are admitted by named consumers rather than a numeric budget. This model is a
-    Phase-2 hypothesis ratified against 9 of 11 ground-truth packs; gemini and
-    cursor captures may still amend it. Implementation design: ingest-engine.html.
+    Phase-2 hypothesis ratified against 9 of 11 ground-truth packs; Gemini and Cursor captures may
+    still amend mappings but do not reopen the strict projection boundary. The typed message/tool
+    contract is the next-schema target; schema 7 remains explicitly labelled above until code, search,
+    protocol, and clients activate it together. Implementation design: ingest-engine.html.
   </footer>
 </div>

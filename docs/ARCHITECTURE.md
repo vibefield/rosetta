@@ -298,8 +298,8 @@ more:
 ```rust
 enum CanonicalFact {
     SessionUpserted(Session),     // agent kind, project/workspace, native id, times, status
-    EntryAppended(Entry),         // role, kind (message/thinking/tool_use/tool_result/system),
-                                  //   text content, tool payload, parent linkage, timestamps
+    EntryAppended(Entry),         // typed user/agent/reasoning/tool/notice/summary body,
+                                  //   parent/turn/response linkage, timestamps
     ArtifactUpserted(Artifact),   // todos, plans, tasks, team state
     MetricEmitted(MetricSample),  // e.g. Usage { input, output, cache_creation, cache_read }
                                   //   keyed (session, response_key), canonical flag
@@ -307,6 +307,80 @@ enum CanonicalFact {
     DriftObserved(Drift),
 }
 ```
+
+### 4.1.1 Strict public message boundary
+
+> **Activation status (2026-08-29): ratified target, not shipped.** Projection schema 7
+> still exposes `ToolCall { input: Value, result: String, payload: Value }`. The next
+> schema replaces it only when core types, all captured adapters, store/search consumers,
+> protocol, and the client activate together. Until then, the current columns remain
+> explicitly legacy; no consumer should grow new dependencies on their native shapes.
+
+The raw ledger is the complete source record. A canonical timeline is instead a
+user-facing semantic projection. These are deliberately different jobs:
+
+- `user` means human-authored prose, not merely a native `role: "user"`; tool results,
+  developer prompts, environment injections, and transport wrappers cannot become user
+  messages.
+- `agent` and `summary` contain human-readable prose, never serialized JSON. Reasoning is
+  retained only when it is non-empty, plain, and user-visible. Redacted, encrypted,
+  signature-only, and empty thinking remains ledger-only; response usage/model/timing facts
+  reattach instead of disappearing with a dropped wrapper.
+- Lifecycle records become a closed `Notice` union (compaction, truncation, model/mode/
+  workspace change, permission decision, handoff, runtime error), not arbitrary system
+  text. Generated/custom titles refine `session.title`, not the timeline.
+- Attachments are typed image/document/audio/video/file references. Inline bytes become
+  immutable content-addressed projection members; the database retains relocatable refs.
+- `turn_id`, `response_id`, and `block_index` preserve exact grouping so clients never
+  infer response boundaries from adjacent rows.
+
+A tool start and completion fold into one `ToolInteraction` with native correlation id and
+name, canonical status/timing/failure, and one closed semantic action. There are no
+universal `input`, `result`, or `payload` fields. The action families are:
+
+`file_read`, `file_list`, `file_search`, `code_lookup`, `file_change`, `shell`,
+`process`, `web_search`, `web_fetch`, `delegate`, `task`, `collaborate`, `question`,
+`skill`, `workflow`, `schedule`, `artifact`, `tool_discovery`, `mode`, `finding`,
+`notification`, `structured_output`, `external`, and `unknown`.
+
+Live and out-of-order completions use a closed `ToolActionPatch` parallel to this union.
+It carries result-owned semantic fields only and has no text/JSON/generic variant;
+`pending_merge` stores that typed mutation and the store rejects a family mismatch.
+
+Each family keeps only the data necessary to answer its user-facing question. In
+particular: reads keep path/range but not file content; file changes keep path plus exactly
+one canonical diff but not whole old/new files; successful shell calls keep command/cwd/
+status but no stdout or stderr; web fetches keep URL/status but no page body. A failed,
+denied, interrupted, or timed-out shell call may keep a typed failure and at most 4 KiB / 40
+lines of deterministic diagnostic text. User-critical large text (prose, commands, diffs,
+collaboration bodies, and structured answers) becomes a content-addressed member rather
+than being silently truncated. Members are verified and durably renamed before a
+referencing canonical row commits; the detached search worker resolves their full text only
+after that commit. They remain part of the disposable canonical projection, not a third
+source of truth.
+
+Native parsers stay permissive and drift-aware. An adapter-owned semantic projector may
+narrow native values into the common union, but narrowing failure **never** fails the raw
+record. Unknown extra fields never erase proven semantic fields. A known typed request
+survives an unfamiliar completion: reliable status/timing may still merge, the new outcome
+is omitted, and drift is recorded. Only an unregistered tool or a request lacking its
+minimum identity emits `unknown { native_name, status }`. Either case records one aggregated
+drift shape plus bounded ledger provenance and stores none of the rejected object. Replaying
+the unchanged ledger after adding a projector recovers the richer row.
+Registered MCP/plugin projectors may emit at most bounded scalar display fields and resource
+references; arbitrary nested JSON cannot cross the boundary.
+
+The detached search projection accepts only four semantic lanes: `prose`, `target` (path,
+URL, recipient, resource), `intent` (command, query, objective, subject), and `change`
+(canonical diff). Read bodies, successful shell output, fetched pages, success
+acknowledgements, injected prompts/environment, opaque external values, and empty thinking
+are neither stored nor indexed. Protocol clients receive generated discriminated unions and
+render by their tags; key sniffing and best-effort JSON parsing are forbidden.
+
+The exact per-family keep/drop/search rules, nine-adapter native-name mapping, shared bounds,
+target DDL, and activation tests live in
+[`docs/canonical-model.html`](canonical-model.html#canonical-message-boundary), “The
+canonical message boundary.”
 
 IDs are deterministic: `SessionId = (agent_kind, native_session_id)`,
 `EntryId = blake3(session_id, native_uuid_or_line_hash)`. Same input → same IDs, always —

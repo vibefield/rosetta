@@ -163,17 +163,25 @@ fixture-observed extras the CLI synthesizes: iterations[],
 output_tokens_details{}, speed, stop_details. Accounting semantics: per-message
 DELTA, native-exact (RFC 011).
 
-## 3. toolUseResult — keep it opaque (production scar)
+## 3. toolUseResult — raw stays permissive; projection may narrow (production scar)
 
-Per-tool result shapes are NOT modelled, deliberately. spaghetti once typed
+The **raw Claude type** is not narrowed to one per-tool result enum. spaghetti once typed
 `toolUseResult` strictly to the Read tool's shape
 ({type:'text', file:{filePath, content, numLines, startLine, totalLines}});
 every other tool's result then failed typed deserialization and stored **empty
 FTS text** — a silent production bug (PARSER-UNPARSED-DATA.md §"FTS recall
-drift", fixed 2026-07-02). Rosetta rule: `toolUseResult: string | object`,
-opaque `Value`; any future per-tool typing must be additive, evidence-backed,
-and NEVER make narrowing failure fatal. (Tool *input* shapes are stable and
-documented in spaghetti's viewer components if ever needed.)
+drift", fixed 2026-07-02). Rosetta raw rule remains
+`toolUseResult: string | object`, represented permissively and drift-reported.
+
+The canonical projection has a different job: an adapter-owned, evidence-backed semantic
+projector may extract a bounded common action (for example Read → path/range, Bash →
+command/status, Edit → path/one diff) while dropping native result noise. That projector
+must be downstream of successful raw admission. Narrowing failure NEVER fails the record or
+stores an empty substitute. A known typed request survives an unfamiliar completion with its
+outcome omitted plus ledger provenance/drift; only an unregistered tool or a request missing
+its minimum identity becomes a bounded `unknown` action. The raw ledger retains the complete
+value for replay. This separation keeps the production scar intact without making opaque
+native JSON a public presentation contract.
 
 ## 4. Subagents & workflows — `projects/<slug>/<sid>/…`
 
