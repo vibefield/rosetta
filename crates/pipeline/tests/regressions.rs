@@ -300,6 +300,108 @@ fn claude_split_response_survives_incremental_checkpoint_without_usage_duplicati
 }
 
 #[test]
+fn claude_replayed_branch_coalesces_one_tool_without_reusing_block_indexes() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("projects/p/session-1.jsonl");
+    let response = "msg-revisited-response";
+    let repeated_uuid = "11111111-1111-1111-1111-111111111202";
+    let repeated_tool = json!({
+        "type": "tool_use",
+        "id": "toolu-revisited",
+        "name": "Bash",
+        "input": {"command": "true"}
+    });
+    let mut replayed =
+        claude_assistant_block("session-1", response, repeated_uuid, repeated_tool.clone());
+    replayed["parentUuid"] = json!("new-branch-parent");
+    write_lines(
+        &path,
+        &[
+            claude_assistant_block(
+                "session-1",
+                response,
+                "11111111-1111-1111-1111-111111111201",
+                json!({"type": "text", "text": "first block"}),
+            ),
+            claude_assistant_block("session-1", response, repeated_uuid, repeated_tool),
+            claude_assistant_block(
+                "session-1",
+                "msg-interrupting-response",
+                "11111111-1111-1111-1111-111111111203",
+                json!({"type": "text", "text": "branch work"}),
+            ),
+            replayed,
+            claude_assistant_block(
+                "session-1",
+                response,
+                "11111111-1111-1111-1111-111111111204",
+                json!({"type": "tool_use", "id": "toolu-late", "name": "Read",
+                       "input": {"file_path": "/w/project/src/lib.rs"}}),
+            ),
+        ],
+    );
+
+    let runtime = runtime(&ClaudeCodeAdapter);
+    let options = opts();
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    let (_, files) = meta_ingest(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let report = stream_backfill(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(report.hard_errors, 0);
+
+    let mut statement = store
+        .conn()
+        .prepare(
+            "SELECT block_index, type, tool_native_id, parent_uuid
+             FROM message
+             WHERE session_id = ?1 AND response_id = ?2
+             ORDER BY block_index",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map(rusqlite::params![files[0].session_id, response], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (0, "agent".into(), None, None),
+            (
+                1,
+                "tool_use".into(),
+                Some("toolu-revisited".into()),
+                Some("new-branch-parent".into())
+            ),
+            (2, "tool_use".into(), Some("toolu-late".into()), None),
+        ]
+    );
+}
+
+#[test]
 fn codex_large_opening_record_gets_a_bounded_identity_retry() {
     let root = TempDir::new().unwrap();
     generate(&CorpusSpec::new(Agent::Codex, 1, 30, 42), root.path()).unwrap();

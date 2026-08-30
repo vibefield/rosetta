@@ -335,6 +335,7 @@ impl BulkReconciliationBuffer {
         let mut tail = Vec::new();
         let mut native_updates = Vec::new();
         let mut session_touches = BTreeMap::new();
+        let mut opener_finalizations = Vec::new();
         for source_key in &source_keys {
             let source = self
                 .sources
@@ -359,27 +360,50 @@ impl BulkReconciliationBuffer {
                             correlation_key: tool.correlation.key.clone(),
                         };
                         note_session_touch(&mut session_touches, &row.session_id, row.at);
-                        if let Some(previous) = openers.get(&key) {
-                            return Err(StoreError::ProjectionInvalid {
-                                message: format!(
-                                    "duplicate cold tool openers {} and {} share correlation {}/{}",
-                                    previous.row.timeline_id,
-                                    row.timeline_id,
-                                    key.session_id,
-                                    key.correlation_key
-                                ),
-                            });
-                        }
-                        openers.insert(
-                            key,
-                            BufferedOpener {
+                        if activation_end != 0 && *sequence < activation_end {
+                            opener_finalizations.push(BufferedFinalization {
+                                key: key.clone(),
                                 cursor_id: source_key.cursor_id,
                                 generation: source_key.generation,
-                                finalized: activation_end != 0 && *sequence < activation_end,
-                                order,
-                                row: (**row).clone(),
-                            },
-                        );
+                            });
+                        }
+                        let candidate = BufferedOpener {
+                            order,
+                            row: (**row).clone(),
+                        };
+                        if let Some(previous) = openers.get_mut(&key) {
+                            if previous.row.timeline_id != candidate.row.timeline_id {
+                                return Err(StoreError::ProjectionInvalid {
+                                    message: format!(
+                                        "cold tool openers {} and {} share correlation {}/{}",
+                                        previous.row.timeline_id,
+                                        candidate.row.timeline_id,
+                                        key.session_id,
+                                        key.correlation_key
+                                    ),
+                                });
+                            }
+                            if previous.order == candidate.order && previous.row != candidate.row {
+                                return Err(StoreError::ProjectionInvalid {
+                                    message: format!(
+                                        "cold tool opener {} has conflicting payloads at {}:{}",
+                                        candidate.row.timeline_id,
+                                        candidate.order.path,
+                                        candidate.order.sequence
+                                    ),
+                                });
+                            }
+                            // Claude can repeat one native assistant record on
+                            // a later branch with the same UUID/tool ID but a
+                            // different parent. Ordinary SQLite upsert semantics
+                            // made the later source position authoritative; the
+                            // one-shot fold must preserve that exact behavior.
+                            if candidate.order > previous.order {
+                                *previous = candidate;
+                            }
+                        } else {
+                            openers.insert(key, candidate);
+                        }
                     }
                     DeferredOp::ToolUpdate {
                         session_id,
@@ -413,20 +437,17 @@ impl BulkReconciliationBuffer {
             }
         }
 
-        for (key, opener) in &openers {
-            if !opener.finalized {
-                continue;
-            }
+        for finalization in opener_finalizations {
             let path = paths
-                .get(&opener.cursor_id)
+                .get(&finalization.cursor_id)
                 .expect("opener source path was loaded");
             insert_fact(
                 &mut new_facts,
                 BufferedFact {
-                    key: key.clone(),
+                    key: finalization.key,
                     evidence: EvidenceOrder {
                         source_identity: SourceIdentity(format!("{path}#source-finalization")),
-                        generation: opener.generation,
+                        generation: finalization.generation,
                         record_offset: i64::MAX as u64,
                         mutation_index: u32::MAX,
                     },
@@ -438,7 +459,7 @@ impl BulkReconciliationBuffer {
                         ..ToolUpdatePatch::default()
                     },
                     at: None,
-                    src_cursor: Some(opener.cursor_id),
+                    src_cursor: Some(finalization.cursor_id),
                 },
             )?;
         }
@@ -620,11 +641,15 @@ struct SourceOrder {
 
 #[derive(Debug)]
 struct BufferedOpener {
-    cursor_id: i64,
-    generation: u64,
-    finalized: bool,
     order: SourceOrder,
     row: TimelineEntry,
+}
+
+#[derive(Debug)]
+struct BufferedFinalization {
+    key: ToolKey,
+    cursor_id: i64,
+    generation: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

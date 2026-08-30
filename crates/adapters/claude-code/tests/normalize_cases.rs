@@ -37,6 +37,37 @@ fn run(lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
     (ops, statuses)
 }
 
+fn run_with_checkpoint(lines: &[Value], split: usize) -> Vec<IngestOp> {
+    let adapter = ClaudeCodeAdapter;
+    let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
+    let session_id = ids::session_id(&runtime_id, "session-under-test");
+    let mut before = NormalizeCtx::new(&runtime_id, &session_id);
+    before.state = adapter.init_state();
+    let mut ops = Vec::new();
+    for line in &lines[..split] {
+        ops.extend(
+            adapter
+                .ingest_line(&mut before, "transcript", line.to_string().as_bytes())
+                .ops,
+        );
+    }
+    let checkpoint = adapter
+        .checkpoint_state(before.state.as_deref())
+        .unwrap()
+        .expect("claude checkpoint");
+    let mut after = NormalizeCtx::new(&runtime_id, &session_id);
+    after.next_ordinal = before.next_ordinal;
+    after.state = adapter.restore_state(Some(&checkpoint)).unwrap();
+    for line in &lines[split..] {
+        ops.extend(
+            adapter
+                .ingest_line(&mut after, "transcript", line.to_string().as_bytes())
+                .ops,
+        );
+    }
+    ops
+}
+
 /// An assistant record with the given content blocks, in the shape the
 /// canonical records for the `assistant` type.
 fn assistant(content: Value, usage: Option<Value>) -> Value {
@@ -307,6 +338,74 @@ fn assistant_records_share_response_block_space_across_checkpoint_resume() {
         );
     }
     assert_eq!(resumed, one_shot);
+}
+
+#[test]
+fn revisited_response_reuses_native_block_identity_after_checkpoint() {
+    let first_uuid = "11111111-1111-1111-1111-111111111301";
+    let repeated_uuid = "11111111-1111-1111-1111-111111111302";
+    let mut repeated = assistant_record(
+        "msg_revisited",
+        repeated_uuid,
+        json!([{"type": "tool_use", "id": "toolu_revisited", "name": "Bash",
+                "input": {"command": "true"}}]),
+        None,
+    );
+    repeated["parentUuid"] = json!("new-branch-parent");
+    let lines = vec![
+        assistant_record(
+            "msg_revisited",
+            first_uuid,
+            json!([{"type": "text", "text": "first"}]),
+            None,
+        ),
+        assistant_record(
+            "msg_revisited",
+            repeated_uuid,
+            json!([{"type": "tool_use", "id": "toolu_revisited", "name": "Bash",
+                    "input": {"command": "true"}}]),
+            None,
+        ),
+        assistant_record(
+            "msg_interrupting",
+            "11111111-1111-1111-1111-111111111303",
+            json!([{"type": "text", "text": "another response"}]),
+            None,
+        ),
+        repeated,
+        assistant_record(
+            "msg_revisited",
+            "11111111-1111-1111-1111-111111111304",
+            json!([{"type": "text", "text": "new late block"}]),
+            None,
+        ),
+    ];
+
+    let (one_shot, statuses) = run(&lines);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    let rows = messages(&one_shot);
+    let revisited = rows
+        .iter()
+        .filter(|row| {
+            row.response
+                .as_ref()
+                .is_some_and(|response| response.id == "msg_revisited")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        revisited
+            .iter()
+            .map(|row| row.block_index)
+            .collect::<Vec<_>>(),
+        [Some(0), Some(1), Some(1), Some(2)]
+    );
+    assert_eq!(revisited[1].timeline_id, revisited[2].timeline_id);
+    assert_eq!(
+        revisited[2].parent_native_id.as_deref(),
+        Some("new-branch-parent")
+    );
+    assert_eq!(run_with_checkpoint(&lines, 3), one_shot);
 }
 
 #[test]

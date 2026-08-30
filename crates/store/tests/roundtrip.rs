@@ -617,6 +617,59 @@ fn private_cold_buffer_deduplicates_retries_and_rejects_source_conflicts() {
 }
 
 #[test]
+fn private_cold_duplicate_timeline_opener_uses_last_source_position() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "branched.jsonl");
+
+    let mut first = message("branched-call", 0, MessageKind::ToolUse);
+    first.content = None;
+    first.uuid = Some("same-native-message".into());
+    first.parent_uuid = Some("old-branch-parent".into());
+    first.tool = Some(shell_tool("branched-tool", "same command"));
+    first.src_cursor = Some(cursor_id);
+    first.src_offset = Some(10);
+    let mut later = first.clone();
+    later.parent_uuid = Some("new-branch-parent".into());
+    later.src_offset = Some(20);
+
+    store
+        .apply(&Batch {
+            ops: vec![
+                message_op(first),
+                message_op(later),
+                status_update("branched-tool", ToolStatus::Succeeded, 21),
+            ],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.messages_inserted, 1);
+    assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
+    assert_eq!(stats.profile.bulk_tool_facts_written, 2);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].timeline_id, "branched-call");
+    assert_eq!(
+        page[0].parent_native_id.as_deref(),
+        Some("new-branch-parent")
+    );
+    assert_eq!(page[0].provenance.src_offset, Some(20));
+    assert_eq!(
+        entry_tool(&page[0]).unwrap().status.value,
+        ToolStatus::Succeeded
+    );
+}
+
+#[test]
 fn private_cold_append_refolds_existing_tool_once_per_correlation() {
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
     store.apply(&base_batch()).unwrap();

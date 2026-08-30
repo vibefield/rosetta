@@ -11,6 +11,8 @@
 //! derived from the session id plus a stable discriminator, so replaying a file
 //! twice produces byte-identical ops.
 
+use std::collections::BTreeMap;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
@@ -61,8 +63,12 @@ const SPAWN_TOOLS: [&str; 2] = ["Agent", "Task"];
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClaudeCodeState {
     workspace: Option<(String, String)>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    active_response: Option<ClaudeResponseState>,
+    /// Native response ids are not necessarily contiguous in a transcript:
+    /// branch reconstruction can repeat an older assistant record thousands
+    /// of lines later. Keep the closed response block identity so checkpoint
+    /// resume and branch replay assign the same canonical block index.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    responses: BTreeMap<String, ClaudeResponseState>,
 }
 
 impl ClaudeCodeState {
@@ -79,45 +85,42 @@ impl ClaudeCodeState {
     }
 
     /// Claude may persist one API response as several assistant JSONL records,
-    /// each containing only the newly materialized block. Non-assistant records
-    /// (notably tool results) may occur between those records, so this cursor is
-    /// advanced only when another assistant response id is observed.
-    fn enter_response(&mut self, id: &str, projected_blocks: u32) -> ResponseProjection {
-        if self
-            .active_response
-            .as_ref()
-            .is_none_or(|response| response.id != id)
-        {
-            self.active_response = Some(ClaudeResponseState {
-                id: id.to_owned(),
-                next_block_index: 0,
-                usage: None,
-            });
+    /// each containing only newly materialized blocks. A branch replay may then
+    /// repeat a prior record with the same UUID and a different parent. Stable
+    /// block identities make that a last-writer update, not a new response slot.
+    fn enter_response(&mut self, id: &str, block_identities: &[String]) -> ResponseProjection {
+        let response = self.responses.entry(id.to_owned()).or_default();
+        let mut block_indices = Vec::with_capacity(block_identities.len());
+        for identity in block_identities {
+            let index = response
+                .blocks
+                .iter()
+                .position(|known| known == identity)
+                .and_then(|index| u32::try_from(index).ok())
+                .unwrap_or_else(|| {
+                    let index = u32::try_from(response.blocks.len()).unwrap_or(u32::MAX);
+                    response.blocks.push(identity.clone());
+                    index
+                });
+            block_indices.push(index);
         }
-        let response = self.active_response.as_mut().expect("response initialized");
-        let first_block_index = response.next_block_index;
-        response.next_block_index = response.next_block_index.saturating_add(projected_blocks);
         ResponseProjection {
-            first_block_index,
+            block_indices,
             usage: response.usage.clone(),
         }
     }
 
     fn remember_usage(&mut self, response_id: &str, usage: ClaudeResponseUsage) {
-        if let Some(response) = self
-            .active_response
-            .as_mut()
-            .filter(|response| response.id == response_id)
-        {
+        if let Some(response) = self.responses.get_mut(response_id) {
             response.usage = Some(usage);
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ClaudeResponseState {
-    id: String,
-    next_block_index: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blocks: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<ClaudeResponseUsage>,
 }
@@ -136,7 +139,7 @@ enum ClaudeUsageTarget {
 }
 
 struct ResponseProjection {
-    first_block_index: u32,
+    block_indices: Vec<u32>,
     usage: Option<ClaudeResponseUsage>,
 }
 
@@ -322,6 +325,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
     };
 
     let mut rows: Vec<(MessageRow, Option<FileEditRow>)> = Vec::new();
+    let mut block_identities = Vec::new();
     for (index, block) in line.message.content.iter().enumerate() {
         // Split rows share the record's uuid, so the block index is what makes
         // the timeline id unique within the session.
@@ -333,6 +337,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 let mut row = emit.row(&seed, MessageKind::Agent, &discriminator);
                 row.content = Some(text.clone());
                 rows.push((row, None));
+                block_identities.push(discriminator);
             }
             AssistantContentBlock::Known(KnownAssistantBlock::Thinking { thinking, .. })
                 if !thinking.trim().is_empty() =>
@@ -340,6 +345,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 let mut row = emit.row(&seed, MessageKind::Thinking, &discriminator);
                 row.content = Some(thinking.clone());
                 rows.push((row, None));
+                block_identities.push(discriminator);
             }
             AssistantContentBlock::Known(KnownAssistantBlock::ToolUse {
                 id, name, input, ..
@@ -379,6 +385,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 }
                 let edit = file_edit(&row, name, input, ts);
                 rows.push((row, edit));
+                block_identities.push(discriminator);
             }
             // Empty prose/reasoning and `fallback` (an in-response model switch)
             // carry no user-visible timeline content. Unfamiliar kinds land in
@@ -387,14 +394,13 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
         }
     }
 
-    let projected_blocks = u32::try_from(rows.len()).unwrap_or(u32::MAX);
     let fallback_first_block = rows
         .first()
         .and_then(|(row, _)| u32::try_from(row.ordinal).ok())
         .unwrap_or_default();
     let response =
-        emit.response_projection(&line.message.id, projected_blocks, fallback_first_block);
-    for (local_index, (row, _)) in rows.iter_mut().enumerate() {
+        emit.response_projection(&line.message.id, &block_identities, fallback_first_block);
+    for ((row, _), block_index) in rows.iter_mut().zip(&response.block_indices) {
         row.group = Some(TimelineGroup {
             id: line.message.id.clone(),
             kind: GroupKind::AgentCycle,
@@ -404,11 +410,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
             id: line.message.id.clone(),
             derivation: GroupDerivation::Native,
         });
-        row.block_index = Some(
-            response
-                .first_block_index
-                .saturating_add(u32::try_from(local_index).unwrap_or(u32::MAX)),
-        );
+        row.block_index = Some(*block_index);
     }
 
     // Claude repeats the same final response usage on every persisted block.
@@ -805,19 +807,24 @@ impl<'a> Emit<'a> {
     fn response_projection(
         &mut self,
         response_id: &str,
-        projected_blocks: u32,
+        block_identities: &[String],
         fallback_first_block: u32,
     ) -> ResponseProjection {
         self.ctx
             .state
             .as_mut()
             .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
-            .map(|state| state.enter_response(response_id, projected_blocks))
+            .map(|state| state.enter_response(response_id, block_identities))
             // `AgentAdapter::init_state` makes this unreachable in production.
             // Keeping a deterministic ordinal fallback makes direct trait use
             // degrade to collision-free output instead of panicking.
             .unwrap_or(ResponseProjection {
-                first_block_index: fallback_first_block,
+                block_indices: (0..block_identities.len())
+                    .map(|index| {
+                        fallback_first_block
+                            .saturating_add(u32::try_from(index).unwrap_or(u32::MAX))
+                    })
+                    .collect(),
                 usage: None,
             })
     }
