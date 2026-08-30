@@ -61,7 +61,10 @@ export function FileViewerHeader({
             derivable path is exactly when a truncated name needs one. */}
         <ColumnHeading name={handle.name} tint={tint} mono title={handle.path ?? undefined} />
         {kind !== null && <span className="ah-fileview__kind">{kind.label}</span>}
-        <span className="ah-caption tnum">{fmtBytes(handle.size)}</span>
+        {/* A change has no size of its own, and `0 B` would be a figure the
+            room invented. Silence is the honest slot — the diff's own bar
+            carries `+2 −1`, which is the fact a reader wanted anyway. */}
+        {handle.size > 0 && <span className="ah-caption tnum">{fmtBytes(handle.size)}</span>}
       </div>
 
       <div className="ah-fileview__acts">

@@ -6,7 +6,7 @@
 // loading it has already done the damage by the time it can report it.
 
 import { useEffect, useState } from "react";
-import { BINARY_KIND, looksBinary, resolveKind } from "./registry";
+import { BINARY_KIND, diffKind, looksBinary, resolveKind } from "./registry";
 import type { FileHandle, FileSource, OpenFile } from "./types";
 
 export type FileContent =
@@ -43,13 +43,43 @@ function decode(bytes: Uint8Array): string {
  * goes to, and a fresh object every render would re-read the file on every
  * render. The worktree column memoizes one per engine.
  */
-export function useFileContent(handle: FileHandle | null, source: FileSource): FileContent {
+export function useFileContent(
+  handle: FileHandle | null,
+  source: FileSource,
+  /** Set when the caller is opening a CHANGE rather than a file — the one
+   * decision the registry cannot make from a name. */
+  asDiff = false,
+): FileContent {
   const [content, setContent] = useState<FileContent>(READING);
 
   useEffect(() => {
     if (handle === null) return;
 
-    const kind = resolveKind(handle.name);
+    const kind = asDiff ? diffKind(handle.name) : resolveKind(handle.name);
+
+    if (kind.viewer.payload === "compare") {
+      if (source.compare === undefined) {
+        setContent({ status: "failed", reason: "this source has nothing to compare against" });
+        return;
+      }
+      setContent(READING);
+      const comparing = new AbortController();
+      void source
+        .compare(handle, comparing.signal)
+        .then(({ unified }) => {
+          if (comparing.signal.aborted) return;
+          setContent({
+            status: "ready",
+            file: { handle, kind, bytes: new Uint8Array(0), text: null, unified },
+          });
+        })
+        .catch((error) => {
+          if (comparing.signal.aborted) return;
+          setContent({ status: "failed", reason: describe(error) });
+        });
+      return () => comparing.abort();
+    }
+
     if (handle.size === 0) {
       setContent({ status: "empty" });
       return;
@@ -80,6 +110,7 @@ export function useFileContent(handle: FileHandle | null, source: FileSource): F
             kind: resolved,
             bytes,
             text: resolved.viewer.payload === "text" ? decode(bytes) : null,
+            unified: null,
           },
         });
       } catch (error) {
@@ -89,7 +120,7 @@ export function useFileContent(handle: FileHandle | null, source: FileSource): F
     })();
 
     return () => controller.abort();
-  }, [handle, source]);
+  }, [handle, source, asDiff]);
 
   return content;
 }

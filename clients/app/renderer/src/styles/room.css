@@ -1167,3 +1167,188 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 .ah-hex__offset { color: var(--vf-text-faint); }
 .ah-hex__bytes { color: var(--vf-text-secondary); }
 .ah-hex__text { color: var(--vf-text-tertiary); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COLUMN ⑤ — THE REPOSITORY'S GIT (design record §8)
+
+   `.ah-commit`, `.ah-gitseg` and `.ah-push` are the proto's own vocabulary
+   and ARE diffed against it. `.ah-changerow` and `.ah-diff*` are the app's:
+   the record draws the change groups as mille subtrees, which mille cannot
+   serve over a filtered set, so they are the room's own rows wearing mille's
+   geometry — the same row height and indent, so the two columns read as one
+   repository rather than as two components that happen to be adjacent.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* the switch is the only thing in its row, so it takes the row: "a switch's
+   shape is its material, not its width" (§8) */
+.ah-seg.ah-gitseg { display: flex; flex: 1; }
+.ah-seg.ah-gitseg button { flex: 1; height: 20px; padding: 0 9px; font-size: 10px; }
+
+/* ── the change rows ───────────────────────────────────────────────────── */
+
+.ah-changetree { padding: 0 6px 2px; }
+.ah-changerow {
+  display: flex; align-items: center; gap: 6px;
+  height: var(--vf-tree-row-height); border-radius: 7px;
+  padding-right: 4px;
+}
+.ah-changerow:hover { background: var(--vf-fill); }
+/* the active entry wears `--vf-fill` and nothing else uses that fill —
+   DESIGN.md §8, and the reason the open diff is legible at a glance */
+.ah-changerow[data-selected] { background: var(--vf-fill-hover); }
+.ah-changerow__name {
+  display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1;
+  border: 0; background: transparent; padding: 0;
+  color: var(--vf-text-secondary); font-size: 11.5px; text-align: left;
+}
+.ah-changerow__name > span {
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-changerow[data-kind="directory"] .ah-changerow__name {
+  color: var(--vf-text-faint); font-size: 10.5px;
+}
+.ah-changerow[data-selected] .ah-changerow__name { color: var(--vf-text-primary); }
+
+/* the session mark: the one fact a git client cannot show. A dot, in the
+   project's own §2.6 tint — it says WHICH session, and hue means which.
+   The slot is always there, so a marked row and an unmarked one line up
+   their glyphs; only the dot itself comes and goes. */
+.ah-changerow__mark { flex: none; width: 5px; height: 5px; border-radius: 999px; }
+.ah-changerow__mark[data-touched] { background: var(--tint, var(--vf-text-tertiary)); }
+
+/* mille's own glyph, at column ③'s size: one repository, one icon set */
+.ah-changerow__icon { flex: none; width: 13px; height: 13px; }
+.ah-changerow__icon svg { width: 100%; height: 100%; display: block; }
+
+/* git's own letter, in the §2.5 hue its meaning earns — added is a positive
+   delta, deleted a negative one. Everything else is a state the ramp carries
+   without spending a colour on it. The slot holds its width when empty so
+   the names align down the column. */
+.ah-changerow__letter {
+  flex: none; width: 9px; text-align: center;
+  font-family: var(--vf-font-mono); font-size: 10px; font-weight: 500;
+  color: var(--vf-text-tertiary);
+}
+.ah-changerow__letter[data-letter="A"] { color: var(--vf-green); }
+.ah-changerow__letter[data-letter="D"] { color: var(--vf-red); }
+.ah-changerow__letter[data-letter="U"] { color: var(--vf-orange); }
+.ah-changerow__letter[data-letter="?"] { color: var(--vf-text-faint); }
+
+/* the acts appear on hover: a reading column does not carry two buttons per
+   row at rest, and a row you are not pointing at is not one you are staging */
+.ah-changerow__acts { display: flex; align-items: center; gap: 2px; flex: none; opacity: 0; }
+.ah-changerow:hover .ah-changerow__acts,
+.ah-changerow:focus-within .ah-changerow__acts { opacity: 1; }
+.ah-changerow__acts button {
+  width: 18px; height: 18px; border: 0; border-radius: 5px; padding: 0;
+  background: transparent; color: var(--vf-text-tertiary); font-size: 12px; line-height: 1;
+}
+.ah-changerow__acts button:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+
+/* ── the commit row: the session row, one object down ──────────────────── */
+
+.ah-commit {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr);
+  width: 100%; padding: 9px 12px 10px; border: 0; background: transparent; text-align: left;
+}
+.ah-commit + .ah-commit { border-top: 1px solid var(--vf-hairline); }
+.ah-commit:hover { background: var(--vf-fill); }
+.ah-commit[data-selected] { background: var(--vf-fill-hover); }
+.ah-commit__l1 { grid-column: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.ah-commit__l3 { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
+.ah-commit strong {
+  min-width: 0; color: var(--vf-text-primary); font-size: 12px; font-weight: 500; line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ah-commit .ah-sessmeta { grid-column: 2; margin-top: 3px; }
+.ah-commit code { font-family: var(--vf-font-mono); font-size: 9.5px; color: var(--vf-text-faint); }
+.ah-commit .ah-last { flex: none; }
+/* the ONE git state the row draws, because it is the one still actionable */
+.ah-push { grid-column: 1; grid-row: 1 / span 3; width: 11px; height: 11px; margin-top: 2px; color: var(--vf-text-faint); }
+.ah-push svg { width: 100%; height: 100%; display: block; }
+
+/* ── the diff ──────────────────────────────────────────────────────────────
+   Two gutters, then the mark, then the line. The line hues are §2.5's own
+   and need no exception: DESIGN.md defines `--vf-green` as "positive delta"
+   and `--vf-red` as "negative delta". What stays neutral is the diffstat
+   FIGURE — §8's rule that hue says which project or which state. */
+
+/* A diff's rows are as wide as the column, not as wide as their longest
+   line: the ground behind an added line says "this whole line is new", and a
+   ground that stops at the text says it about the text only. The code itself
+   still scrolls sideways inside the row. */
+.ah-diff .ah-code__sizer { width: 100%; }
+.ah-diff .ah-code__line { width: 100%; }
+.ah-diff .ah-code__line code { flex: 1; min-width: 0; }
+
+/* the file's own figure, above its hunks */
+.ah-diff__stat {
+  position: sticky; top: 0; z-index: 2; margin: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; border-bottom: 1px solid var(--vf-hairline);
+  background: var(--vf-chrome-solid);
+  color: var(--vf-text-tertiary); font-family: var(--vf-font-sans); font-size: 11px;
+}
+.ah-diff__renamed {
+  color: var(--vf-text-faint); min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.ah-diff .ah-code__num:first-of-type { padding-right: 6px; padding-left: 12px; }
+.ah-diff .ah-code__num {
+  width: calc(var(--ah-code-digits, 3ch) + 18px);
+  padding: 0 6px 0 0; background: transparent;
+}
+.ah-diff__mark {
+  flex: none; width: 16px; text-align: center; user-select: none;
+  color: var(--vf-text-faint);
+}
+.ah-diff .ah-code__line { align-items: center; }
+.ah-diff .ah-code__line[data-diff="add"] { background: color-mix(in srgb, var(--vf-green) 11%, transparent); }
+.ah-diff .ah-code__line[data-diff="del"] { background: color-mix(in srgb, var(--vf-red) 11%, transparent); }
+.ah-diff .ah-code__line[data-diff="add"] .ah-diff__mark { color: var(--vf-green); }
+.ah-diff .ah-code__line[data-diff="del"] .ah-diff__mark { color: var(--vf-red); }
+.ah-diff .ah-code__line[data-diff="note"] code { color: var(--vf-text-faint); }
+.ah-diff .ah-code__line[data-diff="note"] em { font-style: italic; }
+
+/* the hunk header: git's own `@@` plus the enclosing function it names */
+.ah-diff .ah-code__line[data-diff="hunk"] { background: var(--vf-fill); }
+.ah-diff__hunk { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-width: 0; }
+.ah-diff__range { color: var(--vf-text-faint); font-size: 10.5px; flex: none; }
+.ah-diff__context {
+  color: var(--vf-text-tertiary); font-size: 11px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── the confirm: the one thing this room asks before doing ─────────────── */
+
+.ah-confirm {
+  position: fixed; z-index: 61; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, 88vw); padding: 20px 22px 18px;
+  border-radius: 18px; background: var(--vf-chrome-solid);
+  box-shadow: var(--vf-shadow-dialog);
+  animation: ah-fileview-in 200ms var(--vf-ease-island);
+}
+.ah-confirm__title { margin: 0 0 8px; color: var(--vf-text-primary); font-size: 13.5px; font-weight: 600; }
+.ah-confirm__body p { margin: 0; color: var(--vf-text-tertiary); font-size: 12px; line-height: 1.55; }
+.ah-confirm__list {
+  margin: 10px 0 0; padding: 8px 10px; max-height: 148px; overflow: auto;
+  border-radius: 9px; background: var(--vf-fill); list-style: none;
+  font-family: var(--vf-font-mono); font-size: 10.5px; color: var(--vf-text-secondary);
+}
+.ah-confirm__list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-confirm__list li[data-more] { color: var(--vf-text-faint); font-family: var(--vf-font-sans); }
+.ah-confirm__acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.ah-confirm__acts button {
+  height: 28px; padding: 0 14px; border: 0; border-radius: 999px; font-size: 12px;
+  transition: opacity 140ms ease, transform 120ms ease;
+}
+.ah-confirm__acts button:active { transform: scale(0.97); }
+.ah-confirm__cancel { background: var(--vf-fill); color: var(--vf-text-secondary); }
+.ah-confirm__cancel:hover { background: var(--vf-fill-hover); }
+.ah-confirm__go { background: var(--vf-foreground); color: var(--vf-canvas-bg); font-weight: 500; }
+/* red is §2.5's "destructive", which is exactly what this button is */
+.ah-confirm__go[data-destructive] { background: var(--vf-red); color: var(--vf-state-on-solid); }
+.ah-confirm__go:hover { opacity: 0.9; }
+.ah-confirm button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }

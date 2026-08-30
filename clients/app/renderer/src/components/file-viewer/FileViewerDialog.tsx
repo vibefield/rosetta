@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { resolveKind } from "./registry";
+import { diffKind, resolveKind } from "./registry";
 import { useFileContent } from "./use-file-content";
 import { FileViewerHeader } from "./FileViewerHeader";
 import type { HeaderAction } from "./FileViewerHeader";
@@ -36,6 +36,10 @@ export interface FileViewerDialogProps {
   /** Hand a path to the OS. Absent in a browser tab, and absent is why the
    * act is offered as a capability rather than assumed. */
   readonly openInBrowser?: ((path: string) => Promise<boolean>) | null;
+  /** Open this handle as a CHANGE rather than as a file. The registry reads
+   * kinds off a name, and a name cannot say which of the two acts is being
+   * served. */
+  readonly asDiff?: boolean;
 }
 
 export function FileViewerDialog({
@@ -46,8 +50,9 @@ export function FileViewerDialog({
   onClose,
   onReceipt,
   openInBrowser,
+  asDiff = false,
 }: FileViewerDialogProps) {
-  const content = useFileContent(handle, source);
+  const content = useFileContent(handle, source, asDiff);
 
   // The reader's choice of mode, kept only while it names a mode the current
   // view actually has — so opening a `.md` after an image does not land on a
@@ -62,7 +67,12 @@ export function FileViewerDialog({
   // what the reader clicked, so the band can be right about it immediately.
   // A read that disagrees (a `.png` full of text, a `.json` full of NULs)
   // corrects the chip when it resolves.
-  const kind = content.status === "ready" ? content.file.kind : resolveKind(handle.name);
+  const kind =
+    content.status === "ready"
+      ? content.file.kind
+      : asDiff
+        ? diffKind(handle.name)
+        : resolveKind(handle.name);
   const modes = kind.viewer.modes ?? [];
   const mode = chosen !== null && modes.some((m) => m.id === chosen) ? chosen : (modes[0]?.id ?? "");
 

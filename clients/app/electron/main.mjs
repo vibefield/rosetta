@@ -200,9 +200,14 @@ function openWorktree(win, root) {
     if (msg?.type !== "ready") return;
     proc.off("message", onMessage);
     if (proc !== fxProcess) return; // superseded by a newer switch
-    const { port1, port2 } = new MessageChannelMain();
-    proc.postMessage({ type: "attach" }, [port1]);
-    win.webContents.postMessage("ah-worktree-port", { root }, [port2]);
+    const tree = new MessageChannelMain();
+    proc.postMessage({ type: "attach" }, [tree.port1]);
+    win.webContents.postMessage("ah-worktree-port", { root }, [tree.port2]);
+    // Column ⑤ talks to the same process over its own channel: the tree's
+    // port carries mille's framed protocol and is not ours to share.
+    const scm = new MessageChannelMain();
+    proc.postMessage({ type: "attach-git" }, [scm.port1]);
+    win.webContents.postMessage("ah-git-port", { root }, [scm.port2]);
   };
   proc.on("message", onMessage);
 }

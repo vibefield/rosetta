@@ -9,6 +9,7 @@ import { extensionOf, languageFor, PLAIN_TEXT } from "./syntax";
 import type { FileKind, ViewerDefinition } from "./types";
 import { BinaryView } from "./views/BinaryView";
 import { CodeView } from "./views/CodeView";
+import { DiffView } from "./views/DiffView";
 import { ImageView, IMAGE_MODES } from "./views/ImageView";
 import { MarkdownView, MARKDOWN_MODES } from "./views/MarkdownView";
 import { SvgView, SVG_MODES } from "./views/SvgView";
@@ -73,6 +74,16 @@ const SVG: ViewerDefinition = {
   Body: SvgView,
 };
 
+/** A change, not a file. Its limit is `Infinity` because git bounds its own
+ * output host-side and a diff's size has nothing to do with the file's. */
+const DIFF: ViewerDefinition = {
+  id: "diff",
+  payload: "compare",
+  maxBytes: Number.POSITIVE_INFINITY,
+  actions: ["copy-path"],
+  Body: DiffView,
+};
+
 const BINARY: ViewerDefinition = {
   id: "binary",
   payload: "bytes",
@@ -121,6 +132,17 @@ const UNKNOWN_TEXT_KIND: FileKind = {
   language: PLAIN_TEXT,
   mime: null,
 };
+
+/**
+ * The kind for a change rather than a file.
+ *
+ * Chosen by the CALLER, not by the name: the same `main.rs` is a source file
+ * when the tree opens it and a diff when the git column does, and only the
+ * caller knows which act it is serving.
+ */
+export function diffKind(name: string): FileKind {
+  return { viewer: DIFF, label: "Diff", language: languageFor(name), mime: null };
+}
 
 /** What a file name says the file is. Extension only — see `syntax/languages`
  * for why the bytes get no vote here. */

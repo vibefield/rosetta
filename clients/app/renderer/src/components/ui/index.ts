@@ -1,5 +1,7 @@
 export { ColumnHeading } from "./ColumnHeading";
 export type { ColumnHeadingProps } from "./ColumnHeading";
+export { ConfirmDialog } from "./ConfirmDialog";
+export type { ConfirmDialogProps } from "./ConfirmDialog";
 export { EmptyState } from "./EmptyState";
 export type { EmptyStateProps } from "./EmptyState";
 export { ListSummaryHeader } from "./ListSummaryHeader";

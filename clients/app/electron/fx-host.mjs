@@ -10,6 +10,7 @@
 import { createFileExplorerHost } from "@vibecook/mille/host";
 import { registerGitDecorations } from "@vibecook/mille-ui/git";
 import { createShellGitClient } from "@vibecook/mille-ui/git/node";
+import { createGitService } from "./git-service.mjs";
 
 /** Electron's MessagePortMain has worker_threads-adjacent but not identical
  * semantics; normalize the two quirks mille's adapter does not expect
@@ -31,6 +32,41 @@ function wrapMessagePortMain(port) {
 }
 
 let host = null;
+
+/**
+ * Serve the git column over its own port.
+ *
+ * A second port rather than a second use of mille's: that one carries
+ * mille's own framed protocol and is not ours to multiplex. This one is a
+ * plain request/response channel — `{ id, op, args }` in, `{ id, ok, value }`
+ * or `{ id, ok: false, error }` out — and every failure crosses it as a
+ * value, because a git command that failed is a fact the column states, not
+ * an exception the renderer has to survive.
+ */
+function serveGit(port, service) {
+  port.addEventListener("message", (event) => {
+    const request = event.data;
+    if (request === null || typeof request !== "object" || typeof request.id !== "number") {
+      return;
+    }
+    const run = service[request.op];
+    if (typeof run !== "function") {
+      port.postMessage({ id: request.id, ok: false, error: `unknown op: ${request.op}` });
+      return;
+    }
+    void Promise.resolve()
+      .then(() => run(request.args))
+      .then((value) => port.postMessage({ id: request.id, ok: true, value: value ?? null }))
+      .catch((error) => {
+        port.postMessage({
+          id: request.id,
+          ok: false,
+          error: error?.message ? String(error.message) : "the git command failed",
+        });
+      });
+  });
+  port.start();
+}
 
 async function bootstrap() {
   const root = process.env.AH_WORKTREE_ROOT;
@@ -55,11 +91,13 @@ async function bootstrap() {
 
   // Attach handler installs before anything slow so the renderer's
   // handshake is never blocked behind a walk.
+  const gitService = createGitService(root);
+
   process.parentPort.on("message", (evt) => {
     const port = evt.ports[0];
-    if (evt.data?.type === "attach" && port) {
-      host.attachPort(wrapMessagePortMain(port));
-    }
+    if (!port) return;
+    if (evt.data?.type === "attach") host.attachPort(wrapMessagePortMain(port));
+    else if (evt.data?.type === "attach-git") serveGit(wrapMessagePortMain(port), gitService);
   });
 
   try {

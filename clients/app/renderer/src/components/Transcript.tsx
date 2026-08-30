@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchHit, SessionRow, TimelineEntry } from "@rosetta/protocol";
 import { clock, clockShort, tokenText } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
-import { ChevronGlyph } from "../lib/icons";
+import { ChevronGlyph, GitGlyph } from "../lib/icons";
 import type { DocBlock, ProjectViewModel } from "../lib/model";
 import {
   attachmentLabel,
@@ -96,6 +96,11 @@ export interface TranscriptColumnProps {
   readonly focusId: string | null;
   readonly onFocusConsumed: () => void;
   readonly onReceipt: (text: string) => void;
+  /** Column ⑤ opens from HERE, because a guest opens from the head of the
+   * column it describes and this is the column showing that session
+   * (design record §8). `null` when no shell can serve one. */
+  readonly isGitVisible?: boolean | null;
+  readonly onToggleGit?: () => void;
   /** Search mode: grouped hits replace the document. */
   readonly searchResults: SearchResultsViewModel | null;
   readonly onOpenHit: (session: SessionRow, hit: SearchHit) => void;
@@ -110,6 +115,8 @@ export function TranscriptColumn({
   onReceipt,
   searchResults,
   onOpenHit,
+  isGitVisible = null,
+  onToggleGit,
 }: TranscriptColumnProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const seenMax = useRef<number>(-1);
@@ -210,6 +217,20 @@ export function TranscriptColumn({
               ? `${searchResults.counts.matches} ${searchResults.counts.matches === 1 ? "match" : "matches"} · ${searchResults.counts.sessions} ${searchResults.counts.sessions === 1 ? "session" : "sessions"} · ${searchResults.counts.projects} ${searchResults.counts.projects === 1 ? "project" : "projects"}`
               : range}
           </span>
+          {/* wearing the mark of what it opens — the git mark for a git
+              panel, the same shape git has everywhere in this room */}
+          {isGitVisible !== null && onToggleGit !== undefined && (
+            <button
+              type="button"
+              className="ah-iconbtn"
+              aria-pressed={isGitVisible}
+              title={isGitVisible ? "Hide git" : "Show git"}
+              aria-label="Toggle the repository's git"
+              onClick={onToggleGit}
+            >
+              <GitGlyph />
+            </button>
+          )}
         </span>
       </header>
       <div

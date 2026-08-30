@@ -14,7 +14,8 @@ import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts, SessionScope } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
-import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
+import { GitColumn, sessionFilePaths, useGuests } from "./components/git";
+import { WorktreeColumn } from "./components/worktree";
 import {
   useDaemonStatus,
   useMeta,
@@ -179,8 +180,20 @@ export default function App() {
     return projectById.get(projectId)?.row.root_paths[0] ?? null;
   }, [projectId, projectById]);
 
-  /* ── column ③, a guest per H-3 ──────────────────────────────────────── */
-  const worktree = useWorktreeGuest(projectRoot);
+  // Which files this session touched — the one fact a git client cannot show.
+  // Empty until the typed tool projection ships `file_change` actions, which
+  // draws no marks rather than guessing at them.
+  const sessionPaths = useMemo(
+    () => sessionFilePaths(feed.rows, projectRoot),
+    [feed.rows, projectRoot],
+  );
+
+  /* ── the two guests, per H-3 ────────────────────────────────────────────
+     "The rail is a guest; the measure is not" — and with two of them, the
+     newer takes the seat and the room says which one left. */
+  const guests = useGuests(projectRoot, (evicted) =>
+    showReceipt(evicted === "git" ? "git closed — the room seats one" : "worktree closed — the room seats one"),
+  );
 
   /* ── one search view model shared by all three result columns ───────── */
   const searchResults = useMemo(() => {
@@ -265,7 +278,8 @@ export default function App() {
           <div
             className="ah-cols"
             data-mode={searching ? "search" : "browse"}
-            data-rail={worktree.visible ? "on" : "off"}
+            data-rail={guests.worktreeVisible ? "on" : "off"}
+            data-foot={guests.gitVisible ? "on" : undefined}
           >
             <ProjectsColumn
               projects={projectViewModels}
@@ -293,10 +307,8 @@ export default function App() {
               activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
               currentTimestamp={nowMs}
               ingest={ingest}
-              isWorktreeVisible={
-                worktree.available && projectRoot !== null ? worktree.visible : null
-              }
-              onToggleWorktree={worktree.toggle}
+              isWorktreeVisible={guests.available ? guests.worktreeVisible : null}
+              onToggleWorktree={() => guests.toggle("worktree")}
               onSessionSelect={(selectedSession) => {
                 if (searching) {
                   setQuery("");
@@ -315,7 +327,10 @@ export default function App() {
               homeDirectory={home}
               onReceipt={showReceipt}
             />
+            {/* Column ⑤ — always in the grid; closed, it is a 0px track. */}
             <TranscriptColumn
+              isGitVisible={guests.available ? guests.gitVisible : null}
+              onToggleGit={() => guests.toggle("git")}
               session={session}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}
@@ -324,6 +339,13 @@ export default function App() {
               onReceipt={showReceipt}
               searchResults={searchResults}
               onOpenHit={openHit}
+            />
+            <GitColumn
+              tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
+              homeDirectory={home}
+              sessionPaths={sessionPaths}
+              currentTimestamp={nowMs}
+              onReceipt={showReceipt}
             />
           </div>
         )}

@@ -6,7 +6,7 @@
 
 export { FileViewerDialog } from "./FileViewerDialog";
 export type { FileViewerDialogProps } from "./FileViewerDialog";
-export { resolveKind } from "./registry";
+export { diffKind, resolveKind } from "./registry";
 export type {
   FileHandle,
   FileKind,

@@ -31,10 +31,19 @@ export interface FileHandle {
   readonly ref?: unknown;
 }
 
-/** Where bytes come from. One method, so a caller can be a mille engine, a
- * fixture, or a test. */
+/** Where bytes come from. A caller can be a mille engine, a fixture, or a
+ * test. */
 export interface FileSource {
   read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array>;
+  /**
+   * A unified diff of this handle, for a view whose payload is `"compare"`.
+   *
+   * Optional, because most sources have one version of a file and nothing to
+   * compare it to. A source that omits it must never resolve a kind that
+   * asks for one — the registry decides that from the name, and a diff is
+   * only ever asked for by a caller that built the handle.
+   */
+  compare?(handle: FileHandle, signal: AbortSignal): Promise<{ readonly unified: string }>;
 }
 
 /** A view's own switch, rendered as the room's one switch shape. */
@@ -52,8 +61,11 @@ export type ViewerActionId = "copy-path" | "open-in-browser";
 
 export interface ViewerDefinition {
   readonly id: string;
-  /** How the bytes must arrive. `"text"` also gets `OpenFile.text` decoded. */
-  readonly payload: "text" | "bytes";
+  /** How the content must arrive. `"text"` also gets `OpenFile.text`
+   * decoded; `"compare"` asks the source for a unified diff instead of
+   * bytes, and the file's own size limit does not apply — git bounds its
+   * own output, and a one-line change to a huge file is a small diff. */
+  readonly payload: "text" | "bytes" | "compare";
   /** The most this view will read. Over it, the dialog says so and reads
    * nothing — a limit the reader is told is a fact; a hang is not. */
   readonly maxBytes: number;
@@ -80,6 +92,8 @@ export interface OpenFile {
   readonly bytes: Uint8Array;
   /** Decoded UTF-8, or `null` for a view whose payload is `"bytes"`. */
   readonly text: string | null;
+  /** The unified diff, for a `"compare"` view. */
+  readonly unified: string | null;
 }
 
 export interface ViewBodyProps {
