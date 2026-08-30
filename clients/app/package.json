@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The History room — rosetta's agent-view app, to be ported into vibe-field once polished.",
+  "description": "The History room \u2014 rosetta's agent-view app, to be ported into vibe-field once polished.",
   "main": "electron/main.mjs",
   "engines": {
     "node": ">=22"
@@ -20,8 +20,8 @@
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tanstack/react-virtual": "^3.14.10",
-    "@vibecook/mille": "file:../../../mille/packages/mille",
-    "@vibecook/mille-ui": "file:../../../mille/packages/mille-ui",
+    "@vibecook/mille": "link:../../../mille/packages/mille",
+    "@vibecook/mille-ui": "link:../../../mille/packages/mille-ui",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
