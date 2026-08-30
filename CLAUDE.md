@@ -62,9 +62,12 @@ revision, acknowledgement, crash, and repair tests prevent stale or cross-projec
 Verified inline image bytes are decoded once into immutable `<projection>.images/` members;
 SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the raw ledger
 remains lossless.
-The next projection target replaces schema 7's opaque tool input/result/payload values with
-a closed user-facing semantic action union across all captured adapters. Raw parsing stays
-permissive and narrowing stays nonfatal; this contract is documented but is not shipped yet.
+The next projection candidate replaces schema 7's opaque tool input/result/payload values with
+a closed user-facing semantic action union across all captured adapters. Its evidence-amended
+contract uses adapter-derived correlation keys, versioned namespace-aware projectors, progressive
+typed updates, and provenance-marked causal/response grouping. Raw parsing stays permissive and
+narrowing stays nonfatal. It remains unshipped until current-writer, registry, correlation,
+reduction, product, and atomic-activation gates pass.
 Canonical and search readiness are independently surfaced. The store hot tier,
 subscription hub, localhost HTTP/WebSocket transport, backend-neutral protocol, and
 generated TypeScript bindings are implemented. A feature-gated Tantivy prototype remains

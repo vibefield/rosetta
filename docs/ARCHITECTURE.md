@@ -287,9 +287,9 @@ capture contract explicit.
 > fit it — rosetta does not repeat that.
 >
 > The current detailed hypothesis — eleven entities, the flattened message-row taxonomy,
-> the discover/meta/stream ingest phasing, and the concrete SQLite DDL, ratified
-> against 9 of 11 ground-truth packs — lives in
-> [`docs/canonical-model.html`](canonical-model.html) (rendered design doc, 2026-08-26).
+> the discover/meta/stream ingest phasing, and the concrete SQLite DDL, checked and amended
+> against 9 of 11 ground-truth packs but not yet ratified — lives in
+> [`docs/canonical-model.html`](canonical-model.html) (rendered design doc, 2026-08-29).
 > Where that file and this section disagree, the HTML is newer.
 
 The canonical model is deliberately small — it covers what the three jobs need, nothing
@@ -299,7 +299,7 @@ more:
 enum CanonicalFact {
     SessionUpserted(Session),     // agent kind, project/workspace, native id, times, status
     EntryAppended(Entry),         // typed user/agent/reasoning/tool/notice/summary body,
-                                  //   parent/turn/response linkage, timestamps
+                                  //   parent/causal-group/response linkage, timestamps
     ArtifactUpserted(Artifact),   // todos, plans, tasks, team state
     MetricEmitted(MetricSample),  // e.g. Usage { input, output, cache_creation, cache_read }
                                   //   keyed (session, response_key), canonical flag
@@ -310,11 +310,21 @@ enum CanonicalFact {
 
 ### 4.1.1 Strict public message boundary
 
-> **Activation status (2026-08-29): ratified target, not shipped.** Projection schema 7
+> **Activation status (2026-08-29): evidence-amended candidate, not shipped.** Projection schema 7
 > still exposes `ToolCall { input: Value, result: String, payload: Value }`. The next
 > schema replaces it only when core types, all captured adapters, store/search consumers,
-> protocol, and the client activate together. Until then, the current columns remain
-> explicitly legacy; no consumer should grow new dependencies on their native shapes.
+> protocol, and the client activate together, after the current-writer, registry, correlation,
+> grouping, and product gates pass. Until then, the current columns remain explicitly legacy;
+> no consumer should grow new dependencies on their native shapes.
+
+A privacy-safe point-in-time audit of the nine installed runtimes classified 377,877 tool
+calls. The draft native mapping covered 65.46% overall and 99.65% after excluding Codex's
+opaque outer `exec` envelope. Claude, Codex, and Grok carried 2.79 GiB of native tool-result
+values, validating aggressive reduction, while ID-less Antigravity calls, progressive Hermes
+and Claude snapshots, missing turn/response boundaries, and request fields available only in
+later records disproved the draft's two-phase/native-id assumptions. These organic measurements
+corroborate the design; refreshed canonical ground truth and hermetic fixtures remain the
+activation authority.
 
 The raw ledger is the complete source record. A canonical timeline is instead a
 user-facing semantic projection. These are deliberately different jobs:
@@ -327,29 +337,39 @@ user-facing semantic projection. These are deliberately different jobs:
   signature-only, and empty thinking remains ledger-only; response usage/model/timing facts
   reattach instead of disappearing with a dropped wrapper.
 - Lifecycle records become a closed `Notice` union (compaction, truncation, model/mode/
-  workspace change, permission decision, handoff, runtime error), not arbitrary system
+  workspace change, permission request/decision, handoff, runtime error), not arbitrary system
   text. Generated/custom titles refine `session.title`, not the timeline.
-- Attachments are typed image/document/audio/video/file references. Inline bytes become
-  immutable content-addressed projection members; the database retains relocatable refs.
-- `turn_id`, `response_id`, and `block_index` preserve exact grouping so clients never
-  infer response boundaries from adjacent rows.
+- Attachments are typed image/document/audio/video/file references, while citations remain
+  distinct bounded source/span references. Inline bytes become immutable content-addressed
+  projection members; the database retains relocatable refs. Attachment-only prose rows are
+  valid and do not fabricate empty text.
+- Every entry belongs to a deterministic causal group classified as a human turn, agent cycle,
+  parent invocation, system cycle, or synthetic group. Group and optional response derivation
+  (`native`, `parent_linked`, `ordered`, or `synthetic`) prevents clients from presenting an
+  inferred boundary as exact source evidence.
 
-A tool start and completion fold into one `ToolInteraction` with native correlation id and
-name, canonical status/timing/failure, and one closed semantic action. There are no
+A tool opener, progressive snapshots, and terminal update fold into one `ToolInteraction`
+with a deterministic adapter correlation key, optional native id, namespace/name/provider,
+evidence-backed status/timing/failure, and one closed semantic action. There are no
 universal `input`, `result`, or `payload` fields. The action families are:
 
 `file_read`, `file_list`, `file_search`, `code_lookup`, `file_change`, `shell`,
-`process`, `web_search`, `web_fetch`, `delegate`, `task`, `collaborate`, `question`,
-`skill`, `workflow`, `schedule`, `artifact`, `tool_discovery`, `mode`, `finding`,
-`notification`, `structured_output`, `external`, and `unknown`.
+`code_execute`, `process`, `orchestration`, `web_search`, `web_navigate`, `web_fetch`,
+`delegate`, `task`, `plan`, `collaborate`, `question`, `skill`, `workflow`, `schedule`,
+`artifact`, `tool_discovery`, `mode`, `finding`, `notification`, `structured_output`,
+`external`, and `unknown`.
 
-Live and out-of-order completions use a closed `ToolActionPatch` parallel to this union.
-It carries result-owned semantic fields only and has no text/JSON/generic variant;
-`pending_merge` stores that typed mutation and the store rejects a family mismatch.
+Live, progressive, corrected, and out-of-order records use closed request/outcome patches
+parallel to this union. They have no text/JSON/generic variant; `pending_merge` stores only
+typed mutations. Missing fields never clear proven facts. Evidence rank plus source order
+resolves corrections deterministically; duplicate snapshots are idempotent. The store rejects
+a known-family change, while an `unknown` row may upgrade once when later request evidence
+establishes the registry-selected family.
 
 Each family keeps only the data necessary to answer its user-facing question. In
 particular: reads keep path/range but not file content; file changes keep path plus exactly
-one canonical diff but not whole old/new files; successful shell calls keep command/cwd/
+one canonical diff when provable but not whole old/new files, and leave create-versus-update
+absent when the source cannot prove it; successful shell calls keep command/cwd/
 status but no stdout or stderr; web fetches keep URL/status but no page body. A failed,
 denied, interrupted, or timed-out shell call may keep a typed failure and at most 4 KiB / 40
 lines of deterministic diagnostic text. User-critical large text (prose, commands, diffs,
@@ -363,16 +383,24 @@ Native parsers stay permissive and drift-aware. An adapter-owned semantic projec
 narrow native values into the common union, but narrowing failure **never** fails the raw
 record. Unknown extra fields never erase proven semantic fields. A known typed request
 survives an unfamiliar completion: reliable status/timing may still merge, the new outcome
-is omitted, and drift is recorded. Only an unregistered tool or a request lacking its
-minimum identity emits `unknown { native_name, status }`. Either case records one aggregated
+is omitted, and drift is recorded. Unprovable optional facts remain absent. Only an
+unregistered namespace/name or an unclassifiable record emits `unknown`. Either case records one aggregated
 drift shape plus bounded ledger provenance and stores none of the rejected object. Replaying
 the unchanged ledger after adding a projector recovers the richer row.
 Registered MCP/plugin projectors may emit at most bounded scalar display fields and resource
 references; arbitrary nested JSON cannot cross the boundary.
 
-The detached search projection accepts only four semantic lanes: `prose`, `target` (path,
-URL, recipient, resource), `intent` (command, query, objective, subject), and `change`
-(canonical diff). Read bodies, successful shell output, fetched pages, success
+The projector registry is versioned adapter-owned Rust code, keyed by agent, writer-version
+range, namespace, and native name. Each entry has typed request/update functions plus explicit
+status, search, and bounds policies. It is neither runtime JSON configuration nor another
+ground-truth file. In particular, Codex `exec` becomes an honest orchestration action when no
+executed-child trace exists; static JavaScript references can never fabricate child actions.
+
+The detached search projection accepts only five semantic lanes: `prose`, `target` (path,
+URL, recipient, resource), `intent` (command, query, objective, subject), `change`
+(canonical diff), and low-weight `tool` (canonical kind plus native namespace/name for unknown
+actions). A typed exhaustive extractor produces these lanes; the worker never traverses stored
+JSON. Read bodies, successful shell output, fetched pages, success
 acknowledgements, injected prompts/environment, opaque external values, and empty thinking
 are neither stored nor indexed. Protocol clients receive generated discriminated unions and
 render by their tags; key sniffing and best-effort JSON parsing are forbidden.
