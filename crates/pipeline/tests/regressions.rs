@@ -94,6 +94,41 @@ fn claude_edit(session: &str, uuid: &str, path: &str) -> Value {
     })
 }
 
+fn claude_assistant_block(session: &str, response: &str, uuid: &str, content: Value) -> Value {
+    json!({
+        "parentUuid": null,
+        "isSidechain": false,
+        "message": {
+            "content": [content],
+            "id": response,
+            "model": "claude-opus-5",
+            "role": "assistant",
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "type": "message",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 7,
+                "cache_read_input_tokens": 9,
+                "cache_creation": {},
+                "inference_geo": null,
+                "service_tier": "standard",
+                "output_tokens_details": {"thinking_tokens": 5}
+            }
+        },
+        "requestId": "req-split-response",
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": "2026-08-25T02:35:20.054Z",
+        "userType": "external",
+        "cwd": "/w/project",
+        "sessionId": session,
+        "version": "2.1.241",
+        "gitBranch": "main"
+    })
+}
+
 fn only_path(root: &Path, suffix: &str) -> PathBuf {
     walkdir::WalkDir::new(root)
         .into_iter()
@@ -140,6 +175,128 @@ fn layout_inventory_never_becomes_a_transcript_queue() {
     .unwrap();
     assert_eq!(stream.hard_errors, 0);
     assert_eq!(stream.records, 1);
+}
+
+#[test]
+fn claude_split_response_survives_incremental_checkpoint_without_usage_duplication() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("projects/p/session-1.jsonl");
+    let response = "msg-shared-response";
+    write_lines(
+        &path,
+        &[claude_assistant_block(
+            "session-1",
+            response,
+            "11111111-1111-1111-1111-111111111101",
+            json!({"type": "thinking", "thinking": "first", "signature": "sig"}),
+        )],
+    );
+
+    let runtime = runtime(&ClaudeCodeAdapter);
+    let options = opts();
+    let mut store = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let first = stream_backfill(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(first.hard_errors, 0);
+    assert_eq!(first.stats.messages_inserted, 1);
+
+    let mut transcript = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    for line in [
+        claude_assistant_block(
+            "session-1",
+            response,
+            "11111111-1111-1111-1111-111111111102",
+            json!({"type": "text", "text": "second"}),
+        ),
+        claude_assistant_block(
+            "session-1",
+            response,
+            "11111111-1111-1111-1111-111111111103",
+            json!({"type": "tool_use", "id": "toolu-split", "name": "Bash",
+                   "input": {"command": "true"}}),
+        ),
+    ] {
+        writeln!(transcript, "{line}").unwrap();
+    }
+    drop(transcript);
+
+    // A new stream pass restores adapter state from the persisted checkpoint.
+    let appended = stream_backfill(
+        &ClaudeCodeAdapter,
+        &runtime,
+        root.path(),
+        &mut store,
+        &files,
+        &options,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(appended.hard_errors, 0);
+    assert_eq!(appended.stats.messages_inserted, 2);
+
+    let mut statement = store
+        .conn()
+        .prepare(
+            "SELECT response_id, block_index, type, in_tokens, out_tokens
+             FROM message WHERE session_id = ?1 ORDER BY ordinal",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map([&files[0].session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                response.to_owned(),
+                0,
+                "thinking".to_owned(),
+                Some(100),
+                Some(20)
+            ),
+            (response.to_owned(), 1, "agent".to_owned(), None, None),
+            (response.to_owned(), 2, "tool_use".to_owned(), None, None),
+        ]
+    );
+    let bucket: (i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT SUM(in_tokens), SUM(out_tokens) FROM usage_bucket",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(bucket, (100, 20));
 }
 
 #[test]

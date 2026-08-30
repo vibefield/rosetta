@@ -1,10 +1,11 @@
 //! Raw transcript records → canonical ops.
 //!
-//! The one transform that matters here is the SPLIT: Claude Code packs text,
-//! thinking and tool calls into one assistant record's `content` array, and the
-//! canonical model wants one row per block (docs/canonical-model.html, "Message
-//! rows"). Everything else — tool results folding onto their call, cwd
-//! observations, file edits — follows from that flattening.
+//! The one transform that matters here is the SPLIT: Claude Code can pack text,
+//! thinking and tool calls into one assistant record or persist one response
+//! across several records. The canonical model wants one row per visible block
+//! with response-wide block identity (docs/canonical-model.html, "Message rows").
+//! Everything else — tool results folding onto their call, cwd observations,
+//! file edits — follows from that flattening.
 //!
 //! Pure by contract (CLAUDE.md): no IO, no clock, no randomness. Every id is
 //! derived from the session id plus a stable discriminator, so replaying a file
@@ -16,7 +17,8 @@ use rosetta_adapter_support::tool::{
 };
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TokenSnapshot, WorkspaceObsRow,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot,
+    WorkspaceObsRow,
 };
 use rosetta_core::timeline::{
     AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
@@ -59,6 +61,8 @@ const SPAWN_TOOLS: [&str; 2] = ["Agent", "Task"];
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClaudeCodeState {
     workspace: Option<(String, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_response: Option<ClaudeResponseState>,
 }
 
 impl ClaudeCodeState {
@@ -73,6 +77,67 @@ impl ClaudeCodeState {
         }
         !seen
     }
+
+    /// Claude may persist one API response as several assistant JSONL records,
+    /// each containing only the newly materialized block. Non-assistant records
+    /// (notably tool results) may occur between those records, so this cursor is
+    /// advanced only when another assistant response id is observed.
+    fn enter_response(&mut self, id: &str, projected_blocks: u32) -> ResponseProjection {
+        if self
+            .active_response
+            .as_ref()
+            .is_none_or(|response| response.id != id)
+        {
+            self.active_response = Some(ClaudeResponseState {
+                id: id.to_owned(),
+                next_block_index: 0,
+                usage: None,
+            });
+        }
+        let response = self.active_response.as_mut().expect("response initialized");
+        let first_block_index = response.next_block_index;
+        response.next_block_index = response.next_block_index.saturating_add(projected_blocks);
+        ResponseProjection {
+            first_block_index,
+            usage: response.usage.clone(),
+        }
+    }
+
+    fn remember_usage(&mut self, response_id: &str, usage: ClaudeResponseUsage) {
+        if let Some(response) = self
+            .active_response
+            .as_mut()
+            .filter(|response| response.id == response_id)
+        {
+            response.usage = Some(usage);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaudeResponseState {
+    id: String,
+    next_block_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<ClaudeResponseUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct ClaudeResponseUsage {
+    snapshot: TokenSnapshot,
+    target: ClaudeUsageTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ClaudeUsageTarget {
+    Timeline { timeline_id: String },
+    Session { sample_key: String },
+}
+
+struct ResponseProjection {
+    first_block_index: u32,
+    usage: Option<ClaudeResponseUsage>,
 }
 
 /// One raw line in, canonical ops out. See [`crate::adapter::ClaudeCodeAdapter`].
@@ -262,12 +327,16 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
         // the timeline id unique within the session.
         let discriminator = format!("{}#{index}", line.uuid);
         match block {
-            AssistantContentBlock::Known(KnownAssistantBlock::Text { text, .. }) => {
+            AssistantContentBlock::Known(KnownAssistantBlock::Text { text, .. })
+                if !text.trim().is_empty() =>
+            {
                 let mut row = emit.row(&seed, MessageKind::Agent, &discriminator);
                 row.content = Some(text.clone());
                 rows.push((row, None));
             }
-            AssistantContentBlock::Known(KnownAssistantBlock::Thinking { thinking, .. }) => {
+            AssistantContentBlock::Known(KnownAssistantBlock::Thinking { thinking, .. })
+                if !thinking.trim().is_empty() =>
+            {
                 let mut row = emit.row(&seed, MessageKind::Thinking, &discriminator);
                 row.content = Some(thinking.clone());
                 rows.push((row, None));
@@ -311,20 +380,21 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 let edit = file_edit(&row, name, input, ts);
                 rows.push((row, edit));
             }
-            // `fallback` (an in-response model switch) is not a declared block
-            // kind in the canonical and carries no timeline content; unfamiliar
-            // kinds land in `Other` and are reported by the drift pass.
+            // Empty prose/reasoning and `fallback` (an in-response model switch)
+            // carry no user-visible timeline content. Unfamiliar kinds land in
+            // `Other` and are reported by the drift pass.
             _ => {}
         }
     }
 
-    // A response with nothing projectable still happened — API-error records
-    // carry an empty content array — and its usage must not vanish with it.
-    if rows.is_empty() {
-        let row = emit.row(&seed, MessageKind::Agent, &format!("{}#0", line.uuid));
-        rows.push((row, None));
-    }
-    for (block_index, (row, _)) in rows.iter_mut().enumerate() {
+    let projected_blocks = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    let fallback_first_block = rows
+        .first()
+        .and_then(|(row, _)| u32::try_from(row.ordinal).ok())
+        .unwrap_or_default();
+    let response =
+        emit.response_projection(&line.message.id, projected_blocks, fallback_first_block);
+    for (local_index, (row, _)) in rows.iter_mut().enumerate() {
         row.group = Some(TimelineGroup {
             id: line.message.id.clone(),
             kind: GroupKind::AgentCycle,
@@ -334,16 +404,74 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
             id: line.message.id.clone(),
             derivation: GroupDerivation::Native,
         });
-        row.block_index = Some(u32::try_from(block_index).unwrap_or(u32::MAX));
+        row.block_index = Some(
+            response
+                .first_block_index
+                .saturating_add(u32::try_from(local_index).unwrap_or(u32::MAX)),
+        );
     }
-    if let Some(usage) = line.message.usage.as_ref() {
-        attach_usage(&mut rows, usage);
+
+    // Claude repeats the same final response usage on every persisted block.
+    // The first observation owns one canonical fact; an actual correction is
+    // emitted as a replacement update against that same target.
+    let mut deferred_usage = None;
+    if let Some(tokens) = line
+        .message
+        .usage
+        .as_ref()
+        .map(snapshot)
+        .filter(|tokens| !tokens.is_empty())
+        && response.usage.as_ref().map(|usage| usage.snapshot) != Some(tokens)
+    {
+        let target = response
+            .usage
+            .as_ref()
+            .map(|usage| usage.target.clone())
+            .unwrap_or_else(|| response_usage_target(&rows, &line.message.id));
+        match &target {
+            ClaudeUsageTarget::Timeline { timeline_id } if response.usage.is_none() => {
+                if let Some((row, _)) = rows
+                    .iter_mut()
+                    .find(|(row, _)| row.timeline_id == *timeline_id)
+                {
+                    row.usage = Some(tokens);
+                }
+            }
+            ClaudeUsageTarget::Timeline { timeline_id } => {
+                deferred_usage = Some(IngestOp::Usage {
+                    session_id: emit.session_id.clone(),
+                    response: timeline_id.clone(),
+                    ts: ts.unwrap_or(0),
+                    model: Some(line.message.model.clone()),
+                    tokens,
+                });
+            }
+            ClaudeUsageTarget::Session { sample_key } => {
+                deferred_usage = Some(IngestOp::SessionUsage(SessionUsageRow {
+                    session_id: emit.session_id.clone(),
+                    key: sample_key.clone(),
+                    ts: ts.unwrap_or(0),
+                    model: Some(line.message.model.clone()),
+                    tokens,
+                }));
+            }
+        }
+        emit.remember_response_usage(
+            &line.message.id,
+            ClaudeResponseUsage {
+                snapshot: tokens,
+                target,
+            },
+        );
     }
     for (row, edit) in rows {
         emit.push_row(row);
         if let Some(edit) = edit {
             emit.ops.push(IngestOp::FileEdit(edit));
         }
+    }
+    if let Some(usage) = deferred_usage {
+        emit.ops.push(usage);
     }
 }
 
@@ -399,10 +527,13 @@ fn custom_title_line(emit: &mut Emit, line: &CustomTitleLine) {
 
 // -------------------------------------------------------------------- derived
 
-/// Usage is reported once per response, not per block, so it lands on the row a
-/// reader would attribute the response to: the first text row, else the first
-/// tool call, else whatever the response did produce.
-fn attach_usage(rows: &mut [(MessageRow, Option<FileEditRow>)], usage: &RecordedUsage) {
+/// Pick the best row already available when usage is first observed. A response
+/// split across JSONL records cannot be buffered waiting for a later text block,
+/// so the first projectable record becomes the stable replacement target.
+fn response_usage_target(
+    rows: &[(MessageRow, Option<FileEditRow>)],
+    response_id: &str,
+) -> ClaudeUsageTarget {
     let target = rows
         .iter()
         .position(|(row, _)| row.kind == MessageKind::Agent)
@@ -411,8 +542,13 @@ fn attach_usage(rows: &mut [(MessageRow, Option<FileEditRow>)], usage: &Recorded
                 .position(|(row, _)| row.kind == MessageKind::ToolUse)
         })
         .unwrap_or(0);
-    if let Some((row, _)) = rows.get_mut(target) {
-        row.usage = Some(snapshot(usage));
+    match rows.get(target) {
+        Some((row, _)) => ClaudeUsageTarget::Timeline {
+            timeline_id: row.timeline_id.clone(),
+        },
+        None => ClaudeUsageTarget::Session {
+            sample_key: format!("response:{response_id}"),
+        },
     }
 }
 
@@ -664,6 +800,37 @@ impl<'a> Emit<'a> {
 
     fn push_row(&mut self, row: MessageRow) {
         IngestOp::push_message(&mut self.ops, row);
+    }
+
+    fn response_projection(
+        &mut self,
+        response_id: &str,
+        projected_blocks: u32,
+        fallback_first_block: u32,
+    ) -> ResponseProjection {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .map(|state| state.enter_response(response_id, projected_blocks))
+            // `AgentAdapter::init_state` makes this unreachable in production.
+            // Keeping a deterministic ordinal fallback makes direct trait use
+            // degrade to collision-free output instead of panicking.
+            .unwrap_or(ResponseProjection {
+                first_block_index: fallback_first_block,
+                usage: None,
+            })
+    }
+
+    fn remember_response_usage(&mut self, response_id: &str, usage: ClaudeResponseUsage) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_usage(response_id, usage);
+        }
     }
 
     fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {

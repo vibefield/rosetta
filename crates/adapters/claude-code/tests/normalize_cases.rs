@@ -40,8 +40,12 @@ fn run(lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
 /// An assistant record with the given content blocks, in the shape the
 /// canonical records for the `assistant` type.
 fn assistant(content: Value, usage: Option<Value>) -> Value {
+    assistant_record("msg_1", UUID, content, usage)
+}
+
+fn assistant_record(response_id: &str, uuid: &str, content: Value, usage: Option<Value>) -> Value {
     let mut message = json!({
-        "id": "msg_1",
+        "id": response_id,
         "type": "message",
         "role": "assistant",
         "model": "claude-opus-5",
@@ -57,7 +61,7 @@ fn assistant(content: Value, usage: Option<Value>) -> Value {
         "parentUuid": null,
         "isSidechain": false,
         "message": message,
-        "uuid": UUID,
+        "uuid": uuid,
         "timestamp": "2026-08-25T02:35:19.072Z",
         "sessionId": "session-under-test",
         "version": "2.1.241",
@@ -218,6 +222,154 @@ fn assistant_blocks_split_into_one_row_each() {
     };
     assert_eq!(command.as_preview(), "ls");
     assert_eq!(tool.status.value, ToolStatus::Pending);
+}
+
+#[test]
+fn assistant_records_share_response_block_space_across_checkpoint_resume() {
+    let repeated_usage = usage(100, 20, 5);
+    let lines = vec![
+        assistant_record(
+            "msg_split",
+            "11111111-1111-1111-1111-111111111101",
+            json!([{"type": "thinking", "thinking": "first", "signature": "sig"}]),
+            Some(repeated_usage.clone()),
+        ),
+        assistant_record(
+            "msg_split",
+            "11111111-1111-1111-1111-111111111102",
+            json!([{"type": "text", "text": "second"}]),
+            Some(repeated_usage.clone()),
+        ),
+        assistant_record(
+            "msg_split",
+            "11111111-1111-1111-1111-111111111103",
+            json!([{"type": "tool_use", "id": "toolu_split", "name": "Bash",
+                    "input": {"command": "true"}}]),
+            Some(repeated_usage),
+        ),
+    ];
+
+    let (one_shot, statuses) = run(&lines);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    let rows = messages(&one_shot);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter().map(|row| row.block_index).collect::<Vec<_>>(),
+        [Some(0), Some(1), Some(2)]
+    );
+    assert!(rows.iter().all(|row| {
+        row.response
+            .as_ref()
+            .is_some_and(|response| response.id == "msg_split")
+    }));
+    assert_eq!(
+        rows.iter().filter(|row| !row.usage.is_empty()).count(),
+        1,
+        "repeated native response usage must become one canonical fact"
+    );
+    assert_eq!(rows[0].usage.input, Some(100));
+    assert!(
+        !one_shot
+            .iter()
+            .any(|op| { matches!(op, IngestOp::Usage { .. } | IngestOp::SessionUsage(_)) })
+    );
+
+    let adapter = ClaudeCodeAdapter;
+    let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
+    let mut before = NormalizeCtx::new(
+        &runtime_id,
+        ids::session_id(&runtime_id, "session-under-test"),
+    );
+    before.state = adapter.init_state();
+    let mut resumed = Vec::new();
+    for line in &lines[..1] {
+        resumed.extend(
+            adapter
+                .ingest_line(&mut before, "transcript", line.to_string().as_bytes())
+                .ops,
+        );
+    }
+    let checkpoint = adapter
+        .checkpoint_state(before.state.as_deref())
+        .unwrap()
+        .expect("claude checkpoint");
+    let mut after = NormalizeCtx::new(
+        &runtime_id,
+        ids::session_id(&runtime_id, "session-under-test"),
+    );
+    after.next_ordinal = before.next_ordinal;
+    after.state = adapter.restore_state(Some(&checkpoint)).unwrap();
+    for line in &lines[1..] {
+        resumed.extend(
+            adapter
+                .ingest_line(&mut after, "transcript", line.to_string().as_bytes())
+                .ops,
+        );
+    }
+    assert_eq!(resumed, one_shot);
+}
+
+#[test]
+fn blank_leading_block_keeps_usage_once_without_consuming_a_block_index() {
+    let repeated_usage = usage(10, 2, 0);
+    let (ops, _) = run(&[
+        assistant_record(
+            "msg_blank_first",
+            "11111111-1111-1111-1111-111111111151",
+            json!([{"type": "thinking", "thinking": "", "signature": "sig"}]),
+            Some(repeated_usage.clone()),
+        ),
+        assistant_record(
+            "msg_blank_first",
+            "11111111-1111-1111-1111-111111111152",
+            json!([{"type": "text", "text": "visible"}]),
+            Some(repeated_usage),
+        ),
+    ]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].block_index, Some(0));
+    assert!(rows[0].usage.is_empty());
+    let samples = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::SessionUsage(sample) => Some(sample),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].key, "response:msg_blank_first");
+    assert_eq!(samples[0].tokens.input, Some(10));
+}
+
+#[test]
+fn changed_repeated_response_usage_replaces_the_first_fact() {
+    let (ops, _) = run(&[
+        assistant_record(
+            "msg_corrected",
+            "11111111-1111-1111-1111-111111111201",
+            json!([{"type": "thinking", "thinking": "first", "signature": "sig"}]),
+            Some(usage(10, 2, 0)),
+        ),
+        assistant_record(
+            "msg_corrected",
+            "11111111-1111-1111-1111-111111111202",
+            json!([{"type": "text", "text": "second"}]),
+            Some(usage(11, 3, 0)),
+        ),
+    ]);
+    let rows = messages(&ops);
+    assert_eq!(rows[0].usage.input, Some(10));
+    let correction = ops.iter().find_map(|op| match op {
+        IngestOp::Usage {
+            response, tokens, ..
+        } => Some((response, tokens)),
+        _ => None,
+    });
+    let (target, tokens) = correction.expect("usage correction");
+    assert_eq!(target, &rows[0].timeline_id);
+    assert_eq!(tokens.input, Some(11));
+    assert_eq!(tokens.output, Some(3));
 }
 
 #[test]
