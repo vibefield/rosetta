@@ -101,8 +101,6 @@ class ProjectionDatabase {
       'file_edit',
       'git_commit',
       'drift_agg',
-      'pending_merge',
-      'source_op',
     ]) {
       try {
         counts[table] = safeValue(this.db.prepare(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get().count);

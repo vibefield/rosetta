@@ -12,7 +12,7 @@ function fixture() {
   const file = path.join(directory, 'projection.sqlite');
   const db = new DatabaseSync(file);
   db.exec(`
-    PRAGMA user_version = 7;
+    PRAGMA user_version = 11;
     CREATE TABLE message(id INTEGER PRIMARY KEY, type TEXT, content TEXT);
     INSERT INTO message(type, content) VALUES ('user', 'hello'), ('agent', 'world');
     CREATE TABLE agent_runtime(
@@ -38,8 +38,6 @@ function fixture() {
     CREATE TABLE file_edit(id INTEGER);
     CREATE TABLE git_commit(id INTEGER);
     CREATE TABLE drift_agg(id INTEGER);
-    CREATE TABLE pending_merge(id INTEGER);
-    CREATE TABLE source_op(id INTEGER);
   `);
   db.close();
   return { directory, file };
@@ -51,7 +49,7 @@ test('projection opens read-only and exposes schema, counts, and pages', (t) => 
   const projection = new ProjectionDatabase();
   t.after(() => projection.close());
 
-  assert.equal(projection.open(file).schemaVersion, 7);
+  assert.equal(projection.open(file).schemaVersion, 11);
   const overview = projection.overview();
   assert.equal(overview.counts.message, 2);
   assert.equal(overview.counts.workspace_obs, 1);

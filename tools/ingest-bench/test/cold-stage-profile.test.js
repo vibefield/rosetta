@@ -32,7 +32,6 @@ read time 10.0 ms
 normalize time 20.0 ms
 ledger write time 5.0 ms
 apply time 40.0 ms
-source staging time 3.0 ms
 canonical apply time 30.0 ms
 sqlite commit time 4.0 ms
 `, 'claude-code'),
