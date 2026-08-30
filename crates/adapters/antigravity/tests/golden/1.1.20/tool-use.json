@@ -33,14 +33,33 @@
     "effort": null,
     "content": null,
     "tool": {
-      "tool_id": "step#1:tool#0",
-      "name": "run_command",
-      "input": {
-        "commandLine": "echo rosetta-mock"
+      "correlation": {
+        "key": "step#1:tool#0",
+        "derivation": "positional"
       },
-      "result": null,
-      "payload": null,
-      "is_error": null
+      "native": {
+        "id": null,
+        "namespace": null,
+        "name": "run_command",
+        "provider": null
+      },
+      "status": {
+        "value": "pending",
+        "basis": "request_observed"
+      },
+      "action": {
+        "type": "shell",
+        "command": {
+          "type": "inline",
+          "text": "echo rosetta-mock"
+        },
+        "cwd": null,
+        "timeout_ms": null,
+        "background": false,
+        "outcome": null
+      },
+      "failure": null,
+      "timing": null
     },
     "branch_tool_id": null,
     "usage": null,
@@ -49,12 +68,24 @@
     "src_offset": 298
   },
   {
-    "op": "tool_result",
+    "op": "tool_update",
     "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
-    "tool_id": "step#1:tool#0",
-    "result": "Created At: 2026-08-24T22:10:44-07:00\nCompleted At: 2026-08-24T22:10:44-07:00\n\nThe command exited with code 0.\nOutput:\nrosetta-mock\n\n",
-    "payload": null,
-    "is_error": false,
+    "correlation_key": "step#1:tool#0",
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "succeeded",
+        "basis": "native_terminal_record"
+      },
+      "failure": null,
+      "timing": {
+        "started_at": null,
+        "completed_at": 1787634644000,
+        "duration_ms": null
+      }
+    },
     "at": 1787634644000
   },
   {

@@ -7,10 +7,11 @@
 use std::collections::BTreeSet;
 
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, SessionUsageRow, TokenSnapshot,
-    ToolCall, WorkspaceObsRow,
+    WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
@@ -207,62 +208,73 @@ fn project(
                 };
             };
             let mut row = timeline_row(ctx, record, message, MessageKind::ToolUse);
-            row.tool = Some(ToolCall {
-                tool_id: Some(tool.call_id.clone()),
-                name: tool.tool.clone(),
-                input: tool.state.get("input").cloned().unwrap_or(Value::Null),
-                result: None,
-                payload: None,
-                is_error: None,
-            });
+            let input = tool.state.get("input").cloned().unwrap_or(Value::Null);
+            row.tool = Some(
+                crate::tool::project_request(
+                    ctx.agent_version.as_deref(),
+                    &tool.tool,
+                    &input,
+                    state.workspace.as_deref(),
+                    &tool.call_id,
+                    Some(&tool.call_id),
+                )
+                .unwrap_or_else(|_| {
+                    unknown_interaction(
+                        tool.call_id.clone(),
+                        rosetta_core::CorrelationDerivation::NativeId,
+                        Some(tool.call_id.clone()),
+                        None,
+                        tool.tool.clone(),
+                        None,
+                    )
+                }),
+            );
             attach_usage(state, &record.message_id, message, &mut row);
             ops.push(IngestOp::Message(Box::new(row)));
 
             match tool.state.get("status").and_then(Value::as_str) {
-                Some("completed") => ops.push(IngestOp::ToolResult {
-                    session_id: ctx.session_id.clone(),
-                    tool_id: tool.call_id.clone(),
-                    result: tool
-                        .state
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    payload: tool
-                        .state
-                        .get("metadata")
-                        .filter(|value| !value.is_null())
-                        .cloned(),
-                    is_error: Some(false),
-                    at: tool
+                Some("completed") => {
+                    let at = tool
                         .state
                         .get("time")
                         .and_then(|time| time.get("end"))
                         .and_then(Value::as_u64)
                         .and_then(|at| i64::try_from(at).ok())
-                        .or(Some(record.part_time_created)),
-                }),
-                Some("error") => ops.push(IngestOp::ToolResult {
-                    session_id: ctx.session_id.clone(),
-                    tool_id: tool.call_id.clone(),
-                    result: tool
-                        .state
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    payload: tool
-                        .state
-                        .get("metadata")
-                        .filter(|value| !value.is_null())
-                        .cloned(),
-                    is_error: Some(true),
-                    at: tool
+                        .or(Some(record.part_time_created));
+                    ops.push(IngestOp::ToolUpdate {
+                        session_id: ctx.session_id.clone(),
+                        correlation_key: tool.call_id.clone(),
+                        patch: terminal_update(
+                            Some(false),
+                            true,
+                            rosetta_core::StatusBasis::NativeState,
+                            at,
+                            None,
+                        ),
+                        at,
+                    });
+                }
+                Some("error") => {
+                    let at = tool
                         .state
                         .get("time")
                         .and_then(|time| time.get("end"))
                         .and_then(Value::as_u64)
                         .and_then(|at| i64::try_from(at).ok())
-                        .or(Some(record.part_time_created)),
-                }),
+                        .or(Some(record.part_time_created));
+                    ops.push(IngestOp::ToolUpdate {
+                        session_id: ctx.session_id.clone(),
+                        correlation_key: tool.call_id.clone(),
+                        patch: terminal_update(
+                            Some(true),
+                            true,
+                            rosetta_core::StatusBasis::NativeState,
+                            at,
+                            tool.state.get("error").and_then(Value::as_str),
+                        ),
+                        at,
+                    });
+                }
                 Some("pending" | "running") => {}
                 Some(status) => ops.push(drift(
                     ctx,
@@ -679,12 +691,11 @@ mod tests {
         assert_eq!(outcome.status, LineStatus::Parsed);
         assert!(matches!(
             outcome.ops.as_slice(),
-            [IngestOp::WorkspaceObs(_), IngestOp::Message(_), IngestOp::ToolResult {
-                result: Some(result),
-                is_error: Some(true),
+            [IngestOp::WorkspaceObs(_), IngestOp::Message(_), IngestOp::ToolUpdate {
+                patch,
                 at: Some(125),
                 ..
-            }] if result == "exit status 1"
+            }] if patch.status.is_some_and(|status| status.value == rosetta_core::ToolStatus::Failed)
         ));
     }
 }

@@ -6,10 +6,10 @@
 //! adapter-local database cursor is needed.
 
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, ToolCall,
-    WorkspaceObsRow,
+    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::Deserialize;
@@ -392,17 +392,32 @@ fn project_assistant(
             status = LineStatus::UnknownType;
         }
 
-        let discriminator = format!("message:{}:tool:{}", native.id, call.call_id);
+        let tool_id = call.call_id.clone();
+        let name = call.function.name.clone();
+        let input = decode_arguments(&call.function.arguments);
+        let discriminator = format!("message:{}:tool:{tool_id}", native.id);
         let mut row = message_row(ctx, &discriminator, MessageKind::ToolUse, at);
         row.uuid = Some(call.id);
-        row.tool = Some(ToolCall {
-            tool_id: Some(call.call_id),
-            name: call.function.name,
-            input: decode_arguments(&call.function.arguments),
-            result: None,
-            payload: None,
-            is_error: None,
-        });
+        row.tool = Some(
+            crate::tool::project_request(
+                ctx.agent_version.as_deref(),
+                &name,
+                &input,
+                None,
+                &tool_id,
+                Some(&tool_id),
+            )
+            .unwrap_or_else(|_| {
+                unknown_interaction(
+                    tool_id.clone(),
+                    rosetta_core::CorrelationDerivation::NativeId,
+                    Some(tool_id.clone()),
+                    None,
+                    name,
+                    None,
+                )
+            }),
+        );
         ops.push(IngestOp::Message(Box::new(row)));
     }
     status
@@ -492,13 +507,16 @@ fn project_tool_result(
         ));
         status = LineStatus::UnknownType;
     }
-    let payload = matches!(&value, Value::Object(_) | Value::Array(_)).then_some(value);
-    ops.push(IngestOp::ToolResult {
+    ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
-        tool_id,
-        result: result_text,
-        payload,
-        is_error,
+        correlation_key: tool_id,
+        patch: terminal_update(
+            is_error,
+            true,
+            rosetta_core::StatusBasis::NativeState,
+            at,
+            result_text.as_deref(),
+        ),
         at,
     });
     status

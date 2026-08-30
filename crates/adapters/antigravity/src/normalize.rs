@@ -8,7 +8,8 @@
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms, ToolCall};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -187,14 +188,25 @@ fn planner_response(
         let discriminator = tool_discriminator(line.step_index, index);
         let mut row = emit.row_with_discriminator(&discriminator, MessageKind::ToolUse, at);
         let tool_id = discriminator.clone();
-        row.tool = Some(ToolCall {
-            tool_id: Some(tool_id.clone()),
-            name: call.name.clone(),
-            input: call.args.clone(),
-            result: None,
-            payload: None,
-            is_error: None,
-        });
+        row.tool = Some(
+            crate::tool::project_request(
+                emit.ctx.agent_version.as_deref(),
+                &call.name,
+                &call.args,
+                None,
+                &tool_id,
+            )
+            .unwrap_or_else(|_| {
+                unknown_interaction(
+                    tool_id.clone(),
+                    rosetta_core::CorrelationDerivation::Positional,
+                    None,
+                    None,
+                    call.name.clone(),
+                    None,
+                )
+            }),
+        );
         emit.message(row);
         state.push(tool_id, call.name.clone());
     }
@@ -286,7 +298,7 @@ fn tool_result(
     record_kind: &str,
     expected_name: Option<&str>,
     result: Option<String>,
-    payload: Option<Value>,
+    _payload: Option<Value>,
     is_error: Option<bool>,
     at: Option<Ms>,
 ) -> LineStatus {
@@ -296,12 +308,16 @@ fn tool_result(
             code: ORPHAN_TOOL_RESULT.to_owned(),
         };
     };
-    emit.ops.push(IngestOp::ToolResult {
+    emit.ops.push(IngestOp::ToolUpdate {
         session_id: emit.session_id.clone(),
-        tool_id,
-        result,
-        payload,
-        is_error,
+        correlation_key: tool_id,
+        patch: terminal_update(
+            is_error,
+            true,
+            rosetta_core::StatusBasis::NativeTerminalRecord,
+            at,
+            result.as_deref(),
+        ),
         at,
     });
     LineStatus::Parsed
@@ -509,8 +525,8 @@ mod tests {
                 assert_eq!(row.kind, MessageKind::ToolUse);
                 row.tool
                     .as_ref()
-                    .and_then(|tool| tool.tool_id.clone())
-                    .expect("tool id")
+                    .map(|tool| tool.correlation.key.clone())
+                    .expect("tool correlation key")
             }
             other => panic!("expected one tool row, got {other:?}"),
         };
@@ -529,16 +545,17 @@ mod tests {
         );
         match result.ops.as_slice() {
             [
-                IngestOp::ToolResult {
-                    tool_id: merged,
-                    result,
-                    is_error,
+                IngestOp::ToolUpdate {
+                    correlation_key: merged,
+                    patch,
                     ..
                 },
             ] => {
                 assert_eq!(merged, &tool_id);
-                assert_eq!(result.as_deref(), Some("ok\n"));
-                assert_eq!(*is_error, Some(false));
+                assert_eq!(
+                    patch.status.map(|status| status.value),
+                    Some(rosetta_core::ToolStatus::Succeeded)
+                );
             }
             other => panic!("expected one tool result, got {other:?}"),
         }

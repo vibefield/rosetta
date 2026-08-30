@@ -9,6 +9,7 @@ use rosetta_adapter_grok::{GrokAdapter, spec};
 use rosetta_adapter_support::adapter::{
     AgentAdapter, FileStat, LineStatus, NormalizeCtx, StreamDriver,
 };
+use rosetta_core::timeline::ToolStatus;
 use rosetta_core::{IngestOp, ids};
 use serde_json::json;
 
@@ -273,16 +274,24 @@ fn failed_tool_updates_are_terminal_error_results() {
     assert_eq!(outcome.status, LineStatus::Parsed);
     match outcome.ops.as_slice() {
         [
-            IngestOp::ToolResult {
-                tool_id,
-                result,
-                is_error,
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
                 ..
             },
         ] => {
-            assert_eq!(tool_id, "call-1");
-            assert_eq!(result.as_deref(), Some("boom"));
-            assert_eq!(*is_error, Some(true));
+            assert_eq!(correlation_key, "call-1");
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Failed)
+            );
+            assert_eq!(
+                patch
+                    .failure
+                    .as_ref()
+                    .and_then(|failure| failure.diagnostic.as_deref()),
+                Some("boom")
+            );
         }
         other => panic!("expected a failed tool result, got {other:?}"),
     }

@@ -10,10 +10,12 @@ use std::collections::BTreeMap;
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, PlanRow, TaskRow, TaskStatus,
-    TokenSnapshot, ToolCall,
+    TokenSnapshot,
 };
+use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -372,14 +374,26 @@ fn tool_call(
     let mut message = row(ctx, &discriminator, MessageKind::ToolUse, stamp(line));
     message.uuid = Some(event_id.to_owned());
     message.model = state.current_model.clone();
-    message.tool = Some(ToolCall {
-        tool_id: Some(tool_id.to_owned()),
-        name: name.to_owned(),
-        input: input.clone(),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    message.tool = Some(
+        crate::tool::project_request(
+            ctx.agent_version.as_deref(),
+            name,
+            &input,
+            None,
+            tool_id,
+            Some(tool_id),
+        )
+        .unwrap_or_else(|_| {
+            unknown_interaction(
+                tool_id,
+                CorrelationDerivation::NativeId,
+                Some(tool_id.to_owned()),
+                None,
+                name,
+                None,
+            )
+        }),
+    );
     let timeline_id = message.timeline_id.clone();
     ops.push(IngestOp::Message(Box::new(message)));
 
@@ -458,14 +472,20 @@ fn tool_result(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -
         .as_ref()
         .and_then(tool_content_text)
         .or_else(|| update.raw_output.as_ref().and_then(raw_output_text));
-    let payload = update.raw_output.clone();
     let is_error = terminal_error.or_else(|| update.raw_output.as_ref().and_then(raw_output_error));
-    ops.push(IngestOp::ToolResult {
+    ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
-        tool_id: tool_id.to_owned(),
-        result,
-        payload,
-        is_error,
+        correlation_key: tool_id.to_owned(),
+        patch: terminal_update(
+            is_error,
+            terminal_error.is_none(),
+            StatusBasis::NativeState,
+            stamp(line),
+            is_error
+                .is_some_and(|value| value)
+                .then_some(result.as_deref())
+                .flatten(),
+        ),
         at: stamp(line),
     });
     Ok(())

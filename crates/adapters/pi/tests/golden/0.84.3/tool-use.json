@@ -56,14 +56,37 @@
     "effort": "off",
     "content": null,
     "tool": {
-      "tool_id": "call_mock_0001",
-      "name": "bash",
-      "input": {
-        "command": "echo rosetta-mock"
+      "correlation": {
+        "key": "call_mock_0001",
+        "derivation": "native_id"
       },
-      "result": null,
-      "payload": null,
-      "is_error": null
+      "native": {
+        "id": "call_mock_0001",
+        "namespace": null,
+        "name": "bash",
+        "provider": null
+      },
+      "status": {
+        "value": "pending",
+        "basis": "request_observed"
+      },
+      "action": {
+        "type": "shell",
+        "command": {
+          "type": "inline",
+          "text": "echo rosetta-mock"
+        },
+        "cwd": {
+          "type": "directory",
+          "path": "<PROJECT>",
+          "resolved": false
+        },
+        "timeout_ms": null,
+        "background": false,
+        "outcome": null
+      },
+      "failure": null,
+      "timing": null
     },
     "branch_tool_id": null,
     "usage": {
@@ -78,12 +101,24 @@
     "src_offset": 622
   },
   {
-    "op": "tool_result",
+    "op": "tool_update",
     "session_id": "1b205c955ddc9ae73219f866a2a84d62ae4462e38308f39dc6b2dc9175163ef5",
-    "tool_id": "call_mock_0001",
-    "result": "rosetta-mock\n",
-    "payload": null,
-    "is_error": false,
+    "correlation_key": "call_mock_0001",
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "succeeded",
+        "basis": "native_terminal_record"
+      },
+      "failure": null,
+      "timing": {
+        "started_at": null,
+        "completed_at": 1787635746537,
+        "duration_ms": null
+      }
+    },
     "at": 1787635746537
   },
   {

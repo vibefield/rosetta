@@ -2,6 +2,7 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::adapter::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{MessageKind, MessageRow};
+use rosetta_core::timeline::ToolStatus;
 use serde_json::{Value, json};
 
 fn assistant(id: &str, parent: &str, text: &str) -> Value {
@@ -202,13 +203,15 @@ fn tool_result_merges_without_a_second_timeline_row() {
     assert_eq!(messages(&ops).len(), 1);
     let merges: Vec<_> = ops
         .iter()
-        .filter(|op| matches!(op, IngestOp::ToolResult { .. }))
+        .filter(|op| matches!(op, IngestOp::ToolUpdate { .. }))
         .collect();
     assert_eq!(merges.len(), 1);
     assert!(matches!(
         merges[0],
-        IngestOp::ToolResult { tool_id, result: Some(text), is_error: Some(false), .. }
-            if tool_id == "call-1" && text == "ok\n"
+        IngestOp::ToolUpdate { correlation_key, patch, .. }
+            if correlation_key == "call-1"
+                && patch.status.as_ref().map(|status| status.value) == Some(ToolStatus::Succeeded)
+                && patch.failure.is_none()
     ));
 }
 

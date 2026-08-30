@@ -1137,7 +1137,7 @@ pub struct ToolOutcomePatch {
     pub action: ToolAction,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ToolUpdatePatch {
     pub native_id: Option<String>,

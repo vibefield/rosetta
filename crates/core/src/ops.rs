@@ -8,6 +8,7 @@ use crate::rows::{
     DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, RuntimeRow,
     SessionRow, SessionTitleRow, SessionUsageRow, TaskRow, TokenSnapshot, WorkspaceObsRow,
 };
+use crate::timeline::ToolUpdatePatch;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -27,13 +28,13 @@ pub enum IngestOp {
     /// One flattened timeline row (upsert by timeline_id). Boxed: it is by
     /// far the largest variant and ops move through channels in bulk.
     Message(Box<MessageRow>),
-    /// A merge op, not a row: folds into its tool_use row by (session, tool id).
-    ToolResult {
+    /// A typed merge op, not a row: folds into its tool_use row by the
+    /// adapter's deterministic correlation key.  Native result bodies never
+    /// cross this boundary.
+    ToolUpdate {
         session_id: String,
-        tool_id: String,
-        result: Option<String>,
-        payload: Option<serde_json::Value>,
-        is_error: Option<bool>,
+        correlation_key: String,
+        patch: ToolUpdatePatch,
         at: Option<Ms>,
     },
     /// Replacement-keyed usage snapshot for a response row that already exists

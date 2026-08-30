@@ -11,10 +11,12 @@
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
-    StreamState, TokenSnapshot, ToolCall, WorkspaceObsRow,
+    StreamState, TokenSnapshot, WorkspaceObsRow,
 };
+use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -359,15 +361,27 @@ fn response_item(
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
             row.uuid = item.id.clone();
             stamp_model(&mut row, state);
-            row.tool = Some(ToolCall {
-                tool_id: Some(tool_id),
-                name: name.clone(),
-                input: input.clone(),
-                // Merged in later by the writer, keyed on tool_id.
-                result: None,
-                payload: None,
-                is_error: None,
-            });
+            row.tool = Some(
+                crate::tool::project_request(
+                    ctx.agent_version.as_deref(),
+                    &name,
+                    &input,
+                    state.cwd.as_deref(),
+                    &tool_id,
+                    Some(&tool_id),
+                    item.namespace.as_deref(),
+                )
+                .unwrap_or_else(|_| {
+                    unknown_interaction(
+                        &tool_id,
+                        CorrelationDerivation::NativeId,
+                        Some(tool_id.clone()),
+                        item.namespace.clone(),
+                        &name,
+                        item.namespace.clone(),
+                    )
+                }),
+            );
             // A tool call IS a response: the model produced it, and the
             // token_count that follows belongs to it.
             begin_response(state, &row.timeline_id);
@@ -397,15 +411,23 @@ fn response_item(
                 // Without the correlation id the result can never reach its call.
                 return hard_into(ctx, stream_id, &record_kind, "missing_call_id", ts, ops);
             };
-            let (result, payload) = tool_output(item.output.as_ref());
-            ops.push(IngestOp::ToolResult {
+            let is_error = status_error(item.status.as_deref());
+            let output = is_error
+                .is_some_and(|value| value)
+                .then(|| tool_output_text(item.output.as_ref()))
+                .flatten();
+            ops.push(IngestOp::ToolUpdate {
                 session_id: ctx.session_id.clone(),
-                tool_id,
+                correlation_key: tool_id,
                 // The record declares no status field — success stays UNKNOWN
                 // rather than being sniffed out of its text.
-                payload,
-                result,
-                is_error: None,
+                patch: terminal_update(
+                    is_error,
+                    false,
+                    StatusBasis::NativeTerminalRecord,
+                    ts,
+                    output.as_deref(),
+                ),
                 at: ts,
             });
             LineStatus::Parsed
@@ -414,21 +436,40 @@ fn response_item(
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
             row.uuid = item.id.clone();
             stamp_model(&mut row, state);
-            let mut input = serde_json::Map::new();
-            if let Some(execution) = item.execution.clone() {
-                input.insert("execution".to_owned(), Value::String(execution));
+            let native_id = item.call_id.as_deref().or(item.id.as_deref());
+            let correlation_key = native_id.unwrap_or(discriminator);
+            let mut input = tool_input(item.arguments.as_ref());
+            if let Some(execution) = item.execution.as_ref() {
+                if let Some(map) = input.as_object_mut() {
+                    map.entry("execution")
+                        .or_insert_with(|| Value::String(execution.clone()));
+                }
             }
-            if let Some(arguments) = item.arguments.clone() {
-                input.insert("arguments".to_owned(), arguments);
-            }
-            row.tool = Some(ToolCall {
-                tool_id: item.call_id.clone().or_else(|| item.id.clone()),
-                name: "tool_search".to_owned(),
-                input: Value::Object(input),
-                result: None,
-                payload: None,
-                is_error: None,
-            });
+            row.tool = Some(
+                crate::tool::project_request(
+                    ctx.agent_version.as_deref(),
+                    "tool_search_call",
+                    &input,
+                    state.cwd.as_deref(),
+                    correlation_key,
+                    native_id,
+                    item.namespace.as_deref(),
+                )
+                .unwrap_or_else(|_| {
+                    unknown_interaction(
+                        correlation_key,
+                        if native_id.is_some() {
+                            CorrelationDerivation::NativeId
+                        } else {
+                            CorrelationDerivation::Synthetic
+                        },
+                        native_id.map(str::to_owned),
+                        item.namespace.clone(),
+                        "tool_search_call",
+                        item.namespace.clone(),
+                    )
+                }),
+            );
             begin_response(state, &row.timeline_id);
             ops.push(IngestOp::Message(Box::new(row)));
             LineStatus::Parsed
@@ -439,39 +480,72 @@ fn response_item(
                 // record, but do not fabricate a correlation key.
                 return LineStatus::Parsed;
             };
-            let payload = item.tools.clone().map(Value::Array);
-            ops.push(IngestOp::ToolResult {
+            ops.push(IngestOp::ToolUpdate {
                 session_id: ctx.session_id.clone(),
-                tool_id,
-                payload,
-                result: None,
-                is_error: status_error(item.status.as_deref()),
+                correlation_key: tool_id,
+                patch: terminal_update(
+                    status_error(item.status.as_deref()),
+                    false,
+                    StatusBasis::NativeState,
+                    ts,
+                    None,
+                ),
                 at: ts,
             });
             LineStatus::Parsed
         }
         "local_shell_call" | "web_search_call" | "image_generation_call" => {
-            let name = match item.item_type.as_str() {
-                "local_shell_call" => "local_shell",
-                "web_search_call" => "web_search",
-                _ => "image_generation",
-            };
-            let input = item
-                .action
-                .clone()
-                .or_else(|| item.revised_prompt.clone().map(Value::String))
-                .unwrap_or(Value::Null);
+            let name = item.item_type.as_str();
+            let input = item.action.clone().unwrap_or_else(|| {
+                item.revised_prompt
+                    .as_ref()
+                    .map_or(Value::Null, |prompt| serde_json::json!({"prompt": prompt}))
+            });
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
             row.uuid = item.id.clone();
             stamp_model(&mut row, state);
-            row.tool = Some(ToolCall {
-                tool_id: item.call_id.clone().or_else(|| item.id.clone()),
-                name: name.to_owned(),
-                input,
-                result: item.result.clone(),
-                payload: None,
-                is_error: status_error(item.status.as_deref()),
+            let native_id = item.call_id.as_deref().or(item.id.as_deref());
+            let correlation_key = native_id.unwrap_or(discriminator);
+            let mut tool = crate::tool::project_request(
+                ctx.agent_version.as_deref(),
+                name,
+                &input,
+                state.cwd.as_deref(),
+                correlation_key,
+                native_id,
+                item.namespace.as_deref(),
+            )
+            .unwrap_or_else(|_| {
+                unknown_interaction(
+                    correlation_key,
+                    if native_id.is_some() {
+                        CorrelationDerivation::NativeId
+                    } else {
+                        CorrelationDerivation::Synthetic
+                    },
+                    native_id.map(str::to_owned),
+                    item.namespace.clone(),
+                    name,
+                    item.namespace.clone(),
+                )
             });
+            let is_error = status_error(item.status.as_deref());
+            let patch = terminal_update(
+                is_error,
+                false,
+                StatusBasis::NativeState,
+                ts,
+                is_error
+                    .is_some_and(|value| value)
+                    .then_some(item.result.as_deref())
+                    .flatten(),
+            );
+            if let Some(status) = patch.status {
+                tool.status = status;
+            }
+            tool.failure = patch.failure;
+            tool.timing = patch.timing;
+            row.tool = Some(tool);
             begin_response(state, &row.timeline_id);
             ops.push(IngestOp::Message(Box::new(row)));
             LineStatus::Parsed
@@ -713,24 +787,14 @@ fn tool_input(arguments: Option<&Value>) -> Value {
     }
 }
 
-/// Keep a structured tool result structured; plain text stays in `result` alone
-/// rather than being duplicated into the payload.
-fn structured(output: &str) -> Option<Value> {
-    match serde_json::from_str(output) {
-        Ok(value @ (Value::Object(_) | Value::Array(_))) => Some(value),
-        _ => None,
-    }
-}
-
-/// Preserve modern block-valued results without sacrificing the readable text
-/// used by search and display. Historical JSON-encoded strings keep their old
-/// structured-payload behavior.
-fn tool_output(output: Option<&Value>) -> (Option<String>, Option<Value>) {
+/// Select only a human-readable failure diagnostic. Successful output never
+/// calls this helper and no native object crosses the canonical boundary.
+fn tool_output_text(output: Option<&Value>) -> Option<String> {
     let Some(output) = output else {
-        return (None, None);
+        return None;
     };
     match output {
-        Value::String(text) => (Some(text.clone()), structured(text)),
+        Value::String(text) => Some(text.clone()),
         Value::Array(blocks) => {
             let text = blocks
                 .iter()
@@ -738,14 +802,16 @@ fn tool_output(output: Option<&Value>) -> (Option<String>, Option<Value>) {
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
-            ((!text.is_empty()).then_some(text), Some(output.clone()))
+            (!text.is_empty()).then_some(text)
         }
-        Value::Object(map) => (
-            map.get("text").and_then(Value::as_str).map(str::to_owned),
-            Some(output.clone()),
-        ),
-        Value::Number(_) | Value::Bool(_) => (Some(output.to_string()), None),
-        Value::Null => (None, None),
+        Value::Object(map) => map
+            .get("text")
+            .or_else(|| map.get("message"))
+            .or_else(|| map.get("error"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        Value::Number(_) | Value::Bool(_) => Some(output.to_string()),
+        Value::Null => None,
     }
 }
 
@@ -1001,7 +1067,7 @@ fn keys(value: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{APPLY_PATCH, patch_body, patch_edits, structured, tool_input, tool_output};
+    use super::{APPLY_PATCH, patch_body, patch_edits, tool_input, tool_output_text};
     use rosetta_core::rows::EditKind;
     use serde_json::{Value, json};
 
@@ -1032,23 +1098,18 @@ mod tests {
     }
 
     #[test]
-    fn only_structured_output_becomes_a_payload() {
-        assert_eq!(structured(r#"{"ok":true}"#), Some(json!({"ok": true})));
-        // Plain text lives in `result`; duplicating it into the payload would
-        // just be the same bytes twice.
-        assert_eq!(structured("Process exited with code 0"), None);
-        assert_eq!(structured("42"), None);
-    }
-
-    #[test]
-    fn block_output_keeps_payload_and_readable_text() {
+    fn block_output_reduces_to_a_failure_diagnostic() {
         let output = json!([
             {"type": "input_text", "text": "first"},
             {"type": "input_text", "text": "second"},
         ]);
         assert_eq!(
-            tool_output(Some(&output)),
-            (Some("first\nsecond".to_owned()), Some(output))
+            tool_output_text(Some(&output)).as_deref(),
+            Some("first\nsecond")
+        );
+        assert_eq!(
+            tool_output_text(Some(&json!({"error": "boom"}))).as_deref(),
+            Some("boom")
         );
     }
 

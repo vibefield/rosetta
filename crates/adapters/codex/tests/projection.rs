@@ -9,6 +9,7 @@
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_support::adapter::{AgentAdapter, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, TokenSnapshot};
+use rosetta_core::timeline::{ResourceRef, ToolAction, ToolStatus};
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
 
@@ -389,10 +390,12 @@ fn a_tool_result_merges_by_call_id() {
         [IngestOp::Message(row)] => row.tool.clone().expect("tool call"),
         other => panic!("expected one tool row, got {other:?}"),
     };
-    assert_eq!(tool.tool_id.as_deref(), Some("call_1"));
-    assert_eq!(tool.input, json!({"cmd": "echo hi"}));
-    // The result arrives on its own record and merges later, by tool id.
-    assert_eq!(tool.result, None);
+    assert_eq!(tool.native.id.as_deref(), Some("call_1"));
+    let ToolAction::Shell { command, .. } = &tool.action else {
+        panic!("exec_command must project as shell")
+    };
+    assert_eq!(command.as_preview(), "echo hi");
+    assert_eq!(tool.status.value, ToolStatus::Pending);
 
     let output = ingest(
         &mut ctx,
@@ -408,27 +411,27 @@ fn a_tool_result_merges_by_call_id() {
     );
     match output.ops.as_slice() {
         [
-            IngestOp::ToolResult {
-                tool_id,
-                result,
-                payload,
-                is_error,
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
                 ..
             },
         ] => {
-            assert_eq!(tool_id, "call_1");
-            assert_eq!(result.as_deref(), Some("hi\n"));
+            assert_eq!(correlation_key, "call_1");
             // The canonical types `output` as a bare string and declares no
             // status field: success is unknown, never guessed.
-            assert_eq!(*payload, None);
-            assert_eq!(*is_error, None);
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Unknown)
+            );
+            assert!(patch.failure.is_none());
         }
         other => panic!("expected one tool result, got {other:?}"),
     }
 }
 
 #[test]
-fn a_custom_tool_call_keeps_its_freeform_input_and_pairs_with_its_output() {
+fn a_custom_tool_call_projects_only_reviewed_patch_facts() {
     let mut ctx = context();
     let patch = "*** Begin Patch\n*** Add File: added.txt\n+hello\n*** End Patch";
     let call = ingest(
@@ -449,9 +452,16 @@ fn a_custom_tool_call_keeps_its_freeform_input_and_pairs_with_its_output() {
     match call.ops.as_slice() {
         [IngestOp::Message(row), IngestOp::FileEdit(edit)] => {
             let tool = row.tool.as_ref().expect("custom tool call");
-            assert_eq!(tool.tool_id.as_deref(), Some("call_1"));
-            assert_eq!(tool.name, "apply_patch");
-            assert_eq!(tool.input, json!(patch));
+            assert_eq!(tool.native.id.as_deref(), Some("call_1"));
+            assert_eq!(tool.native.name, "apply_patch");
+            let ToolAction::FileChange { changes } = &tool.action else {
+                panic!("apply_patch must project as file_change")
+            };
+            assert_eq!(changes.len(), 1);
+            assert!(matches!(
+                &changes[0].path,
+                ResourceRef::File { path, .. } if path == "added.txt"
+            ));
             assert_eq!(edit.message_timeline_id.as_deref(), Some(&*row.timeline_id));
             assert_eq!(edit.path, "added.txt");
         }
@@ -473,19 +483,25 @@ fn a_custom_tool_call_keeps_its_freeform_input_and_pairs_with_its_output() {
     assert!(drifts(&output.ops).is_empty());
     match output.ops.as_slice() {
         [
-            IngestOp::ToolResult {
-                tool_id, result, ..
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
+                ..
             },
         ] => {
-            assert_eq!(tool_id, "call_1");
-            assert_eq!(result.as_deref(), Some("Done!"));
+            assert_eq!(correlation_key, "call_1");
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Unknown)
+            );
+            assert!(patch.failure.is_none());
         }
         other => panic!("expected one custom tool result, got {other:?}"),
     }
 }
 
 #[test]
-fn modern_block_tool_results_keep_text_and_structure() {
+fn modern_block_tool_results_drop_unreviewed_text_and_structure() {
     let mut ctx = context();
     let output = ingest(
         &mut ctx,
@@ -502,22 +518,18 @@ fn modern_block_tool_results_keep_text_and_structure() {
     );
     match output.ops.as_slice() {
         [
-            IngestOp::ToolResult {
-                tool_id,
-                result,
-                payload,
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
                 ..
             },
         ] => {
-            assert_eq!(tool_id, "call_1");
-            assert_eq!(result.as_deref(), Some("first\nsecond"));
+            assert_eq!(correlation_key, "call_1");
             assert_eq!(
-                *payload,
-                Some(json!([
-                    {"type": "input_text", "text": "first"},
-                    {"type": "input_text", "text": "second"},
-                ]))
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Unknown)
             );
+            assert!(patch.failure.is_none());
         }
         other => panic!("expected one tool result, got {other:?}"),
     }

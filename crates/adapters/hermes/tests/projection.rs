@@ -9,6 +9,7 @@ use rosetta_adapter_hermes::{HermesAdapter, spec};
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_capture::{SnapshotOutcome, snapshot_db};
 use rosetta_core::rows::MessageKind;
+use rosetta_core::timeline::{ToolAction, ToolStatus};
 use rosetta_core::{IngestOp, ids};
 
 const VERSION: &str = "0.20.5";
@@ -134,25 +135,31 @@ fn tool_result_merges_without_consuming_an_ordinal() {
         .iter()
         .find_map(|row| row.tool.as_ref())
         .expect("tool call");
-    assert_eq!(call.tool_id.as_deref(), Some("call_mock_0002"));
-    assert_eq!(call.name, "terminal");
-    assert_eq!(call.input["command"], "echo rosetta-mock");
+    assert_eq!(call.native.id.as_deref(), Some("call_mock_0002"));
+    assert_eq!(call.native.name, "terminal");
+    let ToolAction::Shell { command, .. } = &call.action else {
+        panic!("terminal must project as shell")
+    };
+    assert_eq!(command.as_preview(), "echo rosetta-mock");
 
     let result = ops.iter().find_map(|op| match op {
-        IngestOp::ToolResult {
-            tool_id,
-            result,
-            payload,
-            is_error,
+        IngestOp::ToolUpdate {
+            correlation_key,
+            patch,
             ..
-        } => Some((tool_id, result, payload, is_error)),
+        } => Some((correlation_key, patch)),
         _ => None,
     });
-    let (tool_id, result, payload, is_error) = result.expect("tool result merge");
-    assert_eq!(tool_id, "call_mock_0002");
-    assert_eq!(result.as_deref(), Some("rosetta-mock"));
-    assert_eq!(payload.as_ref().unwrap()["exit_code"], 0);
-    assert_eq!(*is_error, Some(false));
+    let (correlation_key, patch) = result.expect("tool result merge");
+    assert_eq!(correlation_key, "call_mock_0002");
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(
+        patch.failure.is_none(),
+        "successful output is intentionally discarded"
+    );
 }
 
 #[test]
@@ -267,7 +274,7 @@ fn known_malformed_rows_are_hard_errors_and_new_tables_are_soft_drift() {
 }
 
 #[test]
-fn tool_specific_and_plain_results_are_lossless_soft_drift() {
+fn tool_specific_and_plain_results_keep_only_typed_lifecycle_facts() {
     fn project(content: &str) -> (LineStatus, Vec<IngestOp>) {
         let adapter = HermesAdapter;
         let mut ctx = NormalizeCtx::new("runtime", "session");
@@ -293,44 +300,45 @@ fn tool_specific_and_plain_results_are_lossless_soft_drift() {
     assert_eq!(status, LineStatus::UnknownType);
     assert!(ops.iter().any(|op| matches!(op, IngestOp::Drift(_))));
     let structured = ops.iter().find_map(|op| match op {
-        IngestOp::ToolResult {
-            result,
-            payload,
-            is_error,
-            ..
-        } => Some((result, payload, is_error)),
+        IngestOp::ToolUpdate { patch, .. } => Some(patch),
         _ => None,
     });
-    let (result, payload, is_error) = structured.expect("structured result");
-    assert_eq!(result.as_deref(), Some("synthetic file body"));
-    assert_eq!(payload.as_ref().unwrap()["file_size"], 19);
-    assert_eq!(*is_error, None);
+    let structured = structured.expect("structured result");
+    assert_eq!(
+        structured.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(structured.failure.is_none());
 
     let (status, ops) = project("plain synthetic output");
     assert_eq!(status, LineStatus::UnknownType);
     let plain = ops.iter().find_map(|op| match op {
-        IngestOp::ToolResult {
-            result,
-            payload,
-            is_error,
-            ..
-        } => Some((result, payload, is_error)),
+        IngestOp::ToolUpdate { patch, .. } => Some(patch),
         _ => None,
     });
-    let (result, payload, is_error) = plain.expect("plain result");
-    assert_eq!(result.as_deref(), Some("plain synthetic output"));
-    assert_eq!(*payload, None);
-    assert_eq!(*is_error, None);
+    let plain = plain.expect("plain result");
+    assert_eq!(
+        plain.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(plain.failure.is_none());
 
     let (status, ops) = project(r#"{"error":"synthetic failure"}"#);
     assert_eq!(status, LineStatus::UnknownType);
     let error = ops.iter().find_map(|op| match op {
-        IngestOp::ToolResult {
-            result, is_error, ..
-        } => Some((result, is_error)),
+        IngestOp::ToolUpdate { patch, .. } => Some(patch),
         _ => None,
     });
-    let (result, is_error) = error.expect("error result");
-    assert_eq!(result.as_deref(), Some("synthetic failure"));
-    assert_eq!(*is_error, Some(true));
+    let error = error.expect("error result");
+    assert_eq!(
+        error.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Failed)
+    );
+    assert_eq!(
+        error
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.diagnostic.as_deref()),
+        Some("synthetic failure")
+    );
 }

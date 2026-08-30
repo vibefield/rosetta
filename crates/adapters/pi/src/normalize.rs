@@ -10,10 +10,12 @@ use std::collections::BTreeMap;
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_core::rows::{
     DriftFact, MessageKind, MessageRow, Ms, SessionRole, SessionRow, StreamState, TokenSnapshot,
-    ToolCall, WorkspaceObsRow,
+    WorkspaceObsRow,
 };
+use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -250,7 +252,15 @@ fn message_entry(
             ops.push(IngestOp::Message(Box::new(row)));
         }
         AgentMessage::Known(KnownMessage::Assistant(message)) => {
-            assistant_message(ctx, entry, message, &inherited, ts, ops);
+            assistant_message(
+                ctx,
+                state.header.as_ref().map(|header| header.cwd.as_str()),
+                entry,
+                message,
+                &inherited,
+                ts,
+                ops,
+            );
         }
         AgentMessage::Known(KnownMessage::ToolResult(message)) => {
             tool_result(ctx, message, ts, ops);
@@ -276,6 +286,7 @@ fn message_entry(
 
 fn assistant_message(
     ctx: &mut NormalizeCtx,
+    cwd: Option<&str>,
     entry: &MessageEntry,
     message: &AssistantMessage,
     inherited: &EntryContext,
@@ -328,14 +339,26 @@ fn assistant_message(
                     Some(model),
                     inherited.effort.as_deref(),
                 );
-                row.tool = Some(ToolCall {
-                    tool_id: Some(id.clone()),
-                    name: name.clone(),
-                    input: arguments.clone(),
-                    result: None,
-                    payload: None,
-                    is_error: None,
-                });
+                row.tool = Some(
+                    crate::tool::project_request(
+                        ctx.agent_version.as_deref(),
+                        name,
+                        arguments,
+                        cwd,
+                        id,
+                        Some(id),
+                    )
+                    .unwrap_or_else(|_| {
+                        unknown_interaction(
+                            id,
+                            CorrelationDerivation::NativeId,
+                            Some(id.clone()),
+                            None,
+                            name,
+                            None,
+                        )
+                    }),
+                );
                 rows.push(row);
             }
             // Images have no canonical bitmap row. Unknown blocks are drifted
@@ -365,12 +388,20 @@ fn tool_result(
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) {
-    ops.push(IngestOp::ToolResult {
+    let diagnostic = message
+        .is_error
+        .then(|| blocks_text(&message.content))
+        .flatten();
+    ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
-        tool_id: message.tool_call_id.clone(),
-        result: blocks_text(&message.content),
-        payload: message.details.clone(),
-        is_error: Some(message.is_error),
+        correlation_key: message.tool_call_id.clone(),
+        patch: terminal_update(
+            Some(message.is_error),
+            true,
+            StatusBasis::NativeTerminalRecord,
+            ts,
+            diagnostic.as_deref(),
+        ),
         at: ts,
     });
 }
@@ -388,14 +419,40 @@ fn bash_execution(
         message.exit_code.map(|code| code != 0)
     };
     let mut row = row(ctx, entry, &entry.id, MessageKind::ToolUse, ts, None, None);
-    row.tool = Some(ToolCall {
-        tool_id: None,
-        name: "bash".to_owned(),
-        input: json!({"command": message.command}),
-        result: Some(message.output.clone()),
-        payload: None,
-        is_error,
+    let cwd = None;
+    let mut tool = crate::tool::project_request(
+        ctx.agent_version.as_deref(),
+        "BashExecution",
+        &json!({"command": message.command}),
+        cwd,
+        &entry.id,
+        None,
+    )
+    .unwrap_or_else(|_| {
+        unknown_interaction(
+            &entry.id,
+            CorrelationDerivation::Synthetic,
+            None,
+            None,
+            "BashExecution",
+            None,
+        )
     });
+    let patch = terminal_update(
+        is_error,
+        false,
+        StatusBasis::NativeState,
+        ts,
+        is_error
+            .is_some_and(|error| error)
+            .then_some(message.output.as_str()),
+    );
+    if let Some(status) = patch.status {
+        tool.status = status;
+    }
+    tool.failure = patch.failure;
+    tool.timing = patch.timing;
+    row.tool = Some(tool);
     ops.push(IngestOp::Message(Box::new(row)));
 }
 

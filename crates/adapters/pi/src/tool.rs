@@ -79,7 +79,11 @@ pub fn project_request(
     };
     Ok(open_interaction(
         correlation_key,
-        CorrelationDerivation::NativeId,
+        if native_id.is_some() {
+            CorrelationDerivation::NativeId
+        } else {
+            CorrelationDerivation::Synthetic
+        },
         native_id.map(str::to_owned),
         None,
         name,

@@ -8,9 +8,10 @@
 use std::cmp::Ordering;
 
 use rosetta_core::timeline::{
-    CORE_SCALAR_MAX_BYTES, CanonicalError, CanonicalText, CorrelationDerivation, NativeToolRef,
-    ResourceRef, StatusBasis, ToolAction, ToolActionKind, ToolCorrelation, ToolInteraction,
-    ToolStatus, ToolStatusFact,
+    CORE_SCALAR_MAX_BYTES, CanonicalError, CanonicalText, CorrelationDerivation,
+    FAILURE_DIAGNOSTIC_MAX_BYTES, FAILURE_DIAGNOSTIC_MAX_LINES, NativeToolRef, ResourceRef,
+    StatusBasis, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction,
+    ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
 };
 use serde_json::Value;
 
@@ -406,6 +407,82 @@ pub fn open_interaction(
         failure: None,
         timing: None,
     }
+}
+
+pub fn unknown_interaction(
+    correlation_key: impl Into<String>,
+    correlation_derivation: CorrelationDerivation,
+    native_id: Option<String>,
+    namespace: Option<String>,
+    native_name: impl Into<String>,
+    provider: Option<String>,
+) -> ToolInteraction {
+    let mut interaction =
+        ToolInteraction::unknown(correlation_key, correlation_derivation, native_name);
+    interaction.native.id = native_id;
+    interaction.native.namespace = namespace;
+    interaction.native.provider = provider;
+    interaction
+}
+
+/// Construct a terminal lifecycle patch without carrying successful output.
+/// A failed action may keep one deterministic bounded diagnostic; callers
+/// must pass only the source field selected by their reviewed projector.
+pub fn terminal_update(
+    is_error: Option<bool>,
+    success_when_terminal: bool,
+    basis: StatusBasis,
+    at: Option<i64>,
+    diagnostic: Option<&str>,
+) -> ToolUpdatePatch {
+    let value = match is_error {
+        Some(true) => ToolStatus::Failed,
+        Some(false) => ToolStatus::Succeeded,
+        None if success_when_terminal => ToolStatus::Succeeded,
+        None => ToolStatus::Unknown,
+    };
+    let failure = (value == ToolStatus::Failed).then(|| ToolFailure {
+        kind: rosetta_core::timeline::FailureKind::Unknown,
+        summary: None,
+        diagnostic: diagnostic
+            .map(bound_diagnostic)
+            .filter(|text| !text.is_empty()),
+    });
+    ToolUpdatePatch {
+        status: Some(ToolStatusFact { value, basis }),
+        failure,
+        timing: at.map(|completed_at| ToolTiming {
+            started_at: None,
+            completed_at: Some(completed_at),
+            duration_ms: None,
+        }),
+        ..ToolUpdatePatch::default()
+    }
+}
+
+fn bound_diagnostic(value: &str) -> String {
+    let mut output = String::new();
+    for line in value.lines().take(FAILURE_DIAGNOSTIC_MAX_LINES) {
+        let separator = usize::from(!output.is_empty());
+        let remaining = FAILURE_DIAGNOSTIC_MAX_BYTES.saturating_sub(output.len() + separator);
+        if remaining == 0 {
+            break;
+        }
+        if separator == 1 {
+            output.push('\n');
+        }
+        if line.len() <= remaining {
+            output.push_str(line);
+            continue;
+        }
+        let mut boundary = remaining;
+        while boundary > 0 && !line.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        output.push_str(&line[..boundary]);
+        break;
+    }
+    output
 }
 
 #[cfg(test)]

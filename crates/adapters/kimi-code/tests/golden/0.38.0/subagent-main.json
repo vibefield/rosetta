@@ -61,16 +61,37 @@
     "effort": "on",
     "content": null,
     "tool": {
-      "tool_id": "call_mock_0005",
-      "name": "Agent",
-      "input": {
-        "description": "greet briefly",
-        "prompt": "Reply with a short greeting.",
-        "subagent_type": "explore"
+      "correlation": {
+        "key": "call_mock_0005",
+        "derivation": "native_id"
       },
-      "result": null,
-      "payload": null,
-      "is_error": null
+      "native": {
+        "id": "call_mock_0005",
+        "namespace": null,
+        "name": "Agent",
+        "provider": null
+      },
+      "status": {
+        "value": "pending",
+        "basis": "request_observed"
+      },
+      "action": {
+        "type": "delegate",
+        "agent_kind": null,
+        "name": null,
+        "model": null,
+        "mode": null,
+        "objective": {
+          "type": "inline",
+          "text": "greet briefly"
+        },
+        "child_session_id": null,
+        "resume_id": null,
+        "background": false,
+        "orphan_result_summary": null
+      },
+      "failure": null,
+      "timing": null
     },
     "branch_tool_id": "call_mock_0005",
     "usage": {
@@ -85,14 +106,24 @@
     "src_offset": 95823
   },
   {
-    "op": "tool_result",
+    "op": "tool_update",
     "session_id": "39d86db1b9cc7c2d899d24ddb84ab842b3ea86d51817686314b52d3f92ec40e5",
-    "tool_id": "call_mock_0005",
-    "result": "agent_id: agent-0\nactual_subagent_type: explore\nstatus: completed\n\n[summary]\nHello from rosetta mockmodel. This is a deterministic scripted response.",
-    "payload": {
-      "output": "agent_id: agent-0\nactual_subagent_type: explore\nstatus: completed\n\n[summary]\nHello from rosetta mockmodel. This is a deterministic scripted response."
+    "correlation_key": "call_mock_0005",
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "succeeded",
+        "basis": "native_terminal_record"
+      },
+      "failure": null,
+      "timing": {
+        "started_at": null,
+        "completed_at": 1787636369594,
+        "duration_ms": null
+      }
     },
-    "is_error": null,
     "at": 1787636369594
   },
   {

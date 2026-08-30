@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, FileStat, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{MessageKind, MessageRow, SessionRole, TaskStatus};
+use rosetta_core::timeline::{ToolAction, ToolStatus};
 use rosetta_core::{IngestOp, ids};
 use serde_json::json;
 
@@ -286,12 +287,12 @@ fn tool_results_are_merge_ops_not_timeline_rows() {
         tool_rows[0]
             .tool
             .as_ref()
-            .and_then(|tool| tool.tool_id.as_deref()),
+            .and_then(|tool| tool.native.id.as_deref()),
         Some("call_mock_0001")
     );
     let results: Vec<_> = ops
         .iter()
-        .filter(|op| matches!(op, IngestOp::ToolResult { .. }))
+        .filter(|op| matches!(op, IngestOp::ToolUpdate { .. }))
         .collect();
     assert_eq!(results.len(), 1);
 }
@@ -343,7 +344,7 @@ fn writer_declared_media_parts_parse_without_indexing_media_references() {
 }
 
 #[test]
-fn writer_optional_tool_fields_and_multimodal_results_are_lossless() {
+fn writer_optional_tool_fields_and_multimodal_results_are_bounded() {
     let mut ctx = synthetic_context();
     let call = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -356,7 +357,7 @@ fn writer_optional_tool_fields_and_multimodal_results_are_lossless() {
     };
     let tool = row.tool.as_ref().expect("tool call");
     assert_eq!(row.uuid, None);
-    assert_eq!(tool.input, serde_json::Value::Null);
+    assert!(matches!(tool.action, ToolAction::Unknown {}));
 
     let result = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -364,22 +365,14 @@ fn writer_optional_tool_fields_and_multimodal_results_are_lossless() {
         br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-media","result":{"output":[{"type":"text","text":"caption"},{"type":"think","think":"not searchable","encrypted":"ciphertext"},{"type":"image_url","imageUrl":{"url":"blobref:image"}},{"type":"audio_url","audioUrl":{"url":"blobref:audio"}},{"type":"video_url","videoUrl":{"url":"blobref:video"}}]}},"time":2}"#,
     );
     assert_eq!(result.status, LineStatus::Parsed);
-    let [
-        IngestOp::ToolResult {
-            result, payload, ..
-        },
-    ] = result.ops.as_slice()
-    else {
+    let [IngestOp::ToolUpdate { patch, .. }] = result.ops.as_slice() else {
         panic!("expected one tool result merge, got {:?}", result.ops);
     };
-    assert_eq!(result.as_deref(), Some("caption"));
     assert_eq!(
-        payload
-            .as_ref()
-            .and_then(|value| value.pointer("/output/2/imageUrl/url"))
-            .and_then(serde_json::Value::as_str),
-        Some("blobref:image")
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
     );
+    assert!(patch.failure.is_none());
 
     let media_only = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -387,13 +380,17 @@ fn writer_optional_tool_fields_and_multimodal_results_are_lossless() {
         br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-media","result":{"output":[{"type":"image_url","imageUrl":{"url":"blobref:image-only"}}]}},"time":3}"#,
     );
     assert_eq!(media_only.status, LineStatus::Parsed);
-    let [IngestOp::ToolResult { result, .. }] = media_only.ops.as_slice() else {
+    let [IngestOp::ToolUpdate { patch, .. }] = media_only.ops.as_slice() else {
         panic!(
             "expected one media-only result merge, got {:?}",
             media_only.ops
         );
     };
-    assert_eq!(result, &None);
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(patch.failure.is_none());
 }
 
 fn synthetic_context() -> NormalizeCtx {

@@ -9,6 +9,7 @@
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, MessageKind, MessageRow};
+use rosetta_core::timeline::{ToolAction, ToolStatus};
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
 
@@ -182,11 +183,13 @@ fn assistant_blocks_split_into_one_row_each() {
     assert_eq!(tokens.thinking, Some(5));
 
     let tool = rows[2].tool.as_ref().expect("tool call");
-    assert_eq!(tool.name, "Bash");
-    assert_eq!(tool.tool_id.as_deref(), Some("toolu_1"));
-    assert_eq!(tool.input["command"], json!("ls"));
-    // The result arrives on a later line, never on the call itself.
-    assert_eq!(tool.result, None);
+    assert_eq!(tool.native.name, "Bash");
+    assert_eq!(tool.native.id.as_deref(), Some("toolu_1"));
+    let ToolAction::Shell { command, .. } = &tool.action else {
+        panic!("Bash must project as shell")
+    };
+    assert_eq!(command.as_preview(), "ls");
+    assert_eq!(tool.status.value, ToolStatus::Pending);
 }
 
 #[test]
@@ -286,11 +289,9 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     // The line opens the file, so it also carries the first workspace fix.
     let [
         IngestOp::WorkspaceObs(_),
-        IngestOp::ToolResult {
-            tool_id,
-            result,
-            payload,
-            is_error,
+        IngestOp::ToolUpdate {
+            correlation_key,
+            patch,
             at,
             ..
         },
@@ -298,15 +299,17 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     else {
         panic!("expected exactly one tool result, got {ops:#?}");
     };
-    assert_eq!(tool_id, "toolu_1");
-    assert_eq!(result.as_deref(), Some("rosetta-mock"));
-    assert_eq!(payload.as_ref().unwrap()["stdout"], json!("rosetta-mock"));
-    assert_eq!(*is_error, Some(false));
+    assert_eq!(correlation_key, "toolu_1");
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(patch.failure.is_none(), "successful output is noise");
     assert_eq!(*at, Some(1787625320000));
 }
 
 #[test]
-fn read_images_become_content_addressed_projection_assets() {
+fn read_image_results_do_not_cross_the_canonical_boundary() {
     let encoded_png_signature = "iVBORw0KGgo=";
     let (ops, _) = run(&[user(
         json!([{"type": "tool_result", "tool_use_id": "toolu_image"}]),
@@ -317,25 +320,27 @@ fn read_images_become_content_addressed_projection_assets() {
         }}}),
     )]);
 
-    let IngestOp::ImageAsset { asset } = &ops[1] else {
-        panic!("expected an image asset before its tool result, got {ops:#?}");
-    };
-    assert_eq!(asset.media_type, "image/png");
-    assert_eq!(asset.bytes, b"\x89PNG\r\n\x1a\n");
-    let expected_url = asset.url().unwrap();
-
-    let IngestOp::ToolResult { payload, .. } = &ops[2] else {
-        panic!("expected a tool result after its image asset, got {ops:#?}");
-    };
-    let file = &payload.as_ref().unwrap()["file"];
-    assert_eq!(file["url"], expected_url);
-    assert_eq!(file["type"], "image/png");
-    assert!(file.get("base64").is_none());
-    assert_eq!(file["dimensions"]["originalWidth"], 1);
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, IngestOp::ImageAsset { .. })),
+        "a file-read body is neither authored media nor a canonical attachment"
+    );
+    let patch = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("typed lifecycle update");
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(patch.failure.is_none());
 }
 
 #[test]
-fn malformed_or_mislabeled_images_remain_lossless_in_the_payload() {
+fn malformed_or_mislabeled_read_images_are_also_discarded() {
     for (encoded, media_type) in [("not base64", "image/png"), ("iVBORw0KGgo=", "image/jpeg")] {
         let (ops, _) = run(&[user(
             json!([{"type": "tool_result", "tool_use_id": "toolu_image"}]),
@@ -349,11 +354,10 @@ fn malformed_or_mislabeled_images_remain_lossless_in_the_payload() {
                 .any(|op| matches!(op, IngestOp::ImageAsset { .. })),
             "unverified image bytes must not be written"
         );
-        let payload = ops.iter().find_map(|op| match op {
-            IngestOp::ToolResult { payload, .. } => payload.as_ref(),
-            _ => None,
-        });
-        assert_eq!(payload.unwrap()["file"]["base64"], encoded);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, IngestOp::ToolUpdate { .. }))
+        );
     }
 }
 
@@ -375,11 +379,17 @@ fn a_turn_with_text_and_a_result_keeps_both() {
     assert_eq!(rows[0].kind, MessageKind::User);
     assert_eq!(rows[0].content.as_deref(), Some("and here is my follow-up"));
 
-    let IngestOp::ToolResult { result, .. } = &ops[2] else {
-        panic!("expected a tool result after the turn, got {ops:#?}");
+    let IngestOp::ToolUpdate { patch, .. } = &ops[2] else {
+        panic!("expected a tool update after the turn, got {ops:#?}");
     };
-    // Block-array results keep their text and drop what has none.
-    assert_eq!(result.as_deref(), Some("first\nsecond"));
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert!(
+        patch.failure.is_none(),
+        "successful result text is discarded"
+    );
 }
 
 #[test]

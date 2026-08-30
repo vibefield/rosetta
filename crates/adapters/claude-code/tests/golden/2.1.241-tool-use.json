@@ -26,14 +26,37 @@
         "subtype": null,
         "timeline_id": "e73aa23f6ec13c710bd2d2d4a93f914d2586444f05aa44d6521ca3df36dfd1c2",
         "tool": {
-          "input": {
-            "command": "echo rosetta-mock"
+          "action": {
+            "background": false,
+            "command": {
+              "text": "echo rosetta-mock",
+              "type": "inline"
+            },
+            "cwd": {
+              "path": "/private/tmp/rosetta-farm/tool-use/project",
+              "resolved": true,
+              "type": "directory"
+            },
+            "outcome": null,
+            "timeout_ms": null,
+            "type": "shell"
           },
-          "is_error": null,
-          "name": "Bash",
-          "payload": null,
-          "result": null,
-          "tool_id": "msg_mock_0001_tool"
+          "correlation": {
+            "derivation": "native_id",
+            "key": "msg_mock_0001_tool"
+          },
+          "failure": null,
+          "native": {
+            "id": "msg_mock_0001_tool",
+            "name": "Bash",
+            "namespace": null,
+            "provider": null
+          },
+          "status": {
+            "basis": "request_observed",
+            "value": "pending"
+          },
+          "timing": null
         },
         "ts": 1787625319072,
         "usage": {
@@ -67,18 +90,24 @@
       },
       {
         "at": 1787625319141,
-        "is_error": false,
-        "op": "tool_result",
-        "payload": {
-          "interrupted": false,
-          "isImage": false,
-          "noOutputExpected": false,
-          "stderr": "",
-          "stdout": "rosetta-mock"
+        "correlation_key": "msg_mock_0001_tool",
+        "op": "tool_update",
+        "patch": {
+          "failure": null,
+          "native_id": null,
+          "outcome": null,
+          "request": null,
+          "status": {
+            "basis": "native_terminal_record",
+            "value": "succeeded"
+          },
+          "timing": {
+            "completed_at": 1787625319141,
+            "duration_ms": null,
+            "started_at": null
+          }
         },
-        "result": "rosetta-mock",
-        "session_id": "041f1d1aff79bf7a4ddee35e5bd90cc8bda4af2bdbdfb5c28cc11d8ca0b3dbd7",
-        "tool_id": "msg_mock_0001_tool"
+        "session_id": "041f1d1aff79bf7a4ddee35e5bd90cc8bda4af2bdbdfb5c28cc11d8ca0b3dbd7"
       },
       {
         "agent_version": "2.1.241",

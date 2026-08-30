@@ -9,10 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
     StreamState, TaskRow, TaskStatus, TokenSnapshot, ToolCall, WorkspaceObsRow,
 };
+use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -166,6 +168,7 @@ fn project(
                     ToolEvent {
                         call_id: &request.tool_call_id,
                         name: &request.tool_name,
+                        namespace: None,
                         input: request.arguments.clone(),
                         ts,
                     },
@@ -280,14 +283,15 @@ fn project(
                 );
                 tool_row.model = start.model.clone().or_else(|| state.model.clone());
                 tool_row.effort = state.effort.clone();
-                tool_row.tool = Some(ToolCall {
-                    tool_id: Some(start.tool_call_id.clone()),
-                    name: start.tool_name.clone(),
-                    input: start.arguments.clone().unwrap_or(Value::Null),
-                    result: None,
-                    payload: None,
-                    is_error: None,
-                });
+                let name = start.mcp_tool_name.as_deref().unwrap_or(&start.tool_name);
+                tool_row.tool = Some(project_tool(
+                    ctx,
+                    state,
+                    &start.tool_call_id,
+                    name,
+                    start.mcp_server_name.as_deref(),
+                    start.arguments.as_ref(),
+                ));
                 state.response = Some(tool_row.timeline_id.clone());
                 state.response_usage = TokenSnapshot::default();
                 ops.push(IngestOp::Message(Box::new(tool_row)));
@@ -457,6 +461,7 @@ fn project(
                     ToolEvent {
                         call_id: &request.tool_call_id,
                         name: &request.tool_name,
+                        namespace: None,
                         input: request.arguments.clone(),
                         ts,
                     },
@@ -531,6 +536,7 @@ fn notice_row(
 struct ToolEvent<'a> {
     call_id: &'a str,
     name: &'a str,
+    namespace: Option<&'a str>,
     input: Option<Value>,
     ts: Option<Ms>,
 }
@@ -551,14 +557,14 @@ fn tool_event(
     );
     tool.model = state.model.clone();
     tool.effort = state.effort.clone();
-    tool.tool = Some(ToolCall {
-        tool_id: Some(event.call_id.to_owned()),
-        name: event.name.to_owned(),
-        input: event.input.unwrap_or(Value::Null),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    tool.tool = Some(project_tool(
+        ctx,
+        state,
+        event.call_id,
+        event.name,
+        event.namespace,
+        event.input.as_ref(),
+    ));
     state.response = Some(tool.timeline_id.clone());
     state.response_usage = TokenSnapshot::default();
     ops.push(IngestOp::Message(Box::new(tool)));
@@ -807,15 +813,49 @@ fn tool_request_row(
     );
     tool_row.model = model;
     tool_row.effort = state.effort.clone();
-    tool_row.tool = Some(ToolCall {
-        tool_id: Some(request.tool_call_id.clone()),
-        name: request.name.clone(),
-        input: request.arguments.clone().unwrap_or(Value::Null),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    let name = request.mcp_tool_name.as_deref().unwrap_or(&request.name);
+    tool_row.tool = Some(project_tool(
+        ctx,
+        state,
+        &request.tool_call_id,
+        name,
+        request.mcp_server_name.as_deref(),
+        request.arguments.as_ref(),
+    ));
     tool_row
+}
+
+fn project_tool(
+    ctx: &NormalizeCtx,
+    state: &CopilotState,
+    correlation_key: &str,
+    name: &str,
+    namespace: Option<&str>,
+    input: Option<&Value>,
+) -> ToolCall {
+    let input = input.unwrap_or(&Value::Null);
+    crate::tool::project_request(
+        ctx.agent_version.as_deref(),
+        name,
+        input,
+        state
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.cwd.as_str()),
+        correlation_key,
+        Some(correlation_key),
+        namespace,
+    )
+    .unwrap_or_else(|_| {
+        unknown_interaction(
+            correlation_key,
+            CorrelationDerivation::NativeId,
+            Some(correlation_key.to_owned()),
+            namespace.map(str::to_owned),
+            name,
+            namespace.map(str::to_owned),
+        )
+    })
 }
 
 fn tool_result(
@@ -824,18 +864,25 @@ fn tool_result(
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) {
-    let payload = complete.result.clone().or_else(|| complete.error.clone());
-    let result = complete
-        .result
-        .as_ref()
-        .and_then(display_text)
-        .or_else(|| complete.error.as_ref().and_then(display_text));
-    ops.push(IngestOp::ToolResult {
+    let diagnostic = (!complete.success)
+        .then(|| {
+            complete
+                .error
+                .as_ref()
+                .and_then(display_text)
+                .or_else(|| complete.result.as_ref().and_then(display_text))
+        })
+        .flatten();
+    ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
-        tool_id: complete.tool_call_id.clone(),
-        result,
-        payload,
-        is_error: Some(!complete.success),
+        correlation_key: complete.tool_call_id.clone(),
+        patch: terminal_update(
+            Some(!complete.success),
+            true,
+            StatusBasis::NativeTerminalRecord,
+            ts,
+            diagnostic.as_deref(),
+        ),
         at: ts,
     });
 }

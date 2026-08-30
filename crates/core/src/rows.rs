@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::timeline::ToolInteraction;
+
 /// Unix milliseconds.
 pub type Ms = i64;
 
@@ -154,20 +156,10 @@ impl TokenSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct ToolCall {
-    /// Native correlation id — the merge key for the result.
-    pub tool_id: Option<String>,
-    pub name: String,
-    pub input: serde_json::Value,
-    /// Result text; `None` until the result lands (live sessions).
-    pub result: Option<String>,
-    /// Structured result payload — opaque except for verified large binary
-    /// members externalized into the canonical projection's asset store.
-    pub payload: Option<serde_json::Value>,
-    pub is_error: Option<bool>,
-}
+/// Compatibility name retained while callers move to the explicit canonical
+/// term.  The value itself is the closed typed interaction—there is no legacy
+/// JSON-bearing tool representation behind this alias.
+pub type ToolCall = ToolInteraction;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

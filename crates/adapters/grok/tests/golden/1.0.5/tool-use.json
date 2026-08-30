@@ -33,15 +33,33 @@
     "effort": null,
     "content": null,
     "tool": {
-      "tool_id": "call_mock_0004",
-      "name": "run_terminal_command",
-      "input": {
-        "command": "echo rosetta-mock",
-        "description": "echo mock output"
+      "correlation": {
+        "key": "call_mock_0004",
+        "derivation": "native_id"
       },
-      "result": null,
-      "payload": null,
-      "is_error": null
+      "native": {
+        "id": "call_mock_0004",
+        "namespace": null,
+        "name": "run_terminal_command",
+        "provider": null
+      },
+      "status": {
+        "value": "pending",
+        "basis": "request_observed"
+      },
+      "action": {
+        "type": "shell",
+        "command": {
+          "type": "inline",
+          "text": "echo rosetta-mock"
+        },
+        "cwd": null,
+        "timeout_ms": null,
+        "background": false,
+        "outcome": null
+      },
+      "failure": null,
+      "timing": null
     },
     "branch_tool_id": null,
     "usage": null,
@@ -50,40 +68,24 @@
     "src_offset": 376
   },
   {
-    "op": "tool_result",
+    "op": "tool_update",
     "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
-    "tool_id": "call_mock_0004",
-    "result": "rosetta-mock\n",
-    "payload": {
-      "command": "echo rosetta-mock",
-      "current_dir": "<PROJECT>",
-      "description": "echo mock output",
-      "exit_code": 0,
-      "output": [
-        114,
-        111,
-        115,
-        101,
-        116,
-        116,
-        97,
-        45,
-        109,
-        111,
-        99,
-        107,
-        10
-      ],
-      "output_file": "<SCENARIO_DIR>/grok-home/sessions/%2Fprivate%2Ftmp%2Frosetta-farm%2Ftool-use%2Fproject/01a03752-db6d-7210-a3d4-672b775ae289/terminal/call_mock_0004.log",
-      "output_for_prompt": "exit: 0\nrosetta-mock\n",
-      "signal": null,
-      "timed_out": false,
-      "total_bytes": 13,
-      "truncated": false,
-      "type": "Bash",
-      "was_bare_echo": true
+    "correlation_key": "call_mock_0004",
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "succeeded",
+        "basis": "native_state"
+      },
+      "failure": null,
+      "timing": {
+        "started_at": null,
+        "completed_at": 1787634572990,
+        "duration_ms": null
+      }
     },
-    "is_error": false,
     "at": 1787634572990
   },
   {

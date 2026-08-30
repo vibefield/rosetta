@@ -76,14 +76,37 @@
     "effort": null,
     "content": null,
     "tool": {
-      "tool_id": "call_mock_0005",
-      "name": "bash",
-      "input": {
-        "command": "echo rosetta-mock"
+      "correlation": {
+        "key": "call_mock_0005",
+        "derivation": "native_id"
       },
-      "result": null,
-      "payload": null,
-      "is_error": null
+      "native": {
+        "id": "call_mock_0005",
+        "namespace": null,
+        "name": "bash",
+        "provider": null
+      },
+      "status": {
+        "value": "pending",
+        "basis": "request_observed"
+      },
+      "action": {
+        "type": "shell",
+        "command": {
+          "type": "inline",
+          "text": "echo rosetta-mock"
+        },
+        "cwd": {
+          "type": "directory",
+          "path": "<PROJECT>",
+          "resolved": false
+        },
+        "timeout_ms": null,
+        "background": false,
+        "outcome": null
+      },
+      "failure": null,
+      "timing": null
     },
     "branch_tool_id": null,
     "usage": {
@@ -98,15 +121,28 @@
     "src_offset": 27364
   },
   {
-    "op": "tool_result",
+    "op": "tool_update",
     "session_id": "4bcb58d1f1ea8325e37d4c1e56fea6f6f962091b6cf3fb525cb4b44effac67e7",
-    "tool_id": "call_mock_0005",
-    "result": "Permission to run this tool was denied due to the following rules: `shell`",
-    "payload": {
-      "code": "denied",
-      "message": "Permission to run this tool was denied due to the following rules: `shell`"
+    "correlation_key": "call_mock_0005",
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "failed",
+        "basis": "native_terminal_record"
+      },
+      "failure": {
+        "kind": "unknown",
+        "summary": null,
+        "diagnostic": "Permission to run this tool was denied due to the following rules: `shell`"
+      },
+      "timing": {
+        "started_at": null,
+        "completed_at": 1787635692478,
+        "duration_ms": null
+      }
     },
-    "is_error": true,
     "at": 1787635692478
   },
   {

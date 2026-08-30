@@ -5,10 +5,10 @@
 //! usage later carried by `step.end`. This projection takes the message rail
 //! and the dedicated usage rail exactly once.
 
+use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot, ToolCall,
-    WorkspaceObsRow,
+    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot, WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
@@ -571,14 +571,26 @@ fn tool_call(
     let mut row = row(ctx, &discriminator, MessageKind::ToolUse, Some(ts));
     row.uuid.clone_from(&line.event.uuid);
     row.parent_uuid.clone_from(&line.event.parent_uuid);
-    row.tool = Some(ToolCall {
-        tool_id: Some(tool_id.to_owned()),
-        name: name.to_owned(),
-        input,
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    row.tool = Some(
+        crate::tool::project_request(
+            ctx.agent_version.as_deref(),
+            name,
+            &input,
+            state.workspace.as_deref(),
+            tool_id,
+            Some(tool_id),
+        )
+        .unwrap_or_else(|_| {
+            unknown_interaction(
+                tool_id.to_owned(),
+                rosetta_core::CorrelationDerivation::NativeId,
+                Some(tool_id.to_owned()),
+                None,
+                name.to_owned(),
+                None,
+            )
+        }),
+    );
     if name == "Agent" {
         row.branch_tool_id = Some(tool_id.to_owned());
     }
@@ -636,12 +648,16 @@ fn tool_result(
             );
         }
     };
-    ops.push(IngestOp::ToolResult {
+    ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
-        tool_id: tool_id.to_owned(),
-        result: text,
-        payload: serde_json::to_value(result).ok(),
-        is_error: result.is_error,
+        correlation_key: tool_id.to_owned(),
+        patch: terminal_update(
+            result.is_error,
+            true,
+            rosetta_core::StatusBasis::NativeTerminalRecord,
+            Some(ts),
+            text.as_deref(),
+        ),
         at: Some(ts),
     });
     LineStatus::Parsed
