@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rosetta — message &amp; tool payload weight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,500;0,600;0,700;1,500&amp;family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+  :root {
+    --bg: #F6F3EC; --paper: #FBF9F4; --card: #FFFCF7; --ink: #1E2320;
+    --muted: #6A7068; --line: #D8D2C4; --chip: #EEE8DC;
+    --copper: #A14E28; --copper-bg: rgba(161,78,40,.10);
+    --teal: #1F6E63; --teal-bg: rgba(31,110,99,.10);
+    --amber: #8A6A12; --amber-bg: rgba(138,106,18,.12);
+    --rose: #8A3A48; --rose-bg: rgba(138,58,72,.10);
+    --indigo: #3B4A86; --indigo-bg: rgba(59,74,134,.10);
+    --forest: #2C5B38; --forest-bg: rgba(44,91,56,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141714; --paper: #191C19; --card: #1F231F; --ink: #E8E4DA;
+      --muted: #9AA196; --line: #333830; --chip: #2A2F2A;
+      --copper: #D3805A; --copper-bg: rgba(211,128,90,.14);
+      --teal: #55A99B; --teal-bg: rgba(85,169,155,.14);
+      --amber: #D4B45A; --amber-bg: rgba(212,180,90,.14);
+      --rose: #D48A96; --rose-bg: rgba(212,138,150,.14);
+      --indigo: #8B9AD4; --indigo-bg: rgba(139,154,212,.14);
+      --forest: #7BB088; --forest-bg: rgba(123,176,136,.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141714; --paper: #191C19; --card: #1F231F; --ink: #E8E4DA;
+    --muted: #9AA196; --line: #333830; --chip: #2A2F2A;
+    --copper: #D3805A; --copper-bg: rgba(211,128,90,.14);
+    --teal: #55A99B; --teal-bg: rgba(85,169,155,.14);
+    --amber: #D4B45A; --amber-bg: rgba(212,180,90,.14);
+    --rose: #D48A96; --rose-bg: rgba(212,138,150,.14);
+    --indigo: #8B9AD4; --indigo-bg: rgba(139,154,212,.14);
+    --forest: #7BB088; --forest-bg: rgba(123,176,136,.14);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1100px 520px at 0% -8%, var(--copper-bg), transparent 50%), var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', system-ui, sans-serif;
+    font-size: 15.5px; line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 28px 88px; }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--copper);
+  }
+  h1 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; margin: 8px 0 10px; }
+  h2 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 24px; margin: 52px 0 8px; }
+  h3 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 17px; margin: 24px 0 8px; }
+  .lede, .note { color: var(--muted); max-width: 86ch; }
+  a { color: var(--copper); }
+  code { font-family: 'JetBrains Mono', monospace; font-size: .88em; }
+  .callout {
+    border: 1px solid var(--copper); background: var(--copper-bg);
+    border-radius: 10px; padding: 14px 18px; max-width: 92ch; margin: 16px 0 22px; font-size: 14px;
+  }
+  .callout.teal { border-color: var(--teal); background: var(--teal-bg); }
+  .callout.amber { border-color: var(--amber); background: var(--amber-bg); }
+  .callout b { color: var(--copper); }
+  .callout.teal b { color: var(--teal); }
+  .callout.amber b { color: var(--amber); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 22px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi .v { font-family: Spectral, Georgia, serif; font-size: 28px; font-weight: 600; line-height: 1.1; }
+  .kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  .bar {
+    display: flex; height: 28px; border-radius: 7px; overflow: hidden;
+    border: 1px solid var(--line); background: var(--chip); margin: 8px 0 6px;
+  }
+  .seg { height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12.5px; color: var(--muted); margin: 8px 0 18px; }
+  .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13.4px; }
+  th {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em; color: var(--muted);
+    text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.cm { font-family: 'JetBrains Mono', monospace; font-size: 12.2px; font-weight: 600; white-space: nowrap; }
+  td.n { font-family: 'JetBrains Mono', monospace; font-size: 12.2px; text-align: right; white-space: nowrap; }
+  td.delta { font-family: 'JetBrains Mono', monospace; font-size: 12.2px; text-align: right; color: var(--teal); white-space: nowrap; }
+  .mini { height: 8px; background: var(--chip); border-radius: 99px; overflow: hidden; min-width: 80px; }
+  .mini > i { display: block; height: 100%; background: var(--copper); }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h3 { margin: 0 0 6px; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .fn { font-family: 'JetBrains Mono', monospace; font-size: 12.3px; line-height: 1.55; margin: 0; }
+  .fn .c { color: var(--muted); }
+  .fn .k { color: var(--copper); }
+  .fn .p { color: var(--teal); }
+  figure { margin: 12px 0 8px; }
+  figure svg { display: block; width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; max-width: 96ch; }
+  footer.note { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; }
+  .theme-row { display: flex; gap: 6px; margin-top: 10px; }
+  .theme-row button {
+    font: 10.5px/1 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 4px; padding: 5px 8px; cursor: pointer;
+  }
+  .theme-row button[aria-pressed="true"] { color: var(--ink); background: var(--chip); }
+  table.matrix { min-width: 880px; font-size: 12.2px; }
+  table.matrix th { vertical-align: bottom; text-align: center; padding: 10px 6px; white-space: nowrap; }
+  table.matrix th.rowh, table.matrix td.rowh { text-align: left; white-space: nowrap; }
+  table.matrix td { text-align: center; padding: 7px 8px; }
+  table.matrix td.heat {
+    background: color-mix(in srgb, var(--copper) calc(var(--w) * 88%), var(--chip));
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+  }
+  table.matrix td.heat small { display: block; font-weight: 500; color: var(--muted); font-size: 10px; }
+  table.matrix td.empty { color: var(--line); }
+  .scale { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin: 8px 0 12px; }
+  .scale-bar { width: 140px; height: 10px; border-radius: 99px; border: 1px solid var(--line);
+    background: linear-gradient(90deg, var(--chip), color-mix(in srgb, var(--copper) 88%, var(--chip))); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">rosetta · inspection · typed tool projection</div>
+  <h1>Where the projection’s bytes actually go</h1>
+  <p class="lede">
+    Same Claude Code JSONL, recensed after the closed timeline landed.
+    A <code>run-jsonl-audit-2026-08-29_20-47-35-752-c17836</code> (native four-column body).
+    B <code>run-jsonl-audit-2026-08-30_02-09-45-067-13b7a7</code> (image sidecar).
+    C <code>run-jsonl-audit-2026-08-30_16-33-35-386-88b74d</code> (typed tools, this page).
+    24,854 framed records every time. Structure only — no paths, no pixels, no prompts.
+  </p>
+
+  <div class="callout teal">
+    <b>The fat tool columns are gone.</b>
+    <code>tool_input</code> / <code>tool_result</code> / <code>tool_payload</code> no longer exist.
+    Projection file 41.69 → 21.57 → <b>13.73&nbsp;MiB</b>. Message table pages 38.95 → 18.84 →
+    <b>5.45&nbsp;MiB</b>. FTS 16.35 → <b>4.74&nbsp;MiB</b> because search no longer walks native
+    JSON. Apply (stage 7) 1,320 → 1,128 → <b>270&nbsp;ms</b>. Cold wall 2.53 → 2.08 →
+    <b>1.17&nbsp;s</b>. Chat text is unchanged at 1.25&nbsp;MiB.
+  </div>
+
+  <div class="callout amber">
+    <b>Every tool in this campaign is <code>tool_kind=unknown</code>.</b>
+    Claude projectors are pinned to writer <code>2.1.241</code> exactly.
+    This JSONL is <code>2.1.197</code>–<code>2.1.200</code>. Adapter drift recorded
+    2,566 <code>projection_unregistered</code> facts — one per tool request — and
+    fell back to <code>unknown_interaction</code>. So SQLite holds names, status, and
+    private merge stamps, not Read files, Edit hunks, or Bash stdout.
+    File bodies did not move to <code>.assets/</code> on this audit; they were never
+    projected. Schema matrix:
+    <a href="message-schema-matrix.html">message-schema-matrix.html</a>.
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v">13.73</div><div class="l">MiB projection (was 21.57)</div></div>
+    <div class="kpi"><div class="v">1.25</div><div class="l">MiB chat content (unchanged)</div></div>
+    <div class="kpi"><div class="v">5.45</div><div class="l">MiB message table pages</div></div>
+    <div class="kpi"><div class="v">4.15</div><div class="l">MiB tool_update_fact + 2 indexes</div></div>
+    <div class="kpi"><div class="v">1.17 s</div><div class="l">cold wall (was 2.08 s)</div></div>
+    <div class="kpi"><div class="v">4.74</div><div class="l">MiB FTS sidecar (was 16.35)</div></div>
+  </div>
+
+  <h2>Three campaigns, one source</h2>
+  <p class="note">
+    Stage-7 numbers are the production <code>Store::apply</code> wall minus the exclusive
+    RAM tool-fold timer (absent in A/B). Nested SQLite child timers overlap and
+    must not be summed. Same 88,498,056-byte JSONL.
+  </p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>surface</th><th>A native body</th><th>B image sidecar</th><th>C typed tools</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="cm">source JSONL</td><td class="n">84.40 MiB</td><td class="n">84.40 MiB</td><td class="n">84.40 MiB</td></tr>
+        <tr><td class="cm">raw ledger</td><td class="n">85.16 MiB</td><td class="n">85.16 MiB</td><td class="n">85.16 MiB</td></tr>
+        <tr><td class="cm">projection SQLite</td><td class="n">41.69 MiB</td><td class="n">21.57 MiB</td><td class="n">13.73 MiB</td></tr>
+        <tr><td class="cm">message table pages</td><td class="n">38.95 MiB</td><td class="n">18.84 MiB</td><td class="n">5.45 MiB</td></tr>
+        <tr><td class="cm">message rows</td><td class="n">6,188</td><td class="n">6,188</td><td class="n">3,934</td></tr>
+        <tr><td class="cm">thinking / system / summary</td><td class="n">1,892 / 368 / 1</td><td class="n">1,892 / 368 / 1</td><td class="n">0 / 0 / 0</td></tr>
+        <tr><td class="cm">notices</td><td class="n">—</td><td class="n">—</td><td class="n">7 compaction</td></tr>
+        <tr><td class="cm">fat tool TEXT</td><td class="n">27.87 payload</td><td class="n">7.81 payload</td><td class="n">columns removed</td></tr>
+        <tr><td class="cm">tool_detail / open / merge</td><td class="n">—</td><td class="n">—</td><td class="n">0.04 / 0.71 / 1.05</td></tr>
+        <tr><td class="cm">tool_update_fact pages</td><td class="n">—</td><td class="n">—</td><td class="n">2.04 + 2.11 idx</td></tr>
+        <tr><td class="cm">sidecar files</td><td class="n">—</td><td class="n">14.77 MiB images</td><td class="n">none on this audit</td></tr>
+        <tr><td class="cm">FTS sidecar</td><td class="n">16.35 MiB</td><td class="n">16.35 MiB</td><td class="n">4.74 MiB</td></tr>
+        <tr><td class="cm">ops emitted</td><td class="n">10,733</td><td class="n">10,789</td><td class="n">12,557</td></tr>
+        <tr><td class="cm">messages updated</td><td class="n">1,017</td><td class="n">1,017</td><td class="n">0</td></tr>
+        <tr><td class="cm">normalize (parse+)</td><td class="n">186 ms</td><td class="n">175 ms</td><td class="n">167 ms</td></tr>
+        <tr><td class="cm">RAM tool fold</td><td class="n">—</td><td class="n">—</td><td class="n">32 ms</td></tr>
+        <tr><td class="cm">canonical apply (stage 7)</td><td class="n">1,320 ms</td><td class="n">1,128 ms</td><td class="n">270 ms</td></tr>
+        <tr><td class="cm">FTS build</td><td class="n">457 ms</td><td class="n">391 ms</td><td class="n">242 ms</td></tr>
+        <tr><td class="cm">cold wall</td><td class="n">2,532 ms</td><td class="n">2,079 ms</td><td class="n">1,174 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    Row drop is almost entirely empty thinking (1,892) plus the old system kinds
+    (368) minus 7 compact-boundary notices: 6,188 − 2,254 = 3,934. User 381 and
+    agent 980 are identical across A/B/C. Tool-use count is still 2,566.
+    <code>messagesUpdated = 0</code> because the private cold fold writes each
+    opener once; live merge no longer hits SQLite per tool-result.
+  </p>
+
+  <h2>Copies of the same session</h2>
+  <figure>
+    <svg viewBox="0 0 1100 210" role="img" aria-label="Ledger still holds native JSON; SQLite holds the closed timeline; FTS holds chat plus tool names.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.15; }
+        .t { font-family: Spectral, Georgia, serif; font-size: 16px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 11px; fill: var(--muted); }
+      </style>
+      <rect class="box" x="20" y="30" width="250" height="140" rx="10"/>
+      <text class="t" x="36" y="62">Source + ledger</text>
+      <text class="s" x="36" y="86">84.40 / 85.16 MiB</text>
+      <text class="s" x="36" y="106">native JSONL unchanged</text>
+      <text class="s" x="36" y="126">Base64, files, stdout</text>
+      <text class="s" x="36" y="146">replay substrate</text>
+
+      <rect class="box" x="290" y="30" width="250" height="140" rx="10" style="stroke: var(--teal)"/>
+      <text class="t" x="306" y="62">Projection SQLite</text>
+      <text class="s" x="306" y="86">13.73 MiB</text>
+      <text class="s" x="306" y="106">closed columns only</text>
+      <text class="s" x="306" y="126">unknown action stubs</text>
+      <text class="s" x="306" y="146">message pages 5.45 MiB</text>
+
+      <rect class="box" x="560" y="30" width="250" height="140" rx="10"/>
+      <text class="t" x="576" y="62">.assets sidecar</text>
+      <text class="s" x="576" y="86">absent on C</text>
+      <text class="s" x="576" y="106">no CanonicalText members</text>
+      <text class="s" x="576" y="126">chat max 23 KiB &lt; 32 KiB</text>
+      <text class="s" x="576" y="146">unknown tools emit none</text>
+
+      <rect class="box" x="830" y="30" width="250" height="140" rx="10" style="stroke: var(--teal)"/>
+      <text class="t" x="846" y="62">FTS sidecar</text>
+      <text class="s" x="846" y="86">4.74 MiB</text>
+      <text class="s" x="846" y="106">prose = chat 1.25 MiB</text>
+      <text class="s" x="846" y="126">tool = native names</text>
+      <text class="s" x="846" y="146">target/intent/change empty</text>
+    </svg>
+    <figcaption>
+      Ledger size did not move. The write that used to dominate apply — tens of
+      mebibytes of native tool JSON as SQLite TEXT — is no longer in the
+      projection. What remains of tool state is typed (and, in this campaign, empty)
+      <code>tool_detail</code> plus private opener/merge/fact rows.
+    </figcaption>
+  </figure>
+
+  <h2>SQLite pages now</h2>
+  <p class="note">
+    Physical <code>dbstat</code> on C. The old 18.84&nbsp;MiB message table is 5.45.
+    The new heavy cluster is <code>tool_update_fact</code>: 5,132 reduced patches
+    so a sibling source generation can rebuild a tool row from <code>tool_open</code>
+    plus remaining facts. Those rows are not user-facing and not in FTS.
+  </p>
+  <div class="bar" title="Physical SQLite pages">
+    <div class="seg" style="width:39.7%; background:var(--copper)"></div>
+    <div class="seg" style="width:30.2%; background:var(--amber)"></div>
+    <div class="seg" style="width:12.7%; background:var(--indigo)"></div>
+    <div class="seg" style="width:6.5%; background:var(--rose)"></div>
+    <div class="seg" style="width:4.6%; background:var(--teal)"></div>
+    <div class="seg" style="width:3.7%; background:var(--forest)"></div>
+    <div class="seg" style="width:2.6%; background:var(--chip)"></div>
+  </div>
+  <div class="legend">
+    <span class="lg"><span class="dot" style="background:var(--copper)"></span>message 5.45</span>
+    <span class="lg"><span class="dot" style="background:var(--amber)"></span>tool_update_fact + idx 4.15</span>
+    <span class="lg"><span class="dot" style="background:var(--indigo)"></span>message indexes 1.75</span>
+    <span class="lg"><span class="dot" style="background:var(--rose)"></span>drift_seen 0.89</span>
+    <span class="lg"><span class="dot" style="background:var(--teal)"></span>session_usage 0.63</span>
+    <span class="lg"><span class="dot" style="background:var(--forest)"></span>file_edit 0.50</span>
+    <span class="lg"><span class="dot" style="background:var(--chip)"></span>everything else 0.36</span>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>object</th><th>pages</th><th>role</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="cm">message</td><td class="n">5.445 MiB</td><td>closed timeline rows, including private <code>tool_open</code> / <code>tool_merge_state</code></td></tr>
+        <tr><td class="cm">tool_update_fact</td><td class="n">2.039 MiB</td><td>5,132 WITHOUT ROWID patches</td></tr>
+        <tr><td class="cm">tool_update_fact_target</td><td class="n">1.055 MiB</td><td>rebuild lookup</td></tr>
+        <tr><td class="cm">tool_update_fact_src</td><td class="n">1.055 MiB</td><td>generation subtract</td></tr>
+        <tr><td class="cm">drift_seen</td><td class="n">0.887 MiB</td><td>mostly unregistered projector shapes</td></tr>
+        <tr><td class="cm">message_response_block</td><td class="n">0.406 MiB</td><td>unique (session, response, block)</td></tr>
+        <tr><td class="cm">message_bucket_key</td><td class="n">0.367 MiB</td><td>usage rollup</td></tr>
+        <tr><td class="cm">file_edit + indexes</td><td class="n">0.504 MiB</td><td>868 Edit/Write path facts, independent of tool_kind</td></tr>
+        <tr><td class="cm">session_usage + indexes</td><td class="n">0.633 MiB</td><td>1,511 token snapshots</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Message type — rows vs bytes now</h2>
+  <p class="note">
+    “Body” here is the remaining fat TEXT on <code>message</code>:
+    <code>content</code> + <code>detail</code> + <code>tool_detail</code> +
+    <code>tool_open</code> + <code>tool_merge_state</code> + <code>tool_diagnostic</code>
+    = 3.08&nbsp;MiB logical (was 15.16 after images, 35.22 before).
+  </p>
+  <div class="bar" title="Fat TEXT by message.type">
+    <div class="seg" style="width:59.3%; background:var(--copper)"></div>
+    <div class="seg" style="width:29.1%; background:var(--teal)"></div>
+    <div class="seg" style="width:11.5%; background:var(--indigo)"></div>
+    <div class="seg" style="width:0.1%; background:var(--forest)"></div>
+  </div>
+  <div class="legend">
+    <span class="lg"><span class="dot" style="background:var(--copper)"></span>tool_use 1.83 MiB (59%)</span>
+    <span class="lg"><span class="dot" style="background:var(--teal)"></span>user 0.90 MiB</span>
+    <span class="lg"><span class="dot" style="background:var(--indigo)"></span>agent 0.35 MiB</span>
+    <span class="lg"><span class="dot" style="background:var(--forest)"></span>notice 434 B</span>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>type</th><th>rows</th>
+          <th>content</th><th>detail</th><th>tool_detail</th>
+          <th>tool_open</th><th>tool_merge_state</th><th>body now</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="cm">tool_use</td><td class="n">2,566</td>
+          <td class="n">NULL</td><td class="n">NULL</td>
+          <td class="n">0.044</td><td class="n">0.712</td><td class="n">1.046</td>
+          <td class="n">1.83 MiB</td>
+        </tr>
+        <tr>
+          <td class="cm">user</td><td class="n">381</td>
+          <td class="n">0.897</td><td class="n">NULL</td>
+          <td class="n">—</td><td class="n">—</td><td class="n">—</td>
+          <td class="n">0.90 MiB</td>
+        </tr>
+        <tr>
+          <td class="cm">agent</td><td class="n">980</td>
+          <td class="n">0.353</td><td class="n">NULL</td>
+          <td class="n">—</td><td class="n">—</td><td class="n">—</td>
+          <td class="n">0.35 MiB</td>
+        </tr>
+        <tr>
+          <td class="cm">notice</td><td class="n">7</td>
+          <td class="n">NULL</td><td class="n">434 B</td>
+          <td class="n">—</td><td class="n">—</td><td class="n">—</td>
+          <td class="n">434 B</td>
+        </tr>
+        <tr>
+          <td class="cm">thinking</td><td class="n">0</td>
+          <td class="n">—</td><td class="n">—</td>
+          <td class="n">—</td><td class="n">—</td><td class="n">—</td>
+          <td class="n">dropped (source still redacts)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    User content p50 571&nbsp;B, p90 8.8&nbsp;KiB, max 23,061&nbsp;B.
+    Agent p50 136&nbsp;B, p90 927&nbsp;B, max 6,659&nbsp;B.
+    Inline limit is 32&nbsp;KiB, so no chat spilled to <code>.txt</code> members.
+    <code>detail</code> is unused on user/agent because there are no attachments
+    or text members in this file.
+  </p>
+
+  <h2>Remaining text, ranked</h2>
+  <p class="note">
+    Logical UTF-8. Color relative to chat <code>content</code> (1.250&nbsp;MiB).
+    Native Read/Edit/Bash/Write bodies from campaign B are <em>not</em> in this
+    table — they are not in SQLite at all.
+  </p>
+  <div class="scale"><span>lighter</span><div class="scale-bar"></div><span>heavier</span></div>
+  <div class="scroll">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th class="rowh">bucket</th>
+          <th>bytes</th>
+          <th>share of 3.08 MiB fat TEXT</th>
+          <th>what it is</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="cm rowh">content (user+agent)</td>
+          <td class="heat" style="--w:1">1.250 MiB</td>
+          <td class="n">40.6%</td>
+          <td>plain chat; FTS <code>prose</code> is a byte-identical copy</td>
+        </tr>
+        <tr>
+          <td class="cm rowh">tool_merge_state</td>
+          <td class="heat" style="--w:.84">1.046 MiB</td>
+          <td class="n">34.0%</td>
+          <td>private evidence stamps per field; 2 fields on success, 4 on failure</td>
+        </tr>
+        <tr>
+          <td class="cm rowh">tool_update_fact.patch</td>
+          <td class="heat" style="--w:.69">0.863 MiB</td>
+          <td class="n">off message table</td>
+          <td>5,132 closed patches: status/timing/failure only in this campaign</td>
+        </tr>
+        <tr>
+          <td class="cm rowh">tool_open</td>
+          <td class="heat" style="--w:.57">0.712 MiB</td>
+          <td class="n">23.1%</td>
+          <td>private opener snapshot, ~291&nbsp;B each, action always <code>{"type":"unknown"}</code></td>
+        </tr>
+        <tr>
+          <td class="cm rowh">identity hashes</td>
+          <td class="heat" style="--w:.80">~1.00 MiB</td>
+          <td class="n">not fat body</td>
+          <td>timeline_id, session_id, uuid, parent, group, response, correlation</td>
+        </tr>
+        <tr>
+          <td class="cm rowh">file_edit.path</td>
+          <td class="heat" style="--w:.05">0.068 MiB</td>
+          <td class="n">—</td>
+          <td>868 Edit/Write rows, 216 distinct paths, no snapshot bodies</td>
+        </tr>
+        <tr>
+          <td class="cm rowh">tool_detail</td>
+          <td class="heat" style="--w:.04">0.044 MiB</td>
+          <td class="n">1.4%</td>
+          <td>2,566 copies of <code>{"type":"unknown"}</code> (18&nbsp;B)</td>
+        </tr>
+        <tr>
+          <td class="cm rowh">tool_diagnostic</td>
+          <td class="heat" style="--w:.02">0.027 MiB</td>
+          <td class="n">0.9%</td>
+          <td>87 failed tools; bounded native error text, no stdout</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Why every tool is unknown</h2>
+  <p class="note">
+    The Claude registry in <code>crates/adapters/claude-code/src/tool.rs</code>
+    maps Read → <code>file_read</code>, Edit/Write → <code>file_change</code>,
+    Bash → <code>shell</code>, and so on — but only for writer version
+    <code>2.1.241</code> exactly, <code>accepts_unversioned: false</code>.
+    Lookup failure becomes a drift fact and <code>unknown_interaction</code>.
+  </p>
+  <div class="card" style="margin-bottom:14px">
+    <pre class="fn" style="white-space:pre-wrap"><span class="c">// crates/adapters/claude-code/src/tool.rs</span>
+PINNED_WRITER_VERSION = <span class="k">"2.1.241"</span>
+writer_versions: VersionRange::exact(PINNED_WRITER_VERSION)
+accepts_unversioned: false
+
+<span class="c">// this campaign's message.agent_version</span>
+2.1.200  2,174 rows
+2.1.197    853
+2.1.198    721
+2.1.199    186
+
+<span class="c">// drift_agg</span>
+projection_unregistered  2,566   <span class="c">// one per tool request</span>
+unknown_fields              16   <span class="c">// native system records</span></pre>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>native name</th><th>rows</th><th>succeeded</th><th>failed</th><th>projected kind</th><th>would have been</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="cm">Bash</td><td class="n">1,014</td><td class="n">973</td><td class="n">41</td><td class="cm">unknown</td><td class="cm">shell</td></tr>
+        <tr><td class="cm">Edit</td><td class="n">666</td><td class="n">632</td><td class="n">34</td><td class="cm">unknown</td><td class="cm">file_change</td></tr>
+        <tr><td class="cm">Read</td><td class="n">306</td><td class="n">297</td><td class="n">9</td><td class="cm">unknown</td><td class="cm">file_read</td></tr>
+        <tr><td class="cm">Write</td><td class="n">202</td><td class="n">201</td><td class="n">1</td><td class="cm">unknown</td><td class="cm">file_change</td></tr>
+        <tr><td class="cm">TaskUpdate</td><td class="n">121</td><td class="n">121</td><td class="n">0</td><td class="cm">unknown</td><td class="cm">task</td></tr>
+        <tr><td class="cm">Agent</td><td class="n">67</td><td class="n">65</td><td class="n">2</td><td class="cm">unknown</td><td class="cm">delegate</td></tr>
+        <tr><td class="cm">TaskCreate</td><td class="n">65</td><td class="n">65</td><td class="n">0</td><td class="cm">unknown</td><td class="cm">task</td></tr>
+        <tr><td class="cm">13 others</td><td class="n">125</td><td class="n">125</td><td class="n">0</td><td class="cm">unknown</td><td class="cm">schedule / workflow / …</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    Status still terminates: 2,479 succeeded and 87 failed on
+    <code>native_terminal_record</code>, plus a paired
+    <code>source_finalization</code> fact of status <code>unknown</code> for every
+    opener (2,566). Live columns show the terminal record. Opener JSON stays
+    <code>pending</code> / <code>request_observed</code> — it is the request
+    snapshot, not the live row.
+  </p>
+
+  <h2>Private lifecycle tax</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h3>tool_open · 0.71 MiB</h3>
+      <p>
+        Serialized <code>ToolInteraction</code> at open. Always
+        <code>action: {type: unknown}</code>,
+        <code>status: pending</code>, timing/failure null.
+        Used to replay a row when a sibling generation is subtracted.
+        Not queried by the protocol. ~291&nbsp;B × 2,566.
+      </p>
+    </div>
+    <div class="card">
+      <h3>tool_merge_state · 1.05 MiB</h3>
+      <p>
+        <code>{fields: [{field, stamp: {rank, order}}]}</code>.
+        Occupied fields: <code>lifecycle_status</code> and
+        <code>completed_at</code> on all 2,566; plus
+        <code>failure_kind</code> and <code>failure_diagnostic</code> on 87.
+        Stamps carry source identity + generation + offset. This is the
+        largest remaining on-row JSON.
+      </p>
+    </div>
+    <div class="card">
+      <h3>tool_update_fact · 0.86 MiB logical</h3>
+      <p>
+        5,132 patches, 2.04&nbsp;MiB pages, 2.11&nbsp;MiB indexes.
+        Observed occupancy: <code>status</code> 5,132,
+        <code>timing</code> 2,566, <code>failure</code> 87.
+        <code>request</code> and <code>outcome</code> are always null here
+        because unknown actions never carry a typed body to patch.
+      </p>
+    </div>
+    <div class="card">
+      <h3>file_edit · 0.50 MiB pages</h3>
+      <p>
+        Still filled from native Edit/Write names at normalize time, not from
+        <code>ToolAction::FileChange</code>. 666 edit + 202 write, 216 distinct
+        paths, no <code>snapshot_ref</code>. Cheap, and the only remaining
+        file-shaped fact in SQLite.
+      </p>
+    </div>
+  </div>
+
+  <h2>Search sidecar</h2>
+  <p class="note">
+    Schema 3, 3,934 documents (one per message). FTS5 content table lanes
+    <code>c0..c4</code> = prose / target / intent / change / tool.
+  </p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>lane</th><th>logical</th><th>this campaign</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="cm">prose</td><td class="n">1.250 MiB</td><td>byte-identical with <code>message.content</code></td></tr>
+        <tr><td class="cm">target</td><td class="n">0</td><td>unknown actions extract no paths</td></tr>
+        <tr><td class="cm">intent</td><td class="n">0</td><td>no queries / commands</td></tr>
+        <tr><td class="cm">change</td><td class="n">0</td><td>no diffs</td></tr>
+        <tr><td class="cm">tool</td><td class="n">0.012 MiB</td><td>native names only (Bash, Edit, …) = <code>tool_name</code> sum</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    Physical: <code>message_fts_content</code> 1.46&nbsp;MiB,
+    <code>search_document</code> 1.19&nbsp;MiB, plus session/runtime/project
+    indexes. A matched 2.1.241 projector would fill target/intent/change from
+    the closed action (paths, commands, queries) — still not file bodies or
+    stdout, which stay out of FTS by contract.
+  </p>
+
+  <h2>What this round did <em>not</em> do</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h3>No image sidecar on C</h3>
+      <p>
+        Campaign B wrote 54 files / 14.77&nbsp;MiB under <code>&lt;db&gt;.images/</code>
+        from Read <code>toolUseResult.file.base64</code>. Unknown tools do not
+        walk that native payload, so C has neither <code>.images/</code> nor
+        <code>.assets/</code>. The pixels still live only in the ledger.
+      </p>
+    </div>
+    <div class="card">
+      <h3>No text members</h3>
+      <p>
+        <code>CanonicalText::externalize</code> spills inline text above 32&nbsp;KiB
+        to <code>/api/assets/&lt;blake3&gt;.txt</code>. Chat max is 23&nbsp;KiB.
+        Unknown actions have no command/diff/file fields to spill. Zero members.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Full-home ingest is a different story</h3>
+      <p>
+        <code>run-ingest-2026-08-30_16-35-02-904-766d35</code> failed after metadata
+        with <code>duplicate cold tool openers</code> on a repeated native tool id
+        (branch replay). It left 318 named files under
+        <code>rosetta.sqlite.assets</code> (178 txt, 85 jpg, 47 png, 8 pdf,
+        31.3&nbsp;MiB) and no published SQLite. Not mixed into C’s totals.
+        Uncommitted opener last-writer-wins is the fix for that failure; it is
+        not in campaign C.
+      </p>
+    </div>
+    <div class="card">
+      <h3>An earlier typed run was slower</h3>
+      <p>
+        <code>09-28-21</code> / <code>09-29-16</code> already had 3,934 rows and
+        14.19&nbsp;MiB SQLite, but stage-7 apply was 4,258&nbsp;ms (cold wall
+        5.2&nbsp;s) before the in-memory private-cold fold. C is the same
+        schema with that fold: 270&nbsp;ms apply, 1.17&nbsp;s wall.
+      </p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>The remaining apply cost is no longer fat TEXT.</b>
+    Stage 7 on C is 270&nbsp;ms for 12,557 ops; FTS sync is 242&nbsp;ms for 1.25&nbsp;MiB
+    of prose. Framing is 62&nbsp;ms of a 755&nbsp;ms stream phase (the rest is
+    ledger append). If the pin is widened to 2.1.197–2.1.200, SQLite will grow
+    by whatever the typed actions keep (paths, commands, diffs as
+    <code>CanonicalText</code>, outcomes) and <code>.assets/</code> will start
+    to appear for oversized members and authored images — still without putting
+    native <code>toolUseResult</code> back into the row.
+  </div>
+
+  <h2>Method</h2>
+  <p class="note">
+    Read-only SQLite + <code>dbstat</code> on campaign C, with A/B
+    <code>cold-stage-report.json</code> for the comparison chain. Nested JSON
+    sizes parse <code>tool_open</code>, <code>tool_merge_state</code>, and
+    <code>tool_update_fact.patch</code>. FTS lane sizes from
+    <code>message_fts_content</code>. No source home directory was read for C.
+    Asset sizes on the failed full ingest used directory metadata only
+    (extension + byte length).
+  </p>
+
+  <footer class="note">
+    Campaign C <code>run-jsonl-audit-2026-08-30_16-33-35-386-88b74d</code>
+    versus B <code>…02-09-45-067-13b7a7</code> and A
+    <code>…20-47-35-752-c17836</code>.
+    Write path: <a href="ingest-pipeline.html">ingest-pipeline.html</a>.
+    Closed types: <a href="canonical-model.html">canonical-model.html</a>.
+    Column schemas: <a href="message-schema-matrix.html">message-schema-matrix.html</a>.
+  </footer>
+
+  <div class="theme-row">
+    <button type="button" data-theme="light">Light</button>
+    <button type="button" data-theme="dark">Dark</button>
+  </div>
+</div>
+<script>
+  const buttons = document.querySelectorAll('.theme-row button');
+  const stored = localStorage.getItem('rosetta-theme');
+  if (stored) document.documentElement.dataset.theme = stored;
+  function sync() {
+    const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur)));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.theme;
+    localStorage.setItem('rosetta-theme', b.dataset.theme);
+    sync();
+  }));
+  sync();
+</script>
+</body>
+</html>

@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rosetta — message schema matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,500;0,600;0,700;1,500&amp;family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+  :root {
+    --bg: #F6F3EC; --card: #FFFCF7; --ink: #1E2320; --muted: #6A7068;
+    --line: #D8D2C4; --chip: #EEE8DC;
+    --copper: #A14E28; --copper-bg: rgba(161,78,40,.12);
+    --teal: #1F6E63; --teal-bg: rgba(31,110,99,.12);
+    --amber: #8A6A12; --amber-bg: rgba(138,106,18,.14);
+    --indigo: #3B4A86; --indigo-bg: rgba(59,74,134,.12);
+    --rose: #8A3A48; --rose-bg: rgba(138,58,72,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141714; --card: #1F231F; --ink: #E8E4DA; --muted: #9AA196;
+      --line: #333830; --chip: #2A2F2A;
+      --copper: #D3805A; --copper-bg: rgba(211,128,90,.16);
+      --teal: #55A99B; --teal-bg: rgba(85,169,155,.16);
+      --amber: #D4B45A; --amber-bg: rgba(212,180,90,.16);
+      --indigo: #8B9AD4; --indigo-bg: rgba(139,154,212,.16);
+      --rose: #D48A96; --rose-bg: rgba(212,138,150,.16);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141714; --card: #1F231F; --ink: #E8E4DA; --muted: #9AA196;
+    --line: #333830; --chip: #2A2F2A;
+    --copper: #D3805A; --copper-bg: rgba(211,128,90,.16);
+    --teal: #55A99B; --teal-bg: rgba(85,169,155,.16);
+    --amber: #D4B45A; --amber-bg: rgba(212,180,90,.16);
+    --indigo: #8B9AD4; --indigo-bg: rgba(139,154,212,.16);
+    --rose: #D48A96; --rose-bg: rgba(212,138,150,.16);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1000px 480px at 0% -10%, var(--copper-bg), transparent 50%), var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', system-ui, sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 40px 24px 80px; }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--copper);
+  }
+  h1 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: clamp(28px, 4vw, 40px); line-height: 1.12; margin: 8px 0 10px; }
+  h2 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 22px; margin: 40px 0 8px; }
+  .lede, .note { color: var(--muted); max-width: 90ch; }
+  a { color: var(--copper); }
+  code { font-family: 'JetBrains Mono', monospace; font-size: .88em; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 16px 0 18px; font-size: 13px; color: var(--muted); }
+  .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .badge {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;
+    letter-spacing: .04em; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  }
+  .b-plain { color: var(--teal); background: var(--teal-bg); }
+  .b-json { color: var(--copper); background: var(--copper-bg); }
+  .b-null { color: var(--muted); background: var(--chip); }
+  .b-priv { color: var(--indigo); background: var(--indigo-bg); }
+  .b-chk { color: var(--amber); background: var(--amber-bg); }
+  .b-obs { color: var(--rose); background: var(--rose-bg); }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 1100px; font-size: 12.8px; }
+  th {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    text-align: left; padding: 12px 12px; border-bottom: 1px solid var(--line);
+    background: var(--card); position: sticky; top: 0;
+  }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.rowh { font-family: 'JetBrains Mono', monospace; font-weight: 600; white-space: nowrap; }
+  td.rowh small { display: block; font-weight: 500; color: var(--muted); }
+  pre.sch {
+    margin: 6px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
+    line-height: 1.45; white-space: pre-wrap; color: var(--ink);
+  }
+  .cell-plain { background: color-mix(in srgb, var(--teal) 7%, var(--card)); }
+  .cell-json { background: color-mix(in srgb, var(--copper) 8%, var(--card)); }
+  .cell-null { background: var(--card); color: var(--muted); }
+  .cell-priv { background: color-mix(in srgb, var(--indigo) 8%, var(--card)); }
+  .cell-chk { background: color-mix(in srgb, var(--amber) 10%, var(--card)); }
+  footer.note { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; }
+  .theme-row { display: flex; gap: 6px; margin-top: 12px; }
+  .theme-row button {
+    font: 10.5px/1 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 4px; padding: 5px 8px; cursor: pointer;
+  }
+  .theme-row button[aria-pressed="true"] { color: var(--ink); background: var(--chip); }
+  .callout {
+    border: 1px solid var(--amber); background: var(--amber-bg);
+    border-radius: 10px; padding: 12px 16px; max-width: 96ch; margin: 12px 0 18px; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">rosetta · closed schema · claude-code campaign C</div>
+  <h1>Message schema matrix</h1>
+  <p class="lede">
+    Projection schema 10. Native <code>tool_input</code> / <code>tool_result</code> /
+    <code>tool_payload</code> are gone. Every JSON column is a closed tagged
+    union with <code>json_valid</code> CHECKs.
+    Observed on <code>run-jsonl-audit-2026-08-30_16-33-35-386-88b74d</code>
+    (3,934 rows, 17 native tool names, all projected as <code>unknown</code>).
+    Size heatmap: <a href="message-payload-weight.html">message-payload-weight.html</a>.
+    Types: <a href="canonical-model.html">canonical-model.html</a>.
+  </p>
+
+  <div class="callout">
+    Contract vs this file: Claude projectors are pinned to writer
+    <code>2.1.241</code>. This JSONL is <code>2.1.197</code>–<code>2.1.200</code>,
+    so <code>tool_detail</code> is uniformly <code>{"type":"unknown"}</code>.
+    The <code>ToolAction</code> families below are what the column is allowed
+    to hold, not what this campaign stored.
+  </div>
+
+  <div class="legend">
+    <span class="lg"><span class="badge b-plain">plain</span> raw string</span>
+    <span class="lg"><span class="badge b-json">json</span> closed tagged JSON</span>
+    <span class="lg"><span class="badge b-chk">enum / check</span> SQLite CHECK</span>
+    <span class="lg"><span class="badge b-priv">private</span> not in protocol / FTS</span>
+    <span class="lg"><span class="badge b-null">null</span> SQL NULL</span>
+    <span class="lg"><span class="badge b-obs">observed</span> this campaign only</span>
+  </div>
+
+  <h2>Column inventory</h2>
+  <p class="note">
+    <code>message</code> is one row per timeline entry. Tool-use rows are forced
+    by CHECK to leave <code>content</code>/<code>detail</code> NULL and to fill
+    the <code>tool_*</code> cluster. Non-tool rows are forced the other way.
+    <code>json_extract(tool_detail, '$.type') = tool_kind</code>.
+  </p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>column</th>
+          <th>SQLite</th>
+          <th>format</th>
+          <th>contract</th>
+          <th>observed on C</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">type</td>
+          <td class="cell-chk"><span class="badge b-chk">enum</span></td>
+          <td>TEXT</td>
+          <td><pre class="sch">user | agent | thinking | tool_use | notice | summary</pre></td>
+          <td class="cell-plain"><span class="badge b-obs">3,934</span>
+            <pre class="sch">tool_use 2566 · agent 980
+user 381 · notice 7
+thinking/summary 0</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">content</td>
+          <td class="cell-plain"><span class="badge b-plain">plain</span></td>
+          <td>TEXT</td>
+          <td><pre class="sch">inline CanonicalText, or
+Member preview (≤2 KiB)
+tool_use: must be NULL</pre></td>
+          <td class="cell-plain"><span class="badge b-obs">1,361 rows</span>
+            <pre class="sch">user 381 + agent 980
+plain UTF-8, max 23,061 B
+never JSON, never Member</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">detail</td>
+          <td class="cell-json"><span class="badge b-json">json</span></td>
+          <td>TEXT json_valid</td>
+          <td><pre class="sch">MessageDetail tagged union
+$.type in prose | thinking
+        | notice | summary
+prose may hold text_member,
+attachments, citations</pre></td>
+          <td class="cell-json"><span class="badge b-obs">7 rows</span>
+            <pre class="sch">only notices; user/agent NULL
+(no attachments, no members)</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_kind</td>
+          <td class="cell-chk"><span class="badge b-chk">enum</span></td>
+          <td>TEXT</td>
+          <td><pre class="sch">ToolActionKind snake_case
+file_read, shell, unknown, …</pre></td>
+          <td class="cell-chk"><span class="badge b-obs">unknown × 2566</span></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_status
+          <small>+ basis</small></td>
+          <td class="cell-chk"><span class="badge b-chk">enum</span></td>
+          <td>TEXT</td>
+          <td><pre class="sch">pending | running | succeeded
+failed | denied | cancelled
+timed_out | interrupted | unknown
+basis: request_observed
+  native_state | native_terminal_record
+  ground_truth_protocol
+  source_finalization
+finalization ⇒ status unknown</pre></td>
+          <td class="cell-chk"><span class="badge b-obs">live columns</span>
+            <pre class="sch">succeeded 2479
+failed 87
+basis = native_terminal_record</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_detail</td>
+          <td class="cell-json"><span class="badge b-json">json</span></td>
+          <td>TEXT json_valid</td>
+          <td><pre class="sch">serialized ToolAction
+$.type = tool_kind
+never a native object</pre></td>
+          <td class="cell-json"><span class="badge b-obs">2566 × 18 B</span>
+            <pre class="sch">{"type":"unknown"}</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_open</td>
+          <td class="cell-priv"><span class="badge b-priv">private json</span></td>
+          <td>TEXT json_valid</td>
+          <td><pre class="sch">ToolInteraction at open
+used to rebuild after a
+sibling generation subtract</pre></td>
+          <td class="cell-priv"><span class="badge b-obs">2566 × ~291 B</span>
+            <pre class="sch">action always unknown
+status always pending</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_merge_state</td>
+          <td class="cell-priv"><span class="badge b-priv">private json</span></td>
+          <td>TEXT json_valid</td>
+          <td><pre class="sch">ToolMergeState
+one evidence stamp per
+canonical field, sorted</pre></td>
+          <td class="cell-priv"><span class="badge b-obs">1.05 MiB</span>
+            <pre class="sch">fields: lifecycle_status,
+completed_at; + failure_* on 87</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_error_*
+          <small>kind / summary / diagnostic</small></td>
+          <td class="cell-plain"><span class="badge b-plain">enum + plain</span></td>
+          <td>TEXT</td>
+          <td><pre class="sch">kind required if summary
+or diagnostic is set
+diagnostic ≤4 KiB / 40 lines</pre></td>
+          <td class="cell-plain"><span class="badge b-obs">87 rows</span>
+            <pre class="sch">kind=unknown, summary NULL
+diagnostic present, max 1,438 B</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_correlation_key
+          <small>+ kind, native_id, name</small></td>
+          <td class="cell-plain"><span class="badge b-plain">ids</span></td>
+          <td>TEXT</td>
+          <td><pre class="sch">kind: native_id | parent_linked
+        | positional | synthetic
+unique (session, key) on tool_use</pre></td>
+          <td class="cell-plain"><span class="badge b-obs">native_id × 2566</span>
+            <pre class="sch">key = native_id = toolu_… (30 B)
+name = Bash, Edit, Read, …</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">group_* / response_*
+          <small>/ block_index</small></td>
+          <td class="cell-chk"><span class="badge b-chk">enum + ids</span></td>
+          <td>TEXT / INT</td>
+          <td><pre class="sch">response_id, derivation, block
+present together or all NULL</pre></td>
+          <td class="cell-chk"><span class="badge b-obs">3,546 responses</span>
+            <pre class="sch">agent_cycle native 3546
+human_turn native 381
+synthetic 7 notices</pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Non-tool rows</h2>
+  <p class="note"><code>tool_*</code> columns are NULL. CHECK: user/agent need content or detail; notice needs detail and no content; thinking/summary need content.</p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>row</th>
+          <th>content</th>
+          <th>detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">user <small>381</small></td>
+          <td class="cell-plain"><span class="badge b-plain">plain</span>
+            <pre class="sch">string  // the prompt
+CanonicalText::Inline
+(max 23,061 B &lt; 32 KiB)</pre></td>
+          <td class="cell-null"><span class="badge b-null">null</span>
+            <pre class="sch">would be MessageDetail::Prose
+if attachments or a text member
+existed</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">agent <small>980</small></td>
+          <td class="cell-plain"><span class="badge b-plain">plain</span>
+            <pre class="sch">string  // assistant text block
+same Inline path</pre></td>
+          <td class="cell-null"><span class="badge b-null">null</span>
+            <pre class="sch">Prose may also carry citations</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">notice <small>7</small></td>
+          <td class="cell-null"><span class="badge b-null">null</span>
+            <pre class="sch">CHECK requires content NULL</pre></td>
+          <td class="cell-json"><span class="badge b-json">json</span>
+            <pre class="sch">{
+  "type": "notice",
+  "notice": {
+    "type": "compaction",
+    "reason": null
+  }
+}
+// 7/7 compact_boundary
+// old system kinds are dropped</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">thinking <small>0</small></td>
+          <td class="cell-null"><span class="badge b-null">absent</span>
+            <pre class="sch">adapter skips empty thinking
+this corpus still redacts it</pre></td>
+          <td class="cell-null"><span class="badge b-null">—</span></td>
+        </tr>
+        <tr>
+          <td class="rowh">summary <small>0</small></td>
+          <td class="cell-null"><span class="badge b-null">absent</span></td>
+          <td class="cell-null"><span class="badge b-null">—</span>
+            <pre class="sch">would be
+{type: summary, purpose, text_member?}</pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>MessageDetail — closed JSON for <code>detail</code></h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>$.type</th><th>fields</th><th>when</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">prose</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "prose",
+  text_member: AssetRef | null,  // oversized CanonicalText
+  attachments: AttachmentRef[],
+  citations: CitationRef[]       // agent only
+}</pre></td>
+          <td>user / agent when anything besides inline content exists. Unused on C.</td>
+        </tr>
+        <tr>
+          <td class="rowh">thinking</td>
+          <td class="cell-json"><pre class="sch">{ type: "thinking", text_member: AssetRef | null }</pre></td>
+          <td>thinking row whose text spilled above 32&nbsp;KiB. Unused on C.</td>
+        </tr>
+        <tr>
+          <td class="rowh">notice</td>
+          <td class="cell-json"><pre class="sch">{ type: "notice", notice: Notice }
+Notice.type =
+  compaction | truncation | model_changed | mode_changed
+  | workspace_changed | permission_requested
+  | permission_decision | handoff | runtime_error</pre></td>
+          <td class="cell-json"><span class="badge b-obs">compaction × 7</span></td>
+        </tr>
+        <tr>
+          <td class="rowh">summary</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "summary",
+  purpose: compaction | branch | handoff | session,
+  text_member: AssetRef | null
+}</pre></td>
+          <td>Unused on C.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>tool_use rows — observed (all unknown)</h2>
+  <p class="note">
+    One schema for every native name in this file. <code>content</code> and
+    <code>detail</code> are NULL. Native request/result JSON is not stored.
+  </p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>column</th>
+          <th>observed value</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">tool_detail</td>
+          <td class="cell-json"><span class="badge b-json">json</span>
+            <pre class="sch">{"type":"unknown"}     // 2,566 / 2,566</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_open</td>
+          <td class="cell-priv"><span class="badge b-priv">private json</span>
+            <pre class="sch">{
+  correlation: { key: string, derivation: "native_id" },
+  native: { id: string, namespace: null, name: string, provider: null },
+  status: { value: "pending", basis: "request_observed" },
+  action: { type: "unknown" },
+  failure: null,
+  timing: null
+}</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_merge_state</td>
+          <td class="cell-priv"><span class="badge b-priv">private json</span>
+            <pre class="sch">{
+  fields: [
+    { field: "lifecycle_status", stamp: { rank, order } },
+    { field: "completed_at",     stamp: { rank, order } },
+    { field: "failure_kind",     stamp }?,          // 87
+    { field: "failure_diagnostic", stamp }?         // 87
+  ]
+}
+order: { source_identity, generation, record_offset, mutation_index }</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_update_fact.patch
+          <small>sibling table, 5,132</small></td>
+          <td class="cell-priv"><span class="badge b-priv">private json</span>
+            <pre class="sch">{
+  native_id: null,
+  request: null,     // 5,132 / 5,132
+  outcome: null,     // 5,132 / 5,132
+  status: { value, basis },          // always
+  failure: { kind, summary, diagnostic }?,  // 87
+  timing: { started_at, completed_at, duration_ms }?  // 2,566
+}
+status values: unknown 2566 (source_finalization),
+               succeeded 2479, failed 87
+               (native_terminal_record)</pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>ToolAction — what <code>tool_detail</code> is allowed to be</h2>
+  <p class="note">
+    Tagged <code>type</code> in snake_case. Long text fields are
+    <code>CanonicalText</code>: <code>{type:"inline", text}</code> (≤32&nbsp;KiB)
+    or <code>{type:"member", asset, preview, byte_len}</code>. This campaign
+    stored none of the non-unknown variants.
+  </p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>kind</th>
+          <th>payload (contract)</th>
+          <th>Claude native names registered at 2.1.241</th>
+          <th>C rows (as unknown)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">file_read</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "file_read",
+  targets: [{ resource, range?, media_kind? }],
+  outcome?: { truncated }
+}</pre></td>
+          <td>Read</td>
+          <td class="n">306</td>
+        </tr>
+        <tr>
+          <td class="rowh">file_search</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "file_search",
+  query, mode, roots, filters,
+  outcome?: { match_count, file_count, paths, total_paths }
+}</pre></td>
+          <td>Glob, Grep</td>
+          <td class="n">0</td>
+        </tr>
+        <tr>
+          <td class="rowh">file_change</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "file_change",
+  changes: [{
+    operation?, path, destination?,
+    diff?: CanonicalText,
+    lines_added?, lines_removed?
+  }]
+}</pre></td>
+          <td>Write, Edit, NotebookEdit</td>
+          <td class="n">868</td>
+        </tr>
+        <tr>
+          <td class="rowh">shell</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "shell",
+  command: CanonicalText,
+  cwd?, timeout_ms?, background,
+  outcome?: { exit_code, signal, process_id }
+}</pre></td>
+          <td>Bash, bash, PowerShell, Monitor</td>
+          <td class="n">1,014</td>
+        </tr>
+        <tr>
+          <td class="rowh">process</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "process",
+  operation, process_id, input?: CanonicalText,
+  outcome?: { state }
+}</pre></td>
+          <td>KillShell</td>
+          <td class="n">0</td>
+        </tr>
+        <tr>
+          <td class="rowh">delegate</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "delegate",
+  agent_kind?, name?, model?, mode?,
+  objective: CanonicalText,
+  child_session_id?, resume_id?, background,
+  orphan_result_summary?: CanonicalText
+}</pre></td>
+          <td>Task, Agent</td>
+          <td class="n">67</td>
+        </tr>
+        <tr>
+          <td class="rowh">task</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "task",
+  operation, task_id?, subject?,
+  description?: CanonicalText,
+  status?, owner?, blocker_ids
+}</pre></td>
+          <td>TodoWrite, TaskCreate, TaskUpdate, TaskList, TaskOutput, TaskStop, TaskGet</td>
+          <td class="n">190</td>
+        </tr>
+        <tr>
+          <td class="rowh">web_search / web_fetch</td>
+          <td class="cell-json"><pre class="sch">WebSearch { query?, domains, outcome? }
+WebFetch { url, purpose?, outcome? }</pre></td>
+          <td>WebSearch, WebFetch</td>
+          <td class="n">2</td>
+        </tr>
+        <tr>
+          <td class="rowh">question / skill / workflow</td>
+          <td class="cell-json"><pre class="sch">Question { questions, answers }
+Skill { name, arguments?: CanonicalText }
+Workflow { name?, path?, arguments?, objective?, resume_id?, background }</pre></td>
+          <td>AskUserQuestion, Skill, Workflow</td>
+          <td class="n">35</td>
+        </tr>
+        <tr>
+          <td class="rowh">schedule / artifact / tool_discovery</td>
+          <td class="cell-json"><pre class="sch">Schedule { operation, schedule_id?, due_at?, delay_ms?, reason?, objective? }
+Artifact { operation, artifact_kind, name?, description?, resources, media? }
+ToolDiscovery { query, matches, total_count }</pre></td>
+          <td>Cron*, ScheduleWakeup, Artifact, SendUserFile, ToolSearch</td>
+          <td class="n">70</td>
+        </tr>
+        <tr>
+          <td class="rowh">mode / collaborate / finding / notification</td>
+          <td class="cell-json"><pre class="sch">Mode { operation, mode, workspace? }
+Collaborate { operation, recipient?, team?, summary?, body?, … }
+Finding { findings, total_count }
+Notification { channel?, destination?, summary, delivery_id? }</pre></td>
+          <td>Enter/Exit PlanMode &amp; Worktree, SendMessage, ListAgents, Team*, ReportFindings, PushNotification, SendFeedback</td>
+          <td class="n">14</td>
+        </tr>
+        <tr>
+          <td class="rowh">code_lookup</td>
+          <td class="cell-json"><pre class="sch">{ type: "code_lookup", operation, query, path?, outcome? }</pre></td>
+          <td>LSP</td>
+          <td class="n">0</td>
+        </tr>
+        <tr>
+          <td class="rowh">unknown</td>
+          <td class="cell-json"><pre class="sch">{ "type": "unknown" }</pre></td>
+          <td>fallback when lookup fails</td>
+          <td class="n">2,566 / 2,566</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    Also in the closed union, unused by the Claude registry: <code>file_list</code>,
+    <code>code_execute</code>, <code>orchestration</code>, <code>web_navigate</code>,
+    <code>plan</code>, <code>structured_output</code>, <code>external</code>.
+    <code>ResourceRef</code> is itself tagged: file / directory / url / session /
+    task / process / asset.
+  </p>
+
+  <h2>CanonicalText and assets</h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>form</th><th>JSON</th><th>this campaign</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">inline</td>
+          <td class="cell-json"><pre class="sch">{ "type": "inline", "text": string }  // ≤ 32 KiB</pre></td>
+          <td>Chat is stored as the bare <code>content</code> string, not wrapped. Typed tool text would wrap.</td>
+        </tr>
+        <tr>
+          <td class="rowh">member</td>
+          <td class="cell-json"><pre class="sch">{
+  type: "member",
+  asset: { url, digest, media_type, byte_len },
+  preview: string,   // ≤ 2 KiB
+  byte_len: number
+}
+url = /api/assets/&lt;blake3&gt;.txt|png|jpg|pdf|json</pre></td>
+          <td class="cell-null"><span class="badge b-null">none</span>
+            <pre class="sch">no .assets/ on C
+authored Image/Document blocks
+would still emit ProjectionAsset
+even for unknown tools</pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>FTS lanes and <code>file_edit</code></h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>surface</th><th>schema</th><th>observed on C</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">message_fts</td>
+          <td class="cell-plain"><span class="badge b-plain">FTS5</span>
+            <pre class="sch">prose, target, intent, change, tool
+tokenize=unicode61 remove_diacritics 2
+one document per message row</pre></td>
+          <td><pre class="sch">prose  = content            1.250 MiB
+target = (empty)            0
+intent = (empty)            0
+change = (empty)            0
+tool   = native names       0.012 MiB
+unknown ⇒ NativeNameOnly</pre></td>
+        </tr>
+        <tr>
+          <td class="rowh">file_edit</td>
+          <td class="cell-plain"><span class="badge b-plain">table</span>
+            <pre class="sch">session_id, message_id, path, kind,
+snapshot_ref, lines_added, lines_removed,
+at, src_cursor
+kind is native "edit" | "write"</pre></td>
+          <td><pre class="sch">868 rows (666 edit, 202 write)
+216 distinct paths
+snapshot_ref always NULL
+still emitted from Edit/Write names
+at normalize, not from ToolAction</pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Removed relative to campaigns A/B</h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>old column</th><th>was</th><th>now</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rowh">tool_input</td>
+          <td>native request JSON as TEXT (Edit hunk, Write body, Bash command)</td>
+          <td class="cell-null">dropped. Typed request lives in <code>tool_detail</code> / opener action when the projector matches.</td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_result</td>
+          <td>plain stdout / file text / ack</td>
+          <td class="cell-null">dropped. Outcomes are closed fields on <code>ToolAction</code> (exit_code, truncated, …), not bodies.</td>
+        </tr>
+        <tr>
+          <td class="rowh">tool_payload</td>
+          <td>opaque native <code>toolUseResult</code>, including Base64</td>
+          <td class="cell-null">dropped. Images/documents become <code>ProjectionAsset</code> members, not JSON TEXT.</td>
+        </tr>
+        <tr>
+          <td class="rowh">type=system</td>
+          <td>368 mixed subtype strings</td>
+          <td>7 <code>notice</code> compaction rows; other system kinds are not timeline entries.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer class="note">
+    Observed on C <code>run-jsonl-audit-2026-08-30_16-33-35-386-88b74d</code>.
+    Contract from <code>crates/store/src/schema.rs</code> and
+    <code>crates/core/src/timeline.rs</code>. Codec:
+    <code>crates/store/src/tool_codec.rs</code> (<code>tool_detail</code> is a
+    serialized <code>ToolAction</code>, never a native request/result).
+    Sizes: <a href="message-payload-weight.html">message-payload-weight.html</a>.
+  </footer>
+
+  <div class="theme-row">
+    <button type="button" data-theme="light">Light</button>
+    <button type="button" data-theme="dark">Dark</button>
+  </div>
+</div>
+<script>
+  const buttons = document.querySelectorAll('.theme-row button');
+  const stored = localStorage.getItem('rosetta-theme');
+  if (stored) document.documentElement.dataset.theme = stored;
+  function sync() {
+    const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur)));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.theme;
+    localStorage.setItem('rosetta-theme', b.dataset.theme);
+    sync();
+  }));
+  sync();
+</script>
+</body>
+</html>

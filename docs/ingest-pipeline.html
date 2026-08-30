@@ -1,0 +1,1476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rosetta Ingest Pipeline — system map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,500;0,600;0,700;1,500&amp;family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+  :root {
+    --bg: #F6F3EC;
+    --paper: #FBF9F4;
+    --card: #FFFCF7;
+    --ink: #1E2320;
+    --muted: #6A7068;
+    --line: #D8D2C4;
+    --chip: #EEE8DC;
+    --copper: #A14E28;
+    --copper-bg: rgba(161, 78, 40, .10);
+    --teal: #1F6E63;
+    --teal-bg: rgba(31, 110, 99, .10);
+    --indigo: #3B4A86;
+    --indigo-bg: rgba(59, 74, 134, .10);
+    --amber: #8A6A12;
+    --amber-bg: rgba(138, 106, 18, .12);
+    --forest: #2C5B38;
+    --forest-bg: rgba(44, 91, 56, .10);
+    --violet: #6A3C78;
+    --violet-bg: rgba(106, 60, 120, .10);
+    --rose: #8A3A48;
+    --rose-bg: rgba(138, 58, 72, .10);
+    --rail: 272px;
+    --shadow: 0 1px 0 rgba(30,35,32,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141714;
+      --paper: #191C19;
+      --card: #1F231F;
+      --ink: #E8E4DA;
+      --muted: #9AA196;
+      --line: #333830;
+      --chip: #2A2F2A;
+      --copper: #D3805A;
+      --copper-bg: rgba(211, 128, 90, .14);
+      --teal: #55A99B;
+      --teal-bg: rgba(85, 169, 155, .14);
+      --indigo: #8B9AD4;
+      --indigo-bg: rgba(139, 154, 212, .14);
+      --amber: #D4B45A;
+      --amber-bg: rgba(212, 180, 90, .14);
+      --forest: #7BB088;
+      --forest-bg: rgba(123, 176, 136, .14);
+      --violet: #C08BD0;
+      --violet-bg: rgba(192, 139, 208, .14);
+      --rose: #D48A96;
+      --rose-bg: rgba(212, 138, 150, .14);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141714;
+    --paper: #191C19;
+    --card: #1F231F;
+    --ink: #E8E4DA;
+    --muted: #9AA196;
+    --line: #333830;
+    --chip: #2A2F2A;
+    --copper: #D3805A;
+    --copper-bg: rgba(211, 128, 90, .14);
+    --teal: #55A99B;
+    --teal-bg: rgba(85, 169, 155, .14);
+    --indigo: #8B9AD4;
+    --indigo-bg: rgba(139, 154, 212, .14);
+    --amber: #D4B45A;
+    --amber-bg: rgba(212, 180, 90, .14);
+    --forest: #7BB088;
+    --forest-bg: rgba(123, 176, 136, .14);
+    --violet: #C08BD0;
+    --violet-bg: rgba(192, 139, 208, .14);
+    --rose: #D48A96;
+    --rose-bg: rgba(212, 138, 150, .14);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 0% -10%, var(--copper-bg), transparent 55%),
+      var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.55;
+  }
+  code, .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  .shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); min-height: 100vh; }
+  nav.rail {
+    position: sticky; top: 0; height: 100vh; overflow: auto;
+    padding: 22px 16px 40px 20px;
+    border-right: 1px solid var(--line);
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: blur(10px);
+  }
+  nav.rail .brand {
+    font-family: Spectral, Georgia, serif;
+    font-size: 18px; font-weight: 600; line-height: 1.2; margin: 0 0 4px;
+  }
+  nav.rail .brand-sub {
+    font-size: 11.5px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase;
+    font-family: 'JetBrains Mono', monospace; margin-bottom: 16px;
+  }
+  #fn-search {
+    width: 100%; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    font: 12.5px/1.3 'JetBrains Mono', monospace; margin: 0 0 14px;
+  }
+  nav.rail a {
+    display: block; color: var(--muted); text-decoration: none;
+    font-size: 13px; padding: 3px 8px; border-radius: 5px; margin: 1px 0;
+  }
+  nav.rail a:hover, nav.rail a.active { color: var(--ink); background: var(--chip); }
+  nav.rail .g {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--copper);
+    margin: 14px 0 4px; padding: 0 8px;
+  }
+  .theme-row { display: flex; gap: 6px; margin-top: 16px; padding: 0 8px; }
+  .theme-row button {
+    font: 10.5px/1 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 4px; padding: 5px 8px; cursor: pointer;
+  }
+  .theme-row button[aria-pressed="true"] { color: var(--ink); background: var(--chip); }
+
+  main { padding: 36px 36px 96px; max-width: 1280px; }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--copper);
+  }
+  h1 {
+    font-family: Spectral, Georgia, serif; font-weight: 600;
+    font-size: clamp(32px, 4vw, 44px); line-height: 1.12;
+    margin: 8px 0 10px; text-wrap: balance;
+  }
+  h2 {
+    font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 26px;
+    margin: 64px 0 8px; scroll-margin-top: 18px;
+  }
+  h3 {
+    font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 18px;
+    margin: 28px 0 8px; scroll-margin-top: 18px;
+  }
+  .lede { color: var(--muted); max-width: 78ch; margin: 0 0 22px; }
+  .note { color: var(--muted); font-size: 14px; max-width: 86ch; margin: 0 0 18px; }
+  a { color: var(--copper); }
+  p code, li code, td code, figcaption code {
+    font-family: 'JetBrains Mono', monospace; font-size: .88em;
+  }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+    margin: 18px 0 8px; font-size: 12.5px; color: var(--muted);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500;
+    padding: 2px 8px; border-radius: 999px; background: var(--chip);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .c-rosettad { background: var(--copper); }
+  .c-pipeline { background: var(--teal); }
+  .c-capture { background: var(--indigo); }
+  .c-adapter { background: var(--amber); }
+  .c-core { background: var(--ink); }
+  .c-store { background: var(--forest); }
+  .c-search { background: var(--violet); }
+  .c-server { background: var(--rose); }
+
+  .callout {
+    border: 1px solid var(--copper); background: var(--copper-bg);
+    border-radius: 10px; padding: 14px 18px; max-width: 92ch; margin: 16px 0 22px; font-size: 14px;
+  }
+  .callout.teal { border-color: var(--teal); background: var(--teal-bg); }
+  .callout b { color: var(--copper); }
+  .callout.teal b { color: var(--teal); }
+
+  figure.dia { margin: 12px 0 8px; }
+  .scroll {
+    overflow-x: auto; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--card); box-shadow: var(--shadow);
+  }
+  figure.dia svg { display: block; min-width: 980px; width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 13px; color: var(--muted); margin: 8px 0 0; max-width: 96ch; }
+
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px 12px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .kicker {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px;
+  }
+
+  details.tree {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 0; margin: 10px 0;
+  }
+  details.tree > summary {
+    cursor: pointer; list-style: none; padding: 12px 16px;
+    font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600;
+  }
+  details.tree > summary::-webkit-details-marker { display: none; }
+  details.tree > summary::before {
+    content: "▸"; display: inline-block; width: 1.1em; color: var(--muted); font-weight: 400;
+  }
+  details.tree[open] > summary::before { content: "▾"; }
+  .fn {
+    font-family: 'JetBrains Mono', monospace; font-size: 12.4px; line-height: 1.55;
+    margin: 0; padding: 4px 16px 14px 22px; overflow-x: auto;
+  }
+  .fn .c { color: var(--muted); }
+  .fn .k { color: var(--copper); }
+  .fn .p { color: var(--teal); }
+  .fn .a { color: var(--amber); }
+  .fn .s { color: var(--forest); }
+  .fn .q { color: var(--indigo); }
+  .fn .v { color: var(--violet); }
+  .fn .r { color: var(--rose); }
+  .fn .indent { padding-left: 1.35em; }
+  .fn .i2 { padding-left: 2.7em; }
+  .fn .i3 { padding-left: 4.05em; }
+  .fn .i4 { padding-left: 5.4em; }
+  .fn .i5 { padding-left: 6.75em; }
+
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13.5px; }
+  th {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em; color: var(--muted);
+    text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.cm { font-family: 'JetBrains Mono', monospace; font-size: 12.2px; font-weight: 600; white-space: nowrap; }
+  .crate { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600;
+    padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .b-rosettad { color: var(--copper); background: var(--copper-bg); }
+  .b-pipeline { color: var(--teal); background: var(--teal-bg); }
+  .b-capture { color: var(--indigo); background: var(--indigo-bg); }
+  .b-adapter { color: var(--amber); background: var(--amber-bg); }
+  .b-core { color: var(--ink); background: var(--chip); }
+  .b-store { color: var(--forest); background: var(--forest-bg); }
+  .b-search { color: var(--violet); background: var(--violet-bg); }
+  .b-server { color: var(--rose); background: var(--rose-bg); }
+
+  .flow {
+    display: grid; gap: 8px; margin: 12px 0 8px;
+  }
+  .lane {
+    display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: stretch;
+  }
+  .lane .who {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+    display: flex; align-items: center;
+  }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .step {
+    font-family: 'JetBrains Mono', monospace; font-size: 11.5px; font-weight: 500;
+    border: 1px solid var(--line); background: var(--card); border-radius: 7px;
+    padding: 7px 9px; max-width: 100%;
+  }
+  .step small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; margin-top: 2px; }
+  .arrow { color: var(--muted); font-size: 13px; }
+
+  #fn-hits { display: none; margin: 10px 0 0; }
+  #fn-hits.open { display: block; }
+  #fn-hits a {
+    display: block; font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+    padding: 4px 8px; color: var(--ink);
+  }
+
+  footer.note {
+    margin-top: 64px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-size: 13px; color: var(--muted); max-width: 90ch;
+  }
+  @media (max-width: 980px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.rail { position: relative; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding: 24px 18px 72px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+<nav class="rail" aria-label="Sections">
+  <div class="brand">Ingest pipeline</div>
+  <div class="brand-sub">rosetta · rust runtime</div>
+  <input id="fn-search" type="search" placeholder="find a function…" autocomplete="off">
+  <div id="fn-hits"></div>
+  <div class="g">Map</div>
+  <a href="#overview">System overview</a>
+  <a href="#commands">Command paths</a>
+  <a href="#spine">The ingest spine</a>
+  <div class="g">Stages</div>
+  <a href="#discover">1 · Discover</a>
+  <a href="#meta">2 · Meta</a>
+  <a href="#stream">3 · Stream</a>
+  <a href="#jsonl">JSONL tailer</a>
+  <a href="#snapshots">Document / SQLite</a>
+  <a href="#ops">Canonical ops</a>
+  <a href="#apply">4 · Apply</a>
+  <a href="#ledger">Ledger protocol</a>
+  <a href="#live">5 · Live</a>
+  <a href="#serve">Progressive serve</a>
+  <a href="#rebuild">Rebuild</a>
+  <a href="#search">Search sidecar</a>
+  <div class="g">Roster</div>
+  <a href="#adapters">Adapter trait</a>
+  <a href="#catalog">Function catalog</a>
+  <div class="theme-row">
+    <button type="button" data-theme="light">Light</button>
+    <button type="button" data-theme="dark">Dark</button>
+  </div>
+</nav>
+
+<main>
+  <div class="eyebrow">rosetta · layer 2 · function-level system map</div>
+  <h1>The entire ingest pipeline, drawn from the Rust.</h1>
+  <p class="lede">
+    Every production ingest path — <code>ingest</code>, <code>watch</code>, <code>serve</code>,
+    <code>rebuild</code> — is the same three phases plus a live loop that re-enters them.
+    This page is a map of those stages down to the functions that implement them,
+    read from the crates as of 2026-08-29. Companion to
+    <a href="ingest-engine.html">ingest-engine.html</a> (design) and
+    <a href="canonical-model.html">canonical-model.html</a> (what gets stored).
+  </p>
+
+  <div class="legend">
+    <span class="chip"><span class="dot c-rosettad"></span>rosettad</span>
+    <span class="chip"><span class="dot c-pipeline"></span>pipeline</span>
+    <span class="chip"><span class="dot c-capture"></span>capture</span>
+    <span class="chip"><span class="dot c-adapter"></span>adapters</span>
+    <span class="chip"><span class="dot c-core"></span>core</span>
+    <span class="chip"><span class="dot c-store"></span>store</span>
+    <span class="chip"><span class="dot c-search"></span>search</span>
+    <span class="chip"><span class="dot c-server"></span>server</span>
+  </div>
+
+  <div class="callout">
+    <b>Iron rule, as topology.</b> Agent knowledge stops at
+    <code>dyn AgentAdapter</code>. Adapters receive already-bounded bytes or
+    already-serialized JSON rows — never a file handle, DB connection, or watcher.
+    Capture never sees a session. Store never sees a JSONL line. Search never
+    writes canonical rows. Two durable representations only: the checksummed
+    raw ledger, and one canonical SQLite projection. <code>source_op</code> is
+    temporary replacement staging, empty in steady state, not a third store.
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="overview">System overview</h2>
+  <p class="note">Data flows up only. L1 is evidence, not runtime. Consumers never reach past L3 into the store.</p>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 620" role="img" aria-label="Rosetta layers: agent homes into capture, adapters, pipeline, store, search, then L3 HTTP/WS.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+        </marker>
+        <filter id="soft"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-opacity=".08"/></filter>
+      </defs>
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: Spectral, Georgia, serif; font-size: 15px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .lab { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; fill: var(--muted); }
+        .edge { stroke: currentColor; stroke-width: 1.15; fill: none; marker-end: url(#arr); opacity: .55; }
+      </style>
+
+      <text class="lab" x="24" y="22">agent homes — never committed</text>
+      <rect class="box" x="24" y="32" width="170" height="52" rx="8"/>
+      <text class="t" x="38" y="54">~/.claude</text>
+      <text class="s" x="38" y="70">claude-code jsonl</text>
+      <rect class="box" x="206" y="32" width="170" height="52" rx="8"/>
+      <text class="t" x="220" y="54">~/.codex</text>
+      <text class="s" x="220" y="70">rollout + state.db</text>
+      <rect class="box" x="388" y="32" width="170" height="52" rx="8"/>
+      <text class="t" x="402" y="54">~/.grok …</text>
+      <text class="s" x="402" y="70">9 captured agents</text>
+      <rect class="box" x="570" y="32" width="170" height="52" rx="8"/>
+      <text class="t" x="584" y="54">layout.toml</text>
+      <text class="s" x="584" y="70">folded into groundtruth.json</text>
+      <rect class="box" x="752" y="32" width="404" height="52" rx="8"/>
+      <text class="t" x="766" y="54">L1 groundtruth/ · tools/groundtruth/</text>
+      <text class="s" x="766" y="70">dev-time only · one canonical JSON+HTML per agent</text>
+
+      <path class="edge" d="M109,84 L109,118"/>
+      <path class="edge" d="M291,84 L291,118"/>
+      <path class="edge" d="M473,84 L473,118"/>
+
+      <text class="lab" x="24" y="132" fill="var(--indigo)">L2 capture · crates/capture</text>
+      <rect class="box" x="24" y="142" width="1132" height="78" rx="10" style="stroke: var(--indigo)"/>
+      <rect class="box" x="40" y="158" width="200" height="48" rx="7"/>
+      <text class="t" x="52" y="178" style="font-size:13px">walk / walk_filtered</text>
+      <text class="s" x="52" y="194">discovery.rs</text>
+      <rect class="box" x="252" y="158" width="200" height="48" rx="7"/>
+      <text class="t" x="264" y="178" style="font-size:13px">head_tail · Tailer</text>
+      <text class="s" x="264" y="194">discovery.rs · tailer.rs</text>
+      <rect class="box" x="464" y="158" width="220" height="48" rx="7"/>
+      <text class="t" x="476" y="178" style="font-size:13px">snapshot_document / db</text>
+      <text class="s" x="476" y="194">document.rs · sqlite.rs</text>
+      <rect class="box" x="696" y="158" width="200" height="48" rx="7"/>
+      <text class="t" x="708" y="178" style="font-size:13px">NotifyEvents</text>
+      <text class="s" x="708" y="194">watch.rs · hints only</text>
+      <rect class="box" x="908" y="158" width="228" height="48" rx="7"/>
+      <text class="t" x="920" y="178" style="font-size:13px">Ledger::append_raw</text>
+      <text class="s" x="920" y="194">ledger.rs · blake3 frames</text>
+
+      <path class="edge" d="M590,220 L590,254"/>
+
+      <text class="lab" x="24" y="268" fill="var(--amber)">L2 adapters · crates/adapters/&lt;agent&gt;</text>
+      <rect class="box" x="24" y="278" width="1132" height="78" rx="10" style="stroke: var(--amber)"/>
+      <rect class="box" x="40" y="294" width="250" height="48" rx="7"/>
+      <text class="t" x="52" y="314" style="font-size:13px">AgentAdapter::skim</text>
+      <text class="s" x="52" y="330">bounded bytes → native facts</text>
+      <rect class="box" x="302" y="294" width="280" height="48" rx="7"/>
+      <text class="t" x="314" y="314" style="font-size:13px">AgentAdapter::ingest_line</text>
+      <text class="s" x="314" y="330">one record → Vec&lt;IngestOp&gt;</text>
+      <rect class="box" x="594" y="294" width="250" height="48" rx="7"/>
+      <text class="t" x="606" y="314" style="font-size:13px">checkpoint_state</text>
+      <text class="s" x="606" y="330">opaque resume blob</text>
+      <rect class="box" x="856" y="294" width="280" height="48" rx="7"/>
+      <text class="t" x="868" y="314" style="font-size:13px">core::ids  blake3</text>
+      <text class="s" x="868" y="330">minted by pipeline, not adapters</text>
+
+      <path class="edge" d="M590,356 L590,390"/>
+
+      <text class="lab" x="24" y="404" fill="var(--teal)">L2 pipeline · crates/pipeline</text>
+      <rect class="box" x="24" y="414" width="560" height="70" rx="10" style="stroke: var(--teal)"/>
+      <text class="t" x="40" y="440">discover → meta_ingest_into → stream_backfill_into</text>
+      <text class="s" x="40" y="458">LiveRunner::tick re-enters meta + stream · rebuild_runtime replays the ledger</text>
+      <rect class="box" x="600" y="414" width="270" height="70" rx="10" style="stroke: var(--forest)"/>
+      <text class="lab" x="616" y="434" fill="var(--forest)">store</text>
+      <text class="t" x="616" y="454" style="font-size:14px">Store::apply</text>
+      <text class="s" x="616" y="470">one tx · CAS · search_dirty</text>
+      <rect class="box" x="886" y="414" width="270" height="70" rx="10" style="stroke: var(--violet)"/>
+      <text class="lab" x="902" y="434" fill="var(--violet)">search</text>
+      <text class="t" x="902" y="454" style="font-size:14px">Fts5SearchWorker</text>
+      <text class="s" x="902" y="470">detached generation · CURRENT</text>
+
+      <path class="edge" d="M590,484 L590,518"/>
+      <path class="edge" d="M735,484 L735,518"/>
+      <path class="edge" d="M1021,484 L1021,518"/>
+
+      <text class="lab" x="24" y="532" fill="var(--rose)">L3 service · crates/server + protocol</text>
+      <rect class="box" x="24" y="542" width="1132" height="58" rx="10" style="stroke: var(--rose)"/>
+      <text class="t" x="40" y="566">rosettad serve · Hub::absorb · REST /api/* · WS /ws/sessions/{id} · WS /ws/meta</text>
+      <text class="s" x="40" y="582">consent precedes reads · canonical lists available while search is still building</text>
+    </svg>
+    </div>
+    <figcaption>Nine adapters register in <code>rosettad::registry</code>. The pipeline holds <code>&amp;'static dyn AgentAdapter</code>; agent paths and formats never leak into store or server.</figcaption>
+  </figure>
+
+  <div class="grid-3" style="margin-top:18px">
+    <div class="card">
+      <div class="kicker">representation 1</div>
+      <h3>Raw ledger</h3>
+      <p><code>&lt;db&gt;.ledger/&lt;agent&gt;/</code> size-rotated blake3 frames. Precious. Agents GC their own files; this is the replay substrate. Cold first ingest stages it privately, then atomically promotes.</p>
+    </div>
+    <div class="card">
+      <div class="kicker">representation 2</div>
+      <h3>Canonical projection</h3>
+      <p>SQLite schema 7. Disposable. <code>Store::apply</code> is the only writer. On schema/normalizer bump, rebuild from the ledger — never migrate.</p>
+    </div>
+    <div class="card">
+      <div class="kicker">not a representation</div>
+      <h3>FTS5 sidecar</h3>
+      <p><code>&lt;db&gt;.search/</code> is independently disposable. Canonical lists stay up while it builds. Loss never blocks canonical reads.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="commands">Command paths</h2>
+  <p class="note"><code>rosettad::main</code> dispatches eight verbs. All ingest verbs take the same <code>projection_lock</code> (SQLite exclusive on <code>&lt;db&gt;.lock</code>) so two writers cannot share a projection.</p>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 430" role="img" aria-label="CLI verbs and the pipeline functions they call.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10px; fill: var(--muted); }
+        .lab { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; fill: var(--copper); }
+        .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <text class="lab" x="24" y="22">rosettad::main</text>
+      <rect class="box" x="24" y="32" width="1132" height="44" rx="8" style="stroke: var(--copper)"/>
+      <text class="t" x="40" y="58">registry() → 9 adapters · parse_flags · selected(flags)</text>
+
+      <rect class="box" x="24" y="100" width="130" height="54" rx="8"/>
+      <text class="t" x="36" y="122">discover</text>
+      <text class="s" x="36" y="138">cmd_discover</text>
+      <rect class="box" x="166" y="100" width="130" height="54" rx="8"/>
+      <text class="t" x="178" y="122">sources</text>
+      <text class="s" x="178" y="138">cmd_sources</text>
+      <rect class="box" x="308" y="100" width="130" height="54" rx="8"/>
+      <text class="t" x="320" y="122">streams</text>
+      <text class="s" x="320" y="138">cmd_streams</text>
+      <rect class="box" x="450" y="100" width="130" height="54" rx="8"/>
+      <text class="t" x="462" y="122">meta</text>
+      <text class="s" x="462" y="138">cmd_meta</text>
+      <rect class="box" x="592" y="100" width="130" height="54" rx="8" style="stroke: var(--copper)"/>
+      <text class="t" x="604" y="122">ingest</text>
+      <text class="s" x="604" y="138">cmd_ingest</text>
+      <rect class="box" x="734" y="100" width="130" height="54" rx="8" style="stroke: var(--copper)"/>
+      <text class="t" x="746" y="122">watch</text>
+      <text class="s" x="746" y="138">cmd_watch</text>
+      <rect class="box" x="876" y="100" width="130" height="54" rx="8" style="stroke: var(--copper)"/>
+      <text class="t" x="888" y="122">serve</text>
+      <text class="s" x="888" y="138">cmd_serve</text>
+      <rect class="box" x="1018" y="100" width="138" height="54" rx="8" style="stroke: var(--copper)"/>
+      <text class="t" x="1030" y="122">rebuild</text>
+      <text class="s" x="1030" y="138">cmd_rebuild</text>
+
+      <path class="edge" d="M657,154 L657,188"/>
+      <path class="edge" d="M799,154 L799,188"/>
+      <path class="edge" d="M941,154 L941,188"/>
+      <path class="edge" d="M1087,154 L1087,188"/>
+
+      <rect class="box" x="24" y="196" width="1132" height="210" rx="10"/>
+      <text class="lab" x="40" y="218">shared spine those four verbs share</text>
+      <text class="t" x="40" y="246" style="font-size:12.5px">projection_lock → open_* store → discover → per runtime: NotifyEvents::watch? → meta_ingest_into → stream_backfill_into</text>
+      <text class="s" x="40" y="268">ingest: private atomic publication if the projection is new (ColdLedgerStage + finish_bulk_load)</text>
+      <text class="s" x="40" y="286">watch: watch-before-scan, then LiveRunner::start_with_ledger (re-skims meta). No Hub — Effects stay off.</text>
+      <text class="s" x="40" y="304">serve: listener first, consent, skim every runtime, round-robin first files, audit, finish_progressive_load, LiveRunner::resume_from_roster</text>
+      <text class="s" x="40" y="322">rebuild: open_for_rebuild empty file → rebuild_runtime (two ledger passes) → finish_bulk_load → install_rebuilt_projection</text>
+      <text class="s" x="40" y="348">then: ledger.flush · synchronize_fts5_once / Fts5SearchWorker · Store::acknowledge_search</text>
+      <text class="s" x="40" y="380">CLI ingest/watch imply consent (enabled=true). apply_runtime never overwrites enabled on rediscovery. Serve waits on ConsentGate unless --all-agents or persisted enrollment.</text>
+    </svg>
+    </div>
+    <figcaption>Finite <code>ingest</code> and <code>rebuild</code> stay private until validated. Fresh <code>serve</code> is public from the first committed skim.</figcaption>
+  </figure>
+
+  <!-- ============================================================ -->
+  <h2 id="spine">The ingest spine</h2>
+  <p class="note">James’s three phases, plus the live loop that is those phases. Bounds live on <code>IngestOptions</code> so a profile always names a knob.</p>
+
+  <div class="flow">
+    <div class="lane">
+      <div class="who">defaults</div>
+      <div class="steps">
+        <div class="step">skim head 64 KiB<small>skim_head_bytes</small></div>
+        <div class="arrow">→</div>
+        <div class="step">skim tail 16 KiB<small>skim_tail_bytes</small></div>
+        <div class="arrow">→</div>
+        <div class="step">fallback 128 KiB / 256 recs<small>opt-in only</small></div>
+        <div class="arrow">→</div>
+        <div class="step">JSONL 32 MiB rec / 1024 batch<small>TailConfig::json_lines</small></div>
+        <div class="arrow">→</div>
+        <div class="step">audit 1 file / run<small>rotating</small></div>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="who">scheduler</div>
+      <div class="steps">
+        <div class="step">Lane::Live<small>highest</small></div>
+        <div class="arrow">▸</div>
+        <div class="step">Lane::OnOpen<small>app boost</small></div>
+        <div class="arrow">▸</div>
+        <div class="step">Lane::Backfill<small>newest mtime first, FIFO tie</small></div>
+      </div>
+    </div>
+  </div>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 340" role="img" aria-label="Discover, meta, stream, apply, search, live.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.15; }
+        .t { font-family: Spectral, Georgia, serif; font-size: 16px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .n { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; fill: var(--copper); }
+        .edge { stroke: currentColor; stroke-width: 1.2; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <rect class="box" x="20" y="40" width="180" height="110" rx="10"/>
+      <text class="n" x="36" y="64">01</text>
+      <text class="t" x="36" y="88">Discover</text>
+      <text class="s" x="36" y="108">discover()</text>
+      <text class="s" x="36" y="124">no writes</text>
+
+      <rect class="box" x="230" y="40" width="180" height="110" rx="10"/>
+      <text class="n" x="246" y="64">02</text>
+      <text class="t" x="246" y="88">Meta</text>
+      <text class="s" x="246" y="108">meta_ingest_into()</text>
+      <text class="s" x="246" y="124">lists before bodies</text>
+
+      <rect class="box" x="440" y="40" width="180" height="110" rx="10"/>
+      <text class="n" x="456" y="64">03</text>
+      <text class="t" x="456" y="88">Stream</text>
+      <text class="s" x="456" y="108">stream_backfill_into()</text>
+      <text class="s" x="456" y="124">three drivers</text>
+
+      <rect class="box" x="650" y="40" width="180" height="110" rx="10"/>
+      <text class="n" x="666" y="64">04</text>
+      <text class="t" x="666" y="88">Apply</text>
+      <text class="s" x="666" y="108">Store::apply</text>
+      <text class="s" x="666" y="124">ledger already flushed</text>
+
+      <rect class="box" x="860" y="40" width="180" height="110" rx="10"/>
+      <text class="n" x="876" y="64">05</text>
+      <text class="t" x="876" y="88">Search</text>
+      <text class="s" x="876" y="108">wake + ack</text>
+      <text class="s" x="876" y="124">independent ready</text>
+
+      <rect class="box" x="1070" y="40" width="90" height="110" rx="10"/>
+      <text class="n" x="1084" y="64">06</text>
+      <text class="t" x="1084" y="88">Live</text>
+      <text class="s" x="1084" y="108">tick()</text>
+
+      <path class="edge" d="M200,95 L230,95"/>
+      <path class="edge" d="M410,95 L440,95"/>
+      <path class="edge" d="M620,95 L650,95"/>
+      <path class="edge" d="M830,95 L860,95"/>
+      <path class="edge" d="M1040,95 L1070,95"/>
+
+      <path class="edge" d="M1115,150 C1115,210 110,210 110,150"/>
+      <text class="s" x="430" y="204">live ticks ARE meta + stream. watchers armed before the first scan.</text>
+
+      <rect class="box" x="20" y="230" width="360" height="86" rx="10"/>
+      <text class="s" x="36" y="254">typed values on the arrows</text>
+      <text class="t" x="36" y="278" style="font-size:14px">FileStat → SkimResult → SessionFile</text>
+      <text class="s" x="36" y="296">native ids only until admit_identified</text>
+
+      <rect class="box" x="400" y="230" width="370" height="86" rx="10"/>
+      <text class="s" x="416" y="254">adapter boundary</text>
+      <text class="t" x="416" y="278" style="font-size:14px">RawRecord / JSON row → IngestOp</text>
+      <text class="s" x="416" y="296">LineOutcome { ops, Parsed | UnknownType | HardError }</text>
+
+      <rect class="box" x="790" y="230" width="370" height="86" rx="10"/>
+      <text class="s" x="806" y="254">store boundary</text>
+      <text class="t" x="806" y="278" style="font-size:14px">Batch { ops, checkpoints, source }</text>
+      <text class="s" x="806" y="296">SourceMode: Stage · Append · Activate · Abandon</text>
+    </svg>
+    </div>
+    <figcaption>IDs are minted in the pipeline from <code>rosetta_core::ids</code>. Adapters report native session ids, cwd, titles — never a Rosetta id.</figcaption>
+  </figure>
+
+  <!-- ============================================================ -->
+  <h2 id="discover">1 · Discover</h2>
+  <p class="note">Probe every registered adapter’s data root. Nothing is ingested. The app shows the census; the user (or CLI) flips <code>agent_runtime.enabled</code>.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-pipeline">pipeline</span> discover.rs — call tree</summary>
+    <div class="fn" id="fn-discover">
+      <div><span class="k">rosettad::cmd_*</span> / <span class="r">serve::cmd_serve</span></div>
+      <div class="indent"><span class="p">discover</span>(adapters, home, opts, instrument) → Vec&lt;Discovery&gt;</div>
+      <div class="i2">for adapter in adapters</div>
+      <div class="i3">layout = adapter.<span class="a">layout</span>()</div>
+      <div class="i3"><span class="p">expand_data_root</span>(layout.data_root, home)  <span class="c">// only leading ~</span></div>
+      <div class="i3">instrument.time(WalkNanos, || <span class="q">walk_filtered</span>(root, max_files, |p| layout.<span class="a">matching_stream</span>(p)))</div>
+      <div class="i4"><span class="q">walk</span> / <span class="q">walk_filtered</span>  <span class="c">capture::discovery — no symlinks, portable relative paths, cap → truncated</span></div>
+      <div class="i3">runtime = RuntimeRow { id: <span class="p">ids::runtime_id</span>(kind, data_root), enabled: false, … }</div>
+      <div class="i3">installed = file_count &gt; 0  <span class="c">empty shell dir is not an install</span></div>
+    </div>
+  </details>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="kicker">ids</div>
+      <h3>runtime_id(kind, data_root)</h3>
+      <p>blake3("rosetta/runtime" ‖ kind ‖ data_root). <code>data_root</code> keeps the layout’s <code>~/…</code> form so the id is machine-independent.</p>
+    </div>
+    <div class="card">
+      <div class="kicker">capture helpers</div>
+      <h3>walk_filtered · modified_ms</h3>
+      <p>A missing root is an empty report, not an error. The file cap counts matches, not unrelated files. Sidecar <code>-wal/-shm/-journal</code> files still walk; meta later inventories them.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="meta">2 · Meta ingest</h2>
+  <p class="note">Bounded head/tail only. Project and session lists must render before any transcript body is fully read. Output is one Runtime + Project + SessionMeta batch, plus the <code>SessionFile</code> roster the stream phase keys cursors by.</p>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 430" role="img" aria-label="Meta ingest driver dispatch.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .h { font-family: Spectral, Georgia, serif; font-size: 16px; font-weight: 600; fill: currentColor; }
+        .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <rect class="box" x="20" y="20" width="1140" height="54" rx="8" style="stroke: var(--teal)"/>
+      <text class="h" x="36" y="42" style="font-size:15px">meta_ingest_into</text>
+      <text class="s" x="36" y="58">walk_filtered(layout.matching_stream) · files_inventory_only if stream_driver is None</text>
+
+      <path class="edge" d="M200,74 L200,108"/>
+      <path class="edge" d="M590,74 L590,108"/>
+      <path class="edge" d="M980,74 L980,108"/>
+
+      <rect class="box" x="20" y="110" width="250" height="150" rx="10"/>
+      <text class="t" x="36" y="132">JsonLines</text>
+      <text class="s" x="36" y="152">must be jsonl + append_only</text>
+      <text class="s" x="36" y="172">head_tail(64k/16k)</text>
+      <text class="s" x="36" y="188">adapter.skim(head, tail)</text>
+      <text class="s" x="36" y="204">else first_record + reskim</text>
+      <text class="s" x="36" y="220">optional scan_records fallback</text>
+      <text class="s" x="36" y="240">wants_skim_fallback?</text>
+
+      <rect class="box" x="300" y="110" width="280" height="150" rx="10"/>
+      <text class="t" x="316" y="132">DocumentSnapshot</text>
+      <text class="s" x="316" y="152">json/toml/md/text + rewrite</text>
+      <text class="s" x="316" y="172">admit_document</text>
+      <text class="s" x="316" y="188">snapshot_document(limit)</text>
+      <text class="s" x="316" y="204">document_sessions → N virtuals</text>
+      <text class="s" x="316" y="220">path#native_id</text>
+      <text class="s" x="316" y="240">tombstone removed members</text>
+
+      <rect class="box" x="610" y="110" width="280" height="150" rx="10"/>
+      <text class="t" x="626" y="132">SqliteSnapshot</text>
+      <text class="s" x="626" y="152">sqlite + database discipline</text>
+      <text class="s" x="626" y="172">skip is_db_sidecar / NotDatabase</text>
+      <text class="s" x="626" y="188">admit_database</text>
+      <text class="s" x="626" y="204">snapshot_db + sessions_sql</text>
+      <text class="s" x="626" y="220">snapshot_session per row</text>
+      <text class="s" x="626" y="240">db#native_id virtuals</text>
+
+      <rect class="box" x="920" y="110" width="240" height="150" rx="10"/>
+      <text class="t" x="936" y="132">admit_identified</text>
+      <text class="s" x="936" y="152">ids::session_id</text>
+      <text class="s" x="936" y="168">project(cwd) + git_identity</text>
+      <text class="s" x="936" y="184">parent placeholder if needed</text>
+      <text class="s" x="936" y="200">SessionTitle ranked fact</text>
+      <text class="s" x="936" y="216">merge_session</text>
+      <text class="s" x="936" y="240">push SessionFile</text>
+
+      <path class="edge" d="M145,260 L145,292"/>
+      <path class="edge" d="M440,260 L440,292"/>
+      <path class="edge" d="M750,260 L750,292"/>
+      <path class="edge" d="M1040,260 L1040,292"/>
+      <path class="edge" d="M145,308 L1040,308"/>
+
+      <rect class="box" x="20" y="320" width="1140" height="90" rx="10" style="stroke: var(--forest)"/>
+      <text class="t" x="36" y="342">one batch, ledger-first</text>
+      <text class="s" x="36" y="362">preserve existing stream_state on re-skim · sort mains first · files newest-first</text>
+      <text class="s" x="36" y="380">Ledger::append_meta(LEDGER_META_SCHEMA_VERSION=1, ops_json) → checkpoint → Store::apply(Runtime, Project, SessionMeta, SessionTitle, extra ops)</text>
+      <text class="s" x="36" y="396">missing physical snapshots: retain virtual cursors as source_missing tombstones (JSONL never swept here)</text>
+    </svg>
+    </div>
+    <figcaption>Driver/layout mismatch is a hard <code>PipelineError::Config</code> — an adapter cannot opt a JSONL stream into <code>SqliteSnapshot</code>.</figcaption>
+  </figure>
+
+  <details class="tree" open>
+    <summary><span class="crate b-pipeline">pipeline</span> meta.rs — functions</summary>
+    <div class="fn" id="fn-meta">
+      <div><span class="p">meta_ingest</span> → <span class="p">meta_ingest_into</span>(…, ledger: Option&lt;&amp;mut Ledger&gt;)</div>
+      <div class="indent"><span class="p">admit_identified</span>  <span class="c">shared by jsonl skim, document_sessions, snapshot_session</span></div>
+      <div class="indent"><span class="p">admit_document</span> → <span class="q">snapshot_document</span> → adapter.<span class="a">document_sessions</span> → adapter.<span class="a">document_size_limit</span></div>
+      <div class="indent"><span class="p">admit_database</span> → <span class="q">sqlite_file_status</span> · <span class="q">snapshot_db</span> → adapter.<span class="a">snapshot_plan</span> · <span class="a">snapshot_session</span></div>
+      <div class="indent"><span class="p">merge_session</span> · <span class="p">stronger_stream_state</span>(Pending &lt; Streaming &lt; Indexed)</div>
+      <div class="indent"><span class="p">project::project</span>(cwd) · <span class="p">git_identity</span> · <span class="p">find_git_dir</span> · <span class="p">sanitize_remote</span></div>
+      <div class="c" style="padding:8px 0 0">JSONL fallback: if skim.session_id is None, <span class="q">first_record</span> (one bounded record, never the body). If adapter.<span class="a">wants_skim_fallback</span>, <span class="q">scan_records</span> from the last complete delimiter in the head; adapter.<span class="a">absorb_skim_fallback_record</span> may stop early.</div>
+      <div class="c">Claude Code opts in when the main transcript still has no title. Antigravity opts in when no complete checkpoint exposes the USER Objective section.</div>
+    </div>
+  </details>
+
+  <!-- ============================================================ -->
+  <h2 id="stream">3 · Stream backfill</h2>
+  <p class="note"><code>stream_backfill_into</code> splits the roster by driver, then one store transaction per batch. A failed checkpoint CAS rolls the whole batch back — the projection never runs ahead of its cursor.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-pipeline">pipeline</span> stream.rs — dispatcher</summary>
+    <div class="fn" id="fn-stream">
+      <div><span class="p">stream_backfill</span> → <span class="p">stream_backfill_into</span></div>
+      <div class="indent">partition files: JsonLines · DocumentSnapshot · SqliteSnapshot</div>
+      <div class="indent"><span class="p">rotating_audit_paths</span>(store, runtime, tail_files, audit_files_per_run)</div>
+      <div class="i2"><span class="s">queries::audit_path</span>  <span class="c">lexicographic rotation persisted on source_audit.last_path</span></div>
+      <div class="indent">WorkQueue ← every JSONL file at Lane::Backfill, newest mtime first</div>
+      <div class="indent">while queue.pop() → <span class="p">ingest_file</span>(…, audit_requested)</div>
+      <div class="indent">sibling heal: if a generation restarted, force-replay other JSONL files of that session</div>
+      <div class="indent"><span class="p">document::stream_document_sources</span></div>
+      <div class="indent"><span class="p">snapshot::stream_snapshot_sources</span></div>
+      <div class="indent">for each session: <span class="s">Store::set_session_stream_state</span>(Indexed iff every file complete, else Streaming — can <em>downgrade</em> a stale Indexed)</div>
+      <div class="indent"><span class="p">cursor_row</span>  <span class="c">load-or-create ingest_cursor; blob is the CAS expectation</span></div>
+      <div class="indent"><span class="p">merge_stats</span></div>
+    </div>
+  </details>
+
+  <h3 id="jsonl">JSONL · ingest_file</h3>
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 520" role="img" aria-label="JSONL ingest_file loop with ledger-first apply.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <rect class="box" x="20" y="20" width="360" height="86" rx="10"/>
+      <text class="t" x="36" y="44">cursor_row + PipeCheckpoint::decode</text>
+      <text class="s" x="36" y="64">expired blob (bad version / session / normalizer)</text>
+      <text class="s" x="36" y="80">→ replay from byte zero, restore_state(None)</text>
+
+      <rect class="box" x="410" y="20" width="360" height="86" rx="10"/>
+      <text class="t" x="426" y="44">Tailer::read(path, tail, force_replay)</text>
+      <text class="s" x="426" y="64">Missing → incomplete file</text>
+      <text class="s" x="426" y="80">Retry ≤ max_retries=3 else give up</text>
+
+      <rect class="box" x="800" y="20" width="360" height="86" rx="10"/>
+      <text class="t" x="816" y="44">Transition::starts_new_generation</text>
+      <text class="s" x="816" y="64">truncate / same-size rewrite / replace</text>
+      <text class="s" x="816" y="80">bump generation, reset ordinals + state</text>
+
+      <path class="edge" d="M380,63 L410,63"/>
+      <path class="edge" d="M770,63 L800,63"/>
+      <path class="edge" d="M200,106 L200,140"/>
+
+      <rect class="box" x="20" y="142" width="1140" height="120" rx="10" style="stroke: var(--amber)"/>
+      <text class="t" x="36" y="166">for TailItem in batch</text>
+      <text class="s" x="36" y="186">Record → adapter.ingest_line(ctx, stream_id, payload)  timed as NormalizeNanos</text>
+      <text class="s" x="36" y="204">Oversized → DriftFact error_code=oversized, generation_clean=false, no ledger payload</text>
+      <text class="s" x="36" y="222">Parsed / UnknownType / HardError counted; HardError dirties the generation</text>
+      <text class="s" x="36" y="240">project::enrich_workspace_ops — normalize cwd, prefer local origin remote</text>
+
+      <path class="edge" d="M590,262 L590,292"/>
+
+      <rect class="box" x="20" y="294" width="1140" height="86" rx="10"/>
+      <text class="t" x="36" y="318">choose SourceMode from completeness</text>
+      <text class="s" x="36" y="338">same generation → Append · complete+clean → Activate · complete+dirty → Abandon · else Stage</text>
+      <text class="s" x="36" y="356">encode PipeCheckpoint { generation, next_source_sequence, next_ordinal, tail hex, cumulative, adapter_state }</text>
+
+      <path class="edge" d="M590,380 L590,410"/>
+
+      <rect class="box" x="20" y="412" width="560" height="90" rx="10" style="stroke: var(--indigo)"/>
+      <text class="t" x="36" y="436">ledger FIRST</text>
+      <text class="s" x="36" y="456">Ledger::append_raw(source, generation, offsets+payloads)</text>
+      <text class="s" x="36" y="472">complete_generation if sealing a replacement</text>
+      <text class="s" x="36" y="488">Ledger::checkpoint  (fsync unless deferred cold)</text>
+
+      <rect class="box" x="600" y="412" width="560" height="90" rx="10" style="stroke: var(--forest)"/>
+      <text class="t" x="616" y="436">then Store::apply(Batch)</text>
+      <text class="s" x="616" y="456">CheckpointUpdate.expected = prev blob (CAS)</text>
+      <text class="s" x="616" y="472">CheckpointConflict → abandon this file untouched</text>
+      <text class="s" x="616" y="488">empty+unchanged quiet files skip the transaction</text>
+    </svg>
+    </div>
+    <figcaption>Invariant: recovery may find an orphan ledger tail. It must never find a projection row that names unflushed raw bytes.</figcaption>
+  </figure>
+
+  <details class="tree">
+    <summary><span class="crate b-capture">capture</span> tailer.rs — how a lying “append-only” file is caught</summary>
+    <div class="fn" id="fn-tailer">
+      <div><span class="q">Tailer::new</span>(TailConfig) · <span class="q">read</span> · <span class="q">read_bounded</span></div>
+      <div class="indent"><span class="q">resume_point</span> · <span class="q">frame</span> · <span class="q">prefix_anchor</span> · <span class="q">verify_prefix</span></div>
+      <div class="indent"><span class="q">file_identity</span>  <span class="c">inode/dev on unix; path fallback elsewhere</span></div>
+      <div class="indent"><span class="q">TailCheckpoint</span> encode/decode  magic RSTC v1 · blake3 of prefix</div>
+      <div class="indent">Transitions: Initial · Append · Truncate · Rewrite · IdentityReplace · ForcedReplay</div>
+      <div class="c" style="padding-top:6px">Partial trailing lines stay in incomplete_suffix_len — never half-parsed. CRLF is normalized after byte cursors are calculated. force_replay reframes from zero in a new generation (the audit lane).</div>
+    </div>
+  </details>
+
+  <h3 id="snapshots">Document and SQLite snapshots</h3>
+  <p class="note">Virtual sources <code>physical#native_id</code> have ordinary cursors and generations. Every pass hashes full content — audit by construction. Document and SQLite meet in <code>apply_snapshot_records</code> so health, ledger order, and sweeps cannot diverge.</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="kicker">document.rs</div>
+      <h3>stream_document_sources</h3>
+      <p>Group by physical path. <code>snapshot_document</code> until Ready / Missing / Oversized / Unstable×retries. Per virtual: <code>document_records</code> then <code>apply_snapshot_records</code>. A fully missing physical source with <code>source_missing</code> tombstones runs an empty generation so old rows are swept.</p>
+    </div>
+    <div class="card">
+      <div class="kicker">snapshot.rs</div>
+      <h3>stream_snapshot_sources</h3>
+      <p>Group by db. <code>db_stamp</code> cheap skip is not used for content identity — every pass copies once (<code>snapshot_db</code>) and runs the adapter’s declared SQL. Rows become <code>{"query":name,"row":…}</code> JSON records. WAL content not yet checkpointed is visible.</p>
+    </div>
+  </div>
+
+  <details class="tree">
+    <summary><span class="crate b-pipeline">pipeline</span> apply_snapshot_records</summary>
+    <div class="fn" id="fn-snap">
+      <div>revision = blake3(records joined by \n)</div>
+      <div>if checkpoint.snapshot_revision matches AND active generation matches → maybe stamp-only CAS, skip rewrite</div>
+      <div>else new generation = max(highest, active)+1</div>
+      <div class="indent">ledger.append_raw(index-as-offset, record bytes) · checkpoint</div>
+      <div class="indent">fresh NormalizeCtx, restore_state(None)</div>
+      <div class="indent">for record: ingest_line; chunk at 512 ops via <span class="p">flush_chunk</span></div>
+      <div class="indent">last chunk: <span class="p">seal_generation</span> → Ledger::complete_generation then Activate/Abandon</div>
+      <div>empty records (deleted membership): still seal + flush so the sweep happens</div>
+      <div class="c" style="padding-top:6px">Tombstones: physical file gone → SessionFile.source_missing=true, empty generation is authoritative. Member removed from a still-present snapshot → extra virtual file, source_missing=false, empty/new records sweep that member. A racing ordinary Missing read of a non-tombstone stays incomplete and keeps the last clean projection.</div>
+    </div>
+  </details>
+
+  <!-- ============================================================ -->
+  <h2 id="ops">Canonical ops</h2>
+  <p class="note"><code>IngestOp</code> is the typed seam. Adapters end here; the writer starts here. All agent-specific weirdness stops at this enum.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Op</th><th>Meaning</th><th>Writer</th></tr></thead>
+      <tbody>
+        <tr><td class="cm">Runtime</td><td>Installed agent runtime</td><td><code>apply_runtime</code></td></tr>
+        <tr><td class="cm">Project</td><td>Workspace / git identity</td><td><code>apply_project</code></td></tr>
+        <tr><td class="cm">SessionMeta</td><td>Meta-phase upsert; stream refines</td><td><code>apply_session</code></td></tr>
+        <tr><td class="cm">SessionTitle</td><td>Ranked title fact (explicit &gt; generated &gt; fallback)</td><td><code>apply_session_title</code> → <code>refresh_session_title</code></td></tr>
+        <tr><td class="cm">Message</td><td>Flattened timeline row, upsert by timeline_id</td><td><code>apply_message</code> + pending drain</td></tr>
+        <tr><td class="cm">ToolResult</td><td>Merge into tool_use by (session, tool id)</td><td><code>apply_tool_result</code> or <code>queue_pending</code></td></tr>
+        <tr><td class="cm">Usage</td><td>Replacement snapshot for an existing response</td><td><code>apply_usage</code> (new − old on hour bucket)</td></tr>
+        <tr><td class="cm">SessionUsage</td><td>Session/task grain sample, not a fake message</td><td><code>apply_session_usage</code></td></tr>
+        <tr><td class="cm">WorkspaceObs</td><td>cwd / git observation</td><td><code>apply_workspace_obs</code></td></tr>
+        <tr><td class="cm">FileEdit · Plan · Task · GitCommit</td><td>Artifacts</td><td>matching apply_*</td></tr>
+        <tr><td class="cm">Drift</td><td>Aggregated, never one row per bad record</td><td><code>apply_drift</code> → drift_agg / drift_seen</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid-3" style="margin-top:14px">
+    <div class="card"><div class="kicker">ids.rs</div><h3>blake3 domains</h3><p><code>runtime</code> · <code>project/git</code> · <code>project/root</code> · <code>session</code> · <code>timeline</code> · <code>task</code> · <code>usage</code> · <code>shape</code>. Same input → same id; separator injection cannot collide.</p></div>
+    <div class="card"><div class="kicker">fold.rs</div><h3>pure usage math</h3><p><code>snapshot_delta</code> · <code>bucket_apply</code> · <code>CumulativeUsage</code> · <code>split_inclusive_input</code> · <code>hour_bucket</code> · <code>line_delta</code>. No IO, no clock.</p></div>
+    <div class="card"><div class="kicker">NormalizeCtx</div><h3>per-file state</h3><p><code>next_ordinal</code>, <code>cumulative</code>, <code>src_cursor</code>/<code>src_offset</code>, adapter <code>state</code>. Pipeline stamps provenance before each <code>ingest_line</code>.</p></div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="apply">4 · Store apply</h2>
+  <p class="note">Single writer. One transaction applies canonical facts, rollup corrections, checkpoint/reconciliation, and coalesced <code>search_dirty</code> keys. Live observation collects <code>Effects</code> only after commit.</p>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 470" role="img" aria-label="Store::apply transaction.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <rect class="box" x="20" y="20" width="1140" height="50" rx="8" style="stroke: var(--forest)"/>
+      <text class="t" x="36" y="50">Store::apply(batch)  ·  modes: Live · Bulk (private cold) · Progressive (public first run)</text>
+
+      <rect class="box" x="20" y="90" width="270" height="70" rx="8"/>
+      <text class="t" x="36" y="114">search_sync::before_batch</text>
+      <text class="s" x="36" y="132">Live only — snapshot kinds</text>
+      <text class="s" x="36" y="146">and session metadata</text>
+
+      <rect class="box" x="310" y="90" width="270" height="70" rx="8"/>
+      <text class="t" x="326" y="114">apply_batch</text>
+      <text class="s" x="326" y="132">LIVE vs BULK maintenance</text>
+      <text class="s" x="326" y="146">FTS/buckets deferred in bulk</text>
+
+      <rect class="box" x="600" y="90" width="270" height="70" rx="8"/>
+      <text class="t" x="616" y="114">search_sync::record_batch</text>
+      <text class="s" x="616" y="132">bump search_revision</text>
+      <text class="s" x="616" y="146">coalesce search_dirty keys</text>
+
+      <rect class="box" x="890" y="90" width="270" height="70" rx="8"/>
+      <text class="t" x="906" y="114">tx.commit</text>
+      <text class="s" x="906" y="132">then merge Effects</text>
+      <text class="s" x="906" y="146">abandon flag if bulk Abandon</text>
+
+      <path class="edge" d="M290,125 L310,125"/>
+      <path class="edge" d="M580,125 L600,125"/>
+      <path class="edge" d="M870,125 L890,125"/>
+
+      <rect class="box" x="20" y="184" width="280" height="250" rx="10"/>
+      <text class="t" x="36" y="208">source = None</text>
+      <text class="s" x="36" y="228">meta batches, titles</text>
+      <text class="s" x="36" y="246">for op in ops: apply_op</text>
+      <text class="s" x="36" y="270">apply_checkpoint CAS</text>
+      <text class="s" x="36" y="286">rebuild dirty usage buckets</text>
+      <text class="s" x="36" y="302">pending drain if any</text>
+      <text class="s" x="36" y="330">note_touch → Effects</text>
+      <text class="s" x="36" y="354">no generation machinery</text>
+
+      <rect class="box" x="320" y="184" width="410" height="250" rx="10"/>
+      <text class="t" x="336" y="208">direct cold generation</text>
+      <text class="s" x="336" y="228">bulk && active==0 && mode≠Append</text>
+      <text class="s" x="336" y="250">Stage/Activate: maybe sweep, project_source_ops</text>
+      <text class="s" x="336" y="266">Activate: set_active_generation</text>
+      <text class="s" x="336" y="282">progressive: renumber if out of order</text>
+      <text class="s" x="336" y="298">delete source_op (should be empty)</text>
+      <text class="s" x="336" y="322">Abandon: drift only, sweep, refuse finalize</text>
+      <text class="s" x="336" y="346">effects suppressed — unpublished DB</text>
+      <text class="s" x="336" y="370">provisional ordinals until bulk finalize</text>
+
+      <rect class="box" x="750" y="184" width="410" height="250" rx="10"/>
+      <text class="t" x="766" y="208">live / replacement</text>
+      <text class="s" x="766" y="228">Stage: persist_source_ops only</text>
+      <text class="s" x="766" y="244">Append: project_source_ops (keep ordinals)</text>
+      <text class="s" x="766" y="260">Activate: persist, set_active, activate_cursor</text>
+      <text class="s" x="766" y="276">  sweep old via src_cursor, project staged</text>
+      <text class="s" x="766" y="292">  renumber_session, rebuild buckets</text>
+      <text class="s" x="766" y="308">Abandon: persist drift, discard staged</text>
+      <text class="s" x="766" y="332">guard: cannot Stage already-active</text>
+      <text class="s" x="766" y="348">cannot Append a non-active gen</text>
+      <text class="s" x="766" y="364">cannot replace below highest</text>
+    </svg>
+    </div>
+    <figcaption>First generation in an unpublished database projects directly. Later rewrites always stage, then activate or abandon. <code>source_op</code> is empty in steady state.</figcaption>
+  </figure>
+
+  <details class="tree">
+    <summary><span class="crate b-store">store</span> apply_op dispatch and row writers</summary>
+    <div class="fn" id="fn-apply">
+      <div><span class="s">apply_op</span> → <span class="s">note_touch</span> then match IngestOp</div>
+      <div class="indent"><span class="s">apply_runtime</span> · <span class="s">apply_project</span> · <span class="s">apply_session</span> · <span class="s">apply_session_title</span></div>
+      <div class="indent"><span class="s">apply_message</span>  load_old_by_timeline · fts_delete/insert (live) · touch_session · apply_pending_for_message</div>
+      <div class="indent"><span class="s">apply_tool_result</span> / <span class="s">apply_usage</span>  miss → <span class="s">queue_pending</span> (pending_merge)</div>
+      <div class="indent"><span class="s">PendingGate</span>  target-aware: skip SQL when this session cannot match</div>
+      <div class="indent"><span class="s">apply_session_usage</span> · <span class="s">apply_workspace_obs</span> · file_edit · plan · task · git_commit · drift</div>
+      <div class="indent"><span class="s">rebuild_bucket</span> after the batch, once per dirty (session, hour, model)</div>
+      <div class="indent"><span class="s">renumber_session</span> / <span class="s">renumber_all_sessions</span>  presentation order = path · offset · insert</div>
+      <div class="indent"><span class="s">remove_cursor_projection</span>  provenance sweep on generation swap</div>
+      <div class="indent"><span class="s">apply_checkpoint</span>  UPDATE … WHERE checkpoint = expected  (0 rows → CheckpointConflict)</div>
+    </div>
+  </details>
+
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead><tr><th>Table</th><th>Phase</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="cm">agent_runtime</td><td>discover</td><td><code>enabled</code> is consent</td></tr>
+        <tr><td class="cm">projection_state</td><td>open</td><td>epoch · search_revision · canonical_ready</td></tr>
+        <tr><td class="cm">search_dirty</td><td>live apply</td><td>coalesced session repair keys</td></tr>
+        <tr><td class="cm">source_audit</td><td>stream</td><td>rotating audit cursor</td></tr>
+        <tr><td class="cm">project · session · workspace_obs</td><td>meta</td><td>ranked meta_title retained as fallback</td></tr>
+        <tr><td class="cm">ingest_cursor</td><td>stream</td><td>opaque PipeCheckpoint blob + generations</td></tr>
+        <tr><td class="cm">source_op</td><td>replacement</td><td>staging only, pruned at activate</td></tr>
+        <tr><td class="cm">pending_merge</td><td>stream</td><td>tool-result / usage arriving early</td></tr>
+        <tr><td class="cm">message · file_edit · git_commit · plan · task</td><td>stream</td><td>src_cursor provenance</td></tr>
+        <tr><td class="cm">session_usage · usage_bucket</td><td>stream</td><td>rollups, analyzer-disposable</td></tr>
+        <tr><td class="cm">drift_agg · drift_seen</td><td>any</td><td>aggregated drift</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Store open modes</h3>
+  <div class="grid-3">
+    <div class="card"><h3>Store::open</h3><p>Live. Interrupted progressive without <code>canonical_ready</code> fails closed — resume through ingest/watch/serve.</p></div>
+    <div class="card"><h3>open_progressive</h3><p>Public first run. Cold direct-first-generation until <code>finish_progressive_load</code> (indexes, validate, mark ready).</p></div>
+    <div class="card"><h3>open_for_rebuild / open_for_backfill</h3><p>Empty file only. Deferred indexes. <code>finish_bulk_load</code> refuses if any generation was abandoned.</p></div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="ledger">Ledger protocol</h2>
+  <p class="note">Self-describing size-rotated segments. Default root <code>&lt;projection&gt;.ledger/&lt;agent&gt;</code>. A missing projection beside an existing ledger fails closed to <code>rebuild</code> so generations cannot collide.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-capture">capture</span> ledger.rs + <span class="crate b-rosettad">rosettad</span> ColdLedgerStage</summary>
+    <div class="fn" id="fn-ledger">
+      <div><span class="q">Ledger::open</span> · <span class="q">with_max_segment_bytes</span> · <span class="q">defer_sync_until_flush</span></div>
+      <div class="indent"><span class="q">append_raw</span>(source, generation, [(offset, bytes)])</div>
+      <div class="indent"><span class="q">complete_generation</span>(source, generation, normalizer_version, clean)</div>
+      <div class="indent"><span class="q">append_meta</span>(schema_version, ops_json)</div>
+      <div class="indent"><span class="q">checkpoint</span> · <span class="q">flush</span> · rotate_if_needed · define · frame</div>
+      <div class="indent"><span class="q">scan</span> / <span class="q">visit</span>  torn tail is harmless; prior entries survive</div>
+      <div style="padding-top:8px"><span class="k">ColdLedgerStage::new</span>(destination)  temp dir beside parent, refuse if destination exists</div>
+      <div class="indent">writers use defer_sync_until_flush during private cold ingest</div>
+      <div class="indent">after every runtime: ledger.flush (one barrier)</div>
+      <div class="indent"><span class="k">ColdLedgerStage::publish</span>  rename + child-to-parent directory_publication_barriers fsync</div>
+      <div class="indent">then install the validated SQLite file  (<span class="k">publish_private_projection</span>)</div>
+    </div>
+  </details>
+
+  <!-- ============================================================ -->
+  <h2 id="live">5 · Live lane</h2>
+  <p class="note">Deliberately built on top of the two existing phases. A change hint re-runs meta when a new claimed file appears, and stream over just the changed subset otherwise. Events are hints; the tailer checkpoint decides what happened.</p>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 360" role="img" aria-label="LiveRunner tick.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <rect class="box" x="20" y="20" width="1140" height="48" rx="8" style="stroke: var(--teal)"/>
+      <text class="t" x="36" y="48">LiveRunner::tick  ·  LiveOptions { tick: 250ms, poll_interval: 30s, max_coalesced: 256 }</text>
+
+      <rect class="box" x="20" y="90" width="270" height="100" rx="8"/>
+      <text class="t" x="36" y="114">SourceEvents::next_event</text>
+      <text class="s" x="36" y="132">NotifyEvents or ScriptedEvents</text>
+      <text class="s" x="36" y="148">Changed / Rescan</text>
+      <text class="s" x="36" y="164">WAL hints map to the db path</text>
+
+      <rect class="box" x="310" y="90" width="270" height="100" rx="8"/>
+      <text class="t" x="326" y="114">poll() if due</text>
+      <text class="s" x="326" y="132">walk_filtered vs cursor observed_len</text>
+      <text class="s" x="326" y="148">mtime touch at same size still offered</text>
+      <text class="s" x="326" y="164">missing snapshot → tombstone admit</text>
+
+      <rect class="box" x="600" y="90" width="270" height="100" rx="8"/>
+      <text class="t" x="616" y="114">admit() or restat()</text>
+      <text class="s" x="616" y="132">new claimed file → meta_ingest_into</text>
+      <text class="s" x="616" y="148">idempotent, preserves stream_state</text>
+      <text class="s" x="616" y="164">else refresh size/mtime</text>
+
+      <rect class="box" x="890" y="90" width="270" height="100" rx="8"/>
+      <text class="t" x="906" y="114">stream subset</text>
+      <text class="s" x="906" y="132">audit_files_per_run = 0 on catch-up</text>
+      <text class="s" x="906" y="148">poll also rides rotating_audit_paths</text>
+      <text class="s" x="906" y="164">JSONL only for the audit lane</text>
+
+      <path class="edge" d="M290,140 L310,140"/>
+      <path class="edge" d="M580,140 L600,140"/>
+      <path class="edge" d="M870,140 L890,140"/>
+
+      <rect class="box" x="20" y="214" width="1140" height="120" rx="10"/>
+      <text class="t" x="36" y="240">construction</text>
+      <text class="s" x="36" y="260">start / start_with_ledger: watch already armed, then meta_ingest_into, then tickable</text>
+      <text class="s" x="36" y="276">resume_from_roster: serve’s cold/live boundary — do not re-skim; queued hints cover the gap</text>
+      <text class="s" x="36" y="292">stream_live: test/smoke wrapper around start + N ticks</text>
+      <text class="s" x="36" y="316">claimed() = layout stream AND stream_driver is Some · snapshot_hint strips -wal/-shm/-journal</text>
+    </svg>
+    </div>
+    <figcaption>A quiet or lying watcher degrades to the stat poll, never to wrong data. Same-size same-mtime rewrites remain the rotating audit’s job.</figcaption>
+  </figure>
+
+  <!-- ============================================================ -->
+  <h2 id="serve">Progressive serve</h2>
+  <p class="note">The listener and an empty public projection exist first. Consent precedes all reads. Interrupted commits resume in place.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-rosettad">rosettad</span> serve.rs · cmd_serve</summary>
+    <div class="fn" id="fn-serve">
+      <div><span class="k">cmd_serve</span></div>
+      <div class="indent"><span class="k">projection_lock</span> · <span class="k">open_progressive_backfill</span></div>
+      <div class="indent">Hub::new + Hub::warm · ConsentGate · BoostLedger · Fts5SearchWorker::start</div>
+      <div class="indent">bind listener, spawn axum::serve  <span class="c">room is up before any ingest</span></div>
+      <div class="indent">rewarm task: Hub::rewarm every interval from a read-only connection</div>
+      <div class="indent"><span class="p">discover</span> · persist enabled ∩ installed · arm ConsentGate if empty</div>
+      <div class="indent"><span class="c">phase 1 — skim every enrolled runtime before any transcript</span></div>
+      <div class="i2">NotifyEvents::watch(root)  <span class="c">watch-before-scan</span></div>
+      <div class="i2"><span class="p">meta_ingest_into</span> → BackfillRuntime { roster, ledger, events }</div>
+      <div class="indent"><span class="c">phase 2 — BackfillSchedule</span></div>
+      <div class="i2">order_runtime_roster newest-first · bootstrap canonical-list top session</div>
+      <div class="i2">round-robin pop_next · boost.drain() jumps the rotation, never durability</div>
+      <div class="i2"><span class="p">stream_backfill_into</span>(one file, audit_files_per_run=0) · worker.wake · ack</div>
+      <div class="indent"><span class="c">phase 3 — audit pass</span> full roster with default audit lane, once per runtime</div>
+      <div class="indent">ledger.flush · stop rewarm (must not pin WAL) · <span class="s">finish_progressive_load</span></div>
+      <div class="i2">renumber_all + usage_bucket + indexes + ANALYZE + WAL checkpoint, then a <em>tiny</em> tx sets canonical_ready=1</div>
+      <div class="indent"><span class="v">await_initial_search</span>  <span class="c">full_build sidecar on a clean I/O window; lists already public</span></div>
+      <div class="indent"><span class="p">LiveRunner::resume_from_roster</span> · observe_effects · Hub::rewarm + drain_effects (discard cold mutations)</div>
+      <div class="indent">loop: tick each runtime · wake search · drain_effects → Hub::absorb</div>
+      <div class="c" style="padding-top:8px">Watch differs: sequential meta+stream per runtime, then LiveRunner::start_with_ledger (re-skims meta). No Hub, no Effects.</div>
+    </div>
+  </details>
+
+  <div class="callout teal">
+    <b>Private vs public.</b> Finite <code>ingest</code> uses <code>open_for_backfill</code>: a brand-new target is a sibling tempfile, bulk-finalized, then
+    <code>install_rebuilt_projection</code> after the ledger tree is promoted. <code>serve</code> commits per file with WAL durability from process start.
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="rebuild">Rebuild from the ledger</h2>
+  <p class="note">Drop the projection, replay the ledger. Two streaming passes. Deterministic ids make an interrupted rebuild converge when rerun.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-pipeline">pipeline</span> replay.rs · rebuild_runtime</summary>
+    <div class="fn" id="fn-rebuild">
+      <div><span class="p">rebuild_runtime</span>(adapter, runtime, ledger_dir, store, instrument)</div>
+      <div class="indent"><span class="c">pass 1 — visit_election</span></div>
+      <div class="i2">GenerationComplete elects the highest clean sealed generation per path</div>
+      <div class="i2">known-unclean current normalizer cannot displace a prior clean seal</div>
+      <div class="i2">raw records without any seal → fail closed (never promote a crash-truncated gen)</div>
+      <div class="indent">apply Runtime row</div>
+      <div class="indent"><span class="c">pass 2 — visit_replay</span></div>
+      <div class="i2">Meta → deserialize IngestOp, apply (sessions_seen)</div>
+      <div class="i2">Raw: skip stale generation / already-projected active cursor / duplicate offsets</div>
+      <div class="i2"><span class="p">open_file</span> mint cursor + stub SessionMeta if meta never named it</div>
+      <div class="i2">ingest_line into FileReplay.ops · <span class="p">flush_chunk</span> at 512 (Stage then Append after activate)</div>
+      <div class="i2">GenerationComplete of the survivor → Activate (or Abandon if !clean)</div>
+      <div class="indent"><span class="k">cmd_rebuild</span>: rebuild_adapters · open_for_rebuild tempfile · per agent rebuild_runtime · finish_bulk_load · install_rebuilt_projection · search wait</div>
+    </div>
+  </details>
+
+  <!-- ============================================================ -->
+  <h2 id="search">Search sidecar</h2>
+  <p class="note">Canonical and search readiness are independent. The worker builds private immutable generations and atomically selects one with <code>CURRENT</code>. Acknowledgements are epoch-scoped so a stale worker cannot erase a newer projection’s repairs.</p>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 1180 250" role="img" aria-label="FTS5 worker loop.">
+      <style>
+        .box { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .t { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
+      </style>
+      <rect class="box" x="20" y="30" width="220" height="80" rx="8"/>
+      <text class="t" x="36" y="54">synchronize_fts5_once</text>
+      <text class="s" x="36" y="72">canonical_ready? else None</text>
+      <text class="s" x="36" y="88">read CURRENT manifest</text>
+
+      <rect class="box" x="280" y="20" width="260" height="100" rx="8"/>
+      <text class="t" x="296" y="44">full_build</text>
+      <text class="s" x="296" y="62">private tempfile in generations/</text>
+      <text class="s" x="296" y="78">visit_search_documents</text>
+      <text class="s" x="296" y="94">persist + publish_manifest</text>
+
+      <rect class="box" x="580" y="20" width="280" height="100" rx="8"/>
+      <text class="t" x="596" y="44">repair_generation</text>
+      <text class="s" x="596" y="62">search_repairs(old_rev, new_rev)</text>
+      <text class="s" x="596" y="78">delete+reload per dirty session</text>
+      <text class="s" x="596" y="94">empty repairs → full_build</text>
+
+      <rect class="box" x="900" y="20" width="260" height="100" rx="8"/>
+      <text class="t" x="916" y="44">Store::acknowledge_search</text>
+      <text class="s" x="916" y="62">epoch must match</text>
+      <text class="s" x="916" y="78">prunes search_dirty ≤ revision</text>
+      <text class="s" x="916" y="94">replay is harmless</text>
+
+      <path class="edge" d="M240,70 L280,70"/>
+      <path class="edge" d="M540,70 L580,70"/>
+      <path class="edge" d="M860,70 L900,70"/>
+
+      <rect class="box" x="20" y="150" width="1140" height="78" rx="8" style="stroke: var(--violet)"/>
+      <text class="t" x="36" y="174">Fts5SearchWorker::start / wake / drain_acknowledgements / stop</text>
+      <text class="s" x="36" y="194">epoch mismatch or generation.revision &gt; canonical → full_build · revision &lt; canonical → repair · equal → ack in place</text>
+      <text class="s" x="36" y="210">Fts5SidecarSearch implements SearchBackend { state, search } · product grammar in TextQuery::parse (no engine operators on the wire)</text>
+    </svg>
+    </div>
+    <figcaption>Live apply dirties search only for Append/Activate sources, direct Message/ToolResult, runtime kind changes, and session runtime/project changes. Titles and stream-state flips stay canonical-only.</figcaption>
+  </figure>
+
+  <h3>Hot tier, after commit</h3>
+  <p class="note">Not durable. Rebuilt from the projection on restart. The hub is a transport fan-out, not a second store.</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="kicker">store::hot</div>
+      <h3>TailRings · MetaMirror · Effects</h3>
+      <p><code>observe_effects</code> starts collecting. <code>drain_effects</code> after each live batch. Mutations: Message, ToolResult, Usage, SessionSwept. Overflow or dead epoch → <code>Replay::Expired</code> → replacement snapshot.</p>
+    </div>
+    <div class="card">
+      <div class="kicker">server::hub</div>
+      <h3>Hub::absorb · warm · rewarm</h3>
+      <p>Session topics get the mutation log; <code>/ws/meta</code> gets mirror diffs. <code>ConsentGate</code> and <code>BoostLedger</code> sit on the HTTP side: enable/boost never weaken per-file CAS.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="adapters">Adapter boundary</h2>
+  <p class="note">Object-safe. One implementation per agent. Layout inventory is broader than the driven streams — undeclared files stay inventory, never accidental transcripts.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-adapter">adapter-support</span> AgentAdapter</summary>
+    <div class="fn" id="fn-trait">
+      <div>kind · layout · stream_driver · normalizer_version</div>
+      <div>snapshot_plan · snapshot_session  <span class="c">SqliteSnapshot only</span></div>
+      <div>document_sessions · document_size_limit · document_records</div>
+      <div>init_state · checkpoint_state · restore_state  <span class="c">invalid payload expires the cursor</span></div>
+      <div>skim(stream, stat, head, tail) → SkimResult</div>
+      <div>wants_skim_fallback · absorb_skim_fallback_record</div>
+      <div>ingest_line(ctx, stream, line) → LineOutcome</div>
+    </div>
+  </details>
+
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead><tr><th>Adapter</th><th>Driven streams</th><th>Drivers</th><th>nv</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="cm">claude-code</td>
+          <td>transcript · subagent-transcript</td>
+          <td>JsonLines ×2</td>
+          <td>3</td>
+          <td>both timelines. Skim fallback on main title only. Title: customTitle Explicit &gt; aiTitle Generated — no filename title.</td>
+        </tr>
+        <tr>
+          <td class="cm">codex</td>
+          <td>rollout · state-db</td>
+          <td>JsonLines + SqliteSnapshot</td>
+          <td>5</td>
+          <td>rollout is the timeline (must open on session_meta). state-db is <b>meta-only</b> — empty record_queries.</td>
+        </tr>
+        <tr>
+          <td class="cm">grok</td>
+          <td>updates · summary</td>
+          <td>JsonLines + DocumentSnapshot</td>
+          <td>3</td>
+          <td>updates = timeline. summary <code>document_records → []</code> (meta-only). Sibling heal after rewrite.</td>
+        </tr>
+        <tr>
+          <td class="cm">antigravity</td>
+          <td>transcript · conversation-summaries</td>
+          <td>JsonLines + SqliteSnapshot</td>
+          <td>4</td>
+          <td>transcript = timeline (path is native id). summaries SQL is <b>meta-only</b> (empty record_queries). Fallback keeps scanning for latest objective.</td>
+        </tr>
+        <tr>
+          <td class="cm">copilot</td>
+          <td>events · session-workspace</td>
+          <td>JsonLines + DocumentSnapshot</td>
+          <td>3</td>
+          <td>events = timeline. workspace.yaml ≤ 64 KiB, <code>document_records → []</code>. YAML id ≠ path id → unidentified.</td>
+        </tr>
+        <tr>
+          <td class="cm">kimi-code</td>
+          <td>wire · session-state</td>
+          <td>JsonLines + DocumentSnapshot</td>
+          <td>4</td>
+          <td>wire = timeline (identity from path). session-state enumerates main + agents, then <code>document_records → []</code>.</td>
+        </tr>
+        <tr>
+          <td class="cm">hermes</td>
+          <td>state-db</td>
+          <td>SqliteSnapshot</td>
+          <td>2</td>
+          <td>skim unused. Timeline from declared queries (messages ordered by id) as <code>{"query","row"}</code> envelopes. Stateless.</td>
+        </tr>
+        <tr>
+          <td class="cm">opencode</td>
+          <td>opencode-db</td>
+          <td>SqliteSnapshot</td>
+          <td>2</td>
+          <td>skim unused. One <code>timeline</code> query in presentation order (first part-update seq; later edits do not move the row).</td>
+        </tr>
+        <tr>
+          <td class="cm">pi</td>
+          <td>session</td>
+          <td>JsonLines</td>
+          <td>2</td>
+          <td>header must be type=session. Parent is a fork, not a subagent (role always Main). Format version ≠ agent_version.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2 id="catalog">Function catalog</h2>
+  <p class="note">Production functions on the ingest path. Test-only helpers are omitted. Use the search box to jump.</p>
+
+  <details class="tree" open>
+    <summary><span class="crate b-rosettad">rosettad</span> main.rs · serve.rs · bench.rs</summary>
+    <div class="fn" id="cat-rosettad">
+      <div>main · registry · parse_flags · take_value · selected · default_home · ledger_root</div>
+      <div>projection_lock · open_ledger · open_for_backfill · open_progressive_backfill</div>
+      <div>ColdLedgerStage::new/path/publish · directory_publication_barriers</div>
+      <div>cmd_ingest · cmd_watch · cmd_rebuild · rebuild_adapters</div>
+      <div>publish_private_projection · install_rebuilt_projection · make_single_file · sidecar · projection_parent</div>
+      <div>acknowledge_search · build_search_wait · synchronize_search_wait · record_backfill_failures · print_agent_profile</div>
+      <div>serve::cmd_serve · BackfillSchedule::{new, order_runtime_roster, pending, promote, bootstrap, pop_next}</div>
+      <div>StreamMeter · fold_stream · await_initial_search · counter_source</div>
+      <div>bench::{cmd_discover, cmd_sources, cmd_streams, cmd_meta, emit, emit_profile, emit_stage_profile, projection_snapshot}</div>
+    </div>
+  </details>
+
+  <details class="tree" open>
+    <summary><span class="crate b-pipeline">pipeline</span></summary>
+    <div class="fn" id="cat-pipeline">
+      <div>discover · expand_data_root</div>
+      <div>meta_ingest · meta_ingest_into · admit_identified · admit_document · admit_database · merge_session · stronger_stream_state</div>
+      <div>stream_backfill · stream_backfill_into · ingest_file · cursor_row · rotating_audit_paths · merge_stats</div>
+      <div>stream_document_sources · virtual_document_path</div>
+      <div>stream_snapshot_sources · virtual_db_path · apply_snapshot_records · seal_generation · flush_chunk</div>
+      <div>LiveRunner::{start, start_with_ledger, resume_from_roster, tick, admit, poll, restat, claimed, snapshot_hint} · stream_live</div>
+      <div>rebuild_runtime · visit_election · visit_replay · open_file · flush_chunk (replay)</div>
+      <div>WorkQueue::{push, promote, pop} · PipeCheckpoint::{fresh, encode, decode, tail_checkpoint}</div>
+      <div>Instrument::{time, add, apply, ledger_write, finish_bulk_load, finish_progressive_load, observe_normalization, observe_write_batch}</div>
+      <div>project · enrich_workspace_ops · git_identity · find_git_dir · sanitize_remote</div>
+    </div>
+  </details>
+
+  <details class="tree" open>
+    <summary><span class="crate b-capture">capture</span></summary>
+    <div class="fn" id="cat-capture">
+      <div>walk · walk_filtered · head_tail · first_record · scan_records · modified_ms</div>
+      <div>Tailer::{new, read, read_bounded} · TailCheckpoint::{encode, decode, encode_hex, decode_hex}</div>
+      <div>snapshot_document · snapshot_db · db_stamp · sqlite_file_status · is_db_sidecar · DbSnapshot::query_rows</div>
+      <div>NotifyEvents::watch · SourceEvents::next_event · ScriptedEvents</div>
+      <div>Ledger::{open, append_raw, complete_generation, append_meta, checkpoint, flush, defer_sync_until_flush}</div>
+      <div>scan_ledger · visit_ledger</div>
+    </div>
+  </details>
+
+  <details class="tree" open>
+    <summary><span class="crate b-store">store</span></summary>
+    <div class="fn" id="cat-store">
+      <div>Store::{open, open_progressive, open_for_rebuild, apply, finish_bulk_load, finish_progressive_load}</div>
+      <div>set_session_stream_state · acknowledge_search · observe_effects · drain_effects · set_audit_path</div>
+      <div>apply_batch · apply_op · apply_checkpoint · persist_source_ops · project_source_ops · staged_ops</div>
+      <div>activate_cursor · abandon_cursor · set_active_generation · remove_cursor_projection</div>
+      <div>apply_message · apply_tool_result · apply_usage · queue_pending · PendingGate · rebuild_bucket · touch_session</div>
+      <div>apply_runtime · apply_project · apply_session · apply_session_title · refresh_session_title</div>
+      <div>bulk::{prepare, prepare_progressive, finalize, validate, validate_complete, restore_live_pragmas, checkpoint_progressive}</div>
+      <div>search_sync::{before_batch, record_batch, mark_canonical_ready, acknowledge}</div>
+      <div>queries::{cursor_state, audit_path, session, session_list, projection_state, search_repairs, visit_search_documents, …}</div>
+      <div>schema::{init, init_deferred} SCHEMA_VERSION=7</div>
+    </div>
+  </details>
+
+  <details class="tree" open>
+    <summary><span class="crate b-search">search</span> · <span class="crate b-core">core</span> · <span class="crate b-server">server</span></summary>
+    <div class="fn" id="cat-rest">
+      <div>synchronize_fts5_once · full_build · repair_generation · finish_private_generation · publish_manifest</div>
+      <div>Fts5SearchWorker::{start, wake, drain_acknowledgements, stop} · Fts5SidecarSearch::{state, search}</div>
+      <div>TextQuery::parse · fts5_expression</div>
+      <div>ids::{runtime_id, project_id, session_id, timeline_id, task_id, usage_id, normalize_root, shape_hash}</div>
+      <div>fold::{snapshot_delta, bucket_apply, CumulativeUsage, hour_bucket, split_inclusive_input}</div>
+      <div>Hub::{new, warm, rewarm, absorb} · ConsentGate · BoostLedger · router</div>
+    </div>
+  </details>
+
+  <footer class="note">
+    Drawn from the Rust sources under <code>crates/{rosettad,pipeline,capture,store,search,core,adapter-support,adapters,server}</code>.
+    Design intent lives in <a href="ingest-engine.html">ingest-engine.html</a>; the stored shape in
+    <a href="canonical-model.html">canonical-model.html</a>; layer contracts in
+    <a href="ARCHITECTURE.md">ARCHITECTURE.md</a>.
+    This page is a map of what the code does now, not a proposal.
+  </footer>
+</main>
+</div>
+
+<script>
+  const themeButtons = document.querySelectorAll('.theme-row button');
+  const stored = localStorage.getItem('rosetta-theme');
+  if (stored) document.documentElement.dataset.theme = stored;
+  function syncTheme() {
+    const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    themeButtons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur)));
+  }
+  themeButtons.forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.theme;
+    localStorage.setItem('rosetta-theme', b.dataset.theme);
+    syncTheme();
+  }));
+  syncTheme();
+
+  const links = [...document.querySelectorAll('nav.rail a')];
+  const sections = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const io = new IntersectionObserver(entries => {
+    const vis = entries.filter(e => e.isIntersecting).sort((a,b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!vis) return;
+    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + vis.target.id));
+  }, { rootMargin: '-20% 0px -70% 0px', threshold: [0, .2, .6] });
+  sections.forEach(s => io.observe(s));
+
+  const catalog = [];
+  document.querySelectorAll('.fn').forEach(block => {
+    const id = block.id || '';
+    const text = block.innerText;
+    text.split(/\n/).forEach(line => {
+      line.replace(/[A-Za-z_][A-Za-z0-9_:]*(?:::[A-Za-z0-9_]+)?/g, name => {
+        if (name.length < 4) return;
+        catalog.push({ name, id, line: line.trim() });
+      });
+    });
+  });
+  const hits = document.getElementById('fn-hits');
+  const box = document.getElementById('fn-search');
+  box.addEventListener('input', () => {
+    const q = box.value.trim().toLowerCase();
+    if (q.length < 2) { hits.classList.remove('open'); hits.innerHTML = ''; return; }
+    const seen = new Set();
+    const out = [];
+    for (const item of catalog) {
+      if (!item.name.toLowerCase().includes(q)) continue;
+      const key = item.name + item.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+      if (out.length >= 18) break;
+    }
+    hits.innerHTML = out.map(item =>
+      `<a href="#${item.id}">${item.name}</a>`
+    ).join('') || '<a>no matches</a>';
+    hits.classList.add('open');
+  });
+</script>
+</body>
+</html>
