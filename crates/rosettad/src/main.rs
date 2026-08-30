@@ -76,7 +76,7 @@ fn main() -> ExitCode {
             );
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta]"
             );
             eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
             eprintln!(
@@ -110,6 +110,9 @@ struct Flags {
     /// serve only: consent for every installed runtime from the command
     /// line — the headless stand-in for the app's roll call.
     all_agents: bool,
+    /// serve only: expose the completed metadata projection and keep serving,
+    /// but do not read any complete source records.
+    stop_after_meta: bool,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -124,6 +127,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         ledger: None,
         addr: None,
         all_agents: false,
+        stop_after_meta: false,
     };
     let mut at = 0;
     while at < args.len() {
@@ -147,6 +151,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--all-agents" => {
                 flags.all_agents = true;
+                at += 1;
+            }
+            "--stop-after-meta" => {
+                flags.stop_after_meta = true;
                 at += 1;
             }
             "--json" => {

@@ -122,20 +122,36 @@ impl DaemonHealth {
         }
     }
 
-    /// The skim landed and the stream begins: freeze the skim's numbers and
-    /// install a fresh source (a new baseline) for the byte meter.
-    pub fn ingest_stream(
-        &self,
-        kind: &str,
-        sessions_total: u64,
-        files_skimmed: u64,
-        source: IngestCounterSource,
-    ) {
+    /// The skim landed: freeze its metadata counts and return the runtime to
+    /// the transcript queue. No complete source record has been read yet.
+    pub fn ingest_skim_done(&self, kind: &str, sessions_total: u64, files_skimmed: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
-            entry.state = BackfillState::Streaming;
+            entry.state = BackfillState::Queued;
             entry.sessions_total = sessions_total;
             entry.files_skimmed = files_skimmed;
+            entry.live = None;
+        }
+    }
+
+    /// Every enrolled runtime has completed its bounded skim. This is a real
+    /// observable boundary even when the ordinary daemon immediately proceeds
+    /// to streaming; metadata-audit mode deliberately remains here.
+    pub fn ingest_metadata_ready(&self) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        ingest.phase = IngestPhase::MetadataReady;
+        for entry in &mut ingest.entries {
+            entry.live = None;
+        }
+    }
+
+    /// Complete-record streaming begins for this runtime. The meter is
+    /// cumulative across its interleaved per-file calls.
+    pub fn ingest_stream(&self, kind: &str, source: IngestCounterSource) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        ingest.phase = IngestPhase::Backfilling;
+        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+            entry.state = BackfillState::Streaming;
             entry.live = Some(source);
         }
     }
@@ -310,10 +326,20 @@ mod tests {
 
         // Streaming: skim numbers freeze; the byte meter goes live.
         let stream_counter = counter.clone();
+        health.ingest_skim_done("claude-code", 250, 100);
+        let ingest = health.snapshot(&hub, 2_500).ingest;
+        assert_eq!(ingest.runtimes[0].state, BackfillState::Queued);
+        assert_eq!(ingest.runtimes[0].files_skimmed, 100);
+        assert_eq!(ingest.runtimes[0].sessions_total, 250);
+
+        health.ingest_metadata_ready();
+        let ingest = health.snapshot(&hub, 2_600).ingest;
+        assert_eq!(ingest.phase, IngestPhase::MetadataReady);
+        assert_eq!(ingest.runtimes[0].bytes_streamed, 0);
+        assert_eq!(ingest.runtimes[0].records, 0);
+
         health.ingest_stream(
             "claude-code",
-            250,
-            100,
             Arc::new(move || IngestCounters {
                 bytes_read: stream_counter.load(Ordering::Relaxed),
                 records: 7,
@@ -322,6 +348,7 @@ mod tests {
         );
         counter.store(600_000, Ordering::Relaxed);
         let ingest = health.snapshot(&hub, 3_000).ingest;
+        assert_eq!(ingest.phase, IngestPhase::Backfilling);
         assert_eq!(ingest.runtimes[0].state, BackfillState::Streaming);
         assert_eq!(ingest.runtimes[0].files_skimmed, 100);
         assert_eq!(ingest.runtimes[0].sessions_total, 250);

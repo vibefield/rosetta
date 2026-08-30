@@ -50,7 +50,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 3,
+      "protocol_version": 4,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -219,6 +219,7 @@
     "discovering",
     "awaiting_consent",
     "backfilling",
+    "metadata_ready",
     "live"
   ],
   "mutations": [
@@ -407,7 +408,7 @@
       }
     ]
   },
-  "protocol_version": 3,
+  "protocol_version": 4,
   "runtimes": {
     "runtimes": [
       {
@@ -543,7 +544,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 3,
+    "protocol_version": 4,
     "schema_version": 9,
     "search": {
       "projection_epoch": "epoch-1",

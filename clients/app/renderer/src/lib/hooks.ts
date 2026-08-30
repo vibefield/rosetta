@@ -75,7 +75,8 @@ export function useDaemonStatus(): DaemonStatusFeed {
         })
         .finally(() => {
           if (cancelled) return;
-          timer = window.setTimeout(poll, phase !== null && phase !== "live" ? 2_500 : 30_000);
+          const moving = phase !== null && phase !== "live" && phase !== "metadata_ready";
+          timer = window.setTimeout(poll, moving ? 2_500 : 30_000);
         });
     };
     poll();

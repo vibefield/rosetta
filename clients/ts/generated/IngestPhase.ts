@@ -3,7 +3,9 @@
 /**
  * Where the daemon's ingest is in its life. `AwaitingConsent` means the
  * census is on the board and nothing has been read — the USER decides
- * which runtimes enroll. `Live` means the watch loop owns the store and
- * the cold backfill is history.
+ * which runtimes enroll. `MetadataReady` is the exact phase boundary where
+ * every bounded skim has committed but no complete source record has been
+ * streamed. `Live` means the watch loop owns the store and the cold backfill
+ * is history.
  */
-export type IngestPhase = "discovering" | "awaiting_consent" | "backfilling" | "live";
+export type IngestPhase = "discovering" | "awaiting_consent" | "backfilling" | "metadata_ready" | "live";

@@ -534,11 +534,10 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
         let stream_meter = StreamMeter::new(&instrument);
-        health.ingest_stream(
+        health.ingest_skim_done(
             adapter.kind(),
             meta.sessions as u64,
             meta.files_skimmed as u64,
-            stream_meter.source(),
         );
         let roster = files.clone();
         backfills.push(BackfillRuntime {
@@ -553,6 +552,62 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             stream: StreamReport::default(),
             stream_meter,
         });
+    }
+
+    // This is the exact cold-start seam the audit mode exposes: all bounded
+    // metadata batches are committed, while no complete source record has
+    // entered the raw ledger or canonical message tables. Freeze the health
+    // surface here even though the ordinary path immediately advances.
+    health.ingest_metadata_ready();
+    if flags.stop_after_meta {
+        if backfills.is_empty() {
+            return Err("nothing to serve: no enrolled runtimes".to_string());
+        }
+        for entry in &mut backfills {
+            let ledger = entry.ledger.as_mut().expect("a backfill owns its ledger");
+            instrument
+                .ledger_write(ledger, |ledger| ledger.flush())
+                .map_err(|error| error.to_string())?;
+        }
+
+        // Nothing else will write in this mode. Stop the cadence and take one
+        // authoritative mirror snapshot so the app audits the committed seam,
+        // not whichever 500 ms refresh happened to win the race.
+        let _ = rewarm_tx.send(true);
+        let _ = tokio_runtime.block_on(rewarm_task);
+        let published = hub
+            .rewarm(store.conn())
+            .map_err(|error| error.to_string())?;
+        println!(
+            "metadata ready — {published} mirror diffs published; complete-record streaming is paused (ctrl-c to stop)"
+        );
+        for entry in &backfills {
+            println!(
+                "{}: {} sessions, {} projects, {} matched files ({} skimmed, {} inventory-only, {} unidentified)",
+                entry.adapter.kind(),
+                entry.meta.sessions,
+                entry.meta.projects,
+                entry.meta.files_matched,
+                entry.meta.files_skimmed,
+                entry.meta.files_inventory_only,
+                entry.meta.files_unidentified,
+            );
+        }
+        while !stop.load(Ordering::SeqCst) {
+            std::thread::sleep(CONSENT_POLL);
+        }
+
+        let _ = shutdown_tx.send(true);
+        match tokio_runtime.block_on(server) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("server: {error}")),
+            Err(error) => return Err(format!("server task: {error}")),
+        }
+        search_worker.stop();
+        if flags.profile {
+            println!("\n== profile ==\n{}", instrument.report());
+        }
+        return Ok(());
     }
 
     // Phase two: one newest-first file from each runtime in round-robin
@@ -577,6 +632,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             break;
         };
         let entry = &mut backfills[index];
+        health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
         entry.stream_meter.begin();
         let report = rosetta_pipeline::stream_backfill_into(
             entry.adapter,
@@ -600,6 +656,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // rotating_audit_paths selects from the slice it receives.
     if !stop.load(Ordering::SeqCst) {
         for entry in &mut backfills {
+            health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
             entry.stream_meter.begin();
             let report = rosetta_pipeline::stream_backfill_into(
                 entry.adapter,

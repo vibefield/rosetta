@@ -15,6 +15,9 @@ export function isIngestActive(ingest: IngestProgress | null): boolean {
 export function isCensusRunning(ingest: IngestProgress | null): boolean {
   if (!isIngestActive(ingest)) return false;
   if (ingest === null) return true;
+  // The explicit audit seam proves every bounded skim has committed. Runtime
+  // rows remain queued because complete-record streaming has not started.
+  if (ingest.phase === "metadata_ready") return false;
   if (ingest.runtimes.length === 0) return true;
   return ingest.runtimes.some(
     (runtime) => runtime.state === "queued" || runtime.state === "skimming",

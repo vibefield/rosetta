@@ -304,6 +304,7 @@ fn exemplars() -> serde_json::Value {
             IngestPhase::Discovering,
             IngestPhase::AwaitingConsent,
             IngestPhase::Backfilling,
+            IngestPhase::MetadataReady,
             IngestPhase::Live,
         ],
         "discoveries": DiscoveriesResponse {

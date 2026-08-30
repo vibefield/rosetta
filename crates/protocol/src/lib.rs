@@ -25,7 +25,7 @@ pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -57,8 +57,10 @@ pub struct DaemonStatus {
 
 /// Where the daemon's ingest is in its life. `AwaitingConsent` means the
 /// census is on the board and nothing has been read — the USER decides
-/// which runtimes enroll. `Live` means the watch loop owns the store and
-/// the cold backfill is history.
+/// which runtimes enroll. `MetadataReady` is the exact phase boundary where
+/// every bounded skim has committed but no complete source record has been
+/// streamed. `Live` means the watch loop owns the store and the cold backfill
+/// is history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -66,6 +68,7 @@ pub enum IngestPhase {
     Discovering,
     AwaitingConsent,
     Backfilling,
+    MetadataReady,
     Live,
 }
 
