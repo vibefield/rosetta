@@ -37,6 +37,14 @@ export interface BranchFacts {
   readonly behind: number | null;
 }
 
+/** Someone git records as having co-written a commit. For this room that is
+ * usually the agent that wrote it — the one thing a `Co-authored-by` trailer
+ * says that nothing else in the room can. */
+export interface CoAuthor {
+  readonly name: string;
+  readonly email: string | null;
+}
+
 export interface Commit {
   readonly sha: string;
   readonly short: string;
@@ -44,12 +52,24 @@ export interface Commit {
   readonly author: string;
   readonly timestampMs: number;
   readonly merge: boolean;
+  readonly coAuthors: readonly CoAuthor[];
   /** `null` on a branch with no upstream: the row draws no mark rather than
    * claiming a commit is unpushed when nothing can know. */
   readonly pushed: boolean | null;
   readonly added: number;
   readonly deleted: number;
   readonly files: number;
+}
+
+/** One file inside a commit. */
+export interface CommitFile {
+  readonly path: string;
+  /** Where a rename came from. */
+  readonly original: string | null;
+  readonly status: StatusLetter;
+  /** `null` for a binary file, which has no line count. */
+  readonly added: number | null;
+  readonly deleted: number | null;
 }
 
 /** Which side of the index a diff is taken from. */
@@ -71,7 +91,7 @@ export interface GitClient {
   log(): Promise<{ commits: readonly Commit[]; error: string | null }>;
   diff(request: DiffRequest): Promise<{ text: string; error: string | null }>;
   commitFiles(sha: string): Promise<{
-    files: readonly { path: string; added: number | null; deleted: number | null }[];
+    files: readonly CommitFile[];
     error: string | null;
   }>;
   stage(paths: readonly string[]): Promise<void>;

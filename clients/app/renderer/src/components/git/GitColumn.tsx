@@ -15,10 +15,11 @@ import type { FileHandle } from "../file-viewer";
 import { ConfirmDialog, EmptyState, SegmentedControl } from "../ui";
 import { useGitClient, useGitRead } from "./git-host";
 import { createGitFileSource, diffHandle } from "./git-file-source";
+import { CommitDetail } from "./CommitDetail";
 import { GitChanges } from "./GitChanges";
 import { GitHeader } from "./GitHeader";
 import { GitHistory } from "./GitHistory";
-import type { Commit, GitClient, GitView } from "./types";
+import type { Commit, CommitFile, GitClient, GitView } from "./types";
 
 export interface GitColumnProps {
   /** The project's §2.6 accent, following it across the room. */
@@ -92,6 +93,11 @@ export function GitColumn({
   const [open, setOpen] = useState<FileHandle | null>(null);
   const [selection, setSelection] = useState<{ path: string; staged: boolean } | null>(null);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
+  // The commit the column has drilled into, and its files. Held here rather
+  // than inside the detail view so returning to the list and opening the
+  // same commit again does not re-ask git for what it just answered.
+  const [openCommit, setOpenCommit] = useState<Commit | null>(null);
+  const [commitFiles, setCommitFiles] = useState<readonly CommitFile[] | null>(null);
   // Discard is the one act in this room that destroys something. It asks.
   const [pendingDiscard, setPendingDiscard] = useState<readonly string[] | null>(null);
 
@@ -121,10 +127,44 @@ export function GitColumn({
 
   const showCommit = (commit: Commit) => {
     setSelectedSha(commit.sha);
-    onReceipt(`${commit.short} · ${commit.files} ${commit.files === 1 ? "file" : "files"}`);
+    setOpenCommit(commit);
+    setCommitFiles(null);
+    if (client === null) return;
+    void client
+      .commitFiles(commit.sha)
+      .then((answer) => {
+        if (answer.error !== null) {
+          onReceipt(answer.error);
+          setCommitFiles([]);
+          return;
+        }
+        setCommitFiles(answer.files);
+      })
+      .catch((error: unknown) => {
+        onReceipt(error instanceof Error ? error.message : "could not read that commit");
+        setCommitFiles([]);
+      });
   };
 
-  const count = view === "history" ? commits.length : entries.length;
+  const leaveCommit = () => {
+    setOpenCommit(null);
+    setCommitFiles(null);
+    setSelection(null);
+  };
+
+  /** A file inside the open commit, diffed against its parent. */
+  const showCommitFile = (path: string) => {
+    if (connection === null || openCommit === null) return;
+    setSelection({ path, staged: false });
+    setOpen(diffHandle({ path, sha: openCommit.sha }, { root: connection.root, label: path }));
+  };
+
+  const count =
+    openCommit !== null
+      ? (commitFiles?.length ?? openCommit.files)
+      : view === "history"
+        ? commits.length
+        : entries.length;
 
   return (
     <div className="ah-col ah-col--foot">
@@ -135,19 +175,29 @@ export function GitColumn({
         count={count}
         changeShape={changeShape(entries)}
         unpushed={unpushed}
+        commit={openCommit}
+        onBack={leaveCommit}
       />
-      <div className="ah-listbar">
-        <SegmentedControl
-          className="ah-gitseg"
-          accessibleLabel="What this column shows"
-          value={view}
-          options={[
-            { value: "changes", label: "Changes" },
-            { value: "history", label: "History" },
-          ]}
-          onValueChange={(next) => setView(next as GitView)}
-        />
-      </div>
+      {/* The switch belongs to the two views of a branch. Inside a commit
+          there is nothing to switch between, and leaving it there would
+          offer a control that changes the surface out from under you. */}
+      {openCommit === null && (
+        <div className="ah-listbar">
+          <SegmentedControl
+            className="ah-gitseg"
+            accessibleLabel="What this column shows"
+            value={view}
+            options={[
+              { value: "changes", label: "Changes" },
+              { value: "history", label: "History" },
+            ]}
+            onValueChange={(next) => {
+              setView(next as GitView);
+              setSelection(null);
+            }}
+          />
+        </div>
+      )}
 
       {connection === null ? (
         <EmptyState
@@ -156,6 +206,15 @@ export function GitColumn({
         />
       ) : status === null && log === null ? (
         <EmptyState title="Reading the repository" description="Asking git for its status." />
+      ) : openCommit !== null ? (
+        <CommitDetail
+          commit={openCommit}
+          currentTimestamp={currentTimestamp}
+          files={commitFiles}
+          selectedPath={selection?.path ?? null}
+          onSelect={showCommitFile}
+          sessionPaths={sessionPaths}
+        />
       ) : view === "changes" ? (
         <GitChanges
           entries={entries}

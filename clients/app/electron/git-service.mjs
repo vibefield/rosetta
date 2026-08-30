@@ -100,14 +100,20 @@ function parseStatus(raw) {
   return entries;
 }
 
-/** `sha\x1fsubject\x1fauthor\x1funix\x1fparents` per commit. */
-const LOG_FORMAT = "%H%x1f%s%x1f%an%x1f%at%x1f%P";
+/** `sha ⟂ subject ⟂ author ⟂ unix ⟂ parents ⟂ co-authors` per commit.
+ *
+ * The co-authors come from git's OWN trailer parser rather than a regex over
+ * the body: `Co-authored-by` is case-insensitive, may repeat, and folds
+ * continuation lines — all of which git already knows and a hand-rolled
+ * match gets wrong on somebody else's commit. */
+const LOG_FORMAT =
+  "%H%x1f%s%x1f%an%x1f%at%x1f%P%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1e)";
 
 function parseLog(raw, unpushed) {
   const out = [];
   for (const line of raw.split("\n")) {
     if (line.trim() === "") continue;
-    const [sha, subject, author, at, parents] = line.split("\x1f");
+    const [sha, subject, author, at, parents, coAuthored] = line.split("\x1f");
     if (!sha) continue;
     out.push({
       sha,
@@ -118,6 +124,22 @@ function parseLog(raw, unpushed) {
       // A merge has more than one parent, and its diffstat is not a fact
       // about one person's work.
       merge: (parents ?? "").trim().split(/\s+/).filter(Boolean).length > 1,
+      // `Name <email>` per trailer. The name is what a byline shows; the
+      // address is kept because two agents can share a display name and the
+      // reader may need to tell them apart.
+      coAuthors: (coAuthored ?? "")
+        .split("\x1e")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => {
+          const angle = entry.lastIndexOf("<");
+          return angle === -1
+            ? { name: entry, email: null }
+            : {
+                name: entry.slice(0, angle).trim(),
+                email: entry.slice(angle + 1).replace(">", "").trim() || null,
+              };
+        }),
       // `null` is not `false`: a branch with no upstream cannot answer this,
       // and the row draws no mark rather than claiming the commit is unpushed.
       pushed: unpushed === null ? null : !unpushed.has(sha),
@@ -237,20 +259,47 @@ export function createGitService(root) {
       return { text: result.stdout, error: null };
     },
 
-    /** Which files one commit touched, for the History view's detail. */
+    /**
+     * Which files one commit touched, with the letter each earned.
+     *
+     * Two passes because git will not emit both in one invocation:
+     * `--name-status` knows an add from a rename, `--numstat` knows the line
+     * counts. The letter is the half a reader scans by, so it leads.
+     */
     async commitFiles(sha) {
-      const result = await git(root, [
-        "show", "--format=", "--numstat", "-M", sha,
+      const [status, stat] = await Promise.all([
+        git(root, ["show", "--format=", "--name-status", "-M", sha]),
+        git(root, ["show", "--format=", "--numstat", "-M", sha]),
       ]);
-      if (!result.ok) return { files: [], error: result.stderr };
-      const files = [];
-      for (const line of result.stdout.split("\n")) {
+      if (!status.ok) return { files: [], error: status.stderr };
+
+      const counts = new Map();
+      for (const line of stat.stdout.split("\n")) {
         if (!line.includes("\t")) continue;
-        const [added, deleted, path] = line.split("\t");
-        files.push({
-          path,
+        const parts = line.split("\t");
+        const [added, deleted] = parts;
+        // A rename's numstat row carries three path fields; the last is the
+        // destination, which is the path the letter pass will also name.
+        const path = parts[parts.length - 1];
+        counts.set(path, {
           added: added === "-" ? null : Number.parseInt(added, 10) || 0,
           deleted: deleted === "-" ? null : Number.parseInt(deleted, 10) || 0,
+        });
+      }
+
+      const files = [];
+      for (const line of status.stdout.split("\n")) {
+        if (!line.includes("\t")) continue;
+        const parts = line.split("\t");
+        // `R100 old new` for a rename or copy; `M path` for everything else.
+        const letter = parts[0][0];
+        const original = parts.length > 2 ? parts[1] : null;
+        const path = parts[parts.length - 1];
+        files.push({
+          path,
+          original,
+          status: letter,
+          ...(counts.get(path) ?? { added: null, deleted: null }),
         });
       }
       return { files, error: null };

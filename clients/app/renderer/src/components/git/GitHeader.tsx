@@ -8,7 +8,7 @@
 // it cannot drift.
 
 import { ColumnHeading } from "../ui";
-import type { BranchFacts, GitView } from "./types";
+import type { BranchFacts, Commit, GitView } from "./types";
 
 export interface GitHeaderProps {
   readonly branch: BranchFacts | null;
@@ -19,6 +19,11 @@ export interface GitHeaderProps {
   /** The caption for the Changes view: `2 added · 5 modified`. */
   readonly changeShape: string;
   readonly unpushed: number | null;
+  /** The commit being read, when the column has drilled into one. The head
+   * names the object the column is SHOWING, and while a commit is open that
+   * object is the commit, not the branch. */
+  readonly commit: Commit | null;
+  readonly onBack: () => void;
 }
 
 /** `3 unpushed`, or the honest silence of a branch with no upstream. */
@@ -41,9 +46,42 @@ export function GitHeader({
   count,
   changeShape,
   unpushed,
+  commit,
+  onBack,
 }: GitHeaderProps) {
   const name = branch?.name ?? null;
   const caption = view === "history" ? formatSync(branch, unpushed) : changeShape;
+
+  if (commit !== null) {
+    return (
+      <header>
+        <div className="ah-backhead">
+          <button
+            type="button"
+            className="ah-back"
+            onClick={onBack}
+            // Names where it goes, not just that it goes back — the branch is
+            // the object the reader came from.
+            title={`Back to ${name ?? "the branch"}`}
+            aria-label={`Back to ${name ?? "the branch"}`}
+          >
+            ‹
+          </button>
+          <ColumnHeading
+            name={commit.short}
+            tint={tint}
+            mono
+            count={count}
+            countTitle={`${count} ${count === 1 ? "file" : "files"}`}
+            title={commit.sha}
+          />
+        </div>
+        <span className="ah-caption tnum">
+          {commit.merge ? "merge" : `+${commit.added} −${commit.deleted}`}
+        </span>
+      </header>
+    );
+  }
 
   return (
     <header>

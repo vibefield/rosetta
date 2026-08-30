@@ -1405,3 +1405,40 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 .ah-confirm__go[data-destructive] { background: var(--vf-red); color: var(--vf-state-on-solid); }
 .ah-confirm__go:hover { opacity: 0.9; }
 .ah-confirm button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+
+/* ── inside one commit ─────────────────────────────────────────────────── */
+
+/* The head still names the object the column is showing — which, while a
+   commit is open, is the commit. The way back names the branch it returns
+   to rather than just pointing at it. */
+.ah-backhead { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.ah-backhead .ah-colhead { min-width: 0; }
+.ah-back {
+  flex: none; width: 18px; height: 18px; margin-left: -4px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--vf-text-tertiary); font-size: 15px; line-height: 1;
+}
+.ah-back:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+
+/* The row above had to truncate a long subject; this is the surface that
+   does not, so the message is given in full before its files. */
+.ah-commitmsg {
+  margin: 0; padding: 11px 12px 3px;
+  color: var(--vf-text-secondary); font-size: 12px; line-height: 1.45;
+}
+
+/* A commit's byline can name two or three people; it truncates rather than
+   pushing the diffstat off the row. */
+.ah-commit__who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* who git says wrote it, on the surface with room to name all of them */
+.ah-commitwho {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+  margin: 0; padding: 0 12px 9px;
+  color: var(--vf-text-faint); font-size: 10px;
+}
+.ah-commitwho span { color: var(--vf-text-tertiary); }
+/* a co-author is named, not badged: the glyph is what §8 rules out, and a
+   dot before the name says "and" without spending a second vocabulary */
+.ah-commitwho span[data-co]::before { content: "· "; color: var(--vf-text-faint); }
+.ah-commitwho time { margin-left: auto; font-variant-numeric: tabular-nums; }

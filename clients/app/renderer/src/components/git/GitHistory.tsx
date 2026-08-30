@@ -1,15 +1,25 @@
 // The History view: what this branch has committed.
 //
-// The commit row is the session row one object down — message on top, author
-// and diffstat in the middle, sha bottom-left and age bottom-right — with
-// three rules from the design record §8:
+// The commit row is the session row one object down — message on top, the
+// byline and diffstat in the middle, sha bottom-left and age bottom-right —
+// with two rules from the design record §8:
 //
 //   · the diffstat is NEUTRAL, never git's green and red. Hue in this room
 //     says which project or which state; a direction of change is neither;
-//   · it carries no agent mark. The author is whoever's git identity signed
-//     it, and which agent ran this session is already on the session row;
 //   · only one git state is drawn — not pushed yet — because it is the one
 //     the reader can still act on.
+//
+// The record's third rule was that the row carries no agent mark, because
+// "which one ran this session is already on the session row". That held for
+// the column it described, which was scoped to ONE session. This one is
+// scoped to the repository and lists commits from sessions that are not in
+// this room at all, so the session row cannot speak for them and the
+// redundancy the rule guarded against is gone.
+//
+// What it still does NOT get is the agent GLYPH — that is the provider
+// iconography the rule names, and it would be a second vocabulary for a fact
+// git already states in words. A co-author is shown the way git records it
+// and the way every other git client shows it: as a name in the byline.
 //
 // The record also says the row is not pressable, "this proposal has no diff
 // view, and a hover fill would be promising one". There is a diff view now,
@@ -18,6 +28,14 @@
 import { EmptyState } from "../ui";
 import { lastActive } from "../../lib/format";
 import type { Commit } from "./types";
+
+/** Everyone git says wrote this commit: the author who signed it, then the
+ * co-authors it names — which in this room is usually the agent. */
+function byline(commit: Commit): string {
+  return [commit.author, ...commit.coAuthors.map((author) => author.name)]
+    .filter((name) => name !== "")
+    .join(", ");
+}
 
 export interface GitHistoryProps {
   readonly commits: readonly Commit[];
@@ -76,7 +94,9 @@ export function GitHistory({
             <strong title={commit.subject}>{commit.subject}</strong>
           </span>
           <span className="ah-commit__meta">
-            <span>{commit.author}</span>
+            <span className="ah-commit__who" title={byline(commit)}>
+              {byline(commit)}
+            </span>
             <span>·</span>
             {commit.merge ? (
               // A merge's diffstat is not a fact about one person's work.
