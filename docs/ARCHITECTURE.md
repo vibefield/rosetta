@@ -646,6 +646,29 @@ This makes the optimization boundary explicit:
   campaign retained exact hit counts and ranked-result digests; p95 moved about +1.1% in both
   search lanes, which is treated as run noise because detached FTS does not read `tool_payload`.
   This is one payload-heavy file, not evidence for whole-roster wall-time extrapolation.
+- Private-cold relational reconciliation is now a generation-scoped RAM fold rather than a
+  per-fragment SQLite loop. The `cold-tool-ram-reconcile-2026-08-30` pair used that same
+  permission-read-only 88,498,056-byte Claude transcript (SHA-256
+  `7ecfbffce129ee8c0fc07e2b0b28325f569227cc32cb1894aa9c67327dc02c96`) on the same
+  macOS/aarch64 machine, release builds, and identical CLI/configuration. Baseline `d4abca8`
+  versus the final, retry-hardened candidate moved canonical apply from 4.079 s to 0.171 s
+  (-95.8%), total store apply from 4.172 s to 0.349 s, and process wall from 5.02 s to
+  1.29 s. The candidate spent 26.3 ms folding 2,566 correlations in RAM and 32.1 ms
+  inserting 5,132 reduced facts;
+  tool-result lookup/write timers fell from 1.799 s/59.6 ms to zero because each final tool
+  row was inserted once. One max timestamp touch per affected session reduced touch attempts
+  from 8,011 to 2,880. Deferring tool rows moved 3,926 provisional ordinals into the global
+  38.1 ms renumber pass, which is included in the wall result. Both sides retained 24,854
+  parsed records, 12,557 ops, 3,934 messages, 2,566 tool rows, 5,132 facts, 868 edits, zero
+  pending merges, equal usage/aggregate rows, zero logical `EXCEPT` differences after mapping
+  surrogate message IDs, and passing quick/foreign-key checks. Frozen search campaign
+  `67b44f4c6ec55edea241aaeb6760b725580d8d1c52fae599b2e00b6fbc9a6b2a` used the
+  checksummed `product-diagnostic-v2` suite (BLAKE3
+  `00dcab42b607869ed696fe70caed9ab16c7ffe3507453e8f3ffc2ebccbc4fbe1`), 5 warmups and
+  100 cycles; the comparison passed equal schema/configuration, logical counts, filters, hit
+  counts, and ordered-result digests. This optimization applies to every adapter emitting the
+  universal `Message::ToolUse` / `ToolUpdate` / response-usage / file-edit vocabulary; live
+  and progressive-public stores deliberately retain transactional reconciliation.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
 now attribute replay cost by adapter and canonical statement family. The target-aware gate

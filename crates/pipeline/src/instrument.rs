@@ -73,6 +73,8 @@ pub enum Metric {
     OrdinalLookups,
     SessionRenumbers,
     SessionRenumberRows,
+    BulkToolRowsReconciled,
+    BulkToolFactsWritten,
     MessageLookupNanos,
     MessageWriteNanos,
     ToolResultLookupNanos,
@@ -87,6 +89,8 @@ pub enum Metric {
     OtherApplyNanos,
     OrdinalLookupNanos,
     SessionRenumberNanos,
+    ToolReconcileNanos,
+    ToolFactWriteNanos,
     BulkRenumberRows,
     BulkRenumberNanos,
     BulkBucketNanos,
@@ -99,7 +103,7 @@ pub enum Metric {
     SearchSyncNanos,
 }
 
-const METRIC_COUNT: usize = 83;
+const METRIC_COUNT: usize = 87;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -167,6 +171,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::OrdinalLookups, "ordinal lookups"),
     (Metric::SessionRenumbers, "session renumbers"),
     (Metric::SessionRenumberRows, "session renumber rows"),
+    (Metric::BulkToolRowsReconciled, "bulk tool rows reconciled"),
+    (Metric::BulkToolFactsWritten, "bulk tool facts written"),
     (Metric::MessageLookupNanos, "message lookup time"),
     (Metric::MessageWriteNanos, "message write time"),
     (Metric::ToolResultLookupNanos, "tool-result lookup time"),
@@ -181,6 +187,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::OtherApplyNanos, "other apply time"),
     (Metric::OrdinalLookupNanos, "ordinal lookup time"),
     (Metric::SessionRenumberNanos, "session renumber time"),
+    (Metric::ToolReconcileNanos, "tool reconciliation time"),
+    (Metric::ToolFactWriteNanos, "tool fact write time"),
     (Metric::BulkRenumberRows, "bulk renumber rows"),
     (Metric::BulkRenumberNanos, "bulk renumber time"),
     (Metric::BulkBucketNanos, "bulk bucket time"),
@@ -414,55 +422,80 @@ impl Instrument {
     pub fn apply(&self, store: &mut Store, batch: &Batch) -> Result<ApplyStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || store.apply(batch));
         if let Ok(stats) = &result {
-            self.add(Metric::ProjectionAssets, stats.projection_assets);
-            self.add(Metric::AssetFilesWritten, stats.asset_files_written);
-            self.add(Metric::AssetFilesReused, stats.asset_files_reused);
-            self.add(Metric::AssetBytes, stats.asset_bytes);
-            self.add(Metric::AssetWriteNanos, stats.asset_write_nanos);
-            self.add(Metric::SourceStageNanos, stats.source_stage_nanos);
-            self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
-            self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
-            let profile = &stats.profile;
-            self.add(Metric::MessageApplyAttempts, profile.message_attempts);
-            self.add(
-                Metric::ToolResultApplyAttempts,
-                profile.tool_result_attempts,
-            );
-            self.add(Metric::UsageApplyAttempts, profile.usage_attempts);
-            self.add(Metric::DriftApplyAttempts, profile.drift_attempts);
-            self.add(Metric::OtherApplyAttempts, profile.other_attempts);
-            self.add(Metric::SessionTouchAttempts, profile.session_touch_attempts);
-            self.add(Metric::SessionTouchRows, profile.session_touch_rows);
-            self.add(Metric::PendingGateChecks, profile.pending_gate_checks);
-            self.add(Metric::PendingLookupSkips, profile.pending_lookup_skips);
-            self.add(Metric::PendingLookups, profile.pending_lookups);
-            self.add(Metric::PendingRows, profile.pending_rows);
-            self.add(Metric::PendingQueues, profile.pending_queues);
-            self.add(Metric::OrdinalLookups, profile.ordinal_lookups);
-            self.add(Metric::SessionRenumbers, profile.session_renumbers);
-            self.add(Metric::SessionRenumberRows, profile.session_renumber_rows);
-            self.add(Metric::MessageLookupNanos, profile.message_lookup_nanos);
-            self.add(Metric::MessageWriteNanos, profile.message_write_nanos);
-            self.add(
-                Metric::ToolResultLookupNanos,
-                profile.tool_result_lookup_nanos,
-            );
-            self.add(
-                Metric::ToolResultWriteNanos,
-                profile.tool_result_write_nanos,
-            );
-            self.add(Metric::UsageLookupNanos, profile.usage_lookup_nanos);
-            self.add(Metric::UsageWriteNanos, profile.usage_write_nanos);
-            self.add(Metric::SessionTouchNanos, profile.session_touch_nanos);
-            self.add(Metric::PendingGateNanos, profile.pending_gate_nanos);
-            self.add(Metric::PendingLookupNanos, profile.pending_lookup_nanos);
-            self.add(Metric::PendingQueueNanos, profile.pending_queue_nanos);
-            self.add(Metric::DriftApplyNanos, profile.drift_apply_nanos);
-            self.add(Metric::OtherApplyNanos, profile.other_apply_nanos);
-            self.add(Metric::OrdinalLookupNanos, profile.ordinal_lookup_nanos);
-            self.add(Metric::SessionRenumberNanos, profile.session_renumber_nanos);
+            self.record_apply_stats(stats);
         }
         result
+    }
+
+    /// Flush the private-cold relational fold at a runtime boundary. The same
+    /// counters are used as ordinary batches, while the RAM fold has its own
+    /// exclusive timer for the audit UI.
+    pub fn flush_bulk_reconciliation(&self, store: &mut Store) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.flush_bulk_reconciliation());
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    fn record_apply_stats(&self, stats: &ApplyStats) {
+        self.add(Metric::ProjectionAssets, stats.projection_assets);
+        self.add(Metric::AssetFilesWritten, stats.asset_files_written);
+        self.add(Metric::AssetFilesReused, stats.asset_files_reused);
+        self.add(Metric::AssetBytes, stats.asset_bytes);
+        self.add(Metric::AssetWriteNanos, stats.asset_write_nanos);
+        self.add(Metric::SourceStageNanos, stats.source_stage_nanos);
+        self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
+        self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
+        let profile = &stats.profile;
+        self.add(Metric::MessageApplyAttempts, profile.message_attempts);
+        self.add(
+            Metric::ToolResultApplyAttempts,
+            profile.tool_result_attempts,
+        );
+        self.add(Metric::UsageApplyAttempts, profile.usage_attempts);
+        self.add(Metric::DriftApplyAttempts, profile.drift_attempts);
+        self.add(Metric::OtherApplyAttempts, profile.other_attempts);
+        self.add(Metric::SessionTouchAttempts, profile.session_touch_attempts);
+        self.add(Metric::SessionTouchRows, profile.session_touch_rows);
+        self.add(Metric::PendingGateChecks, profile.pending_gate_checks);
+        self.add(Metric::PendingLookupSkips, profile.pending_lookup_skips);
+        self.add(Metric::PendingLookups, profile.pending_lookups);
+        self.add(Metric::PendingRows, profile.pending_rows);
+        self.add(Metric::PendingQueues, profile.pending_queues);
+        self.add(Metric::OrdinalLookups, profile.ordinal_lookups);
+        self.add(Metric::SessionRenumbers, profile.session_renumbers);
+        self.add(Metric::SessionRenumberRows, profile.session_renumber_rows);
+        self.add(
+            Metric::BulkToolRowsReconciled,
+            profile.bulk_tool_rows_reconciled,
+        );
+        self.add(
+            Metric::BulkToolFactsWritten,
+            profile.bulk_tool_facts_written,
+        );
+        self.add(Metric::MessageLookupNanos, profile.message_lookup_nanos);
+        self.add(Metric::MessageWriteNanos, profile.message_write_nanos);
+        self.add(
+            Metric::ToolResultLookupNanos,
+            profile.tool_result_lookup_nanos,
+        );
+        self.add(
+            Metric::ToolResultWriteNanos,
+            profile.tool_result_write_nanos,
+        );
+        self.add(Metric::UsageLookupNanos, profile.usage_lookup_nanos);
+        self.add(Metric::UsageWriteNanos, profile.usage_write_nanos);
+        self.add(Metric::SessionTouchNanos, profile.session_touch_nanos);
+        self.add(Metric::PendingGateNanos, profile.pending_gate_nanos);
+        self.add(Metric::PendingLookupNanos, profile.pending_lookup_nanos);
+        self.add(Metric::PendingQueueNanos, profile.pending_queue_nanos);
+        self.add(Metric::DriftApplyNanos, profile.drift_apply_nanos);
+        self.add(Metric::OtherApplyNanos, profile.other_apply_nanos);
+        self.add(Metric::OrdinalLookupNanos, profile.ordinal_lookup_nanos);
+        self.add(Metric::SessionRenumberNanos, profile.session_renumber_nanos);
+        self.add(Metric::ToolReconcileNanos, profile.tool_reconcile_nanos);
+        self.add(Metric::ToolFactWriteNanos, profile.tool_fact_write_nanos);
     }
 
     /// Finalize a private projection and record the independently useful

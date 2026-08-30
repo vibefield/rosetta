@@ -427,6 +427,13 @@ pub fn rebuild_runtime(
         )?;
     }
 
+    // All surviving sources for this runtime are now sealed. Reconcile their
+    // cross-file tool lifecycle once in RAM before declaring sessions ready.
+    if store.is_bulk_rebuild() {
+        let reconciled = instrument.flush_bulk_reconciliation(store)?;
+        merge_stats(&mut report.stats, &reconciled);
+    }
+
     // Rebuild has the same readiness contract as source backfill: only
     // sessions whose every sealed source is currently clean are Indexed.
     // Meta-only sessions are absent from this map and retain Pending.

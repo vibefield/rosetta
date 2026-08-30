@@ -185,6 +185,657 @@ fn base_batch() -> Batch {
     }
 }
 
+fn install_cursor(store: &mut Store, path: &str) -> i64 {
+    store
+        .apply(&Batch {
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: "rt1".into(),
+                stream: "transcript".into(),
+                path: path.into(),
+                session_id: "s1".into(),
+                expected: None,
+                next: "fresh".into(),
+                updated_at: None,
+            }],
+            ..Batch::default()
+        })
+        .unwrap();
+    queries::cursor_state(store.conn(), "rt1", path)
+        .unwrap()
+        .unwrap()
+        .id
+}
+
+#[test]
+fn private_cold_reconciliation_folds_cross_source_relations_once_in_ram() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let result_cursor = install_cursor(&mut store, "a-result.jsonl");
+    let opener_cursor = install_cursor(&mut store, "z-opener.jsonl");
+
+    let terminal = IngestOp::ToolUpdate {
+        session_id: "s1".into(),
+        correlation_key: "cold-tool".into(),
+        evidence: EvidenceOrder {
+            source_identity: SourceIdentity("a-result.jsonl".into()),
+            generation: 1,
+            record_offset: 7,
+            mutation_index: 0,
+        },
+        patch: Box::new(ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: ToolStatus::Succeeded,
+                basis: StatusBasis::NativeTerminalRecord,
+            }),
+            ..Default::default()
+        }),
+        at: Some(3_700_000),
+    };
+    store
+        .apply(&Batch {
+            ops: vec![
+                terminal,
+                IngestOp::Usage {
+                    session_id: "s1".into(),
+                    response: "cold-call".into(),
+                    ts: 3_700_000,
+                    model: Some("claude-opus-5".into()),
+                    tokens: TokenSnapshot {
+                        input: Some(17),
+                        output: Some(3),
+                        ..Default::default()
+                    },
+                },
+                IngestOp::FileEdit(FileEditRow {
+                    session_id: "s1".into(),
+                    message_timeline_id: Some("cold-call".into()),
+                    path: "/w/rosetta/src/lib.rs".into(),
+                    kind: EditKind::Edit,
+                    snapshot_ref: None,
+                    lines_added: Some(2),
+                    lines_removed: Some(1),
+                    at: Some(3_700_000),
+                }),
+            ],
+            source: Some(SourceWrite {
+                cursor_id: result_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let mut ordinary = message("ordinary", 0, MessageKind::User);
+    ordinary.src_cursor = Some(opener_cursor);
+    ordinary.src_offset = Some(0);
+    let mut opener = message("cold-call", 1, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(shell_tool("cold-tool", "cargo test"));
+    opener.src_cursor = Some(opener_cursor);
+    opener.src_offset = Some(1);
+    store
+        .apply(&Batch {
+            ops: vec![message_op(ordinary), message_op(opener)],
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "only non-relational rows reach SQLite before the runtime closes"
+    );
+    for table in ["tool_update_fact", "file_edit", "pending_merge"] {
+        assert_eq!(
+            store
+                .conn()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0,
+            "{table} must not be used as a cold reconciliation queue"
+        );
+    }
+
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.messages_inserted, 1);
+    assert_eq!(stats.messages_updated, 0);
+    assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(stats.tool_results_unmatched, 0);
+    assert_eq!(stats.usage_applied, 1);
+    assert_eq!(stats.usage_unmatched, 0);
+    assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
+    assert_eq!(stats.profile.bulk_tool_facts_written, 2);
+    assert_eq!(stats.profile.message_lookup_nanos, 0);
+    assert_eq!(stats.profile.tool_result_lookup_nanos, 0);
+    assert_eq!(stats.profile.usage_lookup_nanos, 0);
+    assert_eq!(stats.profile.usage_write_nanos, 0);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2,
+        "native and source-finalization facts remain for future subtraction"
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM file_edit", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let call = page
+        .iter()
+        .find(|entry| entry.timeline_id == "cold-call")
+        .unwrap();
+    let tool = entry_tool(call).unwrap();
+    assert_eq!(tool.status.value, ToolStatus::Succeeded);
+    assert_eq!(call.usage.input, Some(17));
+    assert_eq!(call.usage.output, Some(3));
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT updated_at FROM session WHERE id = 's1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        3_700_000,
+        "the RAM fold applies one max timestamp touch for the whole session"
+    );
+
+    assert_eq!(
+        store.flush_bulk_reconciliation().unwrap(),
+        rosetta_store::ApplyStats::default(),
+        "a committed RAM plan drains exactly once"
+    );
+    store.finish_bulk_load().unwrap();
+}
+
+#[test]
+fn private_cold_reconciliation_discards_superseded_ram_generation() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "rewrite.jsonl");
+
+    let mut stale = message("rewrite-call", 0, MessageKind::ToolUse);
+    stale.content = None;
+    stale.tool = Some(shell_tool("rewrite-tool", "old command"));
+    stale.src_cursor = Some(cursor_id);
+    stale.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![
+                message_op(stale),
+                status_update("rewrite-tool", ToolStatus::Failed, 1),
+            ],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let mut fresh = message("rewrite-call", 0, MessageKind::ToolUse);
+    fresh.content = None;
+    fresh.tool = Some(shell_tool("rewrite-tool", "new command"));
+    fresh.src_cursor = Some(cursor_id);
+    fresh.src_offset = Some(0);
+    let mut succeeded = status_update("rewrite-tool", ToolStatus::Succeeded, 1);
+    if let IngestOp::ToolUpdate { evidence, .. } = &mut succeeded {
+        evidence.generation = 2;
+    }
+    store
+        .apply(&Batch {
+            ops: vec![message_op(fresh), succeeded],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
+    assert_eq!(stats.profile.bulk_tool_facts_written, 2);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let tool = entry_tool(&page[0]).unwrap();
+    assert_eq!(tool.status.value, ToolStatus::Succeeded);
+    let ToolAction::Shell { command, .. } = &tool.action else {
+        panic!("expected the replacement shell action")
+    };
+    assert_eq!(command.as_preview(), "new command");
+    let generations: Vec<i64> = {
+        let mut statement = store
+            .conn()
+            .prepare("SELECT DISTINCT generation FROM tool_update_fact ORDER BY generation")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(generations, vec![2]);
+}
+
+#[test]
+fn private_cold_abandoned_replacement_keeps_buffered_active_generation() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "abandoned-rewrite.jsonl");
+
+    let mut clean = message("clean-call", 0, MessageKind::ToolUse);
+    clean.content = None;
+    clean.tool = Some(shell_tool("clean-tool", "keep this command"));
+    clean.src_cursor = Some(cursor_id);
+    clean.src_offset = Some(0);
+    let mut succeeded = status_update("clean-tool", ToolStatus::Succeeded, 1);
+    if let IngestOp::ToolUpdate { evidence, .. } = &mut succeeded {
+        evidence.source_identity = SourceIdentity("abandoned-rewrite.jsonl".into());
+        evidence.generation = 1;
+    }
+    store
+        .apply(&Batch {
+            ops: vec![message_op(clean), succeeded],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    // Start a replacement before the clean generation has been flushed from
+    // RAM, then abandon it. The active generation is still the authority.
+    let mut unclean = message("unclean-call", 0, MessageKind::ToolUse);
+    unclean.content = None;
+    unclean.tool = Some(shell_tool("unclean-tool", "discard this command"));
+    unclean.src_cursor = Some(cursor_id);
+    unclean.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![message_op(unclean)],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 1,
+                mode: SourceMode::Abandon,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].timeline_id, "clean-call");
+    let tool = entry_tool(&page[0]).unwrap();
+    assert_eq!(tool.status.value, ToolStatus::Succeeded);
+    let ToolAction::Shell { command, .. } = &tool.action else {
+        panic!("expected the active shell action")
+    };
+    assert_eq!(command.as_preview(), "keep this command");
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM tool_update_fact WHERE generation = 2",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn private_cold_buffer_deduplicates_retries_and_rejects_source_conflicts() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "retry.jsonl");
+
+    let mut opener = message("retry-call", 0, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(shell_tool("retry-tool", "stable command"));
+    opener.src_cursor = Some(cursor_id);
+    opener.src_offset = Some(0);
+    let staged = Batch {
+        ops: vec![message_op(opener)],
+        source: Some(SourceWrite {
+            cursor_id,
+            session_id: "s1".into(),
+            generation: 1,
+            first_sequence: 0,
+            mode: SourceMode::Stage,
+        }),
+        ..Batch::default()
+    };
+    store.apply(&staged).unwrap();
+    store.apply(&staged).unwrap();
+
+    let mut conflicting = message("different-row", 0, MessageKind::User);
+    conflicting.src_cursor = Some(cursor_id);
+    conflicting.src_offset = Some(0);
+    let error = store
+        .apply(&Batch {
+            ops: vec![message_op(conflicting)],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        rosetta_store::StoreError::SourceConflict {
+            cursor_id: actual_cursor,
+            generation: 1,
+            sequence: 0,
+        } if actual_cursor == cursor_id
+    ));
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE timeline_id = 'different-row'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "the RAM conflict must fail before the SQLite transaction"
+    );
+
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.messages_inserted, 1, "the exact retry folds once");
+    assert_eq!(stats.profile.bulk_tool_facts_written, 1);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].timeline_id, "retry-call");
+}
+
+#[test]
+fn private_cold_append_refolds_existing_tool_once_per_correlation() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "append.jsonl");
+
+    let mut opener = message("append-call", 0, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(shell_tool("append-tool", "long command"));
+    opener.src_cursor = Some(cursor_id);
+    opener.src_offset = Some(0);
+    let mut succeeded = status_update("append-tool", ToolStatus::Succeeded, 1);
+    if let IngestOp::ToolUpdate { evidence, .. } = &mut succeeded {
+        evidence.source_identity = SourceIdentity("append.jsonl".into());
+        evidence.generation = 1;
+    }
+    store
+        .apply(&Batch {
+            ops: vec![message_op(opener), succeeded],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store.flush_bulk_reconciliation().unwrap();
+
+    let mut failed = status_update("append-tool", ToolStatus::Failed, 2);
+    if let IngestOp::ToolUpdate { evidence, .. } = &mut failed {
+        evidence.source_identity = SourceIdentity("append.jsonl".into());
+        evidence.generation = 1;
+    }
+    store
+        .apply(&Batch {
+            ops: vec![failed],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 2,
+                mode: SourceMode::Append,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.messages_inserted, 0);
+    assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
+    assert_eq!(stats.profile.bulk_tool_facts_written, 1);
+    assert_eq!(stats.tool_results_merged, 1);
+    assert_eq!(stats.tool_results_unmatched, 0);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(
+        entry_tool(&page[0]).unwrap().status.value,
+        ToolStatus::Failed
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+}
+
+#[test]
+fn private_cold_replacement_subtracts_sibling_fact_in_ram() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let opener_cursor = install_cursor(&mut store, "opener.jsonl");
+    let result_cursor = install_cursor(&mut store, "result.jsonl");
+
+    let mut opener = message("sibling-call", 0, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(shell_tool("sibling-tool", "true"));
+    opener.src_cursor = Some(opener_cursor);
+    opener.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![message_op(opener)],
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store.flush_bulk_reconciliation().unwrap();
+
+    let mut succeeded = status_update("sibling-tool", ToolStatus::Succeeded, 0);
+    if let IngestOp::ToolUpdate { evidence, .. } = &mut succeeded {
+        evidence.source_identity = SourceIdentity("result.jsonl".into());
+        evidence.generation = 1;
+    }
+    store
+        .apply(&Batch {
+            ops: vec![succeeded],
+            source: Some(SourceWrite {
+                cursor_id: result_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store.flush_bulk_reconciliation().unwrap();
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(
+        entry_tool(&page[0]).unwrap().status.value,
+        ToolStatus::Succeeded
+    );
+
+    // The result source was rewritten and no longer contains its terminal
+    // fact. Its sibling-owned opener must be refolded from the surviving
+    // source-finalization evidence without a per-fact SQLite update loop.
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id: result_cursor,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.profile.bulk_tool_rows_reconciled, 1);
+    assert_eq!(stats.profile.bulk_tool_facts_written, 0);
+    assert_eq!(stats.profile.tool_result_lookup_nanos, 0);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let tool = entry_tool(&page[0]).unwrap();
+    assert_eq!(tool.status.value, ToolStatus::Unknown);
+    assert_eq!(tool.status.basis, StatusBasis::SourceFinalization);
+}
+
+#[test]
+fn private_cold_usage_preserves_pending_then_current_order_across_flushes() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let usage_cursor = install_cursor(&mut store, "usage.jsonl");
+    let opener_cursor = install_cursor(&mut store, "late-opener.jsonl");
+    let usage = |input| IngestOp::Usage {
+        session_id: "s1".into(),
+        response: "late-call".into(),
+        ts: 3_700_000 + input,
+        model: Some("claude-opus-5".into()),
+        tokens: TokenSnapshot {
+            input: Some(input),
+            ..Default::default()
+        },
+    };
+
+    store
+        .apply(&Batch {
+            ops: vec![usage(1)],
+            source: Some(SourceWrite {
+                cursor_id: usage_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    let first = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(first.usage_unmatched, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+
+    let mut opener = message("late-call", 0, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(shell_tool("late-tool", "true"));
+    opener.src_cursor = Some(opener_cursor);
+    opener.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![message_op(opener), usage(2)],
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    let second = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(second.usage_applied, 2);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page[0].usage.input, Some(2));
+}
+
 #[test]
 fn image_asset_and_typed_tool_update_commit_without_embedding_bytes() {
     let directory = tempfile::tempdir().unwrap();

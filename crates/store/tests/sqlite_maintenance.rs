@@ -170,6 +170,14 @@ fn reconciliation_and_bucket_queries_have_matching_indexes() {
         "SELECT 1 FROM file_edit WHERE message_id = 1",
         "file_edit_message",
     );
+    assert_plan_uses(
+        store.conn(),
+        "SELECT id FROM message
+         WHERE session_id = 's1'
+           AND tool_correlation_key = 'tool-1'
+           AND type = 'tool_use'",
+        "message_tool_correlation",
+    );
     let duplicate: i64 = store
         .conn()
         .query_row(

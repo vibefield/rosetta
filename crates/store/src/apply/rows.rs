@@ -179,7 +179,8 @@ fn load_old_by_tool(
                 tool_status_basis, tool_detail, tool_merge_state, tool_error_kind,
                 tool_error_summary, tool_diagnostic, tool_started_at,
                 tool_completed_at, tool_duration_ms, tool_open
-         FROM message WHERE session_id = ?1 AND tool_correlation_key = ?2",
+         FROM message
+         WHERE session_id = ?1 AND tool_correlation_key = ?2 AND type = 'tool_use'",
         params![session_id, correlation_key],
     )
 }
@@ -284,7 +285,7 @@ fn fold_tool_facts(
     Ok((tool, state, fact_count))
 }
 
-fn persist_tool_fact(
+pub(super) fn persist_tool_fact(
     tx: &Transaction,
     session_id: &str,
     correlation_key: &str,
@@ -292,7 +293,7 @@ fn persist_tool_fact(
     patch: &ToolUpdatePatch,
     at: Option<Ms>,
     src_cursor: Option<i64>,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
     let generation = sqlite_u64(evidence.generation, "generation")?;
     let record_offset = sqlite_u64(evidence.record_offset, "record offset")?;
     let mutation_index = i64::from(evidence.mutation_index);
@@ -342,7 +343,7 @@ fn persist_tool_fact(
             });
         }
     }
-    Ok(())
+    Ok(inserted == 1)
 }
 
 fn update_encoded_tool(
@@ -382,6 +383,26 @@ fn update_encoded_tool(
         encoded.completed_at,
         encoded.duration_ms,
     ])?;
+    Ok(())
+}
+
+/// Apply one already-folded lifecycle to an opener that was emitted by an
+/// earlier private-cold reconciliation boundary. This is the bounded fallback
+/// for a later append: one update per affected correlation, never one lookup
+/// and rewrite per lifecycle fragment.
+pub(super) fn update_reconciled_tool(
+    tx: &Transaction,
+    message_id: i64,
+    tool: &ToolInteraction,
+    state: &ToolMergeState,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
+    let started = Instant::now();
+    update_encoded_tool(tx, message_id, tool, state)?;
+    stats.profile.tool_result_write_nanos = stats
+        .profile
+        .tool_result_write_nanos
+        .saturating_add(elapsed_nanos(started));
     Ok(())
 }
 
@@ -458,23 +479,33 @@ pub(super) fn finalize_source_tools(
 /// Remove one source generation's active typed facts and repair any opener
 /// owned by a different source. Rows owned by the swept source are about to be
 /// deleted and will fold surviving sibling facts when their replacement opens.
-pub(super) fn remove_source_tool_facts(tx: &Transaction, cursor_id: i64) -> Result<(), StoreError> {
-    let mut statement = tx.prepare_cached(
-        "SELECT DISTINCT f.session_id, f.correlation_key
-         FROM tool_update_fact f
-         JOIN message m
-           ON m.session_id = f.session_id
-          AND m.tool_correlation_key = f.correlation_key
-         WHERE f.src_cursor = ?1
-           AND (m.src_cursor IS NULL OR m.src_cursor != ?1)
-         ORDER BY f.session_id, f.correlation_key",
-    )?;
-    let targets = statement
-        .query_map(params![cursor_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    drop(statement);
+pub(super) fn remove_source_tool_facts(
+    tx: &Transaction,
+    cursor_id: i64,
+    reconcile_survivors: bool,
+) -> Result<(), StoreError> {
+    let targets = if reconcile_survivors {
+        let mut statement = tx.prepare_cached(
+            "SELECT DISTINCT f.session_id, f.correlation_key
+             FROM tool_update_fact f
+             JOIN message m
+               ON m.session_id = f.session_id
+              AND m.tool_correlation_key = f.correlation_key
+              AND m.type = 'tool_use'
+             WHERE f.src_cursor = ?1
+               AND (m.src_cursor IS NULL OR m.src_cursor != ?1)
+             ORDER BY f.session_id, f.correlation_key",
+        )?;
+        let targets = statement
+            .query_map(params![cursor_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        targets
+    } else {
+        Vec::new()
+    };
     tx.prepare_cached("DELETE FROM tool_update_fact WHERE src_cursor = ?1")?
         .execute(params![cursor_id])?;
     for (session_id, correlation_key) in targets {
@@ -610,13 +641,74 @@ pub(super) fn apply_message(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     pending_gate: &mut PendingGate,
+    effects: Option<&mut Effects>,
+) -> Result<(), StoreError> {
+    apply_message_inner(
+        tx,
+        row,
+        None,
+        false,
+        true,
+        stats,
+        maintenance,
+        dirty_buckets,
+        pending_gate,
+        effects,
+    )
+}
+
+/// Insert a cold-build tool opener after its complete lifecycle was folded in
+/// memory. `row` remains the original opener so `tool_open` retains the exact
+/// source-owned base needed by future generation reconciliation; only the
+/// public/current tool value and its private field stamps are precomputed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_reconciled_tool_message(
+    tx: &Transaction,
+    row: &TimelineEntry,
+    resolved_tool: &ToolInteraction,
+    resolved_state: &ToolMergeState,
+    known_absent: bool,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
+) -> Result<(), StoreError> {
+    apply_message_inner(
+        tx,
+        row,
+        Some((resolved_tool, resolved_state)),
+        known_absent,
+        false,
+        stats,
+        maintenance,
+        dirty_buckets,
+        pending_gate,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_message_inner(
+    tx: &Transaction,
+    row: &TimelineEntry,
+    reconciled_tool: Option<(&ToolInteraction, &ToolMergeState)>,
+    known_absent: bool,
+    touch_message_session: bool,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    pending_gate: &mut PendingGate,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     stats.profile.message_attempts += 1;
-    let started = Instant::now();
-    let loaded = load_old_by_timeline(tx, &row.timeline_id);
-    stats.profile.message_lookup_nanos += elapsed_nanos(started);
-    let old = loaded?;
+    let old = if known_absent {
+        None
+    } else {
+        let started = Instant::now();
+        let loaded = load_old_by_timeline(tx, &row.timeline_id);
+        stats.profile.message_lookup_nanos += elapsed_nanos(started);
+        loaded?
+    };
     if let Some(old) = old.as_ref() {
         mark_bucket(
             dirty_buckets,
@@ -638,8 +730,26 @@ pub(super) fn apply_message(
         TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
         _ => None,
     };
-    let (tool, tool_merge_state, folded_tool_facts) =
-        resolved_open_tool(tx, &row.session_id, incoming_tool, old.as_ref())?;
+    let (tool, tool_merge_state, folded_tool_facts) = match reconciled_tool {
+        Some((resolved, state)) => {
+            let opener = incoming_tool.ok_or_else(|| StoreError::ProjectionInvalid {
+                message: format!(
+                    "pre-reconciled tool row {} does not contain a tool opener",
+                    row.timeline_id
+                ),
+            })?;
+            if opener.correlation != resolved.correlation {
+                return Err(StoreError::ProjectionInvalid {
+                    message: format!(
+                        "pre-reconciled tool correlation changed for row {}",
+                        row.timeline_id
+                    ),
+                });
+            }
+            (Some(resolved.clone()), Some(state.clone()), 0)
+        }
+        None => resolved_open_tool(tx, &row.session_id, incoming_tool, old.as_ref())?,
+    };
     stats.tool_results_merged = stats
         .tool_results_merged
         .saturating_add(u64::try_from(folded_tool_facts).unwrap_or(u64::MAX));
@@ -802,7 +912,9 @@ pub(super) fn apply_message(
     })();
     stats.profile.message_write_nanos += elapsed_nanos(started);
     written?;
-    touch_session(tx, &row.session_id, row.at, stats)?;
+    if touch_message_session {
+        touch_session(tx, &row.session_id, row.at, stats)?;
+    }
     if let Some(fx) = effects.as_deref_mut() {
         fx.push(Mutation::Message(Box::new(emitted.clone())));
     }

@@ -136,6 +136,10 @@ pub struct Store {
     conn: Connection,
     assets: assets::AssetStore,
     mode: StoreMode,
+    /// Relational lifecycle fragments for an unpublished cold projection.
+    /// The buffer follows committed source generations, then folds each tool
+    /// correlation once before emitting final canonical rows to SQLite.
+    bulk_reconciliation: apply::BulkReconciliationBuffer,
     /// An abandoned generation means the private projection was built from an
     /// incomplete source. Keep accepting batches so callers can finish their
     /// diagnostic pass, but never allow that scratch file to be published.
@@ -178,6 +182,7 @@ impl Store {
             conn,
             assets: assets::AssetStore::for_projection(path),
             mode: StoreMode::Live,
+            bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -194,6 +199,7 @@ impl Store {
             conn,
             assets: assets::AssetStore::in_memory(),
             mode: StoreMode::Live,
+            bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -220,6 +226,7 @@ impl Store {
             } else {
                 StoreMode::Progressive
             },
+            bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -278,6 +285,7 @@ impl Store {
             conn,
             assets,
             mode: StoreMode::Bulk,
+            bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
         })
@@ -290,6 +298,22 @@ impl Store {
         let asset_stats = self
             .assets
             .materialize_batch(batch, self.mode != StoreMode::Bulk)?;
+        let bulk_delta = if self.mode == StoreMode::Bulk {
+            // The old generation remains canonical while a replacement is
+            // merely staged. Capture correlations whose source-owned facts
+            // disappear only at the committed activation boundary; Abandon
+            // must leave both SQLite and the RAM buffer on the old generation.
+            let capture_replacement = batch
+                .source
+                .as_ref()
+                .is_some_and(|source| source.mode == SourceMode::Activate);
+            apply::BulkReconciliationDelta::from_batch(batch, &self.conn, capture_replacement)?
+        } else {
+            None
+        };
+        if let Some(delta) = bulk_delta.as_ref() {
+            self.bulk_reconciliation.validate(delta)?;
+        }
         let mut fresh = self.effects.is_some().then(Effects::default);
         let tx = self.conn.transaction()?;
         let search_before = if self.mode == StoreMode::Live {
@@ -321,6 +345,9 @@ impl Store {
         let started = Instant::now();
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(started);
+        if let Some(delta) = bulk_delta {
+            self.bulk_reconciliation.commit(delta);
+        }
         if bulk_load
             && matches!(
                 batch.source.as_ref().map(|source| source.mode),
@@ -332,6 +359,34 @@ impl Store {
         if let (Some(pending), Some(committed)) = (self.effects.as_mut(), fresh) {
             pending.merge(committed);
         }
+        Ok(stats)
+    }
+
+    /// Close every activated private-cold source currently buffered, fold its
+    /// relational tool lifecycle in RAM, and emit each final tool row once.
+    /// Calling this outside private rebuild mode is a harmless no-op so the
+    /// pipeline can place the boundary at the end of any runtime stream.
+    pub fn flush_bulk_reconciliation(&mut self) -> Result<ApplyStats, StoreError> {
+        if self.mode != StoreMode::Bulk {
+            return Ok(ApplyStats::default());
+        }
+
+        let reconcile_started = Instant::now();
+        let mut plan = self.bulk_reconciliation.prepare(&self.conn)?;
+        let reconcile_nanos = elapsed_nanos(reconcile_started);
+        if plan.is_empty() {
+            return Ok(ApplyStats::default());
+        }
+
+        let tx = self.conn.transaction()?;
+        let apply_started = Instant::now();
+        let mut stats = apply::apply_bulk_reconciliation(&tx, &mut plan)?;
+        stats.profile.tool_reconcile_nanos = reconcile_nanos;
+        stats.canonical_apply_nanos = elapsed_nanos(apply_started);
+        let commit_started = Instant::now();
+        tx.commit()?;
+        stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
+        self.bulk_reconciliation.committed(&plan);
         Ok(stats)
     }
 
@@ -351,6 +406,7 @@ impl Store {
             });
         }
         bulk::validate_complete(&self.conn)?;
+        let _ = self.flush_bulk_reconciliation()?;
         let tx = self.conn.transaction()?;
         let mut stats = bulk::finalize(&tx)?;
         search_sync::mark_canonical_ready(&tx)?;
@@ -413,6 +469,10 @@ impl Store {
 
     pub fn is_progressive(&self) -> bool {
         self.mode == StoreMode::Progressive
+    }
+
+    pub fn is_bulk_rebuild(&self) -> bool {
+        self.mode == StoreMode::Bulk
     }
 
     /// Change only the derived readiness badge for one session. Pipeline

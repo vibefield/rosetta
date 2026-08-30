@@ -218,6 +218,14 @@ pub fn stream_backfill_into(
         store.set_audit_path(&runtime.id, path)?;
     }
 
+    // The private projection is still unpublished, so relational lifecycle
+    // fragments from every source in this runtime can be reconciled together
+    // in RAM. Emit each closed tool row once before readiness is evaluated.
+    if store.is_bulk_rebuild() {
+        let reconciled = instrument.flush_bulk_reconciliation(store)?;
+        merge_stats(&mut report.stats, &reconciled);
+    }
+
     // A session is complete only when every admitted source file completed a
     // clean generation. This can both promote and downgrade: a torn append or
     // hard parse error must never leave a stale Indexed badge behind.
