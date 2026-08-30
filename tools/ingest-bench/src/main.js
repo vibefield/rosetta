@@ -53,6 +53,7 @@ function serializeFailure(error) {
     message: error?.message || String(error),
     details: error?.details || null,
     report: error?.benchmarkReport || null,
+    auditFailurePath: error?.auditFailurePath || null,
   };
 }
 

@@ -80,6 +80,13 @@ local JSONL/NDJSON. The workbench:
 - retains the private snapshot and output artifacts so the resulting projection
   can be opened directly in the Database tab for a full row-level audit.
 
+If the daemon exits before a successful stage report exists, the run directory
+retains `audit-failure.json` with the exit status, a content-free stdout event
+trace, and a bounded redacted stderr diagnostic. It records input counts and
+sizes but not private source paths or source content. The progress card marks
+that failure evidence was retained instead of leaving an unexplained lock-only
+directory.
+
 “Any JSONL” means any file can be inspected. Ingestion still requires a real
 adapter grammar: selecting the wrong stream is expected to surface unknown or
 hard-error evidence, not silently reinterpret the file.

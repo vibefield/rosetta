@@ -539,7 +539,11 @@ function auditEvent(message) {
     $('#audit-progress-label').textContent = `${stage} complete`;
   }
   if (message.type === 'audit-failed' || message.type === 'audit-cancelled') {
-    $('#audit-progress-label').textContent = message.type === 'audit-cancelled' ? 'cancelled' : 'failed';
+    const label = $('#audit-progress-label');
+    label.textContent = message.type === 'audit-cancelled'
+      ? 'cancelled'
+      : message.failurePath ? 'failed · evidence retained' : 'failed';
+    label.title = message.failurePath || message.message || '';
   }
 }
 

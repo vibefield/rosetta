@@ -16,6 +16,91 @@ const PREVIEW_WINDOW_BYTES = 512 * 1024;
 const PREVIEW_RECORDS = 8;
 const PREVIEW_TEXT_BYTES = 48 * 1024;
 const MAX_PARSE_BYTES = 2 * 1024 * 1024;
+const FAILURE_FORMAT = 'rosetta-jsonl-audit-failure/1';
+const FAILURE_DIAGNOSTIC_BYTES = 32 * 1024;
+
+function redactDiagnostic(value, files) {
+  let text = typeof value === 'string' ? value : String(value ?? '');
+  for (const file of files) {
+    for (const privateName of [file, path.basename(file)]) {
+      if (privateName) text = text.split(privateName).join('<source>');
+    }
+  }
+  return text.slice(-FAILURE_DIAGNOSTIC_BYTES);
+}
+
+function safeStdoutTrace(stdoutTail) {
+  if (typeof stdoutTail !== 'string') return [];
+  return stdoutTail.split(/\r?\n/).flatMap((line) => {
+    if (!line) return [];
+    try {
+      const event = JSON.parse(line);
+      if (!event || typeof event !== 'object' || typeof event.event !== 'string') return [];
+      const summary = { event: event.event };
+      for (const key of ['agent', 'command', 'stage']) {
+        if (typeof event[key] === 'string') summary[key] = event[key];
+      }
+      for (const key of ['wallMs', 'records', 'parsed', 'hardErrors', 'unknown']) {
+        if (Number.isFinite(event[key])) summary[key] = event[key];
+      }
+      return [summary];
+    } catch {
+      return [];
+    }
+  }).slice(-64);
+}
+
+function auditFailureReport(config, error, cancelled = false) {
+  const details = error?.details && typeof error.details === 'object' ? error.details : null;
+  const process = details ? {
+    code: Number.isInteger(details.code) ? details.code : null,
+    signal: typeof details.signal === 'string' ? details.signal : null,
+    durationMs: Number.isFinite(details.durationMs) ? details.durationMs : null,
+    stdoutTrace: safeStdoutTrace(details.stdoutTail),
+    stderrTail: redactDiagnostic(details.stderrTail, config.files),
+  } : null;
+  const sourceBytes = Array.isArray(config.sourceBytes)
+    && config.sourceBytes.length === config.files.length
+    ? config.sourceBytes
+    : config.files.map((file) => {
+      try {
+        return fs.statSync(file).size;
+      } catch {
+        return null;
+      }
+    });
+  return {
+    format: FAILURE_FORMAT,
+    capturedAt: new Date().toISOString(),
+    selection: {
+      agent: config.agent,
+      stream: config.stream,
+      fileCount: config.files.length,
+      totalSourceBytes: sourceBytes.every(Number.isFinite)
+        ? sourceBytes.reduce((sum, bytes) => sum + bytes, 0)
+        : null,
+      sourceSizesKnown: sourceBytes.filter(Number.isFinite).length,
+      privatePathsRecorded: false,
+      sourceContentRecorded: false,
+    },
+    outcome: cancelled ? 'cancelled' : 'failed',
+    error: {
+      name: error?.name || 'Error',
+      message: redactDiagnostic(error?.message || error, config.files),
+    },
+    process,
+  };
+}
+
+function retainAuditFailure(workDir, config, error, cancelled = false) {
+  const failurePath = path.join(workDir, 'audit-failure.json');
+  const report = auditFailureReport(config, error, cancelled);
+  fs.writeFileSync(failurePath, `${JSON.stringify(report, null, 2)}\n`, {
+    flag: 'wx',
+    mode: 0o600,
+  });
+  return failurePath;
+}
 
 function readRange(file, start, length) {
   const descriptor = fs.openSync(file, 'r');
@@ -192,10 +277,12 @@ class JsonlAuditRun {
     this.config = {
       agent: validateAgents([config.agent])[0],
       binary: assertFile(config.binary, 'rosettad binary'),
-      files: [...new Set(config.files || [])].map((file) => assertFile(file, 'JSONL file')),
       outputDir: assertDirectory(config.outputDir, 'audit output directory', { create: true }),
       stream: String(config.stream || ''),
     };
+    this.config.files = [...new Set(config.files || [])]
+      .map((file) => assertFile(file, 'JSONL file'));
+    this.config.sourceBytes = this.config.files.map((file) => fs.statSync(file).size);
     if (!this.config.files.length) throw new Error('choose at least one JSONL file');
     if (this.config.files.length > 32) throw new Error('one audit run is limited to 32 JSONL files');
     if (!this.config.stream) throw new Error('choose an adapter stream');
@@ -243,10 +330,25 @@ class JsonlAuditRun {
       this.emit({ type: 'audit-complete', audit });
       return audit;
     } catch (error) {
+      let failurePath = null;
+      try {
+        failurePath = retainAuditFailure(workDir, this.config, error, this.cancelled);
+        if (error && (typeof error === 'object' || typeof error === 'function')) {
+          error.auditFailurePath = failurePath;
+        }
+      } catch (reportError) {
+        this.emit({
+          type: 'log',
+          phase: 'jsonl-audit',
+          stream: 'stderr',
+          line: `could not retain audit failure evidence: ${reportError.message}`,
+        });
+      }
       this.emit({
         type: this.cancelled ? 'audit-cancelled' : 'audit-failed',
         message: error.message,
         workDir,
+        failurePath,
       });
       throw error;
     } finally {
@@ -257,6 +359,7 @@ class JsonlAuditRun {
 
 module.exports = {
   JsonlAuditRun,
+  auditFailureReport,
   auditRunName,
   inspectJsonl,
   rankJsonlSources,

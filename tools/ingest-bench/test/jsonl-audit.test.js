@@ -4,7 +4,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { auditRunName, inspectJsonl, rankJsonlSources } = require('../src/lib/jsonl-audit');
+const {
+  auditFailureReport,
+  auditRunName,
+  inspectJsonl,
+  rankJsonlSources,
+} = require('../src/lib/jsonl-audit');
 
 test('JSONL inspection returns bounded raw and parsed content without hiding a torn tail', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rosetta-jsonl-preview-'));
@@ -40,4 +45,66 @@ test('source ranking keeps only the largest adapter-admitted JSON-lines files', 
 
   assert.deepEqual(ranked.map((source) => source.relativePath), ['large.jsonl', 'middle.jsonl']);
   assert.deepEqual(ranked.map((source) => source.file), ['/tmp/root/large.jsonl', '/tmp/root/middle.jsonl']);
+});
+
+test('failed audits retain process evidence without recording private input paths', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rosetta-jsonl-failure-'));
+  const file = path.join(directory, 'private-session-name.jsonl');
+  try {
+    fs.writeFileSync(file, '{"type":"assistant"}\n');
+    const error = new Error('UNIQUE constraint failed: message response block');
+    error.details = {
+      code: 1,
+      signal: null,
+      durationMs: 12.5,
+      stdoutTail: [
+        '{"event":"stage-profile","stage":"metadata","wallMs":3.5}',
+        JSON.stringify({ event: 'boundary-evidence', private: file, content: 'do not retain me' }),
+        '',
+      ].join('\n'),
+      stderrTail: 'rosettad: store error\n',
+    };
+    const report = auditFailureReport({
+      agent: 'claude-code',
+      stream: 'transcript',
+      files: [file],
+    }, error);
+
+    assert.equal(report.outcome, 'failed');
+    assert.equal(report.selection.fileCount, 1);
+    assert.equal(report.selection.totalSourceBytes, fs.statSync(file).size);
+    assert.equal(report.selection.privatePathsRecorded, false);
+    assert.equal(report.process.code, 1);
+    assert.deepEqual(report.process.stdoutTrace, [
+      { event: 'stage-profile', stage: 'metadata', wallMs: 3.5 },
+      { event: 'boundary-evidence' },
+    ]);
+    assert.match(report.process.stderrTail, /store error/);
+    assert.doesNotMatch(JSON.stringify(report), /private-session-name/);
+    assert.doesNotMatch(JSON.stringify(report), /do not retain me/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: false });
+  }
+});
+
+test('failure evidence keeps captured sizes when a selected source vanishes', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rosetta-jsonl-vanished-'));
+  const file = path.join(directory, 'gone.jsonl');
+  try {
+    fs.writeFileSync(file, '{"type":"assistant"}\n');
+    const bytes = fs.statSync(file).size;
+    fs.unlinkSync(file);
+    const report = auditFailureReport({
+      agent: 'claude-code',
+      stream: 'transcript',
+      files: [file],
+      sourceBytes: [bytes],
+    }, new Error(`source vanished: ${file}`));
+
+    assert.equal(report.selection.totalSourceBytes, bytes);
+    assert.equal(report.selection.sourceSizesKnown, 1);
+    assert.equal(report.error.message, 'source vanished: <source>');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: false });
+  }
 });
