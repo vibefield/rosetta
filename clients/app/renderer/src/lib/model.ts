@@ -1,13 +1,16 @@
 // View models: rosetta wire rows → what the room draws. Pure functions of
 // their inputs; every derived figure states its window at the callsite.
 import type {
+  AttachmentRef,
   CanonicalText,
+  CitationRef,
   ContributionRow,
   HeatmapDay,
-  MessageRow,
+  Notice,
   ProjectRow,
   ResourceRef,
   SessionRow,
+  TimelineEntry,
   ToolAction,
 } from "@rosetta/protocol";
 import type { AgentShare } from "./agents";
@@ -210,7 +213,7 @@ export function buildProjectViewModel(
 /* ── the work block: a contiguous run of tool calls is ONE object ────────── */
 
 export interface WorkCall {
-  row: MessageRow;
+  row: TimelineEntry;
   verb: string;
   target: string;
   result: string;
@@ -218,8 +221,8 @@ export interface WorkCall {
 }
 
 export type DocBlock =
-  | { type: "prose"; row: MessageRow }
-  | { type: "aside"; row: MessageRow }
+  | { type: "prose"; row: TimelineEntry }
+  | { type: "aside"; row: TimelineEntry }
   | { type: "work"; key: string; calls: WorkCall[]; durMs: number | null };
 
 function firstLine(text: string, max = 90): string {
@@ -227,11 +230,11 @@ function firstLine(text: string, max = 90): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
-function canonicalText(text: CanonicalText): string {
+export function canonicalText(text: CanonicalText): string {
   return text.type === "inline" ? text.text : text.preview;
 }
 
-function resourceLabel(resource: ResourceRef): string {
+export function resourceLabel(resource: ResourceRef): string {
   switch (resource.type) {
     case "file":
     case "directory":
@@ -245,6 +248,66 @@ function resourceLabel(resource: ResourceRef): string {
     case "asset":
       return resource.asset.url;
   }
+}
+
+export function attachmentLabel(attachment: AttachmentRef): string {
+  const target = resourceLabel(attachment.source);
+  const label = attachment.name?.trim() || target;
+  const size = attachment.byte_len === null ? "" : ` · ${attachment.byte_len.toLocaleString()} bytes`;
+  return `${attachment.kind}: ${label}${size}`;
+}
+
+export function citationLabel(citation: CitationRef): string {
+  const source = citation.source ? resourceLabel(citation.source) : null;
+  return citation.title?.trim() || source || citation.provider?.trim() || "Source";
+}
+
+export function noticeText(notice: Notice): string {
+  switch (notice.type) {
+    case "compaction":
+      return notice.reason ? `Context compacted · ${notice.reason}` : "Context compacted";
+    case "truncation": {
+      const count = notice.omitted_count === null ? "" : ` · ${notice.omitted_count} omitted`;
+      return `${notice.scope.replaceAll("_", " ")} truncated${count}`;
+    }
+    case "model_changed":
+      return notice.from ? `Model changed from ${notice.from} to ${notice.to}` : `Model changed to ${notice.to}`;
+    case "mode_changed":
+      return notice.from ? `Mode changed from ${notice.from} to ${notice.to}` : `Mode changed to ${notice.to}`;
+    case "workspace_changed":
+      return notice.git_branch ? `Workspace changed to ${notice.cwd} · ${notice.git_branch}` : `Workspace changed to ${notice.cwd}`;
+    case "permission_requested":
+      return notice.scope ? `Permission requested · ${notice.scope}` : "Permission requested";
+    case "permission_decision":
+      return notice.scope ? `Permission ${notice.decision} · ${notice.scope}` : `Permission ${notice.decision}`;
+    case "handoff":
+      return `Handed off to ${notice.to_agent ?? notice.to_session_id ?? "another agent"}`;
+    case "runtime_error":
+      return `${notice.kind.replaceAll("_", " ")} · ${notice.summary}`;
+  }
+}
+
+export function timelineText(row: TimelineEntry): string | null {
+  switch (row.body.type) {
+    case "user":
+    case "agent":
+      return row.body.text ? canonicalText(row.body.text) : null;
+    case "thinking":
+    case "summary":
+      return canonicalText(row.body.text);
+    case "notice":
+      return noticeText(row.body.notice);
+    case "tool_use":
+      return null;
+  }
+}
+
+export function timelineAttachments(row: TimelineEntry): readonly AttachmentRef[] {
+  return row.body.type === "user" || row.body.type === "agent" ? row.body.attachments : [];
+}
+
+export function timelineCitations(row: TimelineEntry): readonly CitationRef[] {
+  return row.body.type === "agent" ? row.body.citations : [];
 }
 
 function actionTarget(action: ToolAction): string {
@@ -373,9 +436,9 @@ function actionOutcome(action: ToolAction): string {
   }
 }
 
-function callResult(row: MessageRow): { result: string; failed: boolean } {
-  const tool = row.tool;
-  if (!tool) return { result: "", failed: false };
+function callResult(row: TimelineEntry): { result: string; failed: boolean } {
+  if (row.body.type !== "tool_use") return { result: "", failed: false };
+  const tool = row.body.tool;
   const failed = ["failed", "denied", "cancelled", "timed_out", "interrupted"].includes(
     tool.status.value,
   );
@@ -389,16 +452,19 @@ function callResult(row: MessageRow): { result: string; failed: boolean } {
   };
 }
 
-export function toWorkCall(row: MessageRow): WorkCall {
+export function toWorkCall(row: TimelineEntry): WorkCall {
+  if (row.body.type !== "tool_use") {
+    throw new Error(`timeline entry ${row.timeline_id} is not a tool use`);
+  }
+  const tool = row.body.tool;
   const { result, failed } = callResult(row);
   return {
     row,
-    verb: row.tool
-      ? row.tool.action.type === "unknown"
-        ? row.tool.native.name.toLowerCase()
-        : row.tool.action.type.replaceAll("_", " ")
-      : "tool",
-    target: row.tool ? firstLine(actionTarget(row.tool.action)) : "",
+    verb:
+      tool.action.type === "unknown"
+        ? tool.native.name.toLowerCase()
+        : tool.action.type.replaceAll("_", " "),
+    target: firstLine(actionTarget(tool.action)),
     result,
     failed,
   };
@@ -410,25 +476,31 @@ export function toWorkCall(row: MessageRow): WorkCall {
  * transcript scale). Thinking, system, and summary rows remain readable but
  * render as quieter asides rather than masquerading as user/agent prose.
  */
-export function documentBlocks(rows: MessageRow[]): DocBlock[] {
+export function documentBlocks(rows: TimelineEntry[]): DocBlock[] {
   const out: DocBlock[] = [];
   let run: WorkCall[] = [];
   const flush = () => {
     if (run.length === 0) return;
-    const stamps = run.map((c) => c.row.ts).filter((t): t is number => t !== null);
+    const stamps = run.map((c) => c.row.at).filter((t): t is number => t !== null);
     const durMs = stamps.length >= 2 ? Math.max(...stamps) - Math.min(...stamps) : null;
     out.push({ type: "work", key: run[0].row.timeline_id, calls: run, durMs });
     run = [];
   };
   for (const row of rows) {
-    if (row.kind === "tool_use") {
+    if (row.body.type === "tool_use") {
       run.push(toWorkCall(row));
       continue;
     }
     flush();
-    if (row.kind === "user" || row.kind === "agent") {
-      if (row.content && row.content.trim() !== "") out.push({ type: "prose", row });
-    } else if (row.content && row.content.trim() !== "") {
+    if (row.body.type === "user" || row.body.type === "agent") {
+      if (
+        timelineText(row)?.trim() ||
+        timelineAttachments(row).length > 0 ||
+        timelineCitations(row).length > 0
+      ) {
+        out.push({ type: "prose", row });
+      }
+    } else if (timelineText(row)?.trim()) {
       out.push({ type: "aside", row });
     }
   }

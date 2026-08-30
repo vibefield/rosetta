@@ -3,12 +3,21 @@
 // the watermark marks where live began in YOUR reading and never chases the
 // tail; arrival is a notice, not a stolen scroll.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MessageRow, SearchHit, SessionRow } from "@rosetta/protocol";
+import type { SearchHit, SessionRow, TimelineEntry } from "@rosetta/protocol";
 import { clock, clockShort, tokenText } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
 import { ChevronGlyph } from "../lib/icons";
 import type { DocBlock, ProjectViewModel } from "../lib/model";
-import { documentBlocks, parseSnippet, verbSummary } from "../lib/model";
+import {
+  attachmentLabel,
+  citationLabel,
+  documentBlocks,
+  parseSnippet,
+  timelineAttachments,
+  timelineCitations,
+  timelineText,
+  verbSummary,
+} from "../lib/model";
 import type { SearchResultsViewModel } from "../lib/search-results";
 import { getSessionTitle } from "./sessions/session-display";
 import { ColumnHeading, EmptyState, ResultGroupHeader } from "./ui";
@@ -62,8 +71,8 @@ function WorkBlock({ block }: { block: Extract<DocBlock, { type: "work" }> }) {
   );
 }
 
-function roleName(row: MessageRow): string {
-  switch (row.kind) {
+function roleName(row: TimelineEntry): string {
+  switch (row.body.type) {
     case "user":
       return "You";
     case "agent":
@@ -71,10 +80,10 @@ function roleName(row: MessageRow): string {
     case "thinking":
       return "Reasoning";
     case "summary":
-      return "Summary";
-    case "system":
-      return row.subtype ?? "System";
-    default:
+      return `${row.body.purpose[0].toUpperCase()}${row.body.purpose.slice(1)} summary`;
+    case "notice":
+      return "System";
+    case "tool_use":
       return row.model ?? "Agent";
   }
 }
@@ -270,6 +279,9 @@ export function TranscriptColumn({
                 );
               }
               const row = block.row;
+              const text = timelineText(row) ?? "";
+              const attachments = timelineAttachments(row);
+              const citations = timelineCitations(row);
               const marked =
                 feed.watermark !== null &&
                 row.ordinal > feed.watermark &&
@@ -281,36 +293,44 @@ export function TranscriptColumn({
                     className="ah-tmsg"
                     id={`msg-${row.timeline_id}`}
                     data-hit={rung === row.timeline_id || undefined}
-                    data-kind={row.kind}
+                    data-kind={row.body.type}
                   >
                     <div className="ah-tmsg__head">
                       {roleName(row)}{" "}
-                      {row.ts !== null && (
+                      {row.at !== null && (
                         <time
                           title="Copy an anchor to this message"
                           onClick={() => {
                             navigator.clipboard
                               .writeText(`${row.session_id}#${row.timeline_id}`)
-                              .then(() => onReceipt(`Anchor copied · ${clock(row.ts!)}`))
+                              .then(() => onReceipt(`Anchor copied · ${clock(row.at!)}`))
                               .catch(() => onReceipt("The clipboard refused the anchor"));
                           }}
                         >
-                          {clock(row.ts)}
+                          {clock(row.at)}
                         </time>
                       )}
-                      {row.usage && (
-                        <span className="ah-caption tnum" style={{ marginLeft: "auto" }}>
-                          {tokenText(
-                            (row.usage.input ?? 0) +
-                              (row.usage.output ?? 0) +
-                              (row.usage.thinking ?? 0),
-                          )}
-                        </span>
-                      )}
+                      <span className="ah-caption tnum" style={{ marginLeft: "auto" }}>
+                        {tokenText(
+                          (row.usage.input ?? 0) +
+                            (row.usage.output ?? 0) +
+                            (row.usage.thinking ?? 0),
+                        )}
+                      </span>
                     </div>
-                    {(row.content ?? "").split("\n\n").map((para, i) =>
+                    {text.split("\n\n").map((para, i) =>
                       para.trim() === "" ? null : <p key={i}>{para}</p>,
                     )}
+                    {attachments.map((attachment, index) => (
+                      <p className="ah-caption" key={`attachment-${index}`}>
+                        {attachmentLabel(attachment)}
+                      </p>
+                    ))}
+                    {citations.map((citation, index) => (
+                      <p className="ah-caption" key={`citation-${index}`}>
+                        Source · {citationLabel(citation)}
+                      </p>
+                    ))}
                   </div>
                 </div>
               );

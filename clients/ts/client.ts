@@ -11,7 +11,6 @@ import type { DiscoveriesResponse } from "./generated/DiscoveriesResponse";
 import type { EnableResponse } from "./generated/EnableResponse";
 import type { ErrorCode } from "./generated/ErrorCode";
 import type { HeatmapResponse } from "./generated/HeatmapResponse";
-import type { MessageRow } from "./generated/MessageRow";
 import type { Mutation } from "./generated/Mutation";
 import type { ProjectRow } from "./generated/ProjectRow";
 import type { ProjectsResponse } from "./generated/ProjectsResponse";
@@ -26,6 +25,7 @@ import type { SessionsResponse } from "./generated/SessionsResponse";
 import type { Stamp } from "./generated/Stamp";
 import type { StatusResponse } from "./generated/StatusResponse";
 import type { TimelinePage } from "./generated/TimelinePage";
+import type { TimelineEntry } from "./generated/TimelineEntry";
 import type { UsageResponse } from "./generated/UsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
@@ -61,7 +61,7 @@ export type SubscriptionStatus = "connecting" | "syncing" | "live" | "resyncing"
 
 export interface SessionSubscriptionHandlers {
   /** The full ordered timeline after each change. */
-  onChange?: (messages: MessageRow[]) => void;
+  onChange?: (entries: TimelineEntry[]) => void;
   onStatus?: (status: SubscriptionStatus) => void;
   onError?: (error: ApiError) => void;
 }
@@ -336,7 +336,7 @@ abstract class BaseSubscription {
 
 export class SessionSubscription extends BaseSubscription {
   private readonly handlers: SessionSubscriptionHandlers;
-  private readonly rows = new Map<string, MessageRow>();
+  private readonly rows = new Map<string, TimelineEntry>();
 
   constructor(
     url: string,
@@ -349,7 +349,7 @@ export class SessionSubscription extends BaseSubscription {
   }
 
   /** The current timeline, ordered by presentation ordinal. */
-  messages(): MessageRow[] {
+  entries(): TimelineEntry[] {
     return [...this.rows.values()].sort(
       (a, b) => a.ordinal - b.ordinal || a.timeline_id.localeCompare(b.timeline_id),
     );
@@ -362,7 +362,7 @@ export class SessionSubscription extends BaseSubscription {
         break;
       case "timeline_snapshot":
         this.rows.clear();
-        for (const row of frame.messages) {
+        for (const row of frame.entries) {
           this.rows.set(row.timeline_id, row);
         }
         this.stamp = frame.stamp;
@@ -402,17 +402,23 @@ export class SessionSubscription extends BaseSubscription {
       }
       case "tool_updated": {
         const row = this.rows.get(mutation.timeline_id);
-        if (row?.tool) {
-          row.tool = mutation.tool;
+        if (row?.body.type === "tool_use") {
+          this.rows.set(row.timeline_id, {
+            ...row,
+            body: { ...row.body, tool: mutation.tool },
+          });
         }
         break;
       }
       case "usage": {
         const row = this.rows.get(mutation.timeline_id);
         if (row) {
-          row.usage = mutation.tokens;
-          row.model = mutation.model;
-          row.ts = mutation.ts;
+          this.rows.set(row.timeline_id, {
+            ...row,
+            usage: mutation.tokens,
+            model: mutation.model,
+            at: mutation.ts,
+          });
         }
         break;
       }
@@ -429,7 +435,7 @@ export class SessionSubscription extends BaseSubscription {
   }
 
   private emitChange(): void {
-    this.handlers.onChange?.(this.messages());
+    this.handlers.onChange?.(this.entries());
   }
 
   protected emitStatus(status: SubscriptionStatus): void {

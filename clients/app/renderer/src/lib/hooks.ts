@@ -4,11 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
   IngestProgress,
-  MessageRow,
   MetaState,
   SearchReadiness,
   SearchResponse,
   SubscriptionStatus,
+  TimelineEntry,
   UsageResponse,
 } from "@rosetta/protocol";
 import { CursorExpiredError } from "@rosetta/protocol";
@@ -171,7 +171,7 @@ export function useProjectUsage(
 
 export interface TimelineFeed {
   /** Ordinal-ordered rows: paged history + the live tail, deduplicated. */
-  rows: MessageRow[];
+  rows: TimelineEntry[];
   status: SubscriptionStatus;
   /** Rows with ordinal > watermark arrived after you did (D33's line). */
   watermark: number | null;
@@ -181,8 +181,8 @@ export interface TimelineFeed {
 }
 
 export function useTimeline(sessionId: string | null): TimelineFeed {
-  const [tail, setTail] = useState<MessageRow[]>([]);
-  const [older, setOlder] = useState<MessageRow[]>([]);
+  const [tail, setTail] = useState<TimelineEntry[]>([]);
+  const [older, setOlder] = useState<TimelineEntry[]>([]);
   const [cursor, setCursor] = useState<string | null | undefined>(undefined);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [watermark, setWatermark] = useState<number | null>(null);
@@ -197,12 +197,12 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     sawSnapshot.current = false;
     if (sessionId === null) return;
     const sub = client.subscribeSession(sessionId, {
-      onChange: (messages) => {
-        setTail(messages);
+      onChange: (entries) => {
+        setTail(entries);
         if (!sawSnapshot.current) {
           sawSnapshot.current = true;
           // Everything in the snapshot is the past; the line goes after it.
-          setWatermark(messages.length ? Math.max(...messages.map((m) => m.ordinal)) : null);
+          setWatermark(entries.length ? Math.max(...entries.map((entry) => entry.ordinal)) : null);
         }
       },
       onStatus: setStatus,
@@ -216,7 +216,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
       client
         .timeline(sessionId, cursor === undefined ? { limit: 200 } : { limit: 200, cursor })
         .then((page) => {
-          setOlder((current) => [...page.messages, ...current]);
+          setOlder((current) => [...page.entries, ...current]);
           setCursor(page.cursor);
         })
         .catch((error) => {
@@ -231,7 +231,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
   }, [sessionId, cursor]);
 
   const rows = useMemo(() => {
-    const seen = new Map<string, MessageRow>();
+    const seen = new Map<string, TimelineEntry>();
     for (const row of older) seen.set(row.timeline_id, row);
     for (const row of tail) seen.set(row.timeline_id, row);
     return [...seen.values()].sort((a, b) => a.ordinal - b.ordinal);
