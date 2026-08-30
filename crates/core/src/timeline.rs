@@ -620,10 +620,6 @@ pub enum Notice {
         from: Option<ExecutionMode>,
         to: ExecutionMode,
     },
-    WorkspaceChanged {
-        cwd: String,
-        git_branch: Option<String>,
-    },
     PermissionRequested {
         request_id: Option<String>,
         scope: Option<String>,
@@ -654,10 +650,6 @@ impl Notice {
             Self::ModelChanged { from, to } => {
                 bounded_option("prior model", from.as_deref(), ID_MAX_BYTES)?;
                 required_bounded("model", to, ID_MAX_BYTES)?;
-            }
-            Self::WorkspaceChanged { cwd, git_branch } => {
-                required_bounded("workspace", cwd, CORE_SCALAR_MAX_BYTES)?;
-                bounded_option("git branch", git_branch.as_deref(), CORE_SCALAR_MAX_BYTES)?;
             }
             Self::PermissionRequested { request_id, scope } => {
                 bounded_option("permission request id", request_id.as_deref(), ID_MAX_BYTES)?;

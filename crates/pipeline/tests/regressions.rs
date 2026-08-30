@@ -1412,9 +1412,12 @@ fn claude_subagent_is_a_child_session_not_a_second_parent_file() {
     let parent_id = ids::session_id(&runtime.id, "parent");
     let child_id = ids::session_id(&runtime.id, "child-7");
     let child = queries::session(store.conn(), &child_id).unwrap().unwrap();
+    let parent = queries::session(store.conn(), &parent_id).unwrap().unwrap();
     assert_eq!(child.parent_session_id.as_deref(), Some(parent_id.as_str()));
     assert_eq!(child.root_session_id, parent_id);
     assert_eq!(child.role, SessionRole::Subagent);
+    assert_eq!(child.cwd, parent.cwd);
+    assert_eq!(child.project_id, parent.project_id);
     stream_backfill(
         &ClaudeCodeAdapter,
         &runtime,
@@ -1519,7 +1522,7 @@ fn rotating_audit_detects_same_size_rewrite_outside_the_tail_anchor() {
 }
 
 #[test]
-fn forced_replay_is_idempotent_for_edits_observations_and_drift() {
+fn forced_replay_is_idempotent_for_edits_and_drift() {
     let root = TempDir::new().unwrap();
     let path = root.path().join("projects/p/session-1.jsonl");
     write_lines(
@@ -1556,21 +1559,14 @@ fn forced_replay_is_idempotent_for_edits_observations_and_drift() {
         store
             .conn()
             .query_row(
-                "SELECT (SELECT COUNT(*) FROM workspace_obs),
-                        (SELECT COUNT(*) FROM file_edit),
+                "SELECT (SELECT COUNT(*) FROM file_edit),
                         (SELECT COALESCE(SUM(count),0) FROM drift_agg)",
                 [],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             )
             .unwrap()
     };
-    assert_eq!(counts(&store), (1, 1, 1));
+    assert_eq!(counts(&store), (1, 1));
     let mut audited = options.clone();
     audited.audit_files_per_run = 1;
     stream_backfill(
@@ -1583,7 +1579,7 @@ fn forced_replay_is_idempotent_for_edits_observations_and_drift() {
         &Instrument::new(),
     )
     .unwrap();
-    assert_eq!(counts(&store), (1, 1, 1));
+    assert_eq!(counts(&store), (1, 1));
 }
 
 #[test]

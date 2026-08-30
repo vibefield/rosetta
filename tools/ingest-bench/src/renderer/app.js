@@ -858,13 +858,12 @@ function sessionCard(session, {
   appendMetaFact(facts, 'Agent', session.agentKind);
   appendMetaFact(facts, 'Runtime enabled', session.runtimeEnabled ? 'yes' : 'no');
   appendMetaFact(facts, 'Project', session.projectName || 'Unassigned');
-  appendMetaFact(facts, 'Repository', session.workspaceGitRepo || session.projectGitRepo);
-  appendMetaFact(facts, 'Git branch', session.gitBranch);
+  appendMetaFact(facts, 'Working directory', session.cwd, { mono: true });
+  appendMetaFact(facts, 'Repository', session.projectGitRepo);
   appendMetaFact(facts, 'Started', formatTimestamp(session.startedAt));
   appendMetaFact(facts, 'Updated', formatTimestamp(session.updatedAt));
   appendMetaFact(facts, 'Duration', formatDuration(Number(session.updatedAt) - Number(session.startedAt)));
   appendMetaFact(facts, 'Source files', formatNumber(session.sourceCount));
-  appendMetaFact(facts, 'Workspace observations', formatNumber(session.workspaceObservationCount));
   appendMetaFact(facts, 'Agent versions', formatStructured(session.versionsSeen));
   appendMetaFact(facts, 'Data root', session.dataRoot, { mono: true });
   appendMetaFact(facts, 'Native session ID', session.nativeSessionId, { mono: true });
@@ -873,7 +872,6 @@ function sessionCard(session, {
   appendMetaFact(facts, 'Project ID', session.projectId, { mono: true });
   appendMetaFact(facts, 'Parent session ID', session.parentSessionId, { mono: true });
   appendMetaFact(facts, 'Root session ID', session.rootSessionId, { mono: true });
-  if (session.projectAssignedAt) appendMetaFact(facts, 'Project assigned', formatTimestamp(session.projectAssignedAt));
   card.append(facts);
   return card;
 }
@@ -883,7 +881,7 @@ function sessionSearchText(session) {
     session.title, session.summary, session.agentKind, session.role, session.streamState,
     session.projectName, session.cwd, session.nativeSessionId, session.id,
     session.parentSessionId, session.rootSessionId, session.runtimeId, session.dataRoot,
-    session.projectRootPaths, session.projectGitRepo, session.workspaceGitRepo, session.gitBranch,
+    session.projectRootPaths, session.projectGitRepo,
   ]);
 }
 

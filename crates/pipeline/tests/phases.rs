@@ -78,6 +78,8 @@ fn claude_code_phases_end_to_end() {
     assert_eq!(meta.files_unidentified, 0);
     let listed = queries::session_list(h.store.conn(), None, 100).unwrap();
     assert_eq!(listed.len(), 8);
+    assert!(listed.iter().all(|session| session.cwd.is_some()));
+    assert!(listed.iter().all(|session| session.project_id.is_some()));
     assert!(
         listed
             .iter()
@@ -95,6 +97,15 @@ fn claude_code_phases_end_to_end() {
         &h.instrument,
     )
     .unwrap();
+    assert_eq!(
+        h.store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        meta.projects as i64,
+        "streaming must not manufacture projects",
+    );
     assert_eq!(stream.files, files.len());
     assert!(stream.parsed > 0, "corpus lines must parse");
     // The corpus's odd types (atis-latch, mode, …) are DECLARED no-ops, not

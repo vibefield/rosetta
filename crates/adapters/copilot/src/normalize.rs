@@ -13,8 +13,8 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
-    StreamState, TaskRow, TaskStatus, TokenSnapshot, ToolCall, WorkspaceObsRow,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TaskRow, TaskStatus,
+    TokenSnapshot, ToolCall,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, ids};
@@ -37,7 +37,9 @@ const INVALID_JSON: &str = "<invalid-json>";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CopilotState {
-    workspace: Option<WorkspaceState>,
+    /// Current execution cwd for resolving relative tool inputs only.
+    /// The canonical session cwd and project are fixed during meta ingest.
+    tool_cwd: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     /// Tool requests and execution starts describe the same native call. This
@@ -49,13 +51,6 @@ pub struct CopilotState {
     /// later cumulative shutdown usage snapshot.
     response: Option<String>,
     response_usage: TokenSnapshot,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct WorkspaceState {
-    cwd: String,
-    branch: Option<String>,
-    repository: Option<String>,
 }
 
 pub fn ingest_line(
@@ -180,7 +175,7 @@ fn project(
                 );
             }
             if let Some(cwd) = request.working_directory.as_deref() {
-                observe_workspace_parts(ctx, state, cwd, None, None, ts, ops);
+                remember_tool_cwd(state, cwd);
             }
         }
         EventPayload::ExternalToolCompleted(_) => {}
@@ -189,35 +184,7 @@ fn project(
             state.model = start.selected_model.clone();
             state.effort = start.reasoning_effort.clone();
 
-            let parent_session_id = start
-                .detached_from_spawning_parent_session_id
-                .as_deref()
-                .map(|native| ids::session_id(&ctx.runtime_id, native));
-            let role = parent_session_id
-                .as_ref()
-                .map_or(SessionRole::Main, |_| SessionRole::Subagent);
-            let started_at = rfc3339_ms(&start.start_time).or(ts).unwrap_or_default();
-            ops.push(IngestOp::SessionMeta(SessionRow {
-                id: ctx.session_id.clone(),
-                native_session_id: start.session_id.clone(),
-                runtime_id: ctx.runtime_id.clone(),
-                project_id: None,
-                parent_session_id: parent_session_id.clone(),
-                root_session_id: parent_session_id.unwrap_or_else(|| ctx.session_id.clone()),
-                role,
-                title: None,
-                summary: None,
-                started_at,
-                updated_at: ts.unwrap_or(started_at),
-                stream_state: StreamState::Streaming,
-            }));
-            observe_workspace(
-                ctx,
-                state,
-                start.context.as_ref(),
-                ts.or(Some(started_at)),
-                ops,
-            );
+            remember_context_cwd(state, start.context.as_ref());
         }
         EventPayload::SessionResume(resume) => {
             if let Some(model) = &resume.selected_model {
@@ -226,7 +193,7 @@ fn project(
             if let Some(effort) = &resume.reasoning_effort {
                 state.effort = Some(effort.clone());
             }
-            observe_workspace(ctx, state, resume.context.as_ref(), ts, ops);
+            remember_context_cwd(state, resume.context.as_ref());
         }
         EventPayload::SessionModelChange(change) => {
             state.model = Some(change.new_model.clone());
@@ -313,18 +280,7 @@ fn project(
             }
             shutdown_usage(ctx, state, shutdown, ts, ops);
         }
-        EventPayload::SessionContextChanged(context) => observe_workspace_parts(
-            ctx,
-            state,
-            &context.cwd,
-            context.branch.as_deref(),
-            context
-                .repository
-                .as_deref()
-                .or(context.git_root.as_deref()),
-            ts,
-            ops,
-        ),
+        EventPayload::SessionContextChanged(context) => remember_tool_cwd(state, &context.cwd),
         EventPayload::SessionContextCleared(cleared) => {
             let content = cleared.initial_message.clone().unwrap_or_else(|| {
                 format!(
@@ -864,10 +820,7 @@ fn project_tool(
         ctx.agent_version.as_deref(),
         name,
         input,
-        state
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.cwd.as_str()),
+        state.tool_cwd.as_deref(),
         correlation_key,
         Some(correlation_key),
         namespace,
@@ -1023,14 +976,8 @@ fn display_text(value: &Value) -> Option<String> {
     }
 }
 
-fn observe_workspace(
-    ctx: &NormalizeCtx,
-    state: &mut CopilotState,
-    context: Option<&Value>,
-    at: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) {
-    let (Some(context), Some(at)) = (context.and_then(Value::as_object), at) else {
+fn remember_context_cwd(state: &mut CopilotState, context: Option<&Value>) {
+    let Some(context) = context.and_then(Value::as_object) else {
         return;
     };
     let Some(cwd) = context
@@ -1040,48 +987,14 @@ fn observe_workspace(
     else {
         return;
     };
-    observe_workspace_parts(
-        ctx,
-        state,
-        cwd,
-        context.get("branch").and_then(Value::as_str),
-        context.get("repository").and_then(Value::as_str),
-        Some(at),
-        ops,
-    );
+    remember_tool_cwd(state, cwd);
 }
 
-fn observe_workspace_parts(
-    ctx: &NormalizeCtx,
-    state: &mut CopilotState,
-    cwd: &str,
-    branch: Option<&str>,
-    repository: Option<&str>,
-    at: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) {
-    let Some(at) = at else { return };
+fn remember_tool_cwd(state: &mut CopilotState, cwd: &str) {
     if cwd.is_empty() {
         return;
     }
-    let observation = WorkspaceState {
-        cwd: cwd.to_owned(),
-        branch: branch.filter(|value| !value.is_empty()).map(str::to_owned),
-        repository: repository
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned),
-    };
-    if state.workspace.as_ref() == Some(&observation) {
-        return;
-    }
-    ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-        session_id: ctx.session_id.clone(),
-        at,
-        cwd: observation.cwd.clone(),
-        git_branch: observation.branch.clone(),
-        git_repo: observation.repository.clone(),
-    }));
-    state.workspace = Some(observation);
+    state.tool_cwd = Some(cwd.to_owned());
 }
 
 fn row(

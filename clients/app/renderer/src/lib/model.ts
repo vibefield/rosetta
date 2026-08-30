@@ -274,8 +274,6 @@ export function noticeText(notice: Notice): string {
       return notice.from ? `Model changed from ${notice.from} to ${notice.to}` : `Model changed to ${notice.to}`;
     case "mode_changed":
       return notice.from ? `Mode changed from ${notice.from} to ${notice.to}` : `Mode changed to ${notice.to}`;
-    case "workspace_changed":
-      return notice.git_branch ? `Workspace changed to ${notice.cwd} · ${notice.git_branch}` : `Workspace changed to ${notice.cwd}`;
     case "permission_requested":
       return notice.scope ? `Permission requested · ${notice.scope}` : "Permission requested";
     case "permission_decision":

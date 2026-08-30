@@ -95,7 +95,6 @@ class ProjectionDatabase {
       'agent_runtime',
       'project',
       'session',
-      'workspace_obs',
       'ingest_cursor',
       'message',
       'file_edit',
@@ -161,7 +160,7 @@ class ProjectionDatabase {
              s.stream_state AS streamState,
              s.started_at AS startedAt,
              s.updated_at AS updatedAt,
-             s.project_assigned_at AS projectAssignedAt,
+             s.cwd,
              s.parent_session_id AS parentSessionId,
              s.root_session_id AS rootSessionId,
              r.id AS runtimeId,
@@ -173,21 +172,10 @@ class ProjectionDatabase {
              p.name AS projectName,
              p.root_paths AS projectRootPaths,
              p.git_repo AS projectGitRepo,
-             w.cwd,
-             w.git_branch AS gitBranch,
-             w.git_repo AS workspaceGitRepo,
-             (SELECT COUNT(*) FROM workspace_obs wo WHERE wo.session_id = s.id) AS workspaceObservationCount,
              (SELECT COUNT(*) FROM ingest_cursor c WHERE c.session_id = s.id) AS sourceCount
       FROM session s
       JOIN agent_runtime r ON r.id = s.runtime_id
       LEFT JOIN project p ON p.id = s.project_id
-      LEFT JOIN workspace_obs w ON w.rowid = (
-        SELECT latest.rowid
-        FROM workspace_obs latest
-        WHERE latest.session_id = s.id
-        ORDER BY latest.at DESC, latest.rowid DESC
-        LIMIT 1
-      )
       ORDER BY s.updated_at DESC, s.id
     `).all()).map((row) => ({
       ...row,

@@ -4,8 +4,8 @@
 //! thinking and tool calls into one assistant record or persist one response
 //! across several records. The canonical model wants one row per visible block
 //! with response-wide block identity (docs/canonical-model.html, "Message rows").
-//! Everything else — tool results folding onto their call, cwd observations,
-//! file edits — follows from that flattening.
+//! Everything else — tool results folding onto their call and file edits —
+//! follows from that flattening. Session cwd is admitted by the bounded skim.
 //!
 //! Pure by contract (CLAUDE.md): no IO, no clock, no randomness. Every id is
 //! derived from the session id plus a stable discriminator, so replaying a file
@@ -20,7 +20,6 @@ use rosetta_adapter_support::tool::{
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot,
-    WorkspaceObsRow,
 };
 use rosetta_core::timeline::{
     AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
@@ -56,13 +55,9 @@ const INVALID_JSON: &str = "<invalid-json>";
 /// live in the observed corpus (census `tool_use_names`: 2,237 and 71).
 const SPAWN_TOOLS: [&str; 2] = ["Agent", "Task"];
 
-/// Adapter-private per-file state, created through `AgentAdapter::init_state`.
-///
-/// Only the last workspace observation: every single record repeats `cwd` and
-/// `gitBranch`, and the projection wants transitions, not one row per line.
+/// Adapter-private per-file response-fold state.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClaudeCodeState {
-    workspace: Option<(String, String)>,
     /// Native response ids are not necessarily contiguous in a transcript:
     /// branch reconstruction can repeat an older assistant record thousands
     /// of lines later. Keep the closed response block identity so checkpoint
@@ -72,18 +67,6 @@ pub struct ClaudeCodeState {
 }
 
 impl ClaudeCodeState {
-    /// True when this observation differs from the previous one.
-    fn observe(&mut self, cwd: &str, git_branch: &str) -> bool {
-        let seen = self
-            .workspace
-            .as_ref()
-            .is_some_and(|(last_cwd, last_branch)| last_cwd == cwd && last_branch == git_branch);
-        if !seen {
-            self.workspace = Some((cwd.to_owned(), git_branch.to_owned()));
-        }
-        !seen
-    }
-
     /// Claude may persist one API response as several assistant JSONL records,
     /// each containing only newly materialized blocks. A branch replay may then
     /// repeat a prior record with the same UUID and a different parent. Stable
@@ -231,7 +214,6 @@ fn normalize(ctx: &mut NormalizeCtx, stream_id: &str, record: &KnownRecord) -> L
 
 fn user_line(emit: &mut Emit, line: &UserLine) {
     let ts = rfc3339_ms(&line.timestamp);
-    emit.workspace(&line.cwd, &line.git_branch, ts);
     let seed = Seed {
         uuid: Some(&line.uuid),
         parent_uuid: line.parent_uuid.as_deref(),
@@ -314,7 +296,6 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
 
 fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
     let ts = rfc3339_ms(&line.timestamp);
-    emit.workspace(&line.cwd, &line.git_branch, ts);
     let seed = Seed {
         uuid: Some(&line.uuid),
         parent_uuid: line.parent_uuid.as_deref(),
@@ -479,7 +460,6 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
 
 fn system_line(emit: &mut Emit, line: &SystemLine) {
     let ts = rfc3339_ms(&line.timestamp);
-    emit.workspace(&line.cwd, &line.git_branch, ts);
     let seed = Seed {
         uuid: Some(&line.uuid),
         parent_uuid: line.parent_uuid.as_deref(),
@@ -859,33 +839,6 @@ impl<'a> Emit<'a> {
             )),
             at,
         });
-    }
-
-    fn workspace(&mut self, cwd: &str, git_branch: &str, at: Option<Ms>) {
-        // Without a timestamp there is nowhere to put the observation, and
-        // recording it in state would suppress the next one that does have one.
-        let Some(at) = at else { return };
-        let changed = match self
-            .ctx
-            .state
-            .as_mut()
-            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
-        {
-            Some(state) => state.observe(cwd, git_branch),
-            // A pipeline that skipped init_state gets every observation rather
-            // than none: deduplication is an optimization, the data is not.
-            None => true,
-        };
-        if changed {
-            self.ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-                session_id: self.session_id.clone(),
-                at,
-                cwd: cwd.to_owned(),
-                git_branch: (!git_branch.is_empty()).then(|| git_branch.to_owned()),
-                // Repo identity comes from discovery, not from a transcript.
-                git_repo: None,
-            }));
-        }
     }
 
     fn drift(

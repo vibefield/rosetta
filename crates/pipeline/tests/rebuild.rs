@@ -26,7 +26,7 @@ struct Snapshot {
     fts_hits: usize,
     tokens: i64,
     projects: i64,
-    workspace_repos: i64,
+    session_cwds: i64,
 }
 
 fn snapshot(store: &Store) -> Snapshot {
@@ -50,7 +50,7 @@ fn snapshot(store: &Store) -> Snapshot {
             .len(),
         tokens: one("SELECT SUM(COALESCE(in_tokens,0) + COALESCE(out_tokens,0)) FROM usage_bucket"),
         projects: one("SELECT COUNT(*) FROM project"),
-        workspace_repos: one("SELECT COUNT(*) FROM workspace_obs WHERE git_repo IS NOT NULL"),
+        session_cwds: one("SELECT COUNT(*) FROM session WHERE cwd IS NOT NULL"),
     }
 }
 
@@ -177,9 +177,21 @@ fn ingest_then_lose_the_sources() -> Ledgered {
 
     let original = snapshot(&store);
     assert!(original.messages > 0 && original.fts_hits > 0 && original.tokens > 0);
+    assert!(
+        original.session_cwds > 0,
+        "meta admission must retain session cwd"
+    );
     assert_eq!(
-        original.workspace_repos, 0,
-        "stream projection must not enrich raw workspace rows from today's checkout"
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM project WHERE git_repo LIKE '%replay-probe%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "a later stream cwd must not create or reassign a project"
     );
 
     // The agent GC's everything. The projection is about to be dropped too.

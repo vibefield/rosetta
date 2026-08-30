@@ -51,9 +51,6 @@ pub(crate) fn before_batch(tx: &Transaction<'_>, batch: &Batch) -> Result<Before
             IngestOp::SessionMeta(row) => {
                 session_ids.insert(row.id.clone());
             }
-            IngestOp::WorkspaceObs(row) => {
-                session_ids.insert(row.session_id.clone());
-            }
             _ => {}
         }
     }

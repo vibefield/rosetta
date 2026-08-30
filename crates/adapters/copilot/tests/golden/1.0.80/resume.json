@@ -1,28 +1,5 @@
 [
   {
-    "op": "session_meta",
-    "id": "acd8f5e88984aff7ec091d6ce8ceea4cbbe374b0b27068d02f10130353a7221d",
-    "native_session_id": "58ee8371-b203-48fa-b274-352cb336fe17",
-    "runtime_id": "bf17f75aa2b713a54a2e829fceffaff24d056177d9c881e5ce2e77c56f926921",
-    "project_id": null,
-    "parent_session_id": null,
-    "root_session_id": "acd8f5e88984aff7ec091d6ce8ceea4cbbe374b0b27068d02f10130353a7221d",
-    "role": "main",
-    "title": null,
-    "summary": null,
-    "started_at": 1787635686766,
-    "updated_at": 1787635686819,
-    "stream_state": "streaming"
-  },
-  {
-    "op": "workspace_obs",
-    "session_id": "acd8f5e88984aff7ec091d6ce8ceea4cbbe374b0b27068d02f10130353a7221d",
-    "at": 1787635686819,
-    "cwd": "<PROJECT>",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
     "op": "message",
     "timeline_id": "84e0f20b5aa749ea55e0d7e774c2641902fbeab7ae6a0f6c5b748277305ecc6a",
     "session_id": "acd8f5e88984aff7ec091d6ce8ceea4cbbe374b0b27068d02f10130353a7221d",

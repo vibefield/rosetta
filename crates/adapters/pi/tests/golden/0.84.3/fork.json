@@ -1,28 +1,5 @@
 [
   {
-    "op": "session_meta",
-    "id": "6b6bf724590aea6544f4f1f7d4214d86c928533f4fac8009a66ee0bcb4875078",
-    "native_session_id": "01a03764-ca06-78d4-a53c-e0c15cfa5ae2",
-    "runtime_id": "129237fece719fab92b37b64922b77970c8076b16dfc394900fc73817f3c9e89",
-    "project_id": null,
-    "parent_session_id": null,
-    "root_session_id": "6b6bf724590aea6544f4f1f7d4214d86c928533f4fac8009a66ee0bcb4875078",
-    "role": "main",
-    "title": null,
-    "summary": null,
-    "started_at": 1787635747334,
-    "updated_at": 1787635747334,
-    "stream_state": "streaming"
-  },
-  {
-    "op": "workspace_obs",
-    "session_id": "6b6bf724590aea6544f4f1f7d4214d86c928533f4fac8009a66ee0bcb4875078",
-    "at": 1787635747334,
-    "cwd": "<PROJECT>",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
     "op": "message",
     "timeline_id": "83a07402caf7ed11a0092083ad5098c94e46d4e3d8561271f2df24ef96661f6e",
     "session_id": "6b6bf724590aea6544f4f1f7d4214d86c928533f4fac8009a66ee0bcb4875078",
@@ -100,29 +77,6 @@
       "src_cursor": 5,
       "src_offset": 614
     }
-  },
-  {
-    "op": "session_meta",
-    "id": "27171da08f20bab3d1038893efd6cfb2ea2b0bfaa70709f6edb395fd2d3d222a",
-    "native_session_id": "01a03764-cb20-7527-b8ae-32fb5e8c6694",
-    "runtime_id": "129237fece719fab92b37b64922b77970c8076b16dfc394900fc73817f3c9e89",
-    "project_id": null,
-    "parent_session_id": "6b6bf724590aea6544f4f1f7d4214d86c928533f4fac8009a66ee0bcb4875078",
-    "root_session_id": "6b6bf724590aea6544f4f1f7d4214d86c928533f4fac8009a66ee0bcb4875078",
-    "role": "main",
-    "title": null,
-    "summary": null,
-    "started_at": 1787635747616,
-    "updated_at": 1787635747616,
-    "stream_state": "streaming"
-  },
-  {
-    "op": "workspace_obs",
-    "session_id": "27171da08f20bab3d1038893efd6cfb2ea2b0bfaa70709f6edb395fd2d3d222a",
-    "at": 1787635747616,
-    "cwd": "<PROJECT>",
-    "git_branch": null,
-    "git_repo": null
   },
   {
     "op": "message",

@@ -7,7 +7,6 @@ use crate::assets::ProjectionAsset;
 use crate::rows::{
     DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, RuntimeRow,
     SessionRow, SessionTitleRow, SessionUsageRow, TaskRow, TitleKind, TokenSnapshot,
-    WorkspaceObsRow,
 };
 use crate::timeline::{
     EvidenceOrder, ExecutionMode, GroupDerivation, GroupKind, Notice, PermissionOutcome,
@@ -26,7 +25,8 @@ pub enum IngestOp {
     },
     Runtime(RuntimeRow),
     Project(ProjectRow),
-    /// Meta-phase upsert; stream-phase ops for the same session refine it.
+    /// Meta-phase upsert. Stream normalization never mutates session identity,
+    /// topology, cwd, or project ownership.
     SessionMeta(SessionRow),
     /// Ranked title fact recovered during bounded metadata admission.
     SessionTitle(SessionTitleRow),
@@ -58,7 +58,6 @@ pub enum IngestOp {
     /// Usage that the native agent reports only at session/task granularity.
     /// It is an additive canonical sample, not a synthetic response message.
     SessionUsage(SessionUsageRow),
-    WorkspaceObs(WorkspaceObsRow),
     FileEdit(FileEditRow),
     Plan(PlanRow),
     Task(TaskRow),

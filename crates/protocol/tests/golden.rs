@@ -51,6 +51,7 @@ fn session_row() -> SessionRow {
         native_session_id: "native-s1".into(),
         runtime_id: "rt1".into(),
         project_id: Some("p1".into()),
+        cwd: Some("/w/rosetta".into()),
         parent_session_id: Some("s0".into()),
         root_session_id: "s0".into(),
         role: SessionRole::Subagent,

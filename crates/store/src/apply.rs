@@ -11,11 +11,10 @@ use std::time::Instant;
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
+use rosetta_core::IngestOp;
 use rosetta_core::rows::{
-    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, ProjectRow, SessionUsageRow, TaskRow,
-    WorkspaceObsRow,
+    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, SessionUsageRow, TaskRow,
 };
-use rosetta_core::{IngestOp, ids};
 
 use crate::StoreError;
 use crate::hot::{Effects, Mutation};
@@ -227,45 +226,6 @@ pub(crate) fn apply_bulk_reconciliation(
     plan: &mut BulkReconciliationPlan,
 ) -> Result<ApplyStats, StoreError> {
     bulk_reconcile::apply_plan(tx, plan)
-}
-
-fn apply_workspace_obs(
-    tx: &Transaction,
-    row: &WorkspaceObsRow,
-    src_cursor: Option<i64>,
-) -> Result<(), StoreError> {
-    let cwd = ids::normalize_root(&row.cwd);
-    let project_id = ids::project_id(&cwd, row.git_repo.as_deref());
-    apply_project(
-        tx,
-        &ProjectRow {
-            id: project_id.clone(),
-            name: ids::project_name(&cwd),
-            root_paths: vec![cwd.clone()],
-            git_repo: row.git_repo.clone(),
-        },
-    )?;
-    tx.prepare_cached(
-        "INSERT INTO workspace_obs (session_id, at, cwd, git_branch, git_repo, src_cursor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT DO NOTHING",
-    )?
-    .execute(params![
-        row.session_id,
-        row.at,
-        cwd,
-        row.git_branch,
-        row.git_repo,
-        src_cursor
-    ])?;
-    tx.prepare_cached(
-        "UPDATE session
-         SET project_id = ?2, project_assigned_at = ?3
-         WHERE id = ?1
-           AND (project_assigned_at IS NULL OR ?3 < project_assigned_at)",
-    )?
-    .execute(params![row.session_id, project_id, row.at])?;
-    Ok(())
 }
 
 fn apply_session_usage(
@@ -663,7 +623,6 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM git_commit    WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM task          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
-               EXISTS(SELECT 1 FROM workspace_obs WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session       WHERE title_src_cursor = ?1 LIMIT 1)",
         )?
@@ -715,7 +674,6 @@ fn remove_cursor_projection(
         "DELETE FROM git_commit WHERE src_cursor = ?1",
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
-        "DELETE FROM workspace_obs WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
@@ -1102,8 +1060,7 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
         IngestOp::SessionTitle(row) => {
             fx.touched_sessions.insert(row.session_id.clone());
         }
-        // These touch the session row (`updated_at`, and for workspace obs
-        // the project link plus a possibly-new project row).
+        // Messages and late merge facts touch the session's activity time.
         IngestOp::Message(row) => {
             fx.touched_sessions.insert(row.session_id.clone());
         }
@@ -1111,12 +1068,6 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
             fx.touched_sessions.insert(session_id.clone());
         }
         IngestOp::SessionUsage(row) => {
-            fx.touched_sessions.insert(row.session_id.clone());
-        }
-        IngestOp::WorkspaceObs(row) => {
-            let cwd = ids::normalize_root(&row.cwd);
-            fx.touched_projects
-                .insert(ids::project_id(&cwd, row.git_repo.as_deref()));
             fx.touched_sessions.insert(row.session_id.clone());
         }
         // No session/project/runtime row changes.
@@ -1180,9 +1131,6 @@ fn apply_op(
         }
         IngestOp::SessionUsage(row) => {
             apply_session_usage(tx, row, src_cursor, stats, maintenance, dirty_buckets)?
-        }
-        IngestOp::WorkspaceObs(row) => {
-            profile_other(stats, || apply_workspace_obs(tx, row, src_cursor))?
         }
         IngestOp::FileEdit(row) => profile_other(stats, || apply_file_edit(tx, row, src_cursor))?,
         IngestOp::Plan(row) => profile_other(stats, || apply_plan(tx, row, src_cursor))?,

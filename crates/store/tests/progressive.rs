@@ -25,6 +25,7 @@ fn session(state: StreamState) -> SessionRow {
         native_session_id: "native".into(),
         runtime_id: "rt".into(),
         project_id: None,
+        cwd: None,
         parent_session_id: None,
         root_session_id: "s".into(),
         role: SessionRole::Main,

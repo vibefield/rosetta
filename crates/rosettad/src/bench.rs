@@ -203,11 +203,10 @@ pub(crate) fn meta_event(agent: &str, meta: &MetaReport) -> Value {
     })
 }
 
-const DEFERRED_INDEXES: [&str; 11] = [
+const DEFERRED_INDEXES: [&str; 10] = [
     "session_project",
     "session_runtime",
     "session_parent",
-    "workspace_obs_session",
     "task_session",
     "message_bucket_key",
     "session_usage_bucket_key",
@@ -409,7 +408,6 @@ pub(crate) fn projection_snapshot(
             "projects": table_count(connection, "project")?,
             "sessions": table_count(connection, "session")?,
             "messages": table_count(connection, "message")?,
-            "workspaceObservations": table_count(connection, "workspace_obs")?,
             "fileEdits": table_count(connection, "file_edit")?,
             "plans": table_count(connection, "plan")?,
             "tasks": table_count(connection, "task")?,

@@ -483,7 +483,6 @@ fn ingest_file(
                 }
             }
         }
-        crate::project::normalize_workspace_ops(&mut ops);
 
         let last_reading = *ctx.cumulative.last_reading();
         let adapter_state = adapter

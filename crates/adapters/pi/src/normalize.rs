@@ -14,15 +14,13 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionRole, SessionRow, StreamState, TokenSnapshot,
-    WorkspaceObsRow,
+    DriftFact, MessageKind, MessageRow, Ms, SessionTitleRow, TitleKind, TokenSnapshot,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::adapter::native_id_from_session_path;
 use crate::raw::session::{
     AgentMessage, AssistantMessage, BashExecutionMessage, BranchSummaryEntry, BranchSummaryMessage,
     CompactionEntry, CompactionSummaryMessage, ContentBlock, CustomMessageEntry, CustomRoleMessage,
@@ -41,15 +39,12 @@ const NO_TYPE: &str = "<untyped>";
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PiState {
     header: Option<HeaderState>,
-    title: Option<String>,
     entries: BTreeMap<String, EntryContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HeaderState {
-    native_id: String,
     cwd: String,
-    parent_native_id: Option<String>,
     started_at: Ms,
 }
 
@@ -135,7 +130,7 @@ fn project(
     ops: &mut Vec<IngestOp>,
 ) {
     match record {
-        KnownRecord::Session(header) => session_header(ctx, state, header, ops),
+        KnownRecord::Session(header) => session_header(state, header),
         KnownRecord::ModelChange(entry) => {
             let mut inherited = state.inherited(entry.parent_id.as_deref());
             inherited.model = Some(entry.model_id.clone());
@@ -150,16 +145,15 @@ fn project(
             let inherited = state.inherited(entry.parent_id.as_deref());
             state.remember(&entry.id, inherited);
             if let Some(name) = entry.name.as_ref().filter(|name| !name.is_empty()) {
-                state.title = Some(name.clone());
-                if let Some(header) = state.header.as_ref() {
-                    let updated = rfc3339_ms(&entry.timestamp).unwrap_or(header.started_at);
-                    ops.push(IngestOp::SessionMeta(session_row(
-                        ctx,
-                        header,
-                        state.title.clone(),
-                        updated,
-                    )));
-                }
+                let at = rfc3339_ms(&entry.timestamp)
+                    .or_else(|| state.header.as_ref().map(|header| header.started_at))
+                    .unwrap_or_default();
+                ops.push(IngestOp::SessionTitle(SessionTitleRow {
+                    session_id: ctx.session_id.clone(),
+                    title: name.clone(),
+                    kind: TitleKind::Explicit,
+                    at,
+                }));
             }
         }
         KnownRecord::Message(entry) => message_entry(ctx, state, stream_id, entry, ops),
@@ -179,65 +173,12 @@ fn project(
     }
 }
 
-fn session_header(
-    ctx: &NormalizeCtx,
-    state: &mut PiState,
-    header: &SessionHeader,
-    ops: &mut Vec<IngestOp>,
-) {
+fn session_header(state: &mut PiState, header: &SessionHeader) {
     let started_at = rfc3339_ms(&header.timestamp).unwrap_or_default();
-    let parent_native_id = header
-        .parent_session
-        .as_deref()
-        .and_then(native_id_from_session_path)
-        .map(str::to_owned);
     state.header = Some(HeaderState {
-        native_id: header.id.clone(),
         cwd: header.cwd.clone(),
-        parent_native_id,
         started_at,
     });
-    let saved = state.header.as_ref().expect("header was just stored");
-    ops.push(IngestOp::SessionMeta(session_row(
-        ctx,
-        saved,
-        state.title.clone(),
-        started_at,
-    )));
-    ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-        session_id: ctx.session_id.clone(),
-        at: started_at,
-        cwd: header.cwd.clone(),
-        git_branch: None,
-        git_repo: None,
-    }));
-}
-
-fn session_row(
-    ctx: &NormalizeCtx,
-    header: &HeaderState,
-    title: Option<String>,
-    updated_at: Ms,
-) -> SessionRow {
-    let parent_session_id = header
-        .parent_native_id
-        .as_deref()
-        .map(|native| ids::session_id(&ctx.runtime_id, native));
-    SessionRow {
-        id: ctx.session_id.clone(),
-        native_session_id: header.native_id.clone(),
-        runtime_id: ctx.runtime_id.clone(),
-        project_id: None,
-        parent_session_id: parent_session_id.clone(),
-        root_session_id: parent_session_id.unwrap_or_else(|| ctx.session_id.clone()),
-        // A fork is another main Pi session, not a spawned subagent stream.
-        role: SessionRole::Main,
-        title,
-        summary: None,
-        started_at: header.started_at,
-        updated_at,
-        stream_state: StreamState::Streaming,
-    }
 }
 
 fn message_entry(

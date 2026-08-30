@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use rosetta_core::rows::{
-    MessageKind, MessageRow, RuntimeRow, SessionRole, SessionRow, StreamState, WorkspaceObsRow,
+    MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
 use rosetta_core::timeline::SearchLane;
 use rosetta_core::{
@@ -38,6 +38,7 @@ fn session(id: &str, project_id: Option<&str>) -> SessionRow {
         native_session_id: id.into(),
         runtime_id: "rt1".into(),
         project_id: project_id.map(str::to_string),
+        cwd: project_id.map(|_| "/w/rosetta".to_owned()),
         parent_session_id: None,
         root_session_id: id.into(),
         role: SessionRole::Main,
@@ -541,7 +542,7 @@ fn background_worker_wakes_repairs_and_delivers_acknowledgements() {
 }
 
 #[test]
-fn workspace_project_reassignment_repairs_structured_search_filters() {
+fn metadata_project_assignment_repairs_structured_search_filters() {
     let dir = tempfile::TempDir::new().unwrap();
     let (path, mut store) = canonical(&dir);
     let search = Fts5SidecarSearch::new(&path);
@@ -553,15 +554,19 @@ fn workspace_project_reassignment_repairs_structured_search_filters() {
 
     let cwd = "/work/project";
     let project_id = ids::project_id(cwd, None);
+    let mut assigned = session("s1", Some(&project_id));
+    assigned.cwd = Some(cwd.into());
     store
         .apply(&Batch {
-            ops: vec![IngestOp::WorkspaceObs(WorkspaceObsRow {
-                session_id: "s1".into(),
-                at: 0,
-                cwd: cwd.into(),
-                git_branch: None,
-                git_repo: None,
-            })],
+            ops: vec![
+                IngestOp::Project(ProjectRow {
+                    id: project_id.clone(),
+                    name: "project".into(),
+                    root_paths: vec![cwd.into()],
+                    git_repo: None,
+                }),
+                IngestOp::SessionMeta(assigned),
+            ],
             checkpoints: vec![],
             source: None,
         })

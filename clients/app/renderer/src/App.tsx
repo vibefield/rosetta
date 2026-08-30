@@ -177,8 +177,15 @@ export default function App() {
 
   const projectRoot = useMemo(() => {
     if (projectId === null) return null;
-    return projectById.get(projectId)?.row.root_paths[0] ?? null;
-  }, [projectId, projectById]);
+    const roots = projectById.get(projectId)?.row.root_paths ?? [];
+    if (session?.cwd) {
+      const matching = roots
+        .filter((root) => session.cwd === root || session.cwd?.startsWith(`${root}/`))
+        .sort((a, b) => b.length - a.length)[0];
+      if (matching) return matching;
+    }
+    return roots[0] ?? null;
+  }, [projectId, projectById, session]);
 
   // Which files this session touched — the one fact a git client cannot show.
   // Empty until the typed tool projection ships `file_change` actions, which

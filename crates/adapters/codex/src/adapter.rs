@@ -35,7 +35,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        5
+        6
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
@@ -120,7 +120,7 @@ impl AgentAdapter for CodexAdapter {
     ///
     /// A rollout file opens with its `session_meta` record, so the head window
     /// alone answers for every fact codex records about a session — but the ops
-    /// those facts could build (`SessionMeta`, `WorkspaceObs`) are keyed on a rosetta
+    /// those facts could build (`SessionMeta`) are keyed on a rosetta
     /// session id, which is `blake3(runtime_id, native_id)`, and the meta phase
     /// hands the adapter no runtime id. Deriving one here from the canonical
     /// `~/.codex` would silently disagree with the pipeline's whenever

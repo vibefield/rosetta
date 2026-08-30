@@ -47,6 +47,7 @@ fn session(id: &str) -> SessionRow {
         native_session_id: format!("native-{id}"),
         runtime_id: "rt1".into(),
         project_id: Some("p1".into()),
+        cwd: Some("/w/rosetta".into()),
         parent_session_id: None,
         root_session_id: id.into(),
         role: SessionRole::Main,
@@ -2421,7 +2422,7 @@ fn schema_mismatch_fails_closed_without_dropping_existing_data() {
 #[test]
 fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
     use rosetta_core::rows::{
-        EditKind, FileEditRow, PlanRow, SessionUsageRow, TaskRow, TaskStatus, WorkspaceObsRow,
+        EditKind, FileEditRow, PlanRow, SessionUsageRow, TaskRow, TaskStatus,
     };
 
     let mut store = Store::open_in_memory().unwrap();
@@ -2467,13 +2468,6 @@ fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
         message_op(m1),
         message_op(m2),
         status_update("toolu_g1", ToolStatus::Succeeded, 101),
-        IngestOp::WorkspaceObs(WorkspaceObsRow {
-            session_id: "s1".into(),
-            at: 3_600_000,
-            cwd: "/w/rosetta".into(),
-            git_branch: Some("main".into()),
-            git_repo: None,
-        }),
         IngestOp::FileEdit(FileEditRow {
             session_id: "s1".into(),
             message_timeline_id: Some("g1-tool".into()),
@@ -2550,7 +2544,6 @@ fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
     assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 2);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM file_edit"), 1);
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 1);
@@ -2614,7 +2607,6 @@ fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
     assert_tool_reconciliation_is_ram_only(&store);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM message"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM file_edit"), 0);
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM workspace_obs"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 0);
@@ -2786,54 +2778,58 @@ fn abandoning_an_unclean_generation_keeps_the_active_projection_and_drift() {
 }
 
 #[test]
-fn workspace_changes_after_session_start_do_not_move_the_project() {
-    use rosetta_core::rows::WorkspaceObsRow;
-
+fn later_session_metadata_cannot_move_an_assigned_project_or_cwd() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
+    let other_id = rosetta_core::ids::project_id("/w/other", None);
+    let mut conflicting = session("s1");
+    conflicting.project_id = Some(other_id.clone());
+    conflicting.cwd = Some("/w/other".into());
     store
         .apply(&Batch {
-            ops: vec![IngestOp::WorkspaceObs(WorkspaceObsRow {
-                session_id: "s1".into(),
-                at: 20_000,
-                cwd: "/w/other".into(),
-                git_branch: None,
-                git_repo: None,
-            })],
+            ops: vec![
+                IngestOp::Project(ProjectRow {
+                    id: other_id,
+                    name: "other".into(),
+                    root_paths: vec!["/w/other".into()],
+                    git_repo: None,
+                }),
+                IngestOp::SessionMeta(conflicting),
+            ],
             checkpoints: vec![],
             source: None,
         })
         .unwrap();
-    assert_eq!(
-        queries::session(store.conn(), "s1")
-            .unwrap()
-            .unwrap()
-            .project_id
-            .as_deref(),
-        Some("p1")
-    );
+    let row = queries::session(store.conn(), "s1").unwrap().unwrap();
+    assert_eq!(row.project_id.as_deref(), Some("p1"));
+    assert_eq!(row.cwd.as_deref(), Some("/w/rosetta"));
+}
 
-    store
+#[test]
+fn source_scoped_stream_batches_reject_session_metadata() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "p/transcript.jsonl");
+    let mut conflicting = session("s1");
+    conflicting.cwd = Some("/w/from-stream".into());
+
+    let error = store
         .apply(&Batch {
-            ops: vec![IngestOp::WorkspaceObs(WorkspaceObsRow {
+            ops: vec![IngestOp::SessionMeta(conflicting)],
+            source: Some(SourceWrite {
+                cursor_id,
                 session_id: "s1".into(),
-                at: 9_000,
-                cwd: "/w/earlier".into(),
-                git_branch: None,
-                git_repo: None,
-            })],
-            checkpoints: vec![],
-            source: None,
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Append,
+            }),
+            ..Batch::default()
         })
-        .unwrap();
-    let expected = rosetta_core::ids::project_id("/w/earlier", None);
-    assert_eq!(
-        queries::session(store.conn(), "s1")
-            .unwrap()
-            .unwrap()
-            .project_id,
-        Some(expected)
-    );
+        .unwrap_err();
+
+    assert!(matches!(error, StoreError::SourceState { .. }));
+    let row = queries::session(store.conn(), "s1").unwrap().unwrap();
+    assert_eq!(row.cwd.as_deref(), Some("/w/rosetta"));
 }
 
 #[test]

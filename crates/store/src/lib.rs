@@ -303,6 +303,22 @@ impl Store {
     /// checkpoint CAS conflict — nothing is committed, and nothing reaches
     /// the observed effects.
     pub fn apply(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
+        // Session identity, topology, cwd, and project ownership are settled
+        // only by the ledgered metadata batch. Keep this invariant at the
+        // final write boundary so a future adapter cannot quietly restore
+        // transcript-driven reassignment.
+        if let Some(source) = &batch.source
+            && batch
+                .ops
+                .iter()
+                .any(|op| matches!(op, rosetta_core::IngestOp::SessionMeta(_)))
+        {
+            return Err(StoreError::SourceState {
+                cursor_id: source.cursor_id,
+                message: "source-scoped stream batch contains metadata-only session_meta"
+                    .to_string(),
+            });
+        }
         let asset_stats = self
             .assets
             .materialize_batch(batch, self.mode != StoreMode::Bulk)?;

@@ -1,13 +1,5 @@
 [
   {
-    "op": "workspace_obs",
-    "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
-    "at": 1787636369556,
-    "cwd": "<PROJECT>",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
     "op": "message",
     "timeline_id": "f5ff937723e98ab18d074531e7a2371f0ba3e88bd81f248b7234a118dc865289",
     "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",

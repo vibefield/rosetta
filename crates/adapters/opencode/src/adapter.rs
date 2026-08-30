@@ -27,7 +27,7 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        2
+        3
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

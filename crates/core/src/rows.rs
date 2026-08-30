@@ -192,6 +192,9 @@ pub struct SessionRow {
     pub native_session_id: String,
     pub runtime_id: String,
     pub project_id: Option<String>,
+    /// One normalized primary working directory, selected by the adapter's
+    /// bounded metadata admission. Timeline records never mutate it.
+    pub cwd: Option<String>,
     pub parent_session_id: Option<String>,
     /// `== id` for top-level sessions; subagent trees roll up here.
     pub root_session_id: String,
@@ -259,15 +262,6 @@ pub struct SessionUsageRow {
     pub ts: Ms,
     pub model: Option<String>,
     pub tokens: TokenSnapshot,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceObsRow {
-    pub session_id: String,
-    pub at: Ms,
-    pub cwd: String,
-    pub git_branch: Option<String>,
-    pub git_repo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

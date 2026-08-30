@@ -12,7 +12,7 @@ function fixture() {
   const file = path.join(directory, 'projection.sqlite');
   const db = new DatabaseSync(file);
   db.exec(`
-    PRAGMA user_version = 11;
+    PRAGMA user_version = 12;
     CREATE TABLE message(id INTEGER PRIMARY KEY, type TEXT, content TEXT);
     INSERT INTO message(type, content) VALUES ('user', 'hello'), ('agent', 'world');
     CREATE TABLE agent_runtime(
@@ -23,16 +23,14 @@ function fixture() {
     INSERT INTO project VALUES ('project-1', 'rosetta', '["/work/rosetta"]', 'vibefield/rosetta');
     CREATE TABLE session(
       id TEXT PRIMARY KEY, native_session_id TEXT, runtime_id TEXT, project_id TEXT,
-      parent_session_id TEXT, root_session_id TEXT, role TEXT, title TEXT, summary TEXT,
-      started_at INTEGER, updated_at INTEGER, stream_state TEXT, project_assigned_at INTEGER
+      cwd TEXT, parent_session_id TEXT, root_session_id TEXT, role TEXT, title TEXT, summary TEXT,
+      started_at INTEGER, updated_at INTEGER, stream_state TEXT
     );
     INSERT INTO session VALUES
-      ('session-1', 'native-1', 'runtime-1', 'project-1', NULL, 'session-1', 'main',
-       'Review Rosetta', 'Inspect the ingest bench', 1000, 2000, 'pending', 1000),
-      ('session-2', 'native-2', 'runtime-1', NULL, 'session-1', 'session-1', 'subagent',
-       NULL, NULL, 1500, 3000, 'indexed', NULL);
-    CREATE TABLE workspace_obs(session_id TEXT, at INTEGER, cwd TEXT, git_branch TEXT, git_repo TEXT);
-    INSERT INTO workspace_obs VALUES ('session-1', 1000, '/work/rosetta', 'main', 'vibefield/rosetta');
+      ('session-1', 'native-1', 'runtime-1', 'project-1', '/work/rosetta', NULL, 'session-1', 'main',
+       'Review Rosetta', 'Inspect the ingest bench', 1000, 2000, 'pending'),
+      ('session-2', 'native-2', 'runtime-1', NULL, NULL, 'session-1', 'session-1', 'subagent',
+       NULL, NULL, 1500, 3000, 'indexed');
     CREATE TABLE ingest_cursor(id INTEGER, session_id TEXT);
     INSERT INTO ingest_cursor VALUES (1, 'session-1');
     CREATE TABLE file_edit(id INTEGER);
@@ -49,10 +47,9 @@ test('projection opens read-only and exposes schema, counts, and pages', (t) => 
   const projection = new ProjectionDatabase();
   t.after(() => projection.close());
 
-  assert.equal(projection.open(file).schemaVersion, 11);
+  assert.equal(projection.open(file).schemaVersion, 12);
   const overview = projection.overview();
   assert.equal(overview.counts.message, 2);
-  assert.equal(overview.counts.workspace_obs, 1);
   assert.equal(overview.counts.ingest_cursor, 1);
   assert.ok(overview.objects.some((object) => object.name === 'message'));
 

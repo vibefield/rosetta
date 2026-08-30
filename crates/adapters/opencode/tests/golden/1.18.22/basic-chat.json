@@ -39,14 +39,6 @@
     }
   },
   {
-    "op": "workspace_obs",
-    "session_id": "4ee79513106bd4272433f6c9c13d24ccba2291702738455f79960b4d5bc77dc2",
-    "at": 1787635536145,
-    "cwd": "<PROJECT>",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
     "op": "message",
     "timeline_id": "cb898a4c52423d4504c1dffe431008947d6681bdf2fb27f4a517251e06678837",
     "session_id": "4ee79513106bd4272433f6c9c13d24ccba2291702738455f79960b4d5bc77dc2",

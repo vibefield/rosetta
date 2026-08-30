@@ -84,7 +84,8 @@ pub struct SkimResult {
     /// Native root session id when it differs from the immediate parent.
     pub root_session_id: Option<String>,
     pub role: Option<rosetta_core::rows::SessionRole>,
-    /// Workspace directory the session ran in — drives project assignment.
+    /// One primary working directory proven by bounded native metadata. The
+    /// pipeline normalizes it and settles project ownership before streaming.
     pub cwd: Option<String>,
     pub agent_version: Option<String>,
     /// Session title/summary when the head or tail happens to carry one.

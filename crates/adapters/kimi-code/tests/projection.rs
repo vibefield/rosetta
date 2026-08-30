@@ -498,10 +498,7 @@ fn organic_config_compaction_and_todos_project_canonical_facts() {
         br#"{"type":"config.update","agentsMdPaths":[],"environmentDisclosure":{"cwd":"/work/kimi","date":{"disclosed":true,"value":{"localDate":"2026-08-26","timeZone":"UTC"}}},"profileName":"default","systemPrompt":"prompt","time":1}"#,
     );
     assert_eq!(config.status, LineStatus::Parsed);
-    let [IngestOp::WorkspaceObs(workspace)] = config.ops.as_slice() else {
-        panic!("expected workspace observation, got {:?}", config.ops);
-    };
-    assert_eq!(workspace.cwd, "/work/kimi");
+    assert!(config.ops.is_empty());
 
     let compaction = KimiCodeAdapter.ingest_line(
         &mut ctx,

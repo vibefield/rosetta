@@ -563,9 +563,7 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     )]);
 
     assert!(messages(&ops).is_empty(), "a report-back is not a turn");
-    // The line opens the file, so it also carries the first workspace fix.
     let [
-        IngestOp::WorkspaceObs(_),
         IngestOp::ToolUpdate {
             correlation_key,
             patch,
@@ -656,7 +654,11 @@ fn a_turn_with_text_and_a_result_keeps_both() {
     assert_eq!(body_kind(rows[0]), "user");
     assert_eq!(text(rows[0]), Some("and here is my follow-up"));
 
-    let IngestOp::ToolUpdate { patch, .. } = &ops[2] else {
+    let patch = ops.iter().find_map(|op| match op {
+        IngestOp::ToolUpdate { patch, .. } => Some(patch),
+        _ => None,
+    });
+    let Some(patch) = patch else {
         panic!("expected a tool update after the turn, got {ops:#?}");
     };
     assert_eq!(
@@ -757,29 +759,6 @@ fn explicit_custom_title_is_a_distinct_session_singleton() {
     assert_eq!(title.kind, TitleKind::Explicit);
     assert_eq!(title.title, "Keep this exact title");
     assert!(drift(&ops).is_empty());
-}
-
-#[test]
-fn workspace_observations_record_transitions_only() {
-    let elsewhere = {
-        let mut line = assistant(json!([{"type": "text", "text": "x"}]), None);
-        line["cwd"] = json!("/tmp/other");
-        line
-    };
-    let (ops, _) = run(&[
-        assistant(json!([{"type": "text", "text": "a"}]), None),
-        assistant(json!([{"type": "text", "text": "b"}]), None),
-        elsewhere,
-    ]);
-
-    let observed: Vec<&str> = ops
-        .iter()
-        .filter_map(|op| match op {
-            IngestOp::WorkspaceObs(row) => Some(row.cwd.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(observed, [CWD, "/tmp/other"]);
 }
 
 #[test]

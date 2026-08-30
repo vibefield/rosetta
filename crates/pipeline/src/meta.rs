@@ -337,6 +337,11 @@ pub fn meta_ingest_into(
         });
     }
 
+    // Session ownership is a metadata decision. Resolve child inheritance and
+    // local repository identity exactly once before any transcript is streamed;
+    // the resulting SessionRow + ProjectRow facts are then journaled together.
+    settle_projects(&mut output);
+
     // A re-skim must never regress ingest progress: a session the stream
     // phase already indexed stays indexed.
     for session in &mut output.sessions {
@@ -394,6 +399,7 @@ pub fn meta_ingest_into(
 fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
     match sessions.iter_mut().find(|existing| existing.id == row.id) {
         Some(existing) => {
+            let existing_started_at = existing.started_at;
             let newer = row.updated_at >= existing.updated_at;
             existing.started_at = existing.started_at.min(row.started_at);
             existing.updated_at = existing.updated_at.max(row.updated_at);
@@ -404,7 +410,15 @@ fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
                 existing.title = existing.title.clone().or(row.title);
                 existing.summary = existing.summary.clone().or(row.summary);
             }
-            existing.project_id = existing.project_id.clone().or(row.project_id);
+            existing.cwd = select_primary_cwd(
+                existing.cwd.take(),
+                existing_started_at,
+                row.cwd,
+                row.started_at,
+            );
+            // Project assignment is derived after every metadata source has
+            // contributed its bounded fact.
+            existing.project_id = None;
             existing.parent_session_id =
                 existing.parent_session_id.clone().or(row.parent_session_id);
             if existing.root_session_id == existing.id && row.root_session_id != row.id {
@@ -417,6 +431,82 @@ fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
         }
         None => sessions.push(row),
     }
+}
+
+fn select_primary_cwd(
+    left: Option<String>,
+    left_started_at: i64,
+    right: Option<String>,
+    right_started_at: i64,
+) -> Option<String> {
+    match (left, right) {
+        (None, value) | (value, None) => value,
+        (Some(left), Some(right)) if left == right => Some(left),
+        (Some(left), Some(right)) => {
+            if (right_started_at, right.as_str()) < (left_started_at, left.as_str()) {
+                Some(right)
+            } else {
+                Some(left)
+            }
+        }
+    }
+}
+
+/// Close the adapter metadata contract into one cwd/project assignment per
+/// session. A child with no native cwd may inherit its parent's already-set
+/// metadata; no parent is inferred from a child, and no source-body record is
+/// consulted here.
+fn settle_projects(output: &mut MetaOutput) {
+    let positions: std::collections::BTreeMap<String, usize> = output
+        .sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| (session.id.clone(), index))
+        .collect();
+
+    for _ in 0..output.sessions.len() {
+        let inherited: Vec<Option<String>> = output
+            .sessions
+            .iter()
+            .map(|session| {
+                if session.cwd.is_some() {
+                    return None;
+                }
+                session
+                    .parent_session_id
+                    .as_ref()
+                    .and_then(|id| positions.get(id))
+                    .and_then(|index| output.sessions[*index].cwd.clone())
+                    .or_else(|| {
+                        (session.root_session_id != session.id)
+                            .then_some(&session.root_session_id)
+                            .and_then(|id| positions.get(id))
+                            .and_then(|index| output.sessions[*index].cwd.clone())
+                    })
+            })
+            .collect();
+        let mut changed = false;
+        for (session, cwd) in output.sessions.iter_mut().zip(inherited) {
+            if session.cwd.is_none() && cwd.is_some() {
+                session.cwd = cwd;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut projects = std::collections::BTreeMap::new();
+    for session in &mut output.sessions {
+        session.project_id = session.cwd.as_deref().map(|cwd| {
+            let project = crate::project::project(cwd);
+            let id = project.id.clone();
+            projects.entry(id.clone()).or_insert(project);
+            id
+        });
+    }
+    output.projects = projects.into_values().collect();
 }
 
 fn stronger_stream_state(left: StreamState, right: StreamState) -> StreamState {
@@ -468,14 +558,7 @@ fn admit_identified(
         }));
     }
 
-    let project_id = skim.cwd.as_deref().map(|cwd| {
-        let project = crate::project::project(cwd);
-        let id = project.id.clone();
-        if !output.projects.iter().any(|existing| existing.id == id) {
-            output.projects.push(project);
-        }
-        id
-    });
+    let cwd = skim.cwd.take().map(|cwd| ids::normalize_root(&cwd));
 
     let parent_session_id = skim
         .parent_session_id
@@ -502,7 +585,8 @@ fn admit_identified(
                 id: parent_id.clone(),
                 native_session_id: parent_native.to_owned(),
                 runtime_id: runtime.id.clone(),
-                project_id: project_id.clone(),
+                project_id: None,
+                cwd: None,
                 parent_session_id: None,
                 root_session_id: root_session_id.clone(),
                 role: SessionRole::Main,
@@ -521,7 +605,8 @@ fn admit_identified(
         id: session_id.clone(),
         native_session_id: native_session_id.clone(),
         runtime_id: runtime.id.clone(),
-        project_id,
+        project_id: None,
+        cwd,
         parent_session_id,
         root_session_id,
         role,
@@ -758,4 +843,89 @@ fn admit_database(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(
+        id: &str,
+        cwd: Option<&str>,
+        parent: Option<&str>,
+        root: &str,
+        role: SessionRole,
+        started_at: i64,
+    ) -> SessionRow {
+        SessionRow {
+            id: id.to_owned(),
+            native_session_id: id.to_owned(),
+            runtime_id: "runtime".to_owned(),
+            project_id: None,
+            cwd: cwd.map(str::to_owned),
+            parent_session_id: parent.map(str::to_owned),
+            root_session_id: root.to_owned(),
+            role,
+            title: None,
+            summary: None,
+            started_at,
+            updated_at: started_at,
+            stream_state: StreamState::Pending,
+        }
+    }
+
+    #[test]
+    fn metadata_cwd_selection_is_order_independent() {
+        let early = session("s", Some("/work/early"), None, "s", SessionRole::Main, 10);
+        let late = session("s", Some("/work/late"), None, "s", SessionRole::Main, 20);
+        let mut left = Vec::new();
+        merge_session(&mut left, early.clone());
+        merge_session(&mut left, late.clone());
+        let mut right = Vec::new();
+        merge_session(&mut right, late);
+        merge_session(&mut right, early);
+        assert_eq!(left[0].cwd.as_deref(), Some("/work/early"));
+        assert_eq!(left[0].cwd, right[0].cwd);
+    }
+
+    #[test]
+    fn child_without_cwd_inherits_only_from_metadata_parent() {
+        let mut output = MetaOutput {
+            sessions: vec![
+                session(
+                    "parent",
+                    Some("/work/project"),
+                    None,
+                    "parent",
+                    SessionRole::Main,
+                    10,
+                ),
+                session(
+                    "child",
+                    None,
+                    Some("parent"),
+                    "parent",
+                    SessionRole::Subagent,
+                    20,
+                ),
+            ],
+            ..MetaOutput::default()
+        };
+        settle_projects(&mut output);
+        assert_eq!(output.sessions[1].cwd.as_deref(), Some("/work/project"));
+        assert_eq!(output.sessions[1].project_id, output.sessions[0].project_id);
+        assert_eq!(output.projects.len(), 1);
+    }
+
+    #[test]
+    fn missing_metadata_stays_unassigned() {
+        let mut output = MetaOutput {
+            sessions: vec![session("s", None, None, "s", SessionRole::Main, 10)],
+            ..MetaOutput::default()
+        };
+        settle_projects(&mut output);
+        assert_eq!(output.sessions[0].cwd, None);
+        assert_eq!(output.sessions[0].project_id, None);
+        assert!(output.projects.is_empty());
+    }
 }

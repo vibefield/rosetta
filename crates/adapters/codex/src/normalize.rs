@@ -15,8 +15,7 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
-    StreamState, TokenSnapshot, WorkspaceObsRow,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TokenSnapshot,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
 use rosetta_core::{IngestOp, fold, ids};
@@ -43,8 +42,9 @@ const APPLY_PATCH: &str = "apply_patch";
 /// `response_total` are the machinery for the cumulative token counters.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CodexState {
-    /// Last observed working directory — a change emits a `workspace_obs`.
-    cwd: Option<String>,
+    /// Current execution cwd used only to resolve relative tool arguments.
+    /// The canonical session cwd is selected independently during meta ingest.
+    tool_cwd: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     /// timeline_id of the most recent assistant-authored row.
@@ -117,11 +117,11 @@ fn project(
 ) -> LineStatus {
     match &record.payload {
         RolloutPayload::SessionMeta(meta) => {
-            session_meta(ctx, state, meta, ts, ops);
+            session_meta(ctx, state, meta);
             LineStatus::Parsed
         }
         RolloutPayload::TurnContext(turn) => {
-            turn_context(ctx, state, turn, ts, ops);
+            turn_context(state, turn);
             LineStatus::Parsed
         }
         RolloutPayload::ResponseItem(item) => {
@@ -181,77 +181,24 @@ fn project(
             LineStatus::Parsed
         }
         // Declared and unprojected: the world-state snapshot is a full copy of
-        // the prompt context, and its cwd is already carried by turn_context.
+        // prompt context. Working-directory metadata was settled by the skim.
         RolloutPayload::WorldState(_)
         | RolloutPayload::InterAgentCommunicationMetadata(_)
         | RolloutPayload::SecurityRiskScore(_) => LineStatus::Parsed,
     }
 }
 
-/// Session header: identity, provenance, and the opening working directory.
-///
-/// The session row is emitted HERE rather than from `skim` because deriving its
-/// id needs a runtime id, which the meta phase does not hand the adapter (see
-/// `CodexAdapter::skim`). `IngestOp::SessionMeta` is an upsert, so a pipeline
-/// that later learns more about the session refines this row instead of
-/// fighting it.
-fn session_meta(
-    ctx: &mut NormalizeCtx,
-    state: &mut CodexState,
-    meta: &SessionMeta,
-    ts: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) {
+/// Session identity, topology, and canonical cwd are admitted from this same
+/// opening record by `CodexAdapter::skim`. Streaming retains only provenance
+/// and execution context needed to normalize later tools.
+fn session_meta(ctx: &mut NormalizeCtx, state: &mut CodexState, meta: &SessionMeta) {
     ctx.agent_version = Some(meta.cli_version.clone());
-    // payload.timestamp is when the thread opened; the envelope stamp is when
-    // the record was written. Prefer the former, fall back to the latter.
-    let started = rfc3339_ms(&meta.timestamp).or(ts).unwrap_or_default();
-
-    let parent_session_id = meta
-        .parent_thread_id
-        .as_deref()
-        .map(|native| ids::session_id(&ctx.runtime_id, native));
-    let (root_session_id, role) = match &parent_session_id {
-        Some(parent) => (parent.clone(), SessionRole::Subagent),
-        None => (ctx.session_id.clone(), SessionRole::Main),
-    };
-
-    ops.push(IngestOp::SessionMeta(SessionRow {
-        id: ctx.session_id.clone(),
-        native_session_id: meta.id.clone(),
-        runtime_id: ctx.runtime_id.clone(),
-        // Left to the pipeline: `workspace_obs` is the documented input to
-        // project assignment, so the adapter reports cwd and claims nothing.
-        project_id: None,
-        parent_session_id,
-        root_session_id,
-        role,
-        title: None,
-        summary: None,
-        started_at: started,
-        updated_at: ts.unwrap_or(started),
-        stream_state: StreamState::Streaming,
-    }));
-
-    state.cwd = Some(meta.cwd.clone());
-    ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-        session_id: ctx.session_id.clone(),
-        at: started,
-        cwd: meta.cwd.clone(),
-        git_branch: None,
-        git_repo: None,
-    }));
+    state.tool_cwd = Some(meta.cwd.clone());
 }
 
-/// Per-turn execution context: the model/effort stamp for the rows that follow,
-/// and the second place a working directory can change.
-fn turn_context(
-    ctx: &NormalizeCtx,
-    state: &mut CodexState,
-    turn: &TurnContext,
-    ts: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) {
+/// Per-turn execution context used to stamp rows and resolve relative tool
+/// paths. It does not revise the session metadata selected during admission.
+fn turn_context(state: &mut CodexState, turn: &TurnContext) {
     let settings = turn
         .collaboration_mode
         .as_ref()
@@ -274,17 +221,8 @@ fn turn_context(
         state.effort = Some(effort.to_owned());
     }
 
-    if let Some(cwd) = turn.cwd.as_deref()
-        && state.cwd.as_deref() != Some(cwd)
-    {
-        state.cwd = Some(cwd.to_owned());
-        ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-            session_id: ctx.session_id.clone(),
-            at: ts.unwrap_or_default(),
-            cwd: cwd.to_owned(),
-            git_branch: None,
-            git_repo: None,
-        }));
+    if let Some(cwd) = turn.cwd.as_deref() {
+        state.tool_cwd = Some(cwd.to_owned());
     }
 }
 
@@ -369,7 +307,7 @@ fn response_item(
                 ctx.agent_version.as_deref(),
                 &name,
                 &input,
-                state.cwd.as_deref(),
+                state.tool_cwd.as_deref(),
                 &tool_id,
                 Some(&tool_id),
                 item.namespace.as_deref(),
@@ -463,7 +401,7 @@ fn response_item(
                 ctx.agent_version.as_deref(),
                 "tool_search_call",
                 &input,
-                state.cwd.as_deref(),
+                state.tool_cwd.as_deref(),
                 correlation_key,
                 native_id,
                 item.namespace.as_deref(),
@@ -538,7 +476,7 @@ fn response_item(
                 ctx.agent_version.as_deref(),
                 name,
                 &input,
-                state.cwd.as_deref(),
+                state.tool_cwd.as_deref(),
                 correlation_key,
                 native_id,
                 item.namespace.as_deref(),

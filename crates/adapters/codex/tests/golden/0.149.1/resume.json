@@ -1,28 +1,5 @@
 [
   {
-    "op": "session_meta",
-    "id": "5696213dbc7d8e723bcab99b74327bd57d5418874c79285037a02a9fbe18ffc6",
-    "native_session_id": "01a036c5-7240-7413-a7b0-a8ff01a93e80",
-    "runtime_id": "445624f3fccd60870052446ea698ea1861496f4904b62271dbe337684b131bf9",
-    "project_id": null,
-    "parent_session_id": null,
-    "root_session_id": "5696213dbc7d8e723bcab99b74327bd57d5418874c79285037a02a9fbe18ffc6",
-    "role": "main",
-    "title": null,
-    "summary": null,
-    "started_at": 1787625304641,
-    "updated_at": 1787625304670,
-    "stream_state": "streaming"
-  },
-  {
-    "op": "workspace_obs",
-    "session_id": "5696213dbc7d8e723bcab99b74327bd57d5418874c79285037a02a9fbe18ffc6",
-    "at": 1787625304641,
-    "cwd": "/private/tmp/rosetta-farm/resume/project",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
     "op": "message",
     "timeline_id": "42d3cfb0ad9fdcb8a609e74c481d79dcf508807c5d658a0b54da3244f312c995",
     "session_id": "5696213dbc7d8e723bcab99b74327bd57d5418874c79285037a02a9fbe18ffc6",

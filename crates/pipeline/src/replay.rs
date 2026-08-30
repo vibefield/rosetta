@@ -490,6 +490,7 @@ fn open_file(
                     native_session_id: source.native_session_id.clone(),
                     runtime_id: runtime.id.clone(),
                     project_id: None,
+                    cwd: None,
                     parent_session_id: None,
                     root_session_id: source.session_id.clone(),
                     role: SessionRole::Main,
@@ -571,8 +572,7 @@ fn flush_chunk(
     report: &mut RebuildReport,
     instrument: &Instrument,
 ) -> Result<(), PipelineError> {
-    let mut ops = std::mem::take(&mut file.ops);
-    crate::project::normalize_workspace_ops(&mut ops);
+    let ops = std::mem::take(&mut file.ops);
     let first_sequence = file.next_sequence;
     file.next_sequence += ops.len() as u64;
 

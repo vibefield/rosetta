@@ -4,14 +4,6 @@
     "ops": [
       {
         "at": 1787625319522,
-        "cwd": "/private/tmp/rosetta-farm/resume/project",
-        "git_branch": "HEAD",
-        "git_repo": null,
-        "op": "workspace_obs",
-        "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0"
-      },
-      {
-        "at": 1787625319522,
         "block_index": 0,
         "body": {
           "attachments": [],

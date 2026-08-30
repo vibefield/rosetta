@@ -10,15 +10,13 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
-use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, WorkspaceObsRow,
-};
+use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot};
 use rosetta_core::{IngestOp, ids};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::raw::state::{
-    KnownRecord, MessageRow as NativeMessage, ParsedRow, SessionRow, SystemPromptRow, ToolCallRow,
+    KnownRecord, MessageRow as NativeMessage, ParsedRow, SystemPromptRow, ToolCallRow,
     ToolResultRow, parse_row,
 };
 use crate::spec;
@@ -151,10 +149,9 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
     }
 
     let status = match &*native {
-        KnownRecord::Session(row) => {
-            project_session(ctx, row, &mut ops);
-            LineStatus::Parsed
-        }
+        // The same native session row was already projected by sessions_sql
+        // during bounded metadata admission.
+        KnownRecord::Session(_) => LineStatus::Parsed,
         KnownRecord::Message(row) => project_message(ctx, stream_id, row, &mut ops),
         KnownRecord::SystemPrompt(row) => {
             project_system_prompt(ctx, row, &mut ops);
@@ -263,22 +260,6 @@ fn schema_inventory(
         ops,
         status: LineStatus::UnknownType,
     }
-}
-
-fn project_session(ctx: &NormalizeCtx, row: &SessionRow, ops: &mut Vec<IngestOp>) {
-    let (Some(cwd), Some(at)) = (
-        row.cwd.as_deref().filter(|cwd| !cwd.is_empty()),
-        seconds_ms(row.started_at),
-    ) else {
-        return;
-    };
-    ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-        session_id: ctx.session_id.clone(),
-        at,
-        cwd: cwd.to_owned(),
-        git_branch: row.git_branch.clone().filter(|branch| !branch.is_empty()),
-        git_repo: row.git_repo_root.clone().filter(|repo| !repo.is_empty()),
-    }));
 }
 
 fn project_system_prompt(ctx: &mut NormalizeCtx, row: &SystemPromptRow, ops: &mut Vec<IngestOp>) {

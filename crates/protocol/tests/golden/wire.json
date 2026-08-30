@@ -50,7 +50,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 2,
+      "protocol_version": 3,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -169,6 +169,7 @@
       ],
       "sessions": [
         {
+          "cwd": "/w/rosetta",
           "id": "s1",
           "native_session_id": "native-s1",
           "parent_session_id": "s0",
@@ -349,6 +350,7 @@
       "type": "session_swept"
     },
     {
+      "cwd": "/w/rosetta",
       "id": "s1",
       "native_session_id": "native-s1",
       "parent_session_id": "s0",
@@ -405,7 +407,7 @@
       }
     ]
   },
-  "protocol_version": 2,
+  "protocol_version": 3,
   "runtimes": {
     "runtimes": [
       {
@@ -465,6 +467,7 @@
   },
   "session": {
     "session": {
+      "cwd": "/w/rosetta",
       "id": "s1",
       "native_session_id": "native-s1",
       "parent_session_id": "s0",
@@ -482,6 +485,7 @@
   "sessions": {
     "sessions": [
       {
+        "cwd": "/w/rosetta",
         "id": "s1",
         "native_session_id": "native-s1",
         "parent_session_id": "s0",
@@ -539,7 +543,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 2,
+    "protocol_version": 3,
     "schema_version": 9,
     "search": {
       "projection_epoch": "epoch-1",

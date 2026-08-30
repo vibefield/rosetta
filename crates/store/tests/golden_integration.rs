@@ -65,7 +65,6 @@ fn scaffolding(ops: &[IngestOp], runtime_id: &str, kind: &str) -> Vec<IngestOp> 
             IngestOp::ToolUpdate { session_id, .. } | IngestOp::Usage { session_id, .. } => {
                 Some(session_id.clone())
             }
-            IngestOp::WorkspaceObs(row) => Some(row.session_id.clone()),
             IngestOp::FileEdit(row) => Some(row.session_id.clone()),
             IngestOp::Plan(row) => Some(row.session_id.clone()),
             IngestOp::Task(row) => Some(row.session_id.clone()),
@@ -112,6 +111,7 @@ fn scaffolding(ops: &[IngestOp], runtime_id: &str, kind: &str) -> Vec<IngestOp> 
             native_session_id: session_id.clone(),
             runtime_id: runtime_id.into(),
             project_id: None,
+            cwd: None,
             parent_session_id: None,
             root_session_id: session_id,
             role: SessionRole::Main,

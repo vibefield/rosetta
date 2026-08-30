@@ -13,7 +13,6 @@ use rosetta_adapter_support::tool::{
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, SessionUsageRow, TokenSnapshot,
-    WorkspaceObsRow,
 };
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
@@ -26,8 +25,9 @@ use crate::spec;
 pub struct OpenCodeState {
     /// Message usage is repeated on every joined part; attach it once.
     usage_messages: BTreeSet<String>,
-    /// Assistant envelopes repeat their cwd on every part.
-    workspace: Option<String>,
+    /// Current execution cwd used only to resolve relative tool arguments.
+    /// Session ownership was already fixed by the database metadata query.
+    tool_cwd: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -168,7 +168,7 @@ pub fn ingest(
         ));
     }
 
-    observe_workspace(ctx, state, &message, record.part_time_created, &mut ops);
+    remember_tool_cwd(state, &message);
 
     let status = project(ctx, stream_id, state, &record, &message, &part, &mut ops);
     LineOutcome { ops, status }
@@ -215,7 +215,7 @@ fn project(
                 ctx.agent_version.as_deref(),
                 &tool.tool,
                 &input,
-                state.workspace.as_deref(),
+                state.tool_cwd.as_deref(),
                 &tool.call_id,
                 Some(&tool.call_id),
             );
@@ -461,27 +461,11 @@ fn exact_i64(number: &serde_json::Number) -> Option<i64> {
         .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok()))
 }
 
-fn observe_workspace(
-    ctx: &NormalizeCtx,
-    state: &mut OpenCodeState,
-    message: &MessageData,
-    fallback_at: i64,
-    ops: &mut Vec<IngestOp>,
-) {
+fn remember_tool_cwd(state: &mut OpenCodeState, message: &MessageData) {
     let MessageData::Assistant(message) = message else {
         return;
     };
-    if state.workspace.as_deref() == Some(message.path.cwd.as_str()) {
-        return;
-    }
-    state.workspace = Some(message.path.cwd.clone());
-    ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-        session_id: ctx.session_id.clone(),
-        at: i64::try_from(message.time.created).unwrap_or(fallback_at),
-        cwd: message.path.cwd.clone(),
-        git_branch: None,
-        git_repo: None,
-    }));
+    state.tool_cwd = Some(message.path.cwd.clone());
 }
 
 fn record_kind(message: &MessageData, part: &PartData) -> &'static str {
@@ -716,7 +700,7 @@ mod tests {
         assert_eq!(outcome.status, LineStatus::Parsed);
         assert!(matches!(
             outcome.ops.as_slice(),
-            [IngestOp::WorkspaceObs(_), IngestOp::Message(_), IngestOp::ToolUpdate {
+            [IngestOp::Message(_), IngestOp::ToolUpdate {
                 patch,
                 at: Some(125),
                 ..

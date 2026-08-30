@@ -48,6 +48,7 @@ fn session(id: &str, title: Option<&str>) -> SessionRow {
         native_session_id: format!("native-{id}"),
         runtime_id: "rt1".into(),
         project_id: Some("p1".into()),
+        cwd: Some("/w/rosetta".into()),
         parent_session_id: None,
         root_session_id: id.into(),
         role: SessionRole::Main,

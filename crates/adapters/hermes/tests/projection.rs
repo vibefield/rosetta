@@ -104,8 +104,6 @@ fn text(row: &TimelineEntry) -> Option<&str> {
 #[test]
 fn basic_chat_drops_system_prompt_and_projects_flat_timeline() {
     let ops = normalize_scenario("basic-chat");
-    assert!(ops.iter().any(|op| matches!(op, IngestOp::WorkspaceObs(_))));
-
     let rows = messages(&ops);
     assert_eq!(
         rows.iter().map(|row| body_kind(row)).collect::<Vec<_>>(),

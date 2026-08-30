@@ -287,6 +287,7 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         native_session_id: row.get("native_session_id")?,
         runtime_id: row.get("runtime_id")?,
         project_id: row.get("project_id")?,
+        cwd: row.get("cwd")?,
         parent_session_id: row.get("parent_session_id")?,
         root_session_id: row.get("root_session_id")?,
         role: parse_role(&role),

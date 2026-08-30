@@ -4,14 +4,6 @@
     "ops": [
       {
         "at": 1787625319072,
-        "cwd": "/private/tmp/rosetta-farm/tool-use/project",
-        "git_branch": "HEAD",
-        "git_repo": null,
-        "op": "workspace_obs",
-        "session_id": "041f1d1aff79bf7a4ddee35e5bd90cc8bda4af2bdbdfb5c28cc11d8ca0b3dbd7"
-      },
-      {
-        "at": 1787625319072,
         "block_index": 0,
         "body": {
           "tool": {

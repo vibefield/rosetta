@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS session (
   native_session_id TEXT NOT NULL,
   runtime_id        TEXT NOT NULL REFERENCES agent_runtime(id),
   project_id        TEXT REFERENCES project(id),
+  cwd               TEXT,
   parent_session_id TEXT REFERENCES session(id),
   root_session_id   TEXT NOT NULL REFERENCES session(id),
   role              TEXT NOT NULL DEFAULT 'main',
@@ -82,23 +83,7 @@ CREATE TABLE IF NOT EXISTS session (
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
-  stream_state      TEXT NOT NULL DEFAULT 'pending',
-  -- Internal provenance for the canonical "project at session start" rule.
-  -- Earlier observations may refine the assignment; later cwd changes may not.
-  project_assigned_at INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS workspace_obs (
-  session_id TEXT NOT NULL REFERENCES session(id),
-  at         INTEGER NOT NULL,
-  cwd        TEXT NOT NULL,
-  git_branch TEXT,
-  git_repo   TEXT,
-  src_cursor INTEGER REFERENCES ingest_cursor(id)
-);
-CREATE INDEX IF NOT EXISTS workspace_obs_src ON workspace_obs(src_cursor);
-CREATE UNIQUE INDEX IF NOT EXISTS workspace_obs_identity ON workspace_obs(
-  session_id, at, cwd, COALESCE(git_branch,''), COALESCE(git_repo,'')
+  stream_state      TEXT NOT NULL DEFAULT 'pending'
 );
 
 CREATE TABLE IF NOT EXISTS plan (
@@ -351,7 +336,6 @@ pub(crate) const BULK_DROP_INDEXES: &str = r#"
 DROP INDEX IF EXISTS session_project;
 DROP INDEX IF EXISTS session_runtime;
 DROP INDEX IF EXISTS session_parent;
-DROP INDEX IF EXISTS workspace_obs_session;
 DROP INDEX IF EXISTS task_session;
 DROP INDEX IF EXISTS message_bucket_key;
 DROP INDEX IF EXISTS session_usage_bucket_key;
@@ -369,7 +353,6 @@ CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DES
 CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS session_parent  ON session(parent_session_id);
 CREATE INDEX IF NOT EXISTS session_title_src ON session(title_src_cursor);
-CREATE INDEX IF NOT EXISTS workspace_obs_session ON workspace_obs(session_id, at);
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)

@@ -68,28 +68,16 @@ pub(super) fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), St
 pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), StoreError> {
     tx.prepare_cached(
         "INSERT INTO session
-           (id, native_session_id, runtime_id, project_id, parent_session_id,
+           (id, native_session_id, runtime_id, project_id, cwd, parent_session_id,
             root_session_id, role, title, title_rank, title_at, title_src_cursor,
-            summary, started_at, updated_at, stream_state, project_assigned_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0, NULL, NULL, ?8, ?9, ?10,
-                 ?11, CASE WHEN ?4 IS NULL THEN NULL ELSE ?9 END)
+            summary, started_at, updated_at, stream_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 0, NULL, NULL, ?9, ?10,
+                 ?11, ?12)
          ON CONFLICT(id) DO UPDATE SET
-           project_id = CASE
-             WHEN excluded.project_id IS NULL THEN session.project_id
-             WHEN session.project_id IS NULL THEN excluded.project_id
-             WHEN session.project_assigned_at IS NULL
-               OR excluded.project_assigned_at < session.project_assigned_at
-               OR (excluded.project_assigned_at = session.project_assigned_at
-                   AND excluded.project_id < session.project_id)
-             THEN excluded.project_id ELSE session.project_id END,
-           project_assigned_at = CASE
-             WHEN excluded.project_id IS NULL THEN session.project_assigned_at
-             WHEN session.project_id IS NULL THEN excluded.project_assigned_at
-             WHEN session.project_assigned_at IS NULL
-               OR excluded.project_assigned_at < session.project_assigned_at
-               OR (excluded.project_assigned_at = session.project_assigned_at
-                   AND excluded.project_id < session.project_id)
-             THEN excluded.project_assigned_at ELSE session.project_assigned_at END,
+           -- Metadata may fill a previously unknown assignment, but a later
+           -- stream/re-skim can never move an already-set session.
+           project_id = COALESCE(session.project_id, excluded.project_id),
+           cwd = COALESCE(session.cwd, excluded.cwd),
            parent_session_id = CASE
              WHEN session.parent_session_id IS NULL THEN excluded.parent_session_id
              WHEN excluded.parent_session_id IS NULL THEN session.parent_session_id
@@ -121,6 +109,7 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
         row.native_session_id,
         row.runtime_id,
         row.project_id,
+        row.cwd,
         row.parent_session_id,
         row.root_session_id,
         row.role.as_str(),

@@ -10,7 +10,7 @@ use rosetta_adapter_support::tool::{
 };
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot, WorkspaceObsRow,
+    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot,
 };
 use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ResourceRef};
 use rosetta_core::{IngestOp, ids};
@@ -44,11 +44,12 @@ enum ContentPartError {
 }
 
 /// Per-wire state. Each agent wire gets its own `NormalizeCtx`, so model,
-/// pending usage, workspace dedupe, and ordinals never cross agent sessions.
+/// pending usage, transient tool cwd, and ordinals never cross agent sessions.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KimiCodeState {
-    workspace: Option<String>,
+    /// Execution context for resolving tool paths only. Canonical cwd is meta.
+    tool_cwd: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     pending_usage: Option<TokenSnapshot>,
@@ -181,16 +182,7 @@ fn profile_bind(
 
     state.model = Some(line.model_alias.clone());
     state.effort = Some(line.thinking_effort.clone());
-    if state.workspace.as_deref() != Some(cwd) {
-        state.workspace = Some(cwd.to_owned());
-        ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-            session_id: ctx.session_id.clone(),
-            at,
-            cwd: cwd.to_owned(),
-            git_branch: None,
-            git_repo: None,
-        }));
-    }
+    state.tool_cwd = Some(cwd.to_owned());
     LineStatus::Parsed
 }
 
@@ -222,16 +214,7 @@ fn config_update(
             ops,
         );
     }
-    if state.workspace.as_deref() != Some(cwd) {
-        state.workspace = Some(cwd.to_owned());
-        ops.push(IngestOp::WorkspaceObs(WorkspaceObsRow {
-            session_id: ctx.session_id.clone(),
-            at,
-            cwd: cwd.to_owned(),
-            git_branch: None,
-            git_repo: None,
-        }));
-    }
+    state.tool_cwd = Some(cwd.to_owned());
     LineStatus::Parsed
 }
 
@@ -580,7 +563,7 @@ fn tool_call(
         ctx.agent_version.as_deref(),
         name,
         &input,
-        state.workspace.as_deref(),
+        state.tool_cwd.as_deref(),
         tool_id,
         Some(tool_id),
     );

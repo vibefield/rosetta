@@ -1,41 +1,10 @@
 [
   {
-    "op": "session_meta",
-    "id": "89aee649b2570b3b6fa917738fef6168e14e8142819d9a12f8142e5d62980f56",
-    "native_session_id": "01a03764-c56c-7c56-81a7-0856ceb0bacd",
-    "runtime_id": "129237fece719fab92b37b64922b77970c8076b16dfc394900fc73817f3c9e89",
-    "project_id": null,
-    "parent_session_id": null,
-    "root_session_id": "89aee649b2570b3b6fa917738fef6168e14e8142819d9a12f8142e5d62980f56",
-    "role": "main",
-    "title": null,
-    "summary": null,
-    "started_at": 1787635746156,
-    "updated_at": 1787635746156,
-    "stream_state": "streaming"
-  },
-  {
-    "op": "workspace_obs",
+    "op": "session_title",
     "session_id": "89aee649b2570b3b6fa917738fef6168e14e8142819d9a12f8142e5d62980f56",
-    "at": 1787635746156,
-    "cwd": "<PROJECT>",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
-    "op": "session_meta",
-    "id": "89aee649b2570b3b6fa917738fef6168e14e8142819d9a12f8142e5d62980f56",
-    "native_session_id": "01a03764-c56c-7c56-81a7-0856ceb0bacd",
-    "runtime_id": "129237fece719fab92b37b64922b77970c8076b16dfc394900fc73817f3c9e89",
-    "project_id": null,
-    "parent_session_id": null,
-    "root_session_id": "89aee649b2570b3b6fa917738fef6168e14e8142819d9a12f8142e5d62980f56",
-    "role": "main",
     "title": "rosetta-basic-chat",
-    "summary": null,
-    "started_at": 1787635746156,
-    "updated_at": 1787635746157,
-    "stream_state": "streaming"
+    "kind": "explicit",
+    "at": 1787635746157
   },
   {
     "op": "message",

@@ -4,14 +4,6 @@
     "ops": [
       {
         "at": 1787625318686,
-        "cwd": "/private/tmp/rosetta-farm/basic-chat/project",
-        "git_branch": "HEAD",
-        "git_repo": null,
-        "op": "workspace_obs",
-        "session_id": "c7f92295c3519e80a816923d75a2268c74a6202ad9e126a70a65de1efad38ce5"
-      },
-      {
-        "at": 1787625318686,
         "block_index": 0,
         "body": {
           "attachments": [],

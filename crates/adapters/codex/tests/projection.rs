@@ -662,7 +662,7 @@ fn legacy_records_without_ordinals_use_source_offsets() {
 }
 
 #[test]
-fn a_moved_working_directory_is_observed_once() {
+fn turn_working_directory_is_transient_tool_context() {
     let mut ctx = context();
     let turn = |cwd: &str| {
         json!({
@@ -685,17 +685,14 @@ fn a_moved_working_directory_is_observed_once() {
     };
 
     let first = ingest(&mut ctx, 1, "turn_context", turn("/w/one"));
-    assert_eq!(first.ops.len(), 1, "the first cwd is always an observation");
+    assert!(first.ops.is_empty());
 
     // Same directory next turn: nothing changed, nothing to observe.
     let repeat = ingest(&mut ctx, 2, "turn_context", turn("/w/one"));
     assert!(repeat.ops.is_empty());
 
     let moved = ingest(&mut ctx, 3, "turn_context", turn("/w/two"));
-    match moved.ops.as_slice() {
-        [IngestOp::WorkspaceObs(row)] => assert_eq!(row.cwd, "/w/two"),
-        other => panic!("expected one workspace observation, got {other:?}"),
-    }
+    assert!(moved.ops.is_empty());
 
     // turn_context is also where model and effort come from — codex writes them
     // once per turn, so they stamp the rows that FOLLOW.

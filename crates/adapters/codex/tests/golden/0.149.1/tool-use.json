@@ -1,28 +1,5 @@
 [
   {
-    "op": "session_meta",
-    "id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
-    "native_session_id": "01a036c5-6ff0-70a3-aa4c-75eddafa53d2",
-    "runtime_id": "445624f3fccd60870052446ea698ea1861496f4904b62271dbe337684b131bf9",
-    "project_id": null,
-    "parent_session_id": null,
-    "root_session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
-    "role": "main",
-    "title": null,
-    "summary": null,
-    "started_at": 1787625304049,
-    "updated_at": 1787625304076,
-    "stream_state": "streaming"
-  },
-  {
-    "op": "workspace_obs",
-    "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
-    "at": 1787625304049,
-    "cwd": "/private/tmp/rosetta-farm/tool-use/project",
-    "git_branch": null,
-    "git_repo": null
-  },
-  {
     "op": "message",
     "timeline_id": "99812f067421126c76228953aea99d9b7dc90b7e01d1da8666cb9e4efcf895a0",
     "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
