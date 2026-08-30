@@ -34,6 +34,11 @@ pub enum Metric {
     ReadNanos,
     NormalizeNanos,
     ApplyNanos,
+    ImageAssets,
+    ImageFilesWritten,
+    ImageFilesReused,
+    ImageBytes,
+    ImageWriteNanos,
     LedgerReadNanos,
     LedgerWriteNanos,
     LedgerFrames,
@@ -89,11 +94,12 @@ pub enum Metric {
     BulkIndexNanos,
     BulkValidateNanos,
     BulkPragmaNanos,
+    BulkImageSyncNanos,
     PublishNanos,
     SearchSyncNanos,
 }
 
-const METRIC_COUNT: usize = 77;
+const METRIC_COUNT: usize = 83;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -116,6 +122,11 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::ReadNanos, "read time"),
     (Metric::NormalizeNanos, "normalize time"),
     (Metric::ApplyNanos, "apply time"),
+    (Metric::ImageAssets, "image assets"),
+    (Metric::ImageFilesWritten, "image files written"),
+    (Metric::ImageFilesReused, "image files reused"),
+    (Metric::ImageBytes, "decoded image bytes"),
+    (Metric::ImageWriteNanos, "image materialization time"),
     (Metric::LedgerReadNanos, "ledger read time"),
     (Metric::LedgerWriteNanos, "ledger write time"),
     (Metric::LedgerFrames, "ledger frames"),
@@ -177,6 +188,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::BulkIndexNanos, "bulk index time"),
     (Metric::BulkValidateNanos, "bulk validate time"),
     (Metric::BulkPragmaNanos, "bulk pragma time"),
+    (Metric::BulkImageSyncNanos, "bulk image sync time"),
     (Metric::PublishNanos, "publication time"),
     (Metric::SearchSyncNanos, "detached search sync time"),
 ];
@@ -402,6 +414,11 @@ impl Instrument {
     pub fn apply(&self, store: &mut Store, batch: &Batch) -> Result<ApplyStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || store.apply(batch));
         if let Ok(stats) = &result {
+            self.add(Metric::ImageAssets, stats.image_assets);
+            self.add(Metric::ImageFilesWritten, stats.image_files_written);
+            self.add(Metric::ImageFilesReused, stats.image_files_reused);
+            self.add(Metric::ImageBytes, stats.image_bytes);
+            self.add(Metric::ImageWriteNanos, stats.image_write_nanos);
             self.add(Metric::SourceStageNanos, stats.source_stage_nanos);
             self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
             self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
@@ -478,6 +495,7 @@ impl Instrument {
         self.add(Metric::SqliteCommitNanos, stats.commit_nanos);
         self.add(Metric::BulkValidateNanos, stats.validate_nanos);
         self.add(Metric::BulkPragmaNanos, stats.pragma_nanos);
+        self.add(Metric::BulkImageSyncNanos, stats.image_sync_nanos);
     }
 
     /// Human-readable report: raw counters plus the derived rates the bench

@@ -4,6 +4,7 @@
 //! atomically replaces the projection from the durable raw ledger.
 
 pub mod apply;
+pub mod assets;
 mod bulk;
 pub mod hot;
 pub mod queries;
@@ -30,6 +31,7 @@ pub struct BulkLoadStats {
     pub commit_nanos: u64,
     pub validate_nanos: u64,
     pub pragma_nanos: u64,
+    pub image_sync_nanos: u64,
 }
 
 fn elapsed_nanos(started: Instant) -> u64 {
@@ -40,6 +42,10 @@ fn elapsed_nanos(started: Instant) -> u64 {
 pub enum StoreError {
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
+    Io(std::io::Error),
+    AssetInvalid {
+        message: String,
+    },
     /// The checkpoint CAS failed: another writer advanced this file's cursor,
     /// or the expected state was stale. The batch rolls back untouched.
     CheckpointConflict {
@@ -76,6 +82,8 @@ impl fmt::Display for StoreError {
         match self {
             Self::Sqlite(err) => write!(f, "sqlite: {err}"),
             Self::Json(err) => write!(f, "json: {err}"),
+            Self::Io(err) => write!(f, "filesystem: {err}"),
+            Self::AssetInvalid { message } => write!(f, "invalid image asset: {message}"),
             Self::CheckpointConflict { path } => {
                 write!(f, "checkpoint CAS conflict for {path}")
             }
@@ -114,10 +122,17 @@ impl From<serde_json::Error> for StoreError {
     }
 }
 
+impl From<std::io::Error> for StoreError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
 /// The projection. Single connection; the pipeline's writer thread owns it
 /// exclusively — reads for serving go through their own connections.
 pub struct Store {
     conn: Connection,
+    images: assets::ImageStore,
     mode: StoreMode,
     /// An abandoned generation means the private projection was built from an
     /// incomplete source. Keep accepting batches so callers can finish their
@@ -159,6 +174,7 @@ impl Store {
         }
         Ok(Self {
             conn,
+            images: assets::ImageStore::for_projection(path),
             mode: StoreMode::Live,
             bulk_abandoned: false,
             effects: None,
@@ -174,6 +190,7 @@ impl Store {
         )?;
         Ok(Self {
             conn,
+            images: assets::ImageStore::in_memory(),
             mode: StoreMode::Live,
             bulk_abandoned: false,
             effects: None,
@@ -195,6 +212,7 @@ impl Store {
         }
         Ok(Self {
             conn,
+            images: assets::ImageStore::for_projection(path),
             mode: if state.canonical_ready {
                 StoreMode::Live
             } else {
@@ -212,16 +230,36 @@ impl Store {
     /// temporarily inconsistent.
     pub fn open_for_rebuild(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path)?;
-        Self::from_empty_connection_for_rebuild(conn)
+        Self::from_empty_connection_for_rebuild(conn, assets::ImageStore::for_projection(path))
+    }
+
+    /// Open a private SQLite sibling whose decoded images belong to the final
+    /// projection's stable sidecar. Content-addressing lets the old and new
+    /// databases share that directory safely across the atomic DB swap.
+    pub fn open_for_rebuild_with_assets(
+        path: &Path,
+        projection: &Path,
+    ) -> Result<Self, StoreError> {
+        let conn = Connection::open(path)?;
+        Self::from_empty_connection_for_rebuild(
+            conn,
+            assets::ImageStore::for_projection(projection),
+        )
     }
 
     /// In-memory counterpart to [`Store::open_for_rebuild`], primarily for
     /// parity and regression tests of the cold-load path.
     pub fn open_in_memory_for_rebuild() -> Result<Self, StoreError> {
-        Self::from_empty_connection_for_rebuild(Connection::open_in_memory()?)
+        Self::from_empty_connection_for_rebuild(
+            Connection::open_in_memory()?,
+            assets::ImageStore::in_memory(),
+        )
     }
 
-    fn from_empty_connection_for_rebuild(conn: Connection) -> Result<Self, StoreError> {
+    fn from_empty_connection_for_rebuild(
+        conn: Connection,
+        images: assets::ImageStore,
+    ) -> Result<Self, StoreError> {
         let objects: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
             [],
@@ -236,6 +274,7 @@ impl Store {
         bulk::prepare(&conn)?;
         Ok(Self {
             conn,
+            images,
             mode: StoreMode::Bulk,
             bulk_abandoned: false,
             effects: None,
@@ -246,6 +285,9 @@ impl Store {
     /// checkpoint CAS conflict — nothing is committed, and nothing reaches
     /// the observed effects.
     pub fn apply(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
+        let image_stats = self
+            .images
+            .materialize_batch(batch, self.mode != StoreMode::Bulk)?;
         let mut fresh = self.effects.is_some().then(Effects::default);
         let tx = self.conn.transaction()?;
         let search_before = if self.mode == StoreMode::Live {
@@ -266,6 +308,11 @@ impl Store {
             self.mode == StoreMode::Progressive,
             fresh.as_mut(),
         )?;
+        stats.image_assets = image_stats.assets;
+        stats.image_files_written = image_stats.files_written;
+        stats.image_files_reused = image_stats.files_reused;
+        stats.image_bytes = image_stats.bytes;
+        stats.image_write_nanos = image_stats.nanos;
         if let Some(search_before) = search_before {
             search_sync::record_batch(&tx, batch, search_before)?;
         }
@@ -314,6 +361,7 @@ impl Store {
         let started = Instant::now();
         bulk::restore_live_pragmas(&self.conn)?;
         stats.pragma_nanos = elapsed_nanos(started);
+        stats.image_sync_nanos = self.images.finish_pending()?;
         self.mode = StoreMode::Live;
         self.bulk_abandoned = false;
         Ok(stats)

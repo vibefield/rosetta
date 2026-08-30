@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use rusqlite::{Connection, OpenFlags};
@@ -29,8 +30,8 @@ use rosetta_protocol::{
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
 };
-use rosetta_store::queries;
 use rosetta_store::{StoreError, schema};
+use rosetta_store::{assets, queries};
 
 use crate::hub::Hub;
 
@@ -128,6 +129,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/timeline", get(timeline))
+        .route("/api/assets/{name}", get(asset))
         .route("/api/search", get(search))
         .route(
             "/ws/meta",
@@ -251,6 +253,70 @@ where
 
 fn store_err(error: StoreError) -> Failure {
     Failure::internal(format!("{error}"))
+}
+
+async fn asset(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<Response, Failure> {
+    let media_type =
+        asset_media_type(&name).ok_or_else(|| Failure::not_found("no such image asset"))?;
+    let db = state.db.clone();
+    let expected_digest = name[..64].to_owned();
+    let path_name = name.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        let path = assets::image_root(&db).join(path_name);
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Failure::not_found("no such image asset")
+            } else {
+                Failure::internal(format!("stating image asset: {error}"))
+            }
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(Failure::not_found("no such image asset"));
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|error| Failure::internal(format!("reading image asset: {error}")))?;
+        if blake3::hash(&bytes).to_hex().as_str() != expected_digest {
+            return Err(Failure::internal("image asset failed its content hash"));
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|error| Failure::internal(format!("image read task failed: {error}")))??;
+
+    let mut response = Response::new(Body::from(bytes));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
+fn asset_media_type(name: &str) -> Option<&'static str> {
+    let (digest, extension) = name.split_once('.')?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return None;
+    }
+    match extension {
+        "png" => Some("image/png"),
+        "jpg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
 }
 
 fn clamp_limit(limit: Option<i64>, default: i64) -> i64 {

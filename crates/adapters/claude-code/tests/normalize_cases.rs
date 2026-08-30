@@ -306,6 +306,58 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
 }
 
 #[test]
+fn read_images_become_content_addressed_projection_assets() {
+    let encoded_png_signature = "iVBORw0KGgo=";
+    let (ops, _) = run(&[user(
+        json!([{"type": "tool_result", "tool_use_id": "toolu_image"}]),
+        json!({"toolUseResult": {"file": {
+            "base64": encoded_png_signature,
+            "type": "image/png",
+            "dimensions": {"originalWidth": 1, "originalHeight": 1}
+        }}}),
+    )]);
+
+    let IngestOp::ImageAsset { asset } = &ops[1] else {
+        panic!("expected an image asset before its tool result, got {ops:#?}");
+    };
+    assert_eq!(asset.media_type, "image/png");
+    assert_eq!(asset.bytes, b"\x89PNG\r\n\x1a\n");
+    let expected_url = asset.url().unwrap();
+
+    let IngestOp::ToolResult { payload, .. } = &ops[2] else {
+        panic!("expected a tool result after its image asset, got {ops:#?}");
+    };
+    let file = &payload.as_ref().unwrap()["file"];
+    assert_eq!(file["url"], expected_url);
+    assert_eq!(file["type"], "image/png");
+    assert!(file.get("base64").is_none());
+    assert_eq!(file["dimensions"]["originalWidth"], 1);
+}
+
+#[test]
+fn malformed_or_mislabeled_images_remain_lossless_in_the_payload() {
+    for (encoded, media_type) in [("not base64", "image/png"), ("iVBORw0KGgo=", "image/jpeg")] {
+        let (ops, _) = run(&[user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_image"}]),
+            json!({"toolUseResult": {"file": {
+                "base64": encoded,
+                "type": media_type
+            }}}),
+        )]);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, IngestOp::ImageAsset { .. })),
+            "unverified image bytes must not be written"
+        );
+        let payload = ops.iter().find_map(|op| match op {
+            IngestOp::ToolResult { payload, .. } => payload.as_ref(),
+            _ => None,
+        });
+        assert_eq!(payload.unwrap()["file"]["base64"], encoded);
+    }
+}
+
+#[test]
 fn a_turn_with_text_and_a_result_keeps_both() {
     let (ops, _) = run(&[user(
         json!([

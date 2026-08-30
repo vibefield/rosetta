@@ -11,10 +11,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, ToolCall,
 };
+use rosetta_core::{ImageAsset, IngestOp};
 use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
@@ -182,6 +182,46 @@ impl Harness {
         let value = serde_json::from_slice(&bytes).unwrap();
         (status, value)
     }
+}
+
+#[tokio::test]
+async fn content_addressed_images_are_served_without_exposing_filesystem_paths() {
+    let mut h = harness();
+    let asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    let url = asset.url().unwrap();
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::ImageAsset {
+                asset: asset.clone(),
+            }],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(Request::builder().uri(url).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(bytes.as_ref(), asset.bytes);
+
+    let missing = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/assets/{}.png", "0".repeat(64)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

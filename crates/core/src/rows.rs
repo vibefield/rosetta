@@ -162,7 +162,8 @@ pub struct ToolCall {
     pub input: serde_json::Value,
     /// Result text; `None` until the result lands (live sessions).
     pub result: Option<String>,
-    /// Structured result payload — opaque by policy (spaghetti scar).
+    /// Structured result payload — opaque except for verified large binary
+    /// members externalized into the canonical projection's asset store.
     pub payload: Option<serde_json::Value>,
     pub is_error: Option<bool>,
 }

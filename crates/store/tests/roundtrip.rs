@@ -1,12 +1,14 @@
 //! Store round-trip: ops in, queries out — proving the merge, replacement,
 //! unknownness, drift-aggregation, and checkpoint-CAS semantics end to end.
 
-use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole,
     SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot, ToolCall,
 };
-use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
+use rosetta_core::{ImageAsset, IngestOp};
+use rosetta_store::{
+    Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, assets, queries,
+};
 
 fn runtime() -> RuntimeRow {
     RuntimeRow {
@@ -80,6 +82,89 @@ fn base_batch() -> Batch {
         checkpoints: vec![],
         source: None,
     }
+}
+
+#[test]
+fn image_asset_and_payload_url_commit_as_one_valid_projection_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let projection = directory.path().join("rosetta.sqlite");
+    let mut store = Store::open(&projection).unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let mut call = message("image-call", 0, MessageKind::ToolUse);
+    call.tool = Some(ToolCall {
+        tool_id: Some("toolu_image".into()),
+        name: "Read".into(),
+        input: serde_json::json!({"file_path": "/fixture/image.png"}),
+        result: None,
+        payload: None,
+        is_error: None,
+    });
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(call))],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    let url = asset.url().unwrap();
+    let stats = store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::ImageAsset {
+                    asset: asset.clone(),
+                },
+                IngestOp::ToolResult {
+                    session_id: "s1".into(),
+                    tool_id: "toolu_image".into(),
+                    result: None,
+                    payload: Some(serde_json::json!({"file": {"url": url}})),
+                    is_error: Some(false),
+                    at: None,
+                },
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    assert_eq!(stats.image_assets, 1);
+    assert_eq!(stats.image_files_written, 1);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(
+        page[0].tool.as_ref().unwrap().payload.as_ref().unwrap()["file"]["url"],
+        url
+    );
+    assert_eq!(
+        std::fs::read(assets::image_root(&projection).join(asset.file_name().unwrap())).unwrap(),
+        asset.bytes
+    );
+}
+
+#[test]
+fn invalid_image_asset_fails_before_any_sql_row_commits() {
+    let directory = tempfile::tempdir().unwrap();
+    let projection = directory.path().join("rosetta.sqlite");
+    let mut store = Store::open(&projection).unwrap();
+    let mut asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    asset.digest = "0".repeat(64);
+
+    let error = store
+        .apply(&Batch {
+            ops: vec![IngestOp::Runtime(runtime()), IngestOp::ImageAsset { asset }],
+            ..Batch::default()
+        })
+        .unwrap_err();
+    assert!(matches!(error, StoreError::AssetInvalid { .. }));
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM agent_runtime", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(!assets::image_root(&projection).exists());
 }
 
 #[test]

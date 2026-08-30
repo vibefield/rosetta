@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::assets::ImageAsset;
 use crate::rows::{
     DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, RuntimeRow,
     SessionRow, SessionTitleRow, SessionUsageRow, TaskRow, TokenSnapshot, WorkspaceObsRow,
@@ -11,6 +12,12 @@ use crate::rows::{
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum IngestOp {
+    /// A large decoded image that belongs to the canonical projection but is
+    /// materialized outside SQLite. The matching tool payload carries its
+    /// stable `/api/assets/<digest>.<ext>` URL.
+    ImageAsset {
+        asset: ImageAsset,
+    },
     Runtime(RuntimeRow),
     Project(ProjectRow),
     /// Meta-phase upsert; stream-phase ops for the same session refine it.

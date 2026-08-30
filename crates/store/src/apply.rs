@@ -71,6 +71,11 @@ pub struct Batch {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ApplyStats {
+    pub image_assets: u64,
+    pub image_files_written: u64,
+    pub image_files_reused: u64,
+    pub image_bytes: u64,
+    pub image_write_nanos: u64,
     pub messages_inserted: u64,
     pub messages_updated: u64,
     pub tool_results_merged: u64,
@@ -133,6 +138,11 @@ pub struct ApplyProfile {
 
 impl ApplyStats {
     pub fn merge_from(&mut self, batch: &Self) {
+        self.image_assets += batch.image_assets;
+        self.image_files_written += batch.image_files_written;
+        self.image_files_reused += batch.image_files_reused;
+        self.image_bytes += batch.image_bytes;
+        self.image_write_nanos += batch.image_write_nanos;
         self.messages_inserted += batch.messages_inserted;
         self.messages_updated += batch.messages_updated;
         self.tool_results_merged += batch.tool_results_merged;
@@ -1131,6 +1141,7 @@ fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), S
 /// runs for direct applies AND for staged ops at activation.
 fn note_touch(fx: &mut Effects, op: &IngestOp) {
     match op {
+        IngestOp::ImageAsset { .. } => {}
         IngestOp::Runtime(row) => {
             fx.touched_runtimes.insert(row.id.clone());
         }
@@ -1184,6 +1195,7 @@ fn apply_op(
         note_touch(fx, op);
     }
     match op {
+        IngestOp::ImageAsset { .. } => {}
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
         IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,

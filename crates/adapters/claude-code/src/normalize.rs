@@ -10,12 +10,13 @@
 //! derived from the session id plus a stable discriminator, so replaying a file
 //! twice produces byte-identical ops.
 
+use base64::Engine as _;
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TokenSnapshot, ToolCall,
     WorkspaceObsRow,
 };
-use rosetta_core::{IngestOp, fold, ids};
+use rosetta_core::{ImageAsset, IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -427,6 +428,64 @@ fn result_text(content: Option<&Value>) -> Option<String> {
     }
 }
 
+/// Replace Claude Code's native `toolUseResult.file.base64` with a stable
+/// projection URL. Decoding and hashing are pure; the store performs IO only
+/// after normalization and before it commits the URL.
+fn externalize_image(payload: &mut Value) -> Option<ImageAsset> {
+    let file = payload.get_mut("file")?.as_object_mut()?;
+    let encoded = file.get("base64")?.as_str()?;
+    let bytes = decode_base64(encoded).ok()?;
+    let media_type = sniff_image(&bytes)?;
+    let declared_matches = file
+        .get("type")
+        .and_then(Value::as_str)
+        .is_none_or(|declared| {
+            declared == media_type || (declared == "image/jpg" && media_type == "image/jpeg")
+        });
+    if !declared_matches {
+        return None;
+    }
+
+    let asset = ImageAsset::new(media_type, bytes)?;
+    let url = asset.url()?;
+    file.remove("base64");
+    file.insert("url".to_owned(), Value::String(url));
+    file.insert("type".to_owned(), Value::String(media_type.to_owned()));
+    Some(asset)
+}
+
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    use std::sync::OnceLock;
+
+    use base64::engine::general_purpose::GeneralPurposeConfig;
+    use base64::engine::simd::Simd;
+
+    static DECODER: OnceLock<Simd> = OnceLock::new();
+    DECODER
+        .get_or_init(|| Simd::standard(GeneralPurposeConfig::new()))
+        .decode(encoded)
+}
+
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    base64::engine::general_purpose::STANDARD.decode(encoded)
+}
+
+fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 // --------------------------------------------------------------------- plumbing
 
 struct ToolResultBlock<'a> {
@@ -497,9 +556,12 @@ impl<'a> Emit<'a> {
     fn tool_result(
         &mut self,
         result: &ToolResultBlock<'_>,
-        payload: Option<Value>,
+        mut payload: Option<Value>,
         at: Option<Ms>,
     ) {
+        if let Some(asset) = payload.as_mut().and_then(externalize_image) {
+            self.ops.push(IngestOp::ImageAsset { asset });
+        }
         self.ops.push(IngestOp::ToolResult {
             session_id: self.session_id.clone(),
             tool_id: result.tool_use_id.to_owned(),

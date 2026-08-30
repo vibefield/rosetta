@@ -1036,7 +1036,7 @@ fn open_for_backfill(db: &std::path::Path) -> Result<(Store, Option<tempfile::Te
             )
         })?;
     let temp = named.into_temp_path();
-    let store = Store::open_for_rebuild(temp.as_ref())
+    let store = Store::open_for_rebuild_with_assets(temp.as_ref(), db)
         .map_err(|error| format!("opening backfill database {}: {error:?}", temp.display()))?;
     Ok((store, Some(temp)))
 }
@@ -1148,7 +1148,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     let temp = named.into_temp_path();
 
     let instrument = Instrument::new();
-    let mut store = Store::open_for_rebuild(temp.as_ref())
+    let mut store = Store::open_for_rebuild_with_assets(temp.as_ref(), &db)
         .map_err(|error| format!("opening rebuild database {}: {error:?}", temp.display()))?;
     let mut reports = Vec::new();
     for adapter in adapters {
