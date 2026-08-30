@@ -21,7 +21,7 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > operation or reconciliation payload is serialized into SQLite. Unknown projection schemas fail
 > closed and are replaced only by explicit ledger rebuild.
 >
-> Projection schema 11 separates the one canonical SQLite projection from a disposable SQLite
+> Projection schema 12 separates the one canonical SQLite projection from a disposable SQLite
 > FTS5 sidecar. `projection_state`, the coalesced `search_dirty` repair set, and their asynchronous
 > worker landed together. Full generations publish through an atomic `CURRENT` manifest; epoch,
 > revision, acknowledgement, corruption, and crash tests prevent cross-generation results.
@@ -30,6 +30,10 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > Verified inline images are immutable, content-addressed members of that canonical projection.
 > SQLite carries relocatable service URLs, not Base64; the lossless ledger remains the replay
 > source.
+> Session ownership is closed during bounded metadata admission: one normalized primary cwd and
+> one optional project/repository link per session. The stream phase cannot manufacture projects
+> or reassign ownership; schema 12 removes the former `workspace_obs` relation and
+> `project_assigned_at` arbitration column.
 >
 > Fresh `serve` is progressive: the listener and empty public projection exist first, consent
 > precedes all reads, every runtime is skimmed before streaming, the first streamable canonical-list
@@ -265,6 +269,12 @@ capture contract explicit.
   outrank prompt/checkpoint-derived fallbacks; same-rank replacements preserve native
   rename behavior. Streamed title singleton rows use the same precedence and fall back
   to the retained metadata answer after a source-generation sweep.
+- **Workspace settlement**: every adapter selects one primary cwd from its session header,
+  metadata document, or native session table. Child sessions may inherit a proven parent cwd
+  when their own metadata omits it. The meta phase normalizes that path, resolves its repository
+  root without invoking Git, journals the resulting `SessionRow` and `ProjectRow`, and only then
+  admits the source for streaming. Missing evidence remains `NULL`; transcript cwd changes are
+  never a fallback ownership channel.
 - **Raw ledger**: every complete raw record is appended with source/generation metadata
   to size-rotated segment files, checksummed with blake3, and durably flushed before the
   corresponding projection transaction. By default `rosettad` stores one runtime
@@ -299,7 +309,7 @@ more:
 
 ```rust
 enum CanonicalFact {
-    SessionUpserted(Session),     // agent kind, project/workspace, native id, times, status
+    SessionUpserted(Session),     // agent kind, primary cwd/project, native id, times, status
     EntryAppended(Entry),         // typed user/agent/reasoning/tool/notice/summary body,
                                   //   parent/causal-group/response linkage, timestamps
     ArtifactUpserted(Artifact),   // todos, plans, tasks, team state
@@ -312,7 +322,7 @@ enum CanonicalFact {
 
 ### 4.1.1 Strict public message boundary
 
-> **Activation status (2026-08-30): shipped in projection schema 11.** Core types, every captured
+> **Activation status (2026-08-30): shipped in projection schema 12.** Core types, every captured
 > adapter, canonical store/search, protocol, and the client share one closed user-facing timeline
 > and fixed tool vocabulary. Native input/result/payload objects remain ledger-only. Correlation,
 > evidence ranking, progressive snapshots, and late joins are normalization mechanics, not public
@@ -337,8 +347,8 @@ user-facing semantic projection. These are deliberately different jobs:
   retained only when it is non-empty, plain, and user-visible. Redacted, encrypted,
   signature-only, and empty thinking remains ledger-only; response usage/model/timing facts
   reattach instead of disappearing with a dropped wrapper.
-- Lifecycle records become a closed `Notice` union (compaction, truncation, model/mode/
-  workspace change, permission request/decision, handoff, runtime error), not arbitrary system
+- Lifecycle records become a closed `Notice` union (compaction, truncation, model/mode change,
+  permission request/decision, handoff, runtime error), not arbitrary system
   text. Generated/custom titles refine `session.title`, not the timeline.
 - Attachments are typed image/document/audio/video/file references, while citations remain
   distinct bounded source/span references. Inline bytes become immutable content-addressed
@@ -514,9 +524,13 @@ ingestion.
   crash the ledger recreates the discarded accumulator instead of SQLite acting as an event log.
   Ranked session titles follow the same boundary: SQLite retains one selected title and bounded
   winning provenance, never the losing candidate set.
-  Stream normalization is replay-pure: it may sanitize a native repository identity but cannot
-  consult today's checkout to enrich a historical workspace row. Filesystem-derived project
+  Session cwd/project ownership is admitted once from bounded adapter metadata. Stream
+  normalization may retain a current execution cwd in checkpointed adapter state solely to
+  resolve relative tool arguments; it cannot write that state to canonical tables, consult today's
+  checkout to enrich history, create a project, or reassign a session. Filesystem-derived project
   identity is captured during meta ingest and written into the ledger before it becomes canonical.
+  The store rejects `SessionMeta` in every source-scoped stream batch, making this a write-boundary
+  invariant rather than an adapter convention.
 - **Content-addressed image members** are part of the one canonical projection, not a third
   representation. An adapter may recognize and decode a verified native inline image, but only
   the store writes it to `<projection>.images/<blake3>.<ext>`. Live ingestion makes the immutable
@@ -556,7 +570,7 @@ committed canonical-op goldens and restart tests currently establish this matrix
 | Antigravity | 1 JSONL + metadata SQLite snapshot | yes | none observed | split/resume + ranked-title ledger/snapshot replay |
 | Claude Code | 2 JSONL streams | yes | inline on messages | split at every fixture line |
 | Codex | 1 JSONL + metadata SQLite snapshot | yes | separate `Usage` merge | split/resume + native-title snapshot replay |
-| Copilot | 1 JSONL + metadata document snapshot | yes | inline + separate `Usage` merge | split/resume + workspace rename replay |
+| Copilot | 1 JSONL + metadata document snapshot | yes | inline + separate `Usage` merge | split/resume + metadata rename replay |
 | Grok | 1 JSONL + metadata document snapshot | yes | separate `Usage` merge | checkpoint/one-shot + document replay |
 | Hermes | 1 SQLite snapshot | yes | none observed | stateless snapshot replay equality |
 | Kimi Code | 1 JSONL + metadata document snapshot | yes | inline on messages | split/resume + document replay |
@@ -697,9 +711,9 @@ effectively flat at about 394 MiB. `tool_update_fact` plus its two indexes had o
 447 MiB, while removing opener/merge state from `message` cut that table from about 503 MiB to
 274 MiB. Public message/tool/title/file-edit/usage rows matched after excluding surrogate ids and
 source-provenance keys. The audit also found 6,415 historical `workspace_obs.git_repo` values that
-the old live path had inferred from a checkout but never captured in the ledger; stream projection
-now accepts only replayable native repository identity, with filesystem-derived project identity
-captured in the ledgered meta phase. Peak RSS was 3.64 GB, so partitioning the disposable cold RAM
+the old live path had inferred from a checkout but never captured in the ledger. Schema 12 removes
+that relation entirely: one primary cwd and its filesystem-derived project identity are captured
+in the ledgered meta phase, and stream projection has no ownership mutation op. Peak RSS was 3.64 GB, so partitioning the disposable cold RAM
 fold is the next measured memory target. There is no speedup claim here: an exact same-machine
 schema-10 rerun is still required before attributing the roughly 95-second absolute wall.
 

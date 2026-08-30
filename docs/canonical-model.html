@@ -238,17 +238,17 @@
   <div class="narrow">
     <div class="eyebrow">rosetta · phase 2 · hypothesis</div>
     <h1>Rosetta Canonical Model</h1>
-    <p class="sub">One canonical projection over every agent's ground truth — eleven entities, checked
+    <p class="sub">One canonical projection over every agent's ground truth — ten entities, checked
     against the nine captured <span style="font-family:'JetBrains Mono',monospace;font-size:.88em">groundtruth.json</span>
     packs (gemini and cursor pending). Sessions group under projects, transcripts flatten into typed
     timeline rows, native tool dialects collapse into user-facing semantic actions, and heavy
     aggregates live in materialized caches updated at ingest.</p>
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
-      <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 11 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
-    <div class="status"><b>Implementation checkpoint · 2026-08-29.</b> All eleven logical entities
+      <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
+    <div class="status"><b>Implementation checkpoint · 2026-08-30.</b> All ten logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
-      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 11 includes
+      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 12 includes
       replacement-keyed <code>session_usage</code> for native totals that cannot be attributed to one
       response, deterministic metadata evidence ties, RAM-only replacement staging, and
       canonical/search epoch-revision state. Fresh serve commits to a public,
@@ -257,7 +257,9 @@
       message rows retain stable service URLs and the raw ledger remains lossless. FTS5 is a detached disposable generation built asynchronously after canonical
       validation, then repaired from a coalesced session set. Ordinary schema mismatches fail closed.
       The in-process hot tier, subscription hub, HTTP/WebSocket transport, and generated clients exist.
-      <b>Schema 11 ships the strict message/tool contract below.</b> Native tool objects, progressive
+      Each adapter settles one primary session cwd and optional repository/project during bounded
+      metadata admission; stream records cannot revise ownership. <b>Schema 12 ships the strict
+      message/tool contract below and contains no workspace-observation relation.</b> Native tool objects, progressive
       snapshots, and reconciliation bookkeeping remain ledger/RAM-only; SQLite contains only the
       resolved user-facing action. The full adapter/visibility audit is in
       <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
@@ -280,7 +282,7 @@
 
   <figure class="er">
     <div class="er-scroll">
-    <svg viewBox="0 0 1160 660" role="img" aria-label="Entity-relationship diagram: agent_runtime and project each own many sessions; sessions own ordered message rows, workspace observations, plans, tasks, and replacement-keyed session usage; sessions recurse via parent_session for subagents, anchored by a tool_use message; file edits and git commits are derived from tool_use rows; usage buckets accumulate from message and session usage at ingest; workspace observations derive the project assignment.">
+    <svg viewBox="0 0 1160 660" role="img" aria-label="Entity-relationship diagram: agent_runtime and project each own many sessions; sessions carry one primary cwd and own ordered message rows, plans, tasks, and replacement-keyed session usage; sessions recurse via parent_session for subagents, anchored by a tool_use message; file edits and git commits are derived from tool_use rows; usage buckets accumulate from message and session usage at ingest.">
       <defs>
         <marker id="arrInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
           <polygon points="0,0 10,5 0,10" fill="currentColor"/>
@@ -300,7 +302,7 @@
 
       <!-- project -> session -->
       <line x1="910" y1="105" x2="730" y2="105" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
-      <text x="820" y="96" font-size="11" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">groups · assigned at ingest</text>
+      <text x="820" y="96" font-size="11" text-anchor="middle" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">groups · settled by meta cwd</text>
 
       <!-- session -> message -->
       <line x1="600" y1="170" x2="600" y2="265" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
@@ -309,14 +311,6 @@
       <!-- session self-loop: parent_session -->
       <path d="M 690 40 C 690 6, 560 6, 560 36" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrInk)"/>
       <text x="712" y="22" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">parent_session · role — subagents recurse</text>
-
-      <!-- session -> workspace_obs -->
-      <polyline points="725,140 838,140 838,300 905,300" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrInk)"/>
-      <text x="848" y="226" font-size="11" text-anchor="start" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">observes cwd · branch</text>
-
-      <!-- workspace_obs -> project (derives) -->
-      <line x1="1015" y1="250" x2="1015" y2="166" stroke="var(--copper)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrCu)"/>
-      <text x="1023" y="214" font-size="11" text-anchor="start" style="fill:var(--copper)" font-family="'Source Sans 3',sans-serif">derives assignment</text>
 
       <!-- session -> plan / task (shared rail) -->
       <polyline points="475,130 360,130 360,381" fill="none" stroke="currentColor" stroke-width="1.4"/>
@@ -359,7 +353,7 @@
         <rect x="475" y="40" width="250" height="130" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
         <text x="491" y="64" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">session</text>
         <text x="491" y="86"  font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">id · native_session_id</text>
-        <text x="491" y="104" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">runtime_id · project_id</text>
+        <text x="491" y="104" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">runtime_id · project_id · cwd</text>
         <text x="491" y="122" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">parent · root · role</text>
         <text x="491" y="140" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">title · summary</text>
         <text x="491" y="158" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">started_at · updated_at</text>
@@ -418,16 +412,6 @@
         </g>
       </g>
 
-      <!-- workspace_obs -->
-      <g>
-        <rect x="910" y="250" width="210" height="118" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
-        <text x="926" y="274" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">workspace_obs</text>
-        <text x="926" y="296" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · at</text>
-        <text x="926" y="314" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">cwd · git_branch</text>
-        <text x="926" y="332" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">git_repo</text>
-        <text x="926" y="352" font-size="10.5" fill="var(--muted)" font-style="italic" font-family="'Source Sans 3',sans-serif">mid-session cwd moves stay visible</text>
-      </g>
-
       <!-- file_edit -->
       <g>
         <rect x="240" y="540" width="200" height="86" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
@@ -469,7 +453,8 @@
     <figcaption>The canonical projection. Solid edges are ownership; dashed copper edges are computed
     once at ingest; teal edges are the incremental accumulation that keeps rollups cheap to read.
     <span style="font-family:'JetBrains Mono',monospace;font-size:.92em">project</span> is rosetta's own
-    abstraction — sessions are assigned to it from workspace observations, not from any single agent's layout.</figcaption>
+    abstraction — each session is assigned once from its adapter's bounded primary-cwd metadata,
+    not from arbitrary later transcript state.</figcaption>
   </figure>
 
   <!-- ================================================================ -->
@@ -521,7 +506,8 @@
       <div class="fields">
         <span class="f">id</span><span class="n">deterministic blake3; native ids from filenames</span>
         <span class="f">runtime_id</span><span class="n">→ agent_runtime</span>
-        <span class="f">project_id</span><span class="n">→ project, assigned at ingest (cwd at session start)</span>
+        <span class="f">project_id</span><span class="n">→ project, settled once during bounded meta ingest</span>
+        <span class="f">cwd</span><span class="n">one normalized primary working directory; nullable when native metadata cannot prove it</span>
         <span class="f cu">parent_session_id</span><span class="n">nullable, recursive — one entity covers subagents and teams</span>
         <span class="f cu">root_session_id</span><span class="n">denormalized root of the subagent tree (= id for top-level sessions); contribution rolls up here</span>
         <span class="f">role</span><span class="n">main | subagent | team-member</span>
@@ -534,6 +520,10 @@
       separate "subagent session" type: it duplicated every field. <b>Meta-ingest guarantee:</b> every
       field above is readable without an unbounded transcript read — filenames, mtimes, bounded
       head/tail and complete-record windows, document sidecars, or metadata SQLite snapshots.
+      Claude, Codex, and Pi use opening records; Copilot, Kimi, and Grok use metadata documents;
+      Hermes, OpenCode, and Antigravity use native session-table rows. A child may inherit a proven
+      parent cwd when its own metadata omits one. Stream-time cwd changes may resolve relative tool
+      paths in adapter RAM but never create projects or mutate these fields.
       Codex titles come from <span class="f">state_*.sqlite</span>; Copilot titles come from
       <span class="f">workspace.yaml</span>. Every title candidate carries an evidence rank:
       explicit native label &gt; agent-generated label &gt; prompt/checkpoint fallback. Claude's
@@ -571,24 +561,6 @@
     </div>
 
     <div class="card">
-      <header><h3>workspace_obs</h3><span class="hdr-tags"><span class="ph ph-1">meta</span><span class="ph ph-2">stream</span></span></header>
-      <div class="fields">
-        <span class="f">session_id · at</span><span class="n">one row per observed change</span>
-        <span class="f">cwd</span><span class="n">working directory</span>
-        <span class="f">git_branch</span><span class="n">where stamped</span>
-        <span class="f">git_repo</span><span class="n">sanitized repo identity only when the native record reports it</span>
-      </div>
-      <div class="evidence"><b>Ratification:</b> codex carries cwd in <span class="f">turn_context</span>
-      per turn; copilot emits <span class="f">session.context_changed</span>; claude-code stamps
-      <span class="f">gitBranch</span> on every line. Sessions provably move directories — this table is
-      why project assignment stays honest. The first observation lands during meta ingest; the full
-      history backfills in the stream phase. Local Git discovery may enrich the ledgered meta-level
-      project row, but never a streamed observation: ledger-only replay cannot depend on today's
-      checkout still existing.</div>
-      <div class="consumers-line"><span class="cchip">project assignment</span><span class="cchip">agent-view</span></div>
-    </div>
-
-    <div class="card">
       <header><h3>session_usage</h3><span class="hdr-tags"><span class="ph ph-2">stream</span><span class="ph ph-live">live</span></span></header>
       <div class="fields">
         <span class="f">session_id · sample_key</span><span class="n">stable native replacement identity within a session</span>
@@ -611,8 +583,8 @@
         <span class="f">message_count · tool_call_count</span><span class="n">&nbsp;</span>
       </div>
       <div class="evidence"><b>Session grain only:</b> project / runtime / all-time totals are query-time
-      sums through <span class="f">session</span> — nothing to invalidate when a session is reassigned to
-      another project. <b>Trap:</b> codex token counters are cumulative, claude-code's are per-message —
+      sums through <span class="f">session</span> — ownership is settled once during bounded metadata
+      admission. <b>Trap:</b> codex token counters are cumulative, claude-code's are per-message —
       normalize to deltas once, at ingest, or the cache double-counts. <b>Replacement-aware:</b> usage
       keys either to its response row or to a <span class="f">session_usage.sample_key</span>; a
       re-reported snapshot applies (new − old) in the same tx, so re-ingest is idempotent.
@@ -716,7 +688,7 @@
       </tr>
       <tr>
         <td class="rt">notice</td>
-        <td>a closed lifecycle union: compaction · truncation · model/mode/workspace change · permission
+        <td>a closed lifecycle union: compaction · truncation · model/mode change · permission
         decision · handoff · runtime error; no arbitrary system text</td>
         <td><span class="native">copilot session.* events · grok auto_compact_* · pi compaction · claude-code system(subtype)</span></td>
       </tr>
@@ -855,7 +827,6 @@ enum Notice {
   Truncation { scope: TruncationScope, omitted_count: Option&lt;u64&gt; },
   ModelChanged { from: Option&lt;String&gt;, to: String },
   ModeChanged { from: Option&lt;ExecutionMode&gt;, to: ExecutionMode },
-  WorkspaceChanged { cwd: String, git_branch: Option&lt;String&gt; },
   PermissionRequested { request_id: Option&lt;String&gt;, scope: Option&lt;String&gt; },
   PermissionDecision { decision: PermissionOutcome, scope: Option&lt;String&gt; },
   Handoff { to_session_id: Option&lt;SessionId&gt;, to_agent: Option&lt;String&gt; },
@@ -886,7 +857,7 @@ enum SummaryPurpose { Compaction, Branch, Handoff, Session }</pre>
     <tbody>
       <tr><td class="rt">human/agent-authored text or media</td><td>user/agent prose, attachment, or citation</td><td>classify from a native role string alone</td></tr>
       <tr><td class="rt">tool request, progress, result, or corrected snapshot</td><td>open or update one correlated typed tool row; discard progress/output bodies after extracting declared facts</td><td>emit progress snapshots as duplicate tool cards</td></tr>
-      <tr><td class="rt">permission, truncation, mode, workspace, handoff, runtime failure</td><td>closed notice variant when user-visible</td><td>save arbitrary system text</td></tr>
+      <tr><td class="rt">permission, truncation, mode, handoff, runtime failure</td><td>closed notice variant when user-visible</td><td>save arbitrary system text</td></tr>
       <tr><td class="rt">citation source/span</td><td>bounded citation references attached to agent prose</td><td>mislabel citations as uploaded files</td></tr>
       <tr><td class="rt">hook context, reminders, environment, deferred-tool metadata</td><td>ledger-only unless a separately proven user-visible notice fact exists</td><td>index injected model context</td></tr>
       <tr><td class="rt">compaction/branch/handoff summary</td><td>typed summary with purpose</td><td>treat a summary as human-authored prose</td></tr>
@@ -971,7 +942,7 @@ enum SummaryPurpose { Compaction, Branch, Handoff, Session }</pre>
       <tr><td class="rt">tool_discovery</td><td>What capability did the agent look for?</td>
         <td><span class="keep">query</span>, count, at most 20 matched canonical/native names</td>
         <td><span class="drop">tool schemas and registry payloads</span></td><td>query · names</td></tr>
-      <tr><td class="rt">mode</td><td>What execution mode or workspace changed?</td>
+      <tr><td class="rt">mode</td><td>What execution or worktree mode changed?</td>
         <td><span class="keep">enter/exit</span>, plan/review/worktree mode, workspace name/path, status</td>
         <td><span class="drop">allowed-prompt policy blobs and repeated plan body</span></td><td>mode · workspace</td></tr>
       <tr><td class="rt">finding</td><td>What finding did the agent report?</td>
@@ -1402,7 +1373,7 @@ enum MessageDetail {                         <span class="comment">// the only p
   succeeded. An update that never finds an opener becomes drift plus ledger provenance rather than a
   fabricated timeline row.</p>
 
-  <pre class="ddl"><span class="c">-- Shipped schema-11 message projection.</span>
+  <pre class="ddl"><span class="c">-- Shipped schema-12 message projection.</span>
 CREATE TABLE <b>message</b> (
   id               INTEGER PRIMARY KEY,
   timeline_id      TEXT NOT NULL UNIQUE,
@@ -1683,8 +1654,9 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
     <div class="job">
       <h3>2 · Meta ingest</h3>
       <p>Small synchronous transactions, recency-ordered (mtime descending) so current work lands first.
-      stat calls give the session list and timestamps; bounded reads — first and last transcript lines
-      plus tiny sidecars — fill titles, project assignment, plans, and tasks. Project and session lists
+      stat calls give the session list and timestamps; bounded reads — opening records and tiny
+      metadata documents/databases — fill titles and settle one primary cwd plus optional repository
+      project. Plans and tasks may also be admitted from bounded metadata. Project and session lists
       render now; each session shows an indexing state until its stream lane catches up.</p>
     </div>
     <div class="job">
@@ -1705,11 +1677,11 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
   </div>
 
   <!-- ================================================================ -->
-  <h2>Superseded schema-7 projection (historical)</h2>
-  <p class="h2-note">This snapshot is retained only to explain the storage reduction. It is not the
-  current contract: schema 11 uses the closed message DDL above and contains no serialized staging,
-  pending joins, opener copies, winner stamps, or tool-fact storage. Upgrades rebuild privately from the
-  ledger rather than migrating these legacy rows. Search has its own disposable generation.</p>
+  <h2>Selected schema-12 projection DDL</h2>
+  <p class="h2-note">The closed message DDL above plus this relational shell are the current contract.
+  Schema 12 contains no serialized staging, pending joins, opener copies, workspace observations,
+  winner histories, or tool-fact storage. Upgrades rebuild privately from the ledger rather than
+  migrating old rows. Search has its own disposable generation.</p>
 
   <pre class="ddl"><span class="c">PRAGMA journal_mode = WAL;
 PRAGMA synchronous  = NORMAL;
@@ -1756,7 +1728,8 @@ CREATE TABLE <b>session</b> (
   id                TEXT PRIMARY KEY,       <span class="c">-- blake3(runtime · native id)</span>
   native_session_id TEXT NOT NULL,
   runtime_id        TEXT NOT NULL REFERENCES agent_runtime(id),
-  project_id        TEXT REFERENCES project(id),  <span class="c">-- assigned at ingest</span>
+  project_id        TEXT REFERENCES project(id),  <span class="c">-- settled during bounded meta ingest</span>
+  cwd               TEXT,                         <span class="c">-- one normalized primary cwd; never stream-mutated</span>
   parent_session_id TEXT REFERENCES session(id),  <span class="c">-- subagents recurse</span>
   root_session_id   TEXT NOT NULL REFERENCES session(id),  <span class="c">-- = id for roots; parents never change, set once</span>
   role              TEXT NOT NULL DEFAULT 'main', <span class="c">-- 'main' | 'subagent' | 'team'</span>
@@ -1767,24 +1740,12 @@ CREATE TABLE <b>session</b> (
   summary           TEXT,
   started_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
-  stream_state      TEXT NOT NULL DEFAULT 'pending', <span class="c">-- 'pending' | 'streaming' | 'indexed' — drives the UI badge</span>
-  project_assigned_at INTEGER                    <span class="c">-- earliest workspace evidence wins deterministically</span>
+  stream_state      TEXT NOT NULL DEFAULT 'pending' <span class="c">-- 'pending' | 'streaming' | 'indexed' — drives the UI badge</span>
 );
 CREATE INDEX session_project ON session(project_id, updated_at DESC);
 CREATE INDEX session_runtime ON session(runtime_id, updated_at DESC);
 CREATE INDEX session_parent  ON session(parent_session_id);
 CREATE INDEX session_title_src ON session(title_src_cursor);
-
-CREATE TABLE <b>workspace_obs</b> (
-  session_id TEXT NOT NULL REFERENCES session(id),
-  at         INTEGER NOT NULL,
-  cwd        TEXT NOT NULL,
-  git_branch TEXT,
-  git_repo   TEXT,
-  src_cursor INTEGER REFERENCES ingest_cursor(id)
-);
-CREATE INDEX workspace_obs_src ON workspace_obs(src_cursor);
-CREATE INDEX workspace_obs_session ON workspace_obs(session_id, at);
 
 CREATE TABLE <b>plan</b> (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -1825,45 +1786,10 @@ CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- driver checkpoi
   UNIQUE (runtime_id, path)
 );
 
-CREATE TABLE <b>message</b> (
-  id             INTEGER PRIMARY KEY,       <span class="c">-- stable join key copied into search_document</span>
-  timeline_id    TEXT NOT NULL UNIQUE,      <span class="c">-- stable blake3; native uuids aren't unique</span>
-  session_id     TEXT NOT NULL REFERENCES session(id),
-  ordinal        INTEGER NOT NULL,
-  type           TEXT NOT NULL,             <span class="c">-- schema 7: 'user'|'agent'|'thinking'|'tool_use'|'system'|'summary'</span>
-  subtype        TEXT,                      <span class="c">-- system only: 'compaction'|'truncation'|'model_change'|…</span>
-  uuid           TEXT,                      <span class="c">-- native id</span>
-  parent_uuid    TEXT,                      <span class="c">-- native threading</span>
-  ts             INTEGER,
-  model          TEXT,
-  effort         TEXT,
-  content        TEXT,                      <span class="c">-- the FTS target</span>
-  tool_id        TEXT,                      <span class="c">-- merge key: the result row folds in here</span>
-  tool_name      TEXT,
-  tool_input     TEXT,                      <span class="c">-- LEGACY: opaque native JSON</span>
-  tool_result    TEXT,                      <span class="c">-- LEGACY: native result text; NULL until it lands</span>
-  tool_payload   TEXT,                      <span class="c">-- LEGACY: opaque native JSON; verified binaries are URLs</span>
-  tool_is_error  INTEGER,
-  branch_tool_id TEXT,                      <span class="c">-- anchors a spawned subagent thread</span>
-  in_tokens      INTEGER,                   <span class="c">-- per-turn deltas (cumulative sources normalized first)</span>
-  out_tokens     INTEGER,
-  cache_r_tokens INTEGER,
-  cache_w_tokens INTEGER,
-  think_tokens   INTEGER,
-  agent_version  TEXT,                      <span class="c">-- provenance…</span>
-  src_cursor     INTEGER REFERENCES ingest_cursor(id),  <span class="c">-- …which ledger file</span>
-  src_offset     INTEGER,                   <span class="c">-- …which byte</span>
-  UNIQUE (session_id, ordinal)
-);
-CREATE INDEX message_tool ON message(session_id, tool_id) WHERE tool_id IS NOT NULL;
-CREATE INDEX message_src ON message(src_cursor); <span class="c">-- generation reconciliation must never scan the corpus</span>
-CREATE INDEX message_bucket_key ON message(
-  session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
-);                                             <span class="c">-- equality keys precede the timestamp range</span>
-
-<span class="c">-- No FTS table lives in the canonical database. The schema-7 detached generation owns
--- search_document metadata plus a contentless message_fts(content, tool_input,
--- tool_result). The typed target replaces these with prose/target/intent/change. Its search_state records projection_epoch + revision. The worker
+<span class="c">-- The complete schema-12 message table appears in the closed message contract above.
+-- No FTS table lives in the canonical database. The detached generation owns
+-- search_document metadata plus a contentless message_fts(prose, target, intent, change).
+-- Its search_state records projection_epoch + revision. The worker
 -- builds privately, validates, fsyncs, and atomically selects it through CURRENT.</span>
 
 CREATE TABLE <b>file_edit</b> (
@@ -1942,7 +1868,7 @@ CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized ca
 ) WITHOUT ROWID;
 CREATE INDEX usage_bucket_hour ON usage_bucket(hour_ts);
 <span class="c">-- session grain ONLY: project / runtime / all-time totals are query-time sums
--- through session — nothing to invalidate when a session is reassigned.
+-- through the session's metadata-settled ownership.
 -- replacement-aware: usage keys to its response row or session_usage.sample_key; a re-reported snapshot
 -- applies (new − old) to the bucket in the same tx as the row update</span>
 
@@ -2038,7 +1964,7 @@ ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pr
     ledger. Tables are admitted by named consumers rather than a numeric budget. This model is a
     Phase-2 hypothesis checked and evidence-amended against 9 of 11 ground-truth packs, not yet ratified;
     Gemini and Cursor captures may still amend mappings without reopening the strict raw-versus-canonical
-    boundary. The typed message/tool contract is active in schema 11 across code, search, protocol, and
+    boundary. The typed message/tool contract and metadata-only session ownership are active in schema 12 across code, search, protocol, and
     clients. Fold patches and replacement generations remain process-local; only resolved user-facing
     rows cross the canonical SQLite boundary. Implementation design: ingest-engine.html.
   </footer>

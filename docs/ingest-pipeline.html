@@ -476,7 +476,7 @@
     <div class="card">
       <div class="kicker">representation 2</div>
       <h3>Canonical projection</h3>
-      <p>SQLite schema 7. Disposable. <code>Store::apply</code> is the only writer. On schema/normalizer bump, rebuild from the ledger — never migrate.</p>
+      <p>SQLite schema 12. Disposable. <code>Store::apply</code> is the only writer. On schema/normalizer bump, rebuild from the ledger — never migrate.</p>
     </div>
     <div class="card">
       <div class="kicker">not a representation</div>
@@ -735,7 +735,7 @@
       <rect class="box" x="920" y="110" width="240" height="150" rx="10"/>
       <text class="t" x="936" y="132">admit_identified</text>
       <text class="s" x="936" y="152">ids::session_id</text>
-      <text class="s" x="936" y="168">project(cwd) + git_identity</text>
+      <text class="s" x="936" y="168">normalize bounded metadata cwd</text>
       <text class="s" x="936" y="184">parent placeholder if needed</text>
       <text class="s" x="936" y="200">SessionTitle ranked fact</text>
       <text class="s" x="936" y="216">merge_session</text>
@@ -750,7 +750,7 @@
       <rect class="box" x="20" y="320" width="1140" height="90" rx="10" style="stroke: var(--forest)"/>
       <text class="t" x="36" y="342">one batch, ledger-first</text>
       <text class="s" x="36" y="362">preserve existing stream_state on re-skim · sort mains first · files newest-first</text>
-      <text class="s" x="36" y="380">Ledger::append_meta(LEDGER_META_SCHEMA_VERSION=1, ops_json) → checkpoint → Store::apply(Runtime, Project, SessionMeta, SessionTitle, extra ops)</text>
+      <text class="s" x="36" y="380">settle_projects → Ledger::append_meta(LEDGER_META_SCHEMA_VERSION=2, ops_json) → checkpoint → Store::apply(Runtime, Project, SessionMeta, SessionTitle, extra ops)</text>
       <text class="s" x="36" y="396">missing physical snapshots: retain virtual cursors as source_missing tombstones (JSONL never swept here)</text>
     </svg>
     </div>
@@ -765,7 +765,8 @@
       <div class="indent"><span class="p">admit_document</span> → <span class="q">snapshot_document</span> → adapter.<span class="a">document_sessions</span> → adapter.<span class="a">document_size_limit</span></div>
       <div class="indent"><span class="p">admit_database</span> → <span class="q">sqlite_file_status</span> · <span class="q">snapshot_db</span> → adapter.<span class="a">snapshot_plan</span> · <span class="a">snapshot_session</span></div>
       <div class="indent"><span class="p">merge_session</span> · <span class="p">stronger_stream_state</span>(Pending &lt; Streaming &lt; Indexed)</div>
-      <div class="indent"><span class="p">project::project</span>(cwd) · <span class="p">git_identity</span> · <span class="p">find_git_dir</span> · <span class="p">sanitize_remote</span></div>
+      <div class="indent"><span class="p">settle_projects</span>  inherit proven parent cwd when absent → <span class="p">project::project</span>(cwd) → repository root / normalized non-git root</div>
+      <div class="indent"><span class="p">git_identity</span> · <span class="p">find_git_dir</span> · <span class="p">sanitize_remote</span></div>
       <div class="c" style="padding:8px 0 0">JSONL fallback: if skim.session_id is None, <span class="q">first_record</span> (one bounded record, never the body). If adapter.<span class="a">wants_skim_fallback</span>, <span class="q">scan_records</span> from the last complete delimiter in the head; adapter.<span class="a">absorb_skim_fallback_record</span> may stop early.</div>
       <div class="c">Claude Code opts in when the main transcript still has no title. Antigravity opts in when no complete checkpoint exposes the USER Objective section.</div>
     </div>
@@ -827,7 +828,7 @@
       <text class="s" x="36" y="186">Record → adapter.ingest_line(ctx, stream_id, payload)  timed as NormalizeNanos</text>
       <text class="s" x="36" y="204">Oversized → DriftFact error_code=oversized, generation_clean=false, no ledger payload</text>
       <text class="s" x="36" y="222">Parsed / UnknownType / HardError counted; HardError dirties the generation</text>
-      <text class="s" x="36" y="240">project::enrich_workspace_ops — normalize cwd, prefer local origin remote</text>
+      <text class="s" x="36" y="240">stream cwd, when needed, stays adapter-private and only resolves relative tool paths</text>
 
       <path class="edge" d="M590,262 L590,292"/>
 
@@ -906,14 +907,13 @@
       <thead><tr><th>Op</th><th>Meaning</th><th>Writer</th></tr></thead>
       <tbody>
         <tr><td class="cm">Runtime</td><td>Installed agent runtime</td><td><code>apply_runtime</code></td></tr>
-        <tr><td class="cm">Project</td><td>Workspace / git identity</td><td><code>apply_project</code></td></tr>
-        <tr><td class="cm">SessionMeta</td><td>Meta-phase upsert; stream refines</td><td><code>apply_session</code></td></tr>
+        <tr><td class="cm">Project</td><td>Repository root / normalized non-git root</td><td><code>apply_project</code></td></tr>
+        <tr><td class="cm">SessionMeta</td><td>Metadata-only identity, primary cwd, and ownership; stream cannot revise</td><td><code>apply_session</code></td></tr>
         <tr><td class="cm">SessionTitle</td><td>Ranked title fact (explicit &gt; generated &gt; fallback)</td><td><code>apply_session_title</code> → <code>refresh_session_title</code></td></tr>
         <tr><td class="cm">Message</td><td>Flattened timeline row, upsert by timeline_id</td><td><code>apply_message</code> + pending drain</td></tr>
         <tr><td class="cm">ToolResult</td><td>Merge into tool_use by (session, tool id)</td><td><code>apply_tool_result</code> or <code>queue_pending</code></td></tr>
         <tr><td class="cm">Usage</td><td>Replacement snapshot for an existing response</td><td><code>apply_usage</code> (new − old on hour bucket)</td></tr>
         <tr><td class="cm">SessionUsage</td><td>Session/task grain sample, not a fake message</td><td><code>apply_session_usage</code></td></tr>
-        <tr><td class="cm">WorkspaceObs</td><td>cwd / git observation</td><td><code>apply_workspace_obs</code></td></tr>
         <tr><td class="cm">FileEdit · Plan · Task · GitCommit</td><td>Artifacts</td><td>matching apply_*</td></tr>
         <tr><td class="cm">Drift</td><td>Aggregated, never one row per bad record</td><td><code>apply_drift</code> → drift_agg / drift_seen</td></tr>
       </tbody>
@@ -1011,7 +1011,7 @@
       <div class="indent"><span class="s">apply_message</span>  load_old_by_timeline · fts_delete/insert (live) · touch_session · apply_pending_for_message</div>
       <div class="indent"><span class="s">apply_tool_result</span> / <span class="s">apply_usage</span>  miss → <span class="s">queue_pending</span> (pending_merge)</div>
       <div class="indent"><span class="s">PendingGate</span>  target-aware: skip SQL when this session cannot match</div>
-      <div class="indent"><span class="s">apply_session_usage</span> · <span class="s">apply_workspace_obs</span> · file_edit · plan · task · git_commit · drift</div>
+      <div class="indent"><span class="s">apply_session_usage</span> · file_edit · plan · task · git_commit · drift</div>
       <div class="indent"><span class="s">rebuild_bucket</span> after the batch, once per dirty (session, hour, model)</div>
       <div class="indent"><span class="s">renumber_session</span> / <span class="s">renumber_all_sessions</span>  presentation order = path · offset · insert</div>
       <div class="indent"><span class="s">remove_cursor_projection</span>  provenance sweep on generation swap</div>
@@ -1027,7 +1027,7 @@
         <tr><td class="cm">projection_state</td><td>open</td><td>epoch · search_revision · canonical_ready</td></tr>
         <tr><td class="cm">search_dirty</td><td>live apply</td><td>coalesced session repair keys</td></tr>
         <tr><td class="cm">source_audit</td><td>stream</td><td>rotating audit cursor</td></tr>
-        <tr><td class="cm">project · session · workspace_obs</td><td>meta</td><td>ranked meta_title retained as fallback</td></tr>
+        <tr><td class="cm">project · session</td><td>meta</td><td><code>session.cwd</code> and project ownership settle from bounded adapter metadata; ranked meta_title retained as fallback</td></tr>
         <tr><td class="cm">ingest_cursor</td><td>stream</td><td>opaque PipeCheckpoint blob + generations</td></tr>
         <tr><td class="cm">source_op</td><td>replacement</td><td>staging only, pruned at activate</td></tr>
         <tr><td class="cm">pending_merge</td><td>stream</td><td>tool-result / usage arriving early</td></tr>
@@ -1354,7 +1354,7 @@
     <summary><span class="crate b-pipeline">pipeline</span></summary>
     <div class="fn" id="cat-pipeline">
       <div>discover · expand_data_root</div>
-      <div>meta_ingest · meta_ingest_into · admit_identified · admit_document · admit_database · merge_session · stronger_stream_state</div>
+      <div>meta_ingest · meta_ingest_into · admit_identified · admit_document · admit_database · merge_session · settle_projects · stronger_stream_state</div>
       <div>stream_backfill · stream_backfill_into · ingest_file · cursor_row · rotating_audit_paths · merge_stats</div>
       <div>stream_document_sources · virtual_document_path</div>
       <div>stream_snapshot_sources · virtual_db_path · apply_snapshot_records · seal_generation · flush_chunk</div>
@@ -1362,7 +1362,7 @@
       <div>rebuild_runtime · visit_election · visit_replay · open_file · flush_chunk (replay)</div>
       <div>WorkQueue::{push, promote, pop} · PipeCheckpoint::{fresh, encode, decode, tail_checkpoint}</div>
       <div>Instrument::{time, add, apply, ledger_write, finish_bulk_load, finish_progressive_load, observe_normalization, observe_write_batch}</div>
-      <div>project · enrich_workspace_ops · git_identity · find_git_dir · sanitize_remote</div>
+      <div>project · git_identity · find_git_dir · sanitize_remote</div>
     </div>
   </details>
 
@@ -1390,7 +1390,7 @@
       <div>bulk::{prepare, prepare_progressive, finalize, validate, validate_complete, restore_live_pragmas, checkpoint_progressive}</div>
       <div>search_sync::{before_batch, record_batch, mark_canonical_ready, acknowledge}</div>
       <div>queries::{cursor_state, audit_path, session, session_list, projection_state, search_repairs, visit_search_documents, …}</div>
-      <div>schema::{init, init_deferred} SCHEMA_VERSION=7</div>
+      <div>schema::{init, init_deferred} SCHEMA_VERSION=12</div>
     </div>
   </details>
 

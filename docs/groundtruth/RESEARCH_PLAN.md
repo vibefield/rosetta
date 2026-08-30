@@ -331,7 +331,8 @@ wound down; `kimi migrate` imports old data). MIT, OSS
   container isolation; OAuth vs API-key paths behave differently.
 - **Adapter closure (2026-08-28):** `state.json` is now a first-class document snapshot
   that enumerates root and nested agents. The complete 0.38.0 fixture plus organic
-  durable vocabulary is typed; `config.update` supplies workspace observations,
+  durable vocabulary is typed; bounded `state.json`/profile/config metadata supplies the one
+  canonical session cwd while later `config.update` values remain transient tool-path context,
   `context.apply_compaction` supplies summary rows, and `tools.update_store` supplies
   tasks. Approval and lifecycle bookkeeping is intentionally a typed canonical no-op,
   so new fields still drift. Several organic-only variants still need writer-export or
@@ -615,8 +616,8 @@ absorb — and disproves some assumptions a Claude-only view would have baked in
   `schema_version` table (Hermes v23), a versioned session-header line (Pi v3),
   nothing explicit (most others). Rosetta's per-record `detected_version` must accept
   all three plus heuristics.
-- **Universal shapes confirmed across all ten active agents**: session identity tied to a
-  cwd/workspace key (five different encodings of the same idea); parent/child
+- **Universal shapes confirmed across all ten active agents**: session identity tied to one
+  primary cwd/workspace metadata fact (five different encodings of the same idea); parent/child
   sessions and subagent trees; tool call/result pairing; token-usage blocks with
   cache splits; compaction/summarization events. These are strong candidates for the
   canonical model's spine.

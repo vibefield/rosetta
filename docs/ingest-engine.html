@@ -303,7 +303,7 @@
 
   <pre class="ddl"><span class="c">// crates/core — the central op type; adapters end here, the writer starts here</span>
 enum <b>IngestOp</b> {
-    SessionMeta(SessionRow),          <span class="c">// meta-phase upsert</span>
+    SessionMeta(SessionRow),          <span class="c">// metadata-only identity/ownership; streams never revise it</span>
     SessionTitle(SessionTitleRow),    <span class="c">// bounded title fact: explicit &gt; generated &gt; fallback</span>
     Message(MessageRow),              <span class="c">// one flattened timeline row</span>
     ToolResult { tool_id: ToolId, result: String, payload: Value, is_error: bool },
@@ -313,7 +313,6 @@ enum <b>IngestOp</b> {
                                       <span class="c">// absent components stay None — never coerced to zero</span>
     SessionUsage { key: String, ts: Ms, model: ModelId, tokens: TokenSnapshot },
                                       <span class="c">// native replacement-keyed total with no response; never invent a message</span>
-    WorkspaceObs(WorkspaceObsRow),
     Plan(PlanRow),
     Task(TaskRow),
     FileEdit(FileEditRow),            <span class="c">// carries lines_added / lines_removed</span>
@@ -787,7 +786,7 @@ trait <b>AgentAdapter</b>: Send + Sync {
   Layout filtering admitted 38,998 files, metadata skimmed 6,063, and canonical metadata named
   6,419 sessions. The private lane framed 2,234,095 source records; the progressive lane processed
   2,242,078 because its required final rotating-audit pass reread a bounded slice. Both converged on
-  774,219 messages, 50,167 file edits, 135 projects, 8,410 workspace observations, 519 plans, 486
+  774,219 messages, 50,167 file edits, 135 projects, 8,410 historical schema-7 workspace observations, 519 plans, 486
   tasks, 79 pending merges, 105 drift aggregates, 1,661 drift identities, 2 session-usage rows, and
   20,600 usage buckets, with zero hard errors. Full normalized content-table hashes matched. Cursor
   membership matched; generation/checkpoint bytes intentionally differ between private bulk and
