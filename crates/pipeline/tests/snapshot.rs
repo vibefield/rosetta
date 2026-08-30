@@ -113,13 +113,18 @@ impl AgentAdapter for FakeDbAgent {
             effort: None,
             content: row["body"].as_str().map(str::to_owned),
             tool: None,
+            attachments: Vec::new(),
+            citations: Vec::new(),
+            group: None,
+            response: None,
+            block_index: None,
             branch_tool_id: None,
             usage: None,
             agent_version: ctx.agent_version.clone(),
             src_cursor: ctx.src_cursor,
             src_offset: ctx.src_offset,
         };
-        LineOutcome::parsed(vec![IngestOp::Message(Box::new(message))])
+        LineOutcome::parsed(IngestOp::project_message(message))
     }
 }
 

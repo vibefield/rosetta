@@ -8,8 +8,10 @@
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
-use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, MessageKind, MessageRow};
-use rosetta_core::timeline::{ToolAction, ToolStatus};
+use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, TitleKind};
+use rosetta_core::timeline::{
+    AttachmentKind, Notice, TimelineBody, TimelineEntry, ToolAction, ToolStatus,
+};
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
 
@@ -100,13 +102,43 @@ fn user(content: Value, extra: Value) -> Value {
     line
 }
 
-fn messages(ops: &[IngestOp]) -> Vec<&MessageRow> {
+fn messages(ops: &[IngestOp]) -> Vec<&TimelineEntry> {
     ops.iter()
         .filter_map(|op| match op {
             IngestOp::Message(row) => Some(&**row),
             _ => None,
         })
         .collect()
+}
+
+fn body_kind(row: &TimelineEntry) -> &'static str {
+    match &row.body {
+        TimelineBody::User { .. } => "user",
+        TimelineBody::Agent { .. } => "agent",
+        TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::ToolUse { .. } => "tool_use",
+        TimelineBody::Notice { .. } => "notice",
+        TimelineBody::Summary { .. } => "summary",
+    }
+}
+
+fn text(row: &TimelineEntry) -> Option<&str> {
+    match &row.body {
+        TimelineBody::User { text, .. } | TimelineBody::Agent { text, .. } => {
+            text.as_ref().map(|text| text.as_preview())
+        }
+        TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
+            Some(text.as_preview())
+        }
+        TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
+    }
+}
+
+fn tool(row: &TimelineEntry) -> Option<&rosetta_core::ToolInteraction> {
+    match &row.body {
+        TimelineBody::ToolUse { tool } => Some(tool),
+        _ => None,
+    }
 }
 
 fn edits(ops: &[IngestOp]) -> Vec<&FileEditRow> {
@@ -140,22 +172,18 @@ fn assistant_blocks_split_into_one_row_each() {
     )]);
 
     let rows = messages(&ops);
-    let kinds: Vec<MessageKind> = rows.iter().map(|row| row.kind).collect();
-    assert_eq!(
-        kinds,
-        [
-            MessageKind::Thinking,
-            MessageKind::Agent,
-            MessageKind::ToolUse
-        ]
-    );
+    let kinds: Vec<&str> = rows.iter().map(|row| body_kind(row)).collect();
+    assert_eq!(kinds, ["thinking", "agent", "tool_use"]);
     assert_eq!(
         rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
         [0, 1, 2]
     );
 
     // Split rows share the record's uuid but never its timeline id.
-    assert!(rows.iter().all(|row| row.uuid.as_deref() == Some(UUID)));
+    assert!(
+        rows.iter()
+            .all(|row| row.native_id.as_deref() == Some(UUID))
+    );
     let ids: std::collections::BTreeSet<&str> =
         rows.iter().map(|row| row.timeline_id.as_str()).collect();
     assert_eq!(ids.len(), 3);
@@ -169,20 +197,20 @@ fn assistant_blocks_split_into_one_row_each() {
     // The per-record version stamp beats whatever the pipeline guessed.
     assert!(
         rows.iter()
-            .all(|row| row.agent_version.as_deref() == Some("2.1.241"))
+            .all(|row| row.provenance.agent_version.as_deref() == Some("2.1.241"))
     );
 
     // Usage is reported once per response and lands on the text row.
-    assert_eq!(rows[0].usage, None);
-    assert_eq!(rows[2].usage, None);
-    let tokens = rows[1].usage.expect("usage on the agent row");
+    assert!(rows[0].usage.is_empty());
+    assert!(rows[2].usage.is_empty());
+    let tokens = rows[1].usage;
     assert_eq!(tokens.input, Some(100));
     assert_eq!(tokens.output, Some(20));
     assert_eq!(tokens.cache_read, Some(9));
     assert_eq!(tokens.cache_write, Some(7));
     assert_eq!(tokens.thinking, Some(5));
 
-    let tool = rows[2].tool.as_ref().expect("tool call");
+    let tool = tool(rows[2]).expect("tool call");
     assert_eq!(tool.native.name, "Bash");
     assert_eq!(tool.native.id.as_deref(), Some("toolu_1"));
     let ToolAction::Shell { command, .. } = &tool.action else {
@@ -198,17 +226,15 @@ fn usage_falls_back_to_the_tool_row_then_to_any_row() {
         json!([{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]),
         Some(usage(10, 2, 0)),
     )]);
-    assert!(messages(&ops)[0].usage.is_some());
+    assert!(!messages(&ops)[0].usage.is_empty());
 
     // An API-error record carries no content at all; its usage must not vanish
     // with the response.
     let (ops, statuses) = run(&[assistant(json!([]), Some(usage(10, 2, 0)))]);
     let rows = messages(&ops);
     assert_eq!(statuses, [LineStatus::Parsed]);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].kind, MessageKind::Agent);
-    assert_eq!(rows[0].content, None);
-    assert!(rows[0].usage.is_some());
+    assert!(rows.is_empty(), "an empty response is not visible prose");
+    assert!(ops.iter().any(|op| matches!(op, IngestOp::SessionUsage(_))));
 }
 
 #[test]
@@ -264,7 +290,7 @@ fn spawn_tools_anchor_the_subagent_thread() {
             None,
         )]);
         assert_eq!(
-            messages(&ops)[0].branch_tool_id.as_deref(),
+            messages(&ops)[0].parent_tool_native_id.as_deref(),
             Some("toolu_spawn"),
             "{name} should anchor a subagent thread"
         );
@@ -274,7 +300,7 @@ fn spawn_tools_anchor_the_subagent_thread() {
         json!([{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls"}}]),
         None,
     )]);
-    assert_eq!(messages(&ops)[0].branch_tool_id, None);
+    assert_eq!(messages(&ops)[0].parent_tool_native_id, None);
 }
 
 #[test]
@@ -322,7 +348,7 @@ fn read_image_results_do_not_cross_the_canonical_boundary() {
 
     assert!(
         !ops.iter()
-            .any(|op| matches!(op, IngestOp::ImageAsset { .. })),
+            .any(|op| matches!(op, IngestOp::ProjectionAsset { .. })),
         "a file-read body is neither authored media nor a canonical attachment"
     );
     let patch = ops
@@ -351,7 +377,7 @@ fn malformed_or_mislabeled_read_images_are_also_discarded() {
         )]);
         assert!(
             !ops.iter()
-                .any(|op| matches!(op, IngestOp::ImageAsset { .. })),
+                .any(|op| matches!(op, IngestOp::ProjectionAsset { .. })),
             "unverified image bytes must not be written"
         );
         assert!(
@@ -376,8 +402,8 @@ fn a_turn_with_text_and_a_result_keeps_both() {
 
     let rows = messages(&ops);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].kind, MessageKind::User);
-    assert_eq!(rows[0].content.as_deref(), Some("and here is my follow-up"));
+    assert_eq!(body_kind(rows[0]), "user");
+    assert_eq!(text(rows[0]), Some("and here is my follow-up"));
 
     let IngestOp::ToolUpdate { patch, .. } = &ops[2] else {
         panic!("expected a tool update after the turn, got {ops:#?}");
@@ -393,19 +419,29 @@ fn a_turn_with_text_and_a_result_keeps_both() {
 }
 
 #[test]
-fn an_image_only_turn_is_still_a_turn() {
+fn valid_authored_image_becomes_a_typed_content_addressed_attachment() {
     let (ops, _) = run(&[user(
-        json!([{"type": "image", "source": {"type": "base64"}}]),
+        json!([{"type": "image", "source": {
+            "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"
+        }}]),
         json!({}),
     )]);
     let rows = messages(&ops);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].kind, MessageKind::User);
-    assert_eq!(rows[0].content, None);
+    let TimelineBody::User { text, attachments } = &rows[0].body else {
+        panic!("authored media must remain a user turn")
+    };
+    assert!(text.is_none());
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].kind, AttachmentKind::Image);
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, IngestOp::ProjectionAsset { .. }))
+    );
 }
 
 #[test]
-fn system_records_become_rows_keyed_by_subtype() {
+fn system_compaction_becomes_a_closed_notice() {
     let (ops, _) = run(&[json!({
         "type": "system",
         "subtype": "compact_boundary",
@@ -424,25 +460,36 @@ fn system_records_become_rows_keyed_by_subtype() {
 
     let rows = messages(&ops);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].kind, MessageKind::System);
-    assert_eq!(rows[0].subtype.as_deref(), Some("compact_boundary"));
-    assert_eq!(rows[0].content.as_deref(), Some("conversation compacted"));
+    assert!(matches!(
+        rows[0].body,
+        TimelineBody::Notice {
+            notice: Notice::Compaction { .. }
+        }
+    ));
     assert!(drift(&ops).is_empty(), "compactMetadata is a typed field");
 }
 
 #[test]
-fn every_ai_title_folds_onto_one_summary_row() {
+fn every_ai_title_projects_as_a_ranked_session_title_fact() {
     let (ops, _) = run(&[
         json!({"type": "ai-title", "aiTitle": "first guess", "sessionId": "session-under-test"}),
         json!({"type": "ai-title", "aiTitle": "better title", "sessionId": "session-under-test"}),
     ]);
 
-    let rows = messages(&ops);
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| row.kind == MessageKind::Summary));
-    assert_eq!(rows[1].content.as_deref(), Some("better title"));
-    // The title is a session singleton: the later record upserts the earlier.
-    assert_eq!(rows[0].timeline_id, rows[1].timeline_id);
+    let titles: Vec<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::SessionTitle(title) => Some(title),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(titles.len(), 2);
+    assert!(
+        titles
+            .iter()
+            .all(|title| title.kind == TitleKind::Generated)
+    );
+    assert_eq!(titles[1].title, "better title");
 }
 
 #[test]
@@ -453,11 +500,11 @@ fn explicit_custom_title_is_a_distinct_session_singleton() {
         "sessionId": "session-under-test"
     })]);
     assert_eq!(statuses, [LineStatus::Parsed]);
-    let rows = messages(&ops);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].kind, MessageKind::Summary);
-    assert_eq!(rows[0].subtype.as_deref(), Some("custom_title"));
-    assert_eq!(rows[0].content.as_deref(), Some("Keep this exact title"));
+    let [IngestOp::SessionTitle(title)] = ops.as_slice() else {
+        panic!("custom title must be a session singleton fact")
+    };
+    assert_eq!(title.kind, TitleKind::Explicit);
+    assert_eq!(title.title, "Keep this exact title");
     assert!(drift(&ops).is_empty());
 }
 

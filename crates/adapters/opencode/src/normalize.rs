@@ -7,7 +7,9 @@
 use std::collections::BTreeSet;
 
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, SessionUsageRow, TokenSnapshot,
@@ -190,7 +192,7 @@ fn project(
             let mut row = timeline_row(ctx, record, message, kind);
             row.content = Some(text.text.clone());
             attach_usage(state, &record.message_id, message, &mut row);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         PartData::Tool(tool) => {
@@ -209,16 +211,25 @@ fn project(
             };
             let mut row = timeline_row(ctx, record, message, MessageKind::ToolUse);
             let input = tool.state.get("input").cloned().unwrap_or(Value::Null);
-            row.tool = Some(
-                crate::tool::project_request(
-                    ctx.agent_version.as_deref(),
-                    &tool.tool,
-                    &input,
-                    state.workspace.as_deref(),
-                    &tool.call_id,
-                    Some(&tool.call_id),
-                )
-                .unwrap_or_else(|_| {
+            let projected = crate::tool::project_request(
+                ctx.agent_version.as_deref(),
+                &tool.tool,
+                &input,
+                state.workspace.as_deref(),
+                &tool.call_id,
+                Some(&tool.call_id),
+            );
+            row.tool = Some(match projected {
+                Ok(tool) => tool,
+                Err(error) => {
+                    ops.push(drift(
+                        ctx,
+                        stream_id,
+                        &projection_record_kind("request", None, &tool.tool),
+                        error.drift_code(),
+                        &projection_shape_paths(&input),
+                        Some(record.part_time_created),
+                    ));
                     unknown_interaction(
                         tool.call_id.clone(),
                         rosetta_core::CorrelationDerivation::NativeId,
@@ -227,10 +238,10 @@ fn project(
                         tool.tool.clone(),
                         None,
                     )
-                }),
-            );
+                }
+            });
             attach_usage(state, &record.message_id, message, &mut row);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
 
             match tool.state.get("status").and_then(Value::as_str) {
                 Some("completed") => {
@@ -245,13 +256,13 @@ fn project(
                         session_id: ctx.session_id.clone(),
                         correlation_key: tool.call_id.clone(),
                         evidence: ctx.evidence(1),
-                        patch: terminal_update(
+                        patch: Box::new(terminal_update(
                             Some(false),
                             true,
                             rosetta_core::StatusBasis::NativeState,
                             at,
                             None,
-                        ),
+                        )),
                         at,
                     });
                 }
@@ -267,13 +278,13 @@ fn project(
                         session_id: ctx.session_id.clone(),
                         correlation_key: tool.call_id.clone(),
                         evidence: ctx.evidence(1),
-                        patch: terminal_update(
+                        patch: Box::new(terminal_update(
                             Some(true),
                             true,
                             rosetta_core::StatusBasis::NativeState,
                             at,
                             tool.state.get("error").and_then(Value::as_str),
-                        ),
+                        )),
                         at,
                     });
                 }
@@ -317,7 +328,7 @@ fn project(
                 .or(Some(record.part_time_created));
             row.content = Some(reasoning.text.clone());
             attach_usage(state, &record.message_id, message, &mut row);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         PartData::Patch(patch) => {
@@ -349,7 +360,7 @@ fn project(
                 .map(str::to_owned)
                 .or_else(|| serde_json::to_string(&retry.error).ok());
             attach_usage(state, &record.message_id, message, &mut row);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         PartData::StepFinish(_) => {
@@ -407,6 +418,11 @@ fn timeline_row(
         effort: None,
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),
@@ -532,8 +548,7 @@ fn hard(
 #[cfg(test)]
 mod tests {
     use rosetta_adapter_support::adapter::{LineStatus, NormalizeCtx};
-    use rosetta_core::IngestOp;
-    use rosetta_core::rows::MessageKind;
+    use rosetta_core::{IngestOp, TimelineBody};
     use serde_json::json;
 
     use super::{OpenCodeState, ingest};
@@ -589,9 +604,14 @@ mod tests {
         let IngestOp::Message(row) = &outcome.ops[0] else {
             panic!("expected message");
         };
-        assert_eq!(row.kind, MessageKind::User);
-        assert_eq!(row.content.as_deref(), Some("hello"));
-        assert_eq!(row.uuid.as_deref(), Some("msg-1"));
+        let TimelineBody::User {
+            text: Some(text), ..
+        } = &row.body
+        else {
+            panic!("expected user prose, got {:?}", row.body);
+        };
+        assert_eq!(text.as_preview(), "hello");
+        assert_eq!(row.native_id.as_deref(), Some("msg-1"));
         assert_eq!(
             row.timeline_id,
             rosetta_core::ids::timeline_id("session", "part-1")
@@ -642,10 +662,12 @@ mod tests {
                 _ => None,
             })
             .expect("thinking row");
-        assert_eq!(message.kind, MessageKind::Thinking);
-        assert_eq!(message.content.as_deref(), Some("considering the options"));
-        assert_eq!(message.ts, Some(110));
-        assert_eq!(message.usage.expect("usage").thinking, Some(3));
+        let TimelineBody::Thinking { text } = &message.body else {
+            panic!("expected thinking body, got {:?}", message.body);
+        };
+        assert_eq!(text.as_preview(), "considering the options");
+        assert_eq!(message.at, Some(110));
+        assert_eq!(message.usage.thinking, Some(3));
     }
 
     #[test]
@@ -670,6 +692,7 @@ mod tests {
             "finish": "tool-calls"
         });
         let mut ctx = NormalizeCtx::new("runtime", "session");
+        ctx.agent_version = Some(crate::tool::FIXTURE_WRITER_VERSION.into());
         let mut state = OpenCodeState::default();
         let outcome = ingest(
             &mut ctx,

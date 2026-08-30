@@ -9,8 +9,10 @@
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_codex::tool::CURRENT_WRITER_VERSION;
 use rosetta_adapter_support::adapter::{AgentAdapter, LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, TokenSnapshot};
-use rosetta_core::timeline::{ResourceRef, ToolAction, ToolStatus};
+use rosetta_core::rows::{DriftFact, TokenSnapshot};
+use rosetta_core::timeline::{
+    ResourceRef, StatusBasis, TimelineBody, TimelineEntry, ToolAction, ToolStatus,
+};
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
 
@@ -37,7 +39,7 @@ fn ingest(ctx: &mut NormalizeCtx, ordinal: u64, record_type: &str, payload: Valu
 }
 
 /// An assistant message — the row usage keys to.
-fn agent_row(ctx: &mut NormalizeCtx, ordinal: u64, text: &str) -> MessageRow {
+fn agent_row(ctx: &mut NormalizeCtx, ordinal: u64, text: &str) -> TimelineEntry {
     let outcome = ingest(
         ctx,
         ordinal,
@@ -53,6 +55,25 @@ fn agent_row(ctx: &mut NormalizeCtx, ordinal: u64, text: &str) -> MessageRow {
     match outcome.ops.as_slice() {
         [IngestOp::Message(row)] => (**row).clone(),
         other => panic!("expected one message row, got {other:?}"),
+    }
+}
+
+fn text(row: &TimelineEntry) -> Option<&str> {
+    match &row.body {
+        TimelineBody::User { text, .. } | TimelineBody::Agent { text, .. } => {
+            text.as_ref().map(|text| text.as_preview())
+        }
+        TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
+            Some(text.as_preview())
+        }
+        TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
+    }
+}
+
+fn tool(row: &TimelineEntry) -> Option<&rosetta_core::ToolInteraction> {
+    match &row.body {
+        TimelineBody::ToolUse { tool } => Some(tool),
+        _ => None,
     }
 }
 
@@ -210,9 +231,8 @@ fn compacted_projects_only_the_checkpoint_summary() {
     assert!(drifts(&outcome.ops).is_empty());
     match outcome.ops.as_slice() {
         [IngestOp::Message(row)] => {
-            assert_eq!(row.kind, MessageKind::Summary);
-            assert_eq!(row.subtype.as_deref(), Some("compacted"));
-            assert_eq!(row.content.as_deref(), Some("Earlier work, compacted."));
+            assert!(matches!(row.body, TimelineBody::Summary { .. }));
+            assert_eq!(text(row), Some("Earlier work, compacted."));
         }
         other => panic!("expected only one summary row, got {other:?}"),
     }
@@ -247,8 +267,8 @@ fn current_reasoning_and_agent_message_shapes_are_visible_without_drift() {
     assert!(drifts(&reasoning.ops).is_empty());
     match reasoning.ops.as_slice() {
         [IngestOp::Message(row)] => {
-            assert_eq!(row.kind, MessageKind::Thinking);
-            assert_eq!(row.content.as_deref(), Some("Checked the evidence."));
+            assert!(matches!(row.body, TimelineBody::Thinking { .. }));
+            assert_eq!(text(row), Some("Checked the evidence."));
         }
         other => panic!("expected one thinking row, got {other:?}"),
     }
@@ -268,11 +288,35 @@ fn current_reasoning_and_agent_message_shapes_are_visible_without_drift() {
     assert!(drifts(&delivery.ops).is_empty());
     match delivery.ops.as_slice() {
         [IngestOp::Message(row)] => {
-            assert_eq!(row.kind, MessageKind::System);
-            assert_eq!(row.subtype.as_deref(), Some("agent_message"));
-            assert_eq!(row.content.as_deref(), Some("Work complete."));
+            assert!(matches!(row.body, TimelineBody::Agent { .. }));
+            assert_eq!(text(row), Some("Work complete."));
         }
         other => panic!("expected one system row, got {other:?}"),
+    }
+}
+
+#[test]
+fn injected_developer_and_system_messages_remain_ledger_only() {
+    let mut ctx = context();
+    for (ordinal, role) in [(1, "developer"), (2, "system")] {
+        let outcome = ingest(
+            &mut ctx,
+            ordinal,
+            "response_item",
+            json!({
+                "type": "message",
+                "id": format!("injected-{role}"),
+                "role": role,
+                "content": [{"type": "input_text", "text": "secret prompt context"}],
+                "internal_chat_message_metadata_passthrough": {"turn_id": "turn"},
+            }),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        assert!(
+            outcome.ops.is_empty(),
+            "injected {role} context crossed the canonical boundary: {:?}",
+            outcome.ops
+        );
     }
 }
 
@@ -373,6 +417,60 @@ fn blank_lines_are_not_records() {
 }
 
 #[test]
+fn command_completion_uses_native_exit_status_and_discards_success_output() {
+    let mut ctx = context();
+    let outcome = ingest(
+        &mut ctx,
+        1,
+        "event_msg",
+        json!({
+            "type": "item_completed",
+            "completed_at_ms": 1_787_625_304_177_u64,
+            "item": {
+                "type": "CommandExecution",
+                "id": "call_1",
+                "status": "completed",
+                "exit_code": 0,
+                "duration": {"secs": 0, "nanos": 3_791},
+                "stdout": "a very large successful result is not canonical",
+                "stderr": "",
+                "aggregated_output": "a very large successful result is not canonical"
+            }
+        }),
+    );
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    match outcome.ops.as_slice() {
+        [
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
+                at,
+                ..
+            },
+        ] => {
+            assert_eq!(correlation_key, "call_1");
+            assert_eq!(*at, Some(1_787_625_304_177));
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Succeeded)
+            );
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.basis),
+                Some(StatusBasis::NativeState)
+            );
+            assert!(patch.failure.is_none());
+            assert!(patch.request.is_none());
+            assert!(patch.outcome.is_none());
+            assert_eq!(
+                patch.timing.as_ref().and_then(|timing| timing.duration_ms),
+                Some(1)
+            );
+        }
+        other => panic!("expected one command completion update, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_tool_result_merges_by_call_id() {
     let mut ctx = context();
     let call = ingest(
@@ -389,7 +487,7 @@ fn a_tool_result_merges_by_call_id() {
         }),
     );
     let tool = match call.ops.as_slice() {
-        [IngestOp::Message(row)] => row.tool.clone().expect("tool call"),
+        [IngestOp::Message(row)] => tool(row).cloned().expect("tool call"),
         other => panic!("expected one tool row, got {other:?}"),
     };
     assert_eq!(tool.native.id.as_deref(), Some("call_1"));
@@ -453,7 +551,7 @@ fn a_custom_tool_call_projects_only_reviewed_patch_facts() {
     assert!(drifts(&call.ops).is_empty());
     match call.ops.as_slice() {
         [IngestOp::Message(row), IngestOp::FileEdit(edit)] => {
-            let tool = row.tool.as_ref().expect("custom tool call");
+            let tool = tool(row).expect("custom tool call");
             assert_eq!(tool.native.id.as_deref(), Some("call_1"));
             assert_eq!(tool.native.name, "apply_patch");
             let ToolAction::FileChange { changes } = &tool.action else {
@@ -625,9 +723,9 @@ fn only_assistant_rows_carry_a_model() {
     );
     match outcome.ops.as_slice() {
         [IngestOp::Message(row)] => {
-            assert_eq!(row.kind, MessageKind::User);
+            assert!(matches!(row.body, TimelineBody::User { .. }));
             assert_eq!(row.model, None);
-            assert_eq!(row.content.as_deref(), Some("hi"));
+            assert_eq!(text(row), Some("hi"));
         }
         other => panic!("expected one message row, got {other:?}"),
     }

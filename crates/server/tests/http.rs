@@ -15,7 +15,7 @@ use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
 use rosetta_core::{
-    CanonicalText, CorrelationDerivation, ImageAsset, IngestOp, NativeToolRef, StatusBasis,
+    CanonicalText, CorrelationDerivation, IngestOp, NativeToolRef, ProjectionAsset, StatusBasis,
     ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
@@ -58,6 +58,11 @@ fn message(timeline_id: &str, kind: MessageKind, content: &str) -> MessageRow {
         effort: None,
         content: Some(content.to_string()),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
@@ -153,7 +158,7 @@ impl Harness {
             .apply(&Batch {
                 ops: rows
                     .into_iter()
-                    .map(|row| IngestOp::Message(Box::new(row)))
+                    .flat_map(IngestOp::project_message)
                     .collect(),
                 checkpoints: vec![],
                 source: Some(SourceWrite {
@@ -190,11 +195,11 @@ impl Harness {
 #[tokio::test]
 async fn content_addressed_images_are_served_without_exposing_filesystem_paths() {
     let mut h = harness();
-    let asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    let asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
     let url = asset.url().unwrap();
     h.store
         .apply(&Batch {
-            ops: vec![IngestOp::ImageAsset {
+            ops: vec![IngestOp::ProjectionAsset {
                 asset: asset.clone(),
             }],
             ..Batch::default()
@@ -399,7 +404,7 @@ async fn timeline_pages_bind_a_watermark_that_expires_on_rewrite() {
     assert_eq!(status, StatusCode::OK);
     let page: TimelinePage = serde_json::from_value(body).unwrap();
     assert_eq!(
-        page.messages.iter().map(|m| m.ordinal).collect::<Vec<_>>(),
+        page.entries.iter().map(|m| m.ordinal).collect::<Vec<_>>(),
         vec![3, 4]
     );
     let cursor = page.cursor.expect("more history remains");
@@ -414,18 +419,18 @@ async fn timeline_pages_bind_a_watermark_that_expires_on_rewrite() {
     assert_eq!(status, StatusCode::OK);
     let page: TimelinePage = serde_json::from_value(body).unwrap();
     assert_eq!(
-        page.messages.iter().map(|m| m.ordinal).collect::<Vec<_>>(),
+        page.entries.iter().map(|m| m.ordinal).collect::<Vec<_>>(),
         vec![1, 2]
     );
 
     // A generation swap rewrites the session: the cursor must EXPIRE.
     h.store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message(
+            ops: IngestOp::project_message(message(
                 "rewritten",
                 MessageKind::User,
                 "rewritten body",
-            )))],
+            )),
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: h.cursor,

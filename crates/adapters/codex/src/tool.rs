@@ -157,7 +157,7 @@ pub fn project_request(
         }
         _ => unreachable!("Codex registry and projector are closed together"),
     };
-    Ok(open_interaction(
+    open_interaction(
         correlation_key,
         if native_id.is_some() {
             CorrelationDerivation::NativeId
@@ -169,7 +169,7 @@ pub fn project_request(
         name,
         namespace.map(str::to_owned),
         action,
-    ))
+    )
 }
 
 fn project_shell(input: &Value, cwd: Option<&str>) -> Result<ToolAction, ProjectionError> {

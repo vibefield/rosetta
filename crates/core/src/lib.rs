@@ -10,7 +10,7 @@ pub mod ops;
 pub mod rows;
 pub mod timeline;
 
-pub use assets::ImageAsset;
+pub use assets::{ImageAsset, ProjectionAsset};
 pub use ops::IngestOp;
 pub use rows::{
     DriftFact, EditKind, FileEditRow, GitCommitRow, MessageKind, MessageRow, Ms, PlanRow,
@@ -19,8 +19,9 @@ pub use rows::{
 };
 pub use timeline::{
     CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, EvidenceStamp,
-    FailureKind, GroupDerivation, GroupKind, NativeToolRef, Provenance, ResponseGroup, SearchLanes,
-    SourceIdentity, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
-    ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction, ToolMergeState, ToolMutation,
-    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
+    FailureKind, GroupDerivation, GroupKind, MessageDetail, NativeToolRef, Provenance,
+    ResponseGroup, SearchLanes, SourceIdentity, StatusBasis, TimelineBody, TimelineEntry,
+    TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction,
+    ToolMergeState, ToolMutation, ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact,
+    ToolTiming, ToolUpdatePatch,
 };

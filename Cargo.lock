@@ -1137,6 +1137,7 @@ dependencies = [
 name = "rosetta-adapter-claude-code"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "rosetta-adapter-support",
  "rosetta-core",
  "serde",

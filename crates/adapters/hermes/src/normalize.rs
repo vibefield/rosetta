@@ -6,7 +6,9 @@
 //! adapter-local database cursor is needed.
 
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
 use rosetta_core::rows::{
     DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, WorkspaceObsRow,
@@ -285,7 +287,7 @@ fn project_system_prompt(ctx: &mut NormalizeCtx, row: &SystemPromptRow, ops: &mu
     message.subtype = Some("system_prompt".to_owned());
     message.uuid = Some(row.hash.clone());
     message.content = Some(row.prompt.clone());
-    ops.push(IngestOp::Message(Box::new(message)));
+    IngestOp::push_message(ops, message);
 }
 
 fn project_message(
@@ -301,7 +303,7 @@ fn project_message(
             let mut row = message_row(ctx, &discriminator, MessageKind::User, at);
             row.uuid = Some(native.id.to_string());
             row.content = native.content.clone();
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         "assistant" => project_assistant(ctx, stream_id, native, at, ops),
@@ -311,7 +313,7 @@ fn project_message(
             let mut row = message_row(ctx, &discriminator, MessageKind::System, at);
             row.uuid = Some(native.id.to_string());
             row.content = native.content.clone();
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         other => {
@@ -362,7 +364,7 @@ fn project_assistant(
         let mut row = message_row(ctx, &discriminator, MessageKind::Agent, at);
         row.uuid = Some(native.id.to_string());
         row.content = native.content.clone().filter(|text| !text.is_empty());
-        ops.push(IngestOp::Message(Box::new(row)));
+        IngestOp::push_message(ops, row);
     }
 
     let mut status = LineStatus::Parsed;
@@ -398,16 +400,25 @@ fn project_assistant(
         let discriminator = format!("message:{}:tool:{tool_id}", native.id);
         let mut row = message_row(ctx, &discriminator, MessageKind::ToolUse, at);
         row.uuid = Some(call.id);
-        row.tool = Some(
-            crate::tool::project_request(
-                ctx.agent_version.as_deref(),
-                &name,
-                &input,
-                None,
-                &tool_id,
-                Some(&tool_id),
-            )
-            .unwrap_or_else(|_| {
+        let projected = crate::tool::project_request(
+            ctx.agent_version.as_deref(),
+            &name,
+            &input,
+            None,
+            &tool_id,
+            Some(&tool_id),
+        );
+        row.tool = Some(match projected {
+            Ok(tool) => tool,
+            Err(error) => {
+                ops.push(drift(
+                    ctx,
+                    stream_id,
+                    &projection_record_kind("request", None, &name),
+                    error.drift_code(),
+                    &projection_shape_paths(&input),
+                    at,
+                ));
                 unknown_interaction(
                     tool_id.clone(),
                     rosetta_core::CorrelationDerivation::NativeId,
@@ -416,9 +427,9 @@ fn project_assistant(
                     name,
                     None,
                 )
-            }),
-        );
-        ops.push(IngestOp::Message(Box::new(row)));
+            }
+        });
+        IngestOp::push_message(ops, row);
     }
     status
 }
@@ -511,13 +522,13 @@ fn project_tool_result(
         session_id: ctx.session_id.clone(),
         correlation_key: tool_id,
         evidence: ctx.evidence(0),
-        patch: terminal_update(
+        patch: Box::new(terminal_update(
             is_error,
             true,
             rosetta_core::StatusBasis::NativeState,
             at,
             result_text.as_deref(),
-        ),
+        )),
         at,
     });
     status
@@ -598,6 +609,11 @@ fn message_row(
         effort: None,
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),

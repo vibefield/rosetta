@@ -4,68 +4,102 @@
     "timeline_id": "1f43ead5fada433dd996d7a1e7dc86fe2493b205bf1db9dc00dd8138dd83b659",
     "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
     "ordinal": 0,
-    "kind": "user",
-    "subtype": null,
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634644000,
+    "group": {
+      "id": "1f43ead5fada433dd996d7a1e7dc86fe2493b205bf1db9dc00dd8138dd83b659",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634644000,
     "model": null,
     "effort": null,
-    "content": "<USER_REQUEST>\nRun the echo command now. [use-tool]\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-08-24T22:10:44-07:00.\n</ADDITIONAL_METADATA>",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 1,
-    "src_offset": 0
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "<USER_REQUEST>\nRun the echo command now. [use-tool]\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-08-24T22:10:44-07:00.\n</ADDITIONAL_METADATA>"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 1,
+      "src_offset": 0
+    }
   },
   {
     "op": "message",
     "timeline_id": "b43d524215b79a06a663f6e966afaffb430945647970ca943a1d7008dcfdda0c",
     "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
     "ordinal": 1,
-    "kind": "tool_use",
-    "subtype": null,
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634644000,
+    "group": {
+      "id": "b43d524215b79a06a663f6e966afaffb430945647970ca943a1d7008dcfdda0c",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634644000,
     "model": null,
     "effort": null,
-    "content": null,
-    "tool": {
-      "correlation": {
-        "key": "step#1:tool#0",
-        "derivation": "positional"
-      },
-      "native": {
-        "id": null,
-        "namespace": null,
-        "name": "run_command",
-        "provider": null
-      },
-      "status": {
-        "value": "pending",
-        "basis": "request_observed"
-      },
-      "action": {
-        "type": "shell",
-        "command": {
-          "type": "inline",
-          "text": "echo rosetta-mock"
+    "body": {
+      "type": "tool_use",
+      "tool": {
+        "correlation": {
+          "key": "step#1:tool#0",
+          "derivation": "positional"
         },
-        "cwd": null,
-        "timeout_ms": null,
-        "background": false,
-        "outcome": null
-      },
-      "failure": null,
-      "timing": null
+        "native": {
+          "id": null,
+          "namespace": null,
+          "name": "run_command",
+          "provider": null
+        },
+        "status": {
+          "value": "pending",
+          "basis": "request_observed"
+        },
+        "action": {
+          "type": "shell",
+          "command": {
+            "type": "inline",
+            "text": "echo rosetta-mock"
+          },
+          "cwd": null,
+          "timeout_ms": null,
+          "background": false,
+          "outcome": null
+        },
+        "failure": null,
+        "timing": null
+      }
     },
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 2,
-    "src_offset": 298
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 2,
+      "src_offset": 298
+    }
   },
   {
     "op": "tool_update",
@@ -99,39 +133,78 @@
     "timeline_id": "e5b4d3d9dbcf0e7f4c13680e488a1f6740c3c2f727a9a7853a1ba4621a779ba2",
     "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
     "ordinal": 2,
-    "kind": "summary",
-    "subtype": "CHECKPOINT",
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634644000,
+    "group": {
+      "id": "e5b4d3d9dbcf0e7f4c13680e488a1f6740c3c2f727a9a7853a1ba4621a779ba2",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634644000,
     "model": null,
     "effort": null,
-    "content": "{{ CHECKPOINT 0 }}\n **The earlier parts of this conversation have been truncated due to its long length. The following content summarizes the truncated context so that you may continue your work. **\n\n\n# User Requests\nThe following were user requests from the truncated conversation in chronological order:\n1. Run the echo command now. [use-tool]\n\n# Conversation Logs\n\nReference the following log files for the full, untruncated conversation:\n\n- <SCENARIO_DIR>/home/.gemini/antigravity-cli/brain/e20546c7-87d4-4937-bc4f-196c54eb11e4/.system_generated/logs/transcript.jsonl\n\n**IMPORTANT: this summary is just for your reference. You may respond to my previous and future messages, but DO NOT ACKNOWLEDGE THIS CHECKPOINT MESSAGE. JUST READ IT BUT DO NOT MENTION IT, RESPOND TO IT, OR TAKE ACTION BECAUSE OF IT.**",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 4,
-    "src_offset": 765
+    "body": {
+      "type": "summary",
+      "purpose": "compaction",
+      "text": {
+        "type": "inline",
+        "text": "{{ CHECKPOINT 0 }}\n **The earlier parts of this conversation have been truncated due to its long length. The following content summarizes the truncated context so that you may continue your work. **\n\n\n# User Requests\nThe following were user requests from the truncated conversation in chronological order:\n1. Run the echo command now. [use-tool]\n\n# Conversation Logs\n\nReference the following log files for the full, untruncated conversation:\n\n- <SCENARIO_DIR>/home/.gemini/antigravity-cli/brain/e20546c7-87d4-4937-bc4f-196c54eb11e4/.system_generated/logs/transcript.jsonl\n\n**IMPORTANT: this summary is just for your reference. You may respond to my previous and future messages, but DO NOT ACKNOWLEDGE THIS CHECKPOINT MESSAGE. JUST READ IT BUT DO NOT MENTION IT, RESPOND TO IT, OR TAKE ACTION BECAUSE OF IT.**"
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 4,
+      "src_offset": 765
+    }
   },
   {
     "op": "message",
     "timeline_id": "95c19ab61ae69e4a224bde5c01e7ce0285a314c15ad0913bc7eeae9d8596afd5",
     "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
     "ordinal": 3,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634644000,
+    "group": {
+      "id": "95c19ab61ae69e4a224bde5c01e7ce0285a314c15ad0913bc7eeae9d8596afd5",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634644000,
     "model": null,
     "effort": null,
-    "content": "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 5,
-    "src_offset": 1708
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 1708
+    }
   }
 ]

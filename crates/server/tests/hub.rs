@@ -73,6 +73,11 @@ fn message(timeline_id: &str) -> MessageRow {
         effort: None,
         content: Some(format!("content of {timeline_id}")),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
@@ -120,7 +125,7 @@ impl Harness {
     fn append(&mut self, timeline_id: &str) {
         self.store
             .apply(&Batch {
-                ops: vec![IngestOp::Message(Box::new(message(timeline_id)))],
+                ops: IngestOp::project_message(message(timeline_id)),
                 checkpoints: vec![],
                 source: Some(SourceWrite {
                     cursor_id: self.cursor,
@@ -234,7 +239,7 @@ fn generation_swap_forces_a_replacement_snapshot() {
     // The source rewrites: stage a replacement generation and activate it.
     h.store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message("rewritten")))],
+            ops: IngestOp::project_message(message("rewritten")),
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: h.cursor,

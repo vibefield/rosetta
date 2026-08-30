@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_core::rows::{
     DriftFact, MessageKind, MessageRow, Ms, SessionRole, SessionRow, StreamState, TokenSnapshot,
     WorkspaceObsRow,
@@ -109,7 +111,7 @@ pub fn ingest_line(
     };
 
     let mut ops = Vec::new();
-    project(ctx, state, &record, &mut ops);
+    project(ctx, state, stream_id, &record, &mut ops);
 
     let paths = record.drift_paths();
     if !paths.is_empty() {
@@ -128,6 +130,7 @@ pub fn ingest_line(
 fn project(
     ctx: &mut NormalizeCtx,
     state: &mut PiState,
+    stream_id: &str,
     record: &KnownRecord,
     ops: &mut Vec<IngestOp>,
 ) {
@@ -159,7 +162,7 @@ fn project(
                 }
             }
         }
-        KnownRecord::Message(entry) => message_entry(ctx, state, entry, ops),
+        KnownRecord::Message(entry) => message_entry(ctx, state, stream_id, entry, ops),
         KnownRecord::Compaction(entry) => compaction_entry(ctx, state, entry, ops),
         KnownRecord::BranchSummary(entry) => branch_summary_entry(ctx, state, entry, ops),
         KnownRecord::CustomMessage(entry) => custom_message_entry(ctx, state, entry, ops),
@@ -240,6 +243,7 @@ fn session_row(
 fn message_entry(
     ctx: &mut NormalizeCtx,
     state: &mut PiState,
+    stream_id: &str,
     entry: &MessageEntry,
     ops: &mut Vec<IngestOp>,
 ) {
@@ -249,11 +253,12 @@ fn message_entry(
         AgentMessage::Known(KnownMessage::User(message)) => {
             let mut row = row(ctx, entry, &entry.id, MessageKind::User, ts, None, None);
             row.content = user_content_text(&message.content);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
         }
         AgentMessage::Known(KnownMessage::Assistant(message)) => {
             assistant_message(
                 ctx,
+                stream_id,
                 state.header.as_ref().map(|header| header.cwd.as_str()),
                 entry,
                 message,
@@ -266,7 +271,7 @@ fn message_entry(
             tool_result(ctx, message, ts, ops);
         }
         AgentMessage::Known(KnownMessage::BashExecution(message)) => {
-            bash_execution(ctx, entry, message, ts, ops);
+            bash_execution(ctx, stream_id, entry, message, ts, ops);
         }
         AgentMessage::Known(KnownMessage::Custom(message)) => {
             custom_role_message(ctx, entry, message, ts, ops);
@@ -284,8 +289,12 @@ fn message_entry(
     state.remember(&entry.id, inherited);
 }
 
+// A native message needs both inherited branch context and projection output;
+// keeping those explicit prevents hidden state from entering normalization.
+#[allow(clippy::too_many_arguments)]
 fn assistant_message(
     ctx: &mut NormalizeCtx,
+    stream_id: &str,
     cwd: Option<&str>,
     entry: &MessageEntry,
     message: &AssistantMessage,
@@ -339,16 +348,25 @@ fn assistant_message(
                     Some(model),
                     inherited.effort.as_deref(),
                 );
-                row.tool = Some(
-                    crate::tool::project_request(
-                        ctx.agent_version.as_deref(),
-                        name,
-                        arguments,
-                        cwd,
-                        id,
-                        Some(id),
-                    )
-                    .unwrap_or_else(|_| {
+                let projected = crate::tool::project_request(
+                    ctx.agent_version.as_deref(),
+                    name,
+                    arguments,
+                    cwd,
+                    id,
+                    Some(id),
+                );
+                row.tool = Some(match projected {
+                    Ok(tool) => tool,
+                    Err(error) => {
+                        ops.push(drift(
+                            ctx,
+                            stream_id,
+                            &projection_record_kind("request", None, name),
+                            error.drift_code(),
+                            &projection_shape_paths(arguments),
+                            ts,
+                        ));
                         unknown_interaction(
                             id,
                             CorrelationDerivation::NativeId,
@@ -357,8 +375,8 @@ fn assistant_message(
                             name,
                             None,
                         )
-                    }),
-                );
+                    }
+                });
                 rows.push(row);
             }
             // Images have no canonical bitmap row. Unknown blocks are drifted
@@ -379,7 +397,9 @@ fn assistant_message(
         ));
     }
     attach_usage(&mut rows, &message.usage);
-    ops.extend(rows.into_iter().map(|row| IngestOp::Message(Box::new(row))));
+    for row in rows {
+        IngestOp::push_message(ops, row);
+    }
 }
 
 fn tool_result(
@@ -396,19 +416,20 @@ fn tool_result(
         session_id: ctx.session_id.clone(),
         correlation_key: message.tool_call_id.clone(),
         evidence: ctx.evidence(0),
-        patch: terminal_update(
+        patch: Box::new(terminal_update(
             Some(message.is_error),
             true,
             StatusBasis::NativeTerminalRecord,
             ts,
             diagnostic.as_deref(),
-        ),
+        )),
         at: ts,
     });
 }
 
 fn bash_execution(
     ctx: &mut NormalizeCtx,
+    stream_id: &str,
     entry: &MessageEntry,
     message: &BashExecutionMessage,
     ts: Option<Ms>,
@@ -421,24 +442,36 @@ fn bash_execution(
     };
     let mut row = row(ctx, entry, &entry.id, MessageKind::ToolUse, ts, None, None);
     let cwd = None;
-    let mut tool = crate::tool::project_request(
+    let input = json!({"command": message.command});
+    let projected = crate::tool::project_request(
         ctx.agent_version.as_deref(),
         "BashExecution",
-        &json!({"command": message.command}),
+        &input,
         cwd,
         &entry.id,
         None,
-    )
-    .unwrap_or_else(|_| {
-        unknown_interaction(
-            &entry.id,
-            CorrelationDerivation::Synthetic,
-            None,
-            None,
-            "BashExecution",
-            None,
-        )
-    });
+    );
+    let mut tool = match projected {
+        Ok(tool) => tool,
+        Err(error) => {
+            ops.push(drift(
+                ctx,
+                stream_id,
+                &projection_record_kind("request", None, "BashExecution"),
+                error.drift_code(),
+                &projection_shape_paths(&input),
+                ts,
+            ));
+            unknown_interaction(
+                &entry.id,
+                CorrelationDerivation::Synthetic,
+                None,
+                None,
+                "BashExecution",
+                None,
+            )
+        }
+    };
     let patch = terminal_update(
         is_error,
         false,
@@ -454,7 +487,7 @@ fn bash_execution(
     tool.failure = patch.failure;
     tool.timing = patch.timing;
     row.tool = Some(tool);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
 fn custom_role_message(
@@ -467,7 +500,7 @@ fn custom_role_message(
     let mut row = row(ctx, entry, &entry.id, MessageKind::System, ts, None, None);
     row.subtype = Some(message.custom_type.clone());
     row.content = user_content_text(&message.content);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
 fn branch_summary_message(
@@ -489,7 +522,7 @@ fn branch_summary_message(
     );
     row.subtype = Some("branch_summary".to_owned());
     row.content = Some(message.summary.clone());
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
 fn compaction_summary_message(
@@ -511,7 +544,7 @@ fn compaction_summary_message(
     );
     row.subtype = Some("compaction_summary".to_owned());
     row.content = Some(message.summary.clone());
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
 fn compaction_entry(
@@ -532,7 +565,7 @@ fn compaction_entry(
     row.subtype = Some("compaction".to_owned());
     row.content = Some(entry.summary.clone());
     row.usage = entry.usage.as_ref().map(usage_snapshot);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
     state.remember(&entry.id, inherited);
 }
 
@@ -554,7 +587,7 @@ fn branch_summary_entry(
     row.subtype = Some("branch_summary".to_owned());
     row.content = Some(entry.summary.clone());
     row.usage = entry.usage.as_ref().map(usage_snapshot);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
     state.remember(&entry.id, inherited);
 }
 
@@ -575,7 +608,7 @@ fn custom_message_entry(
     );
     row.subtype = Some(entry.custom_type.clone());
     row.content = user_content_text(&entry.content);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
     state.remember(&entry.id, inherited);
 }
 
@@ -645,6 +678,11 @@ fn make_row(
         effort: effort.map(str::to_owned),
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),

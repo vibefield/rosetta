@@ -66,15 +66,13 @@ pub(super) fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), St
 }
 
 pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), StoreError> {
-    let title_rank = row.title.as_ref().map_or(0, |_| TitleKind::Explicit.rank());
-    let title_at = row.title.as_ref().map(|_| row.updated_at);
     tx.prepare_cached(
         "INSERT INTO session
            (id, native_session_id, runtime_id, project_id, parent_session_id,
             root_session_id, role, title, meta_title, meta_title_rank, meta_title_at,
             summary, started_at, updated_at, stream_state, project_assigned_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                 CASE WHEN ?4 IS NULL THEN NULL ELSE ?12 END)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, 0, NULL, ?8, ?9, ?10,
+                 ?11, CASE WHEN ?4 IS NULL THEN NULL ELSE ?9 END)
          ON CONFLICT(id) DO UPDATE SET
            project_id = CASE
              WHEN excluded.project_id IS NULL THEN session.project_id
@@ -113,37 +111,6 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
                   (CASE excluded.role
                      WHEN 'team' THEN 2 WHEN 'subagent' THEN 1 ELSE 0 END)
                THEN session.role ELSE excluded.role END,
-           title = COALESCE(excluded.title, session.title),
-           meta_title = CASE
-             WHEN excluded.meta_title IS NOT NULL AND (
-               session.meta_title IS NULL
-               OR excluded.meta_title_rank > session.meta_title_rank
-               OR (excluded.meta_title_rank = session.meta_title_rank AND (
-                 (excluded.meta_title_at IS NOT NULL AND session.meta_title_at IS NULL)
-                 OR excluded.meta_title_at > session.meta_title_at
-                 OR (excluded.meta_title_at IS session.meta_title_at
-                     AND excluded.meta_title < session.meta_title))))
-             THEN excluded.meta_title ELSE session.meta_title END,
-           meta_title_rank = CASE
-             WHEN excluded.meta_title IS NOT NULL AND (
-               session.meta_title IS NULL
-               OR excluded.meta_title_rank > session.meta_title_rank
-               OR (excluded.meta_title_rank = session.meta_title_rank AND (
-                 (excluded.meta_title_at IS NOT NULL AND session.meta_title_at IS NULL)
-                 OR excluded.meta_title_at > session.meta_title_at
-                 OR (excluded.meta_title_at IS session.meta_title_at
-                     AND excluded.meta_title < session.meta_title))))
-             THEN excluded.meta_title_rank ELSE session.meta_title_rank END,
-           meta_title_at = CASE
-             WHEN excluded.meta_title IS NOT NULL AND (
-               session.meta_title IS NULL
-               OR excluded.meta_title_rank > session.meta_title_rank
-               OR (excluded.meta_title_rank = session.meta_title_rank AND (
-                 (excluded.meta_title_at IS NOT NULL AND session.meta_title_at IS NULL)
-                 OR excluded.meta_title_at > session.meta_title_at
-                 OR (excluded.meta_title_at IS session.meta_title_at
-                     AND excluded.meta_title < session.meta_title))))
-             THEN excluded.meta_title_at ELSE session.meta_title_at END,
            summary = COALESCE(excluded.summary, session.summary),
            started_at = MIN(session.started_at, excluded.started_at),
            updated_at = MAX(session.updated_at, excluded.updated_at),
@@ -157,14 +124,23 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
         row.parent_session_id,
         row.root_session_id,
         row.role.as_str(),
-        row.title,
-        title_rank,
-        title_at,
         row.summary,
         row.started_at,
         row.updated_at,
         row.stream_state.as_str(),
     ])?;
+    if let Some(title) = &row.title {
+        insert_session_title_fact(
+            tx,
+            &SessionTitleRow {
+                session_id: row.id.clone(),
+                title: title.clone(),
+                kind: TitleKind::Explicit,
+                at: row.updated_at,
+            },
+            None,
+        )?;
+    }
     refresh_session_title(tx, &row.id)?;
     Ok(())
 }
@@ -172,64 +148,64 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
 pub(super) fn apply_session_title(
     tx: &Transaction,
     row: &SessionTitleRow,
+    src_cursor: Option<i64>,
 ) -> Result<(), StoreError> {
-    tx.prepare_cached(
-        "UPDATE session
-         SET meta_title = ?2, meta_title_rank = ?3, meta_title_at = ?4
-         WHERE id = ?1 AND (
-           meta_title IS NULL
-           OR ?3 > meta_title_rank
-           OR (?3 = meta_title_rank AND (
-             (?4 IS NOT NULL AND meta_title_at IS NULL)
-             OR ?4 > meta_title_at
-             OR (?4 IS meta_title_at AND ?2 < meta_title))))",
-    )?
-    .execute(params![row.session_id, row.title, row.kind.rank(), row.at])?;
+    insert_session_title_fact(tx, row, src_cursor)?;
     refresh_session_title(tx, &row.session_id)?;
     Ok(())
 }
 
-/// Reconcile the public session title from source-owned singleton rows.
-/// Explicit custom titles outrank generated titles, which outrank derived
-/// fallbacks, independent of record order, batching, replay, or generation
-/// replacement. Stream and bounded-meta candidates use the same ranks.
+fn insert_session_title_fact(
+    tx: &Transaction,
+    row: &SessionTitleRow,
+    src_cursor: Option<i64>,
+) -> Result<(), StoreError> {
+    tx.prepare_cached(
+        "INSERT OR IGNORE INTO session_title_fact
+           (session_id, title, rank, at, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?
+    .execute(params![
+        row.session_id,
+        row.title,
+        row.kind.rank(),
+        row.at,
+        src_cursor,
+    ])?;
+    Ok(())
+}
+
+/// Reconcile the public session title from active source-owned and direct
+/// candidates. Timeline narrowing turns native title records into
+/// `SessionTitle` facts before SQLite, so title candidates never live in the
+/// closed message table. Equal confidence prefers native recency, then a
+/// stable lexical tie rather than ingestion order.
 pub(super) fn refresh_session_title(tx: &Transaction, session_id: &str) -> Result<(), StoreError> {
-    let streamed = tx
+    let candidate = tx
         .prepare_cached(
-            "SELECT content,
-                    CASE subtype
-                      WHEN 'custom_title' THEN 3
-                      WHEN 'ai_title' THEN 2
-                      WHEN 'title_fallback' THEN 1
-                    END AS title_rank
-             FROM message
-             WHERE session_id = ?1 AND type = 'summary'
-               AND subtype IN ('custom_title', 'ai_title', 'title_fallback')
-               AND content IS NOT NULL AND content != ''
-             ORDER BY title_rank DESC, ts DESC, ordinal DESC, id DESC
+            "SELECT title, rank, at
+             FROM session_title_fact
+             WHERE session_id = ?1
+             ORDER BY rank DESC, at DESC, title ASC
              LIMIT 1",
         )?
         .query_row(params![session_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })
         .optional()?;
-    let meta = tx
-        .prepare_cached("SELECT meta_title, meta_title_rank FROM session WHERE id = ?1")?
-        .query_row(params![session_id], |row| {
-            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
-        })
-        .optional()?;
-    let title = match (streamed, meta) {
-        (Some((streamed, streamed_rank)), Some((_meta, meta_rank)))
-            if streamed_rank >= meta_rank =>
-        {
-            Some(streamed)
-        }
-        (_, Some((meta, _))) => meta,
-        (Some((streamed, _)), None) => Some(streamed),
-        (None, None) => None,
+    let (title, rank, at) = match candidate {
+        Some((title, rank, at)) => (Some(title), rank, Some(at)),
+        None => (None, 0, None),
     };
-    tx.prepare_cached("UPDATE session SET title = ?2 WHERE id = ?1")?
-        .execute(params![session_id, title])?;
+    tx.prepare_cached(
+        "UPDATE session
+         SET title = ?2, meta_title = ?2, meta_title_rank = ?3, meta_title_at = ?4
+         WHERE id = ?1",
+    )?
+    .execute(params![session_id, title, rank, at])?;
     Ok(())
 }

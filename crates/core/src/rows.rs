@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::timeline::ToolInteraction;
+use crate::timeline::{AttachmentRef, CitationRef, ResponseGroup, TimelineGroup, ToolInteraction};
 
 /// Unix milliseconds.
 pub type Ms = i64;
@@ -70,11 +70,12 @@ impl StreamState {
     }
 }
 
-/// One flattened timeline row type. `Agent` is the assistant text row; tool
-/// calls are their own rows with the result merged in (docs/canonical-model.html).
+/// Normalizer-local construction vocabulary. This draft never crosses the
+/// [`crate::IngestOp`] boundary; [`crate::IngestOp::project_message`] closes it
+/// into a [`crate::TimelineEntry`] or deliberately leaves native context in
+/// the raw ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum MessageKind {
     User,
     Agent,
@@ -215,7 +216,6 @@ pub struct SessionTitleRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct MessageRow {
     /// Stable, unique within the session — native uuids aren't.
     pub timeline_id: String,
@@ -232,6 +232,11 @@ pub struct MessageRow {
     pub effort: Option<String>,
     pub content: Option<String>,
     pub tool: Option<ToolCall>,
+    pub attachments: Vec<AttachmentRef>,
+    pub citations: Vec<CitationRef>,
+    pub group: Option<TimelineGroup>,
+    pub response: Option<ResponseGroup>,
+    pub block_index: Option<u32>,
     /// Anchors a spawned subagent thread to this tool_use row.
     pub branch_tool_id: Option<String>,
     pub usage: Option<TokenSnapshot>,

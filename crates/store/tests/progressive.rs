@@ -50,12 +50,23 @@ fn message(text: &str) -> MessageRow {
         effort: None,
         content: Some(text.into()),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
         src_cursor: None,
         src_offset: None,
     }
+}
+
+fn message_op(row: MessageRow) -> IngestOp {
+    let mut ops = IngestOp::project_message(row);
+    assert_eq!(ops.len(), 1);
+    ops.pop().unwrap()
 }
 
 #[test]
@@ -87,7 +98,7 @@ fn interrupted_progressive_projection_is_public_resumable_and_not_ready() {
             ops: vec![
                 IngestOp::Runtime(runtime()),
                 IngestOp::SessionMeta(session(StreamState::Indexed)),
-                IngestOp::Message(Box::new(message("visible before finalization"))),
+                message_op(message("visible before finalization")),
             ],
             checkpoints: vec![],
             source: None,
@@ -172,7 +183,7 @@ fn live_mutation_after_progressive_gate_creates_one_coalesced_repair() {
             ops: vec![
                 IngestOp::Runtime(runtime()),
                 IngestOp::SessionMeta(session(StreamState::Indexed)),
-                IngestOp::Message(Box::new(message("first"))),
+                message_op(message("first")),
             ],
             checkpoints: vec![],
             source: None,
@@ -181,14 +192,14 @@ fn live_mutation_after_progressive_gate_creates_one_coalesced_repair() {
     store.finish_progressive_load().unwrap();
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message("second")))],
+            ops: vec![message_op(message("second"))],
             checkpoints: vec![],
             source: None,
         })
         .unwrap();
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message("third")))],
+            ops: vec![message_op(message("third"))],
             checkpoints: vec![],
             source: None,
         })
@@ -293,7 +304,7 @@ fn each_public_source_activation_canonicalizes_multi_file_session_order() {
     z_message.src_offset = Some(10);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(z_message))],
+            ops: vec![message_op(z_message)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: z,
@@ -311,7 +322,7 @@ fn each_public_source_activation_canonicalizes_multi_file_session_order() {
     a_message.src_offset = Some(20);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(a_message))],
+            ops: vec![message_op(a_message)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: a,
@@ -375,7 +386,7 @@ fn path_ordered_public_sources_keep_final_ordinals_without_session_reranks() {
         row.src_offset = Some(1);
         let stats = store
             .apply(&Batch {
-                ops: vec![IngestOp::Message(Box::new(row))],
+                ops: vec![message_op(row)],
                 checkpoints: vec![],
                 source: Some(SourceWrite {
                     cursor_id: cursor,

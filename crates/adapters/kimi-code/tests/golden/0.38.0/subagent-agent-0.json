@@ -9,59 +9,70 @@
   },
   {
     "op": "message",
-    "timeline_id": "f967db0527dd2b47fb0c31067484148fd62cadcc79d50f6e5ccea576d006fc10",
-    "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
-    "ordinal": 0,
-    "kind": "system",
-    "subtype": "subagent",
-    "uuid": "msg_01M0VPWJ55RBNZ1VK51JBHQBRY",
-    "parent_uuid": null,
-    "ts": 1787636369573,
-    "model": null,
-    "effort": null,
-    "content": "<git-context status=\"unavailable\" reason=\"not-a-repo\"/>\n\nReply with a short greeting.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 6,
-    "src_offset": 20539
-  },
-  {
-    "op": "message",
     "timeline_id": "f5ff937723e98ab18d074531e7a2371f0ba3e88bd81f248b7234a118dc865289",
     "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
     "ordinal": 1,
-    "kind": "system",
-    "subtype": "permission_mode",
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787636369573,
+    "group": {
+      "id": "f5ff937723e98ab18d074531e7a2371f0ba3e88bd81f248b7234a118dc865289",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787636369573,
     "model": null,
     "effort": null,
-    "content": "<system-reminder>\nAuto permission mode is active. Tool approvals will be handled automatically while this mode remains enabled.\n  - Continue normally without pausing for approval prompts.\n  - Do NOT call AskUserQuestion while auto mode is active. Make a reasonable decision and continue without asking the user.\n  - ExitPlanMode is also approved automatically, without the user reviewing the plan. An auto-approved plan is NOT a signal from the user to start executing — follow the user's original instructions on whether to proceed.\n</system-reminder>",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 7,
-    "src_offset": 20875
+    "body": {
+      "type": "notice",
+      "notice": {
+        "type": "mode_changed",
+        "from": null,
+        "to": "normal"
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 7,
+      "src_offset": 20875
+    }
   },
   {
     "op": "message",
     "timeline_id": "c17e2254c408d671d41dacd1413fab27a5811b3deaffffe0f193068a1251ace9",
     "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
     "ordinal": 2,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": "138c5af1-0e46-49b9-a750-554ac6aea904",
-    "parent_uuid": null,
-    "ts": 1787636369581,
+    "group": {
+      "id": "c17e2254c408d671d41dacd1413fab27a5811b3deaffffe0f193068a1251ace9",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "138c5af1-0e46-49b9-a750-554ac6aea904",
+    "parent_native_id": null,
+    "at": 1787636369581,
     "model": "mock-model",
     "effort": "on",
-    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
-    "tool": null,
-    "branch_tool_id": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
     "usage": {
       "input": 128,
       "output": 32,
@@ -69,45 +80,39 @@
       "cache_write": 0,
       "thinking": null
     },
-    "agent_version": null,
-    "src_cursor": 13,
-    "src_offset": 43322
-  },
-  {
-    "op": "message",
-    "timeline_id": "73cabe28721c9e87647658ee5d82adadb25cc9a74981ee907ba1d63d6ae78bbe",
-    "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
-    "ordinal": 3,
-    "kind": "system",
-    "subtype": "subagent",
-    "uuid": "msg_01M0VPWJ5F827ZQN0VNMP85NS0",
-    "parent_uuid": null,
-    "ts": 1787636369583,
-    "model": null,
-    "effort": null,
-    "content": "Your previous response was too brief. Please provide a more comprehensive summary that includes:\n\n1. Specific technical details and implementations\n2. Detailed findings and analysis\n3. All important information that the parent agent should know",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 18,
-    "src_offset": 44800
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 13,
+      "src_offset": 43322
+    }
   },
   {
     "op": "message",
     "timeline_id": "cd7bd2dc63c53750ea54d42fadf4844ff236811eb0879de80f33a9ede97acfc8",
     "session_id": "ac5fc1e19aee15bab0f1de8e0d4c014ade5efe501b042514914dcb15f4bf835e",
     "ordinal": 4,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": "72338471-f196-4b98-99c9-f922ef438d1c",
-    "parent_uuid": null,
-    "ts": 1787636369591,
+    "group": {
+      "id": "cd7bd2dc63c53750ea54d42fadf4844ff236811eb0879de80f33a9ede97acfc8",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "72338471-f196-4b98-99c9-f922ef438d1c",
+    "parent_native_id": null,
+    "at": 1787636369591,
     "model": "mock-model",
     "effort": "on",
-    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
-    "tool": null,
-    "branch_tool_id": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
     "usage": {
       "input": 128,
       "output": 32,
@@ -115,8 +120,10 @@
       "cache_write": 0,
       "thinking": null
     },
-    "agent_version": null,
-    "src_cursor": 23,
-    "src_offset": 46197
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 23,
+      "src_offset": 46197
+    }
   }
 ]

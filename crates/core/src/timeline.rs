@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::assets::{IMAGE_ASSET_URL_PREFIX, ProjectionAsset};
 use crate::rows::{Ms, TaskStatus, TokenSnapshot};
 
 pub const INLINE_TEXT_MAX_BYTES: usize = 32 * 1024;
@@ -20,6 +21,10 @@ pub const SEARCH_PATH_LIMIT: usize = 20;
 pub const WEB_SOURCE_LIMIT: usize = 10;
 pub const CITATION_RANGE_LIMIT: usize = 40;
 pub const EXTERNAL_FIELD_LIMIT: usize = 24;
+pub const CANONICAL_LIST_LIMIT: usize = 20;
+pub const EXTERNAL_LABEL_MAX_BYTES: usize = 128;
+pub const EXTERNAL_VALUE_MAX_BYTES: usize = 1024;
+pub const DOCUMENT_MAX_DEPTH: usize = 4;
 
 macro_rules! wire_enum {
     ($name:ident { $($variant:ident),+ $(,)? }) => {
@@ -251,6 +256,67 @@ impl CanonicalText {
             Self::Member { preview, .. } => preview,
         }
     }
+
+    /// Preserve canonical text fully while keeping SQLite rows bounded. The
+    /// returned projection member must be emitted before the referencing row;
+    /// its bytes remain rebuildable from the raw ledger.
+    pub fn externalize(text: impl Into<String>) -> (Self, Option<ProjectionAsset>) {
+        let text = text.into();
+        if text.len() <= INLINE_TEXT_MAX_BYTES {
+            return (Self::Inline { text }, None);
+        }
+        let preview = utf8_prefix(&text, TEXT_PREVIEW_MAX_BYTES).to_owned();
+        let asset = ProjectionAsset::text(text);
+        let reference = AssetRef {
+            url: asset
+                .url()
+                .expect("canonical text media type has a stable extension"),
+            digest: asset.digest.clone(),
+            media_type: asset.media_type.clone(),
+            byte_len: u64::try_from(asset.bytes.len()).unwrap_or(u64::MAX),
+        };
+        (
+            Self::Member {
+                asset: reference,
+                preview,
+                byte_len: u64::try_from(asset.bytes.len()).unwrap_or(u64::MAX),
+            },
+            Some(asset),
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        match self {
+            Self::Inline { text } => bounded("canonical text", text, INLINE_TEXT_MAX_BYTES),
+            Self::Member {
+                asset,
+                preview,
+                byte_len,
+            } => {
+                asset.validate()?;
+                bounded("canonical text preview", preview, TEXT_PREVIEW_MAX_BYTES)?;
+                if *byte_len != asset.byte_len {
+                    return Err(CanonicalError::Invalid(
+                        "canonical text member byte lengths disagree".into(),
+                    ));
+                }
+                if asset.media_type != "text/plain; charset=utf-8" {
+                    return Err(CanonicalError::Invalid(
+                        "canonical text member has a non-text media type".into(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn utf8_prefix(value: &str, max_bytes: usize) -> &str {
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +327,42 @@ pub struct AssetRef {
     pub media_type: String,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub byte_len: u64,
+}
+
+impl AssetRef {
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        bounded("asset URL", &self.url, CORE_SCALAR_MAX_BYTES)?;
+        bounded("asset media type", &self.media_type, ID_MAX_BYTES)?;
+        if self.byte_len == 0 {
+            return Err(CanonicalError::Invalid(
+                "projection asset has zero declared bytes".into(),
+            ));
+        }
+        if self.digest.len() != 64
+            || !self
+                .digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(CanonicalError::Invalid(
+                "projection asset digest is not lowercase BLAKE3 hex".into(),
+            ));
+        }
+        let extension =
+            ProjectionAsset::supported_extension(&self.media_type).ok_or_else(|| {
+                CanonicalError::Invalid(format!(
+                    "unsupported projection asset media type {:?}",
+                    self.media_type
+                ))
+            })?;
+        let expected = format!("{IMAGE_ASSET_URL_PREFIX}{}.{extension}", self.digest);
+        if self.url != expected {
+            return Err(CanonicalError::Invalid(
+                "projection asset URL does not match its digest and media type".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +387,19 @@ impl ResourceRef {
             Self::Asset { asset } => &asset.url,
         }
     }
+
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        match self {
+            Self::File { path, .. } | Self::Directory { path, .. } => {
+                required_bounded("resource path", path, CORE_SCALAR_MAX_BYTES)
+            }
+            Self::Url { url } => required_bounded("resource URL", url, CORE_SCALAR_MAX_BYTES),
+            Self::Session { id } | Self::Task { id } | Self::Process { id } => {
+                required_bounded("resource id", id, ID_MAX_BYTES)
+            }
+            Self::Asset { asset } => asset.validate(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +421,55 @@ pub struct AttachmentRef {
     pub dimensions: Option<Dimensions>,
 }
 
+impl AttachmentRef {
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        bounded_option(
+            "attachment name",
+            self.name.as_deref(),
+            CORE_SCALAR_MAX_BYTES,
+        )?;
+        bounded_option(
+            "attachment media type",
+            self.media_type.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        if self.byte_len == Some(0) {
+            return Err(CanonicalError::Invalid(
+                "attachment has zero declared bytes".into(),
+            ));
+        }
+        if self
+            .dimensions
+            .is_some_and(|dimensions| dimensions.width == 0 || dimensions.height == 0)
+        {
+            return Err(CanonicalError::Invalid(
+                "attachment dimensions must be positive".into(),
+            ));
+        }
+        self.source.validate()?;
+        if let ResourceRef::Asset { asset } = &self.source {
+            if self
+                .byte_len
+                .is_some_and(|byte_len| byte_len != asset.byte_len)
+            {
+                return Err(CanonicalError::Invalid(
+                    "attachment and asset byte lengths disagree".into(),
+                ));
+            }
+            if self
+                .media_type
+                .as_deref()
+                .is_some_and(|media_type| media_type != asset.media_type)
+            {
+                return Err(CanonicalError::Invalid(
+                    "attachment and asset media types disagree".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TextRange {
@@ -321,6 +485,54 @@ pub struct CitationRef {
     pub title: Option<String>,
     pub source: Option<ResourceRef>,
     pub message_ranges: Vec<TextRange>,
+}
+
+impl CitationRef {
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        bounded_option(
+            "citation source id",
+            self.source_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option("citation provider", self.provider.as_deref(), ID_MAX_BYTES)?;
+        bounded_option(
+            "citation title",
+            self.title.as_deref(),
+            CORE_SCALAR_MAX_BYTES,
+        )?;
+        if let Some(source) = &self.source {
+            source.validate()?;
+        }
+        bounded_collection(
+            "citation message ranges",
+            self.message_ranges.len(),
+            CITATION_RANGE_LIMIT,
+        )?;
+        let mut prior_end = 0;
+        for (index, range) in self.message_ranges.iter().enumerate() {
+            if range.start >= range.end {
+                return Err(CanonicalError::Invalid(
+                    "citation range must have positive width".into(),
+                ));
+            }
+            if index > 0 && range.start < prior_end {
+                return Err(CanonicalError::Invalid(
+                    "citation ranges must be ordered and non-overlapping".into(),
+                ));
+            }
+            prior_end = range.end;
+        }
+        if self.source_id.is_none()
+            && self.provider.is_none()
+            && self.title.is_none()
+            && self.source.is_none()
+        {
+            return Err(CanonicalError::Invalid(
+                "citation has no source identity".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -428,6 +640,45 @@ pub enum Notice {
         kind: RuntimeErrorKind,
         summary: String,
     },
+}
+
+impl Notice {
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        match self {
+            Self::Compaction { reason } => bounded_option(
+                "compaction reason",
+                reason.as_deref(),
+                CORE_SCALAR_MAX_BYTES,
+            )?,
+            Self::Truncation { .. } | Self::ModeChanged { .. } => {}
+            Self::ModelChanged { from, to } => {
+                bounded_option("prior model", from.as_deref(), ID_MAX_BYTES)?;
+                required_bounded("model", to, ID_MAX_BYTES)?;
+            }
+            Self::WorkspaceChanged { cwd, git_branch } => {
+                required_bounded("workspace", cwd, CORE_SCALAR_MAX_BYTES)?;
+                bounded_option("git branch", git_branch.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+            }
+            Self::PermissionRequested { request_id, scope } => {
+                bounded_option("permission request id", request_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("permission scope", scope.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+            }
+            Self::PermissionDecision { scope, .. } => {
+                bounded_option("permission scope", scope.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+            }
+            Self::Handoff {
+                to_session_id,
+                to_agent,
+            } => {
+                bounded_option("handoff session id", to_session_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("handoff agent", to_agent.as_deref(), ID_MAX_BYTES)?;
+            }
+            Self::RuntimeError { summary, .. } => {
+                required_bounded("runtime error summary", summary, FAILURE_SUMMARY_MAX_BYTES)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -958,6 +1209,816 @@ impl ToolAction {
             Self::Unknown {} => ToolActionKind::Unknown,
         }
     }
+
+    /// Move every lossless user-facing text field above the inline limit into
+    /// a content-addressed projection member. Adapter projectors construct a
+    /// typed draft; the central message boundary performs this exhaustive
+    /// walk so no adapter can forget to emit the member bytes.
+    pub(crate) fn externalize_text_members(&mut self) -> Vec<ProjectionAsset> {
+        let mut assets = Vec::new();
+        match self {
+            Self::FileChange { changes } => {
+                for change in changes {
+                    externalize_optional_text(&mut change.diff, &mut assets);
+                }
+            }
+            Self::Shell { command, .. } => externalize_text(command, &mut assets),
+            Self::CodeExecute { code, .. } => externalize_text(code, &mut assets),
+            Self::Process { input, .. } => externalize_optional_text(input, &mut assets),
+            Self::Delegate {
+                objective,
+                orphan_result_summary,
+                ..
+            } => {
+                externalize_text(objective, &mut assets);
+                externalize_optional_text(orphan_result_summary, &mut assets);
+            }
+            Self::Task { description, .. } => externalize_optional_text(description, &mut assets),
+            Self::Plan { summary, .. } => externalize_optional_text(summary, &mut assets),
+            Self::Collaborate { body, .. } => externalize_optional_text(body, &mut assets),
+            Self::Question { questions, answers } => {
+                for question in questions {
+                    externalize_text(&mut question.prompt, &mut assets);
+                }
+                for answer in answers {
+                    for value in &mut answer.values {
+                        externalize_text(value, &mut assets);
+                    }
+                }
+            }
+            Self::Skill { arguments, .. } => externalize_optional_text(arguments, &mut assets),
+            Self::Workflow {
+                arguments,
+                objective,
+                ..
+            } => {
+                externalize_optional_text(arguments, &mut assets);
+                externalize_optional_text(objective, &mut assets);
+            }
+            Self::Schedule { objective, .. } => externalize_optional_text(objective, &mut assets),
+            Self::Artifact { description, .. } => {
+                externalize_optional_text(description, &mut assets)
+            }
+            Self::Finding { findings, .. } => {
+                for finding in findings {
+                    externalize_optional_text(&mut finding.summary, &mut assets);
+                }
+            }
+            Self::Notification { summary, .. } => externalize_text(summary, &mut assets),
+            Self::StructuredOutput { document } => {
+                if let CanonicalDocument::Inline { summary, .. } = document {
+                    externalize_optional_text(summary, &mut assets);
+                }
+                externalize_document(document, &mut assets);
+            }
+            Self::FileRead { .. }
+            | Self::FileList { .. }
+            | Self::FileSearch { .. }
+            | Self::CodeLookup { .. }
+            | Self::Orchestration { .. }
+            | Self::WebSearch { .. }
+            | Self::WebNavigate { .. }
+            | Self::WebFetch { .. }
+            | Self::ToolDiscovery { .. }
+            | Self::Mode { .. }
+            | Self::External { .. }
+            | Self::Unknown {} => {}
+        }
+        assets
+    }
+
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        match self {
+            Self::FileRead { targets, .. } => {
+                bounded_collection("file read targets", targets.len(), CANONICAL_LIST_LIMIT)?;
+                if targets.is_empty() {
+                    return Err(CanonicalError::Invalid("file read has no target".into()));
+                }
+                for target in targets {
+                    target.resource.validate()?;
+                    if target.range.as_ref().is_some_and(|range| range.start == 0) {
+                        return Err(CanonicalError::Invalid(
+                            "source ranges are one-based".into(),
+                        ));
+                    }
+                }
+            }
+            Self::FileList {
+                directory, filter, ..
+            } => {
+                directory.validate()?;
+                bounded_option("file-list filter", filter.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+            }
+            Self::FileSearch {
+                query,
+                roots,
+                filters,
+                outcome,
+                ..
+            } => {
+                required_bounded("file-search query", query, CORE_SCALAR_MAX_BYTES)?;
+                bounded_collection("file-search roots", roots.len(), CANONICAL_LIST_LIMIT)?;
+                bounded_collection("file-search filters", filters.len(), CANONICAL_LIST_LIMIT)?;
+                validate_resources(roots)?;
+                for filter in filters {
+                    required_bounded("file-search filter", &filter.value, CORE_SCALAR_MAX_BYTES)?;
+                }
+                if let Some(outcome) = outcome {
+                    bounded_collection(
+                        "file-search paths",
+                        outcome.paths.len(),
+                        SEARCH_PATH_LIMIT,
+                    )?;
+                    reduced_count(
+                        "file-search paths",
+                        outcome.paths.len(),
+                        outcome.total_paths,
+                    )?;
+                    validate_resources(&outcome.paths)?;
+                }
+            }
+            Self::CodeLookup {
+                query,
+                path,
+                outcome,
+                ..
+            } => {
+                required_bounded("code lookup query", query, CORE_SCALAR_MAX_BYTES)?;
+                validate_optional_resource(path.as_ref())?;
+                if let Some(outcome) = outcome {
+                    bounded_collection(
+                        "code locations",
+                        outcome.locations.len(),
+                        SEARCH_PATH_LIMIT,
+                    )?;
+                    reduced_count(
+                        "code locations",
+                        outcome.locations.len(),
+                        outcome.total_count,
+                    )?;
+                    for location in &outcome.locations {
+                        location.resource.validate()?;
+                        bounded_option(
+                            "code location summary",
+                            location.summary.as_deref(),
+                            CORE_SCALAR_MAX_BYTES,
+                        )?;
+                    }
+                }
+            }
+            Self::FileChange { changes } => {
+                if changes.is_empty() {
+                    return Err(CanonicalError::Invalid("file change has no paths".into()));
+                }
+                for change in changes {
+                    change.path.validate()?;
+                    validate_optional_resource(change.destination.as_ref())?;
+                    validate_optional_text(change.diff.as_ref())?;
+                }
+            }
+            Self::Shell {
+                command,
+                cwd,
+                outcome,
+                ..
+            } => {
+                validate_required_text("shell command", command)?;
+                validate_optional_resource(cwd.as_ref())?;
+                if let Some(outcome) = outcome {
+                    bounded_option("shell signal", outcome.signal.as_deref(), ID_MAX_BYTES)?;
+                    bounded_option(
+                        "shell process id",
+                        outcome.process_id.as_deref(),
+                        ID_MAX_BYTES,
+                    )?;
+                }
+            }
+            Self::CodeExecute {
+                language,
+                code,
+                cwd,
+                outcome,
+            } => {
+                bounded_option("code language", language.as_deref(), ID_MAX_BYTES)?;
+                validate_required_text("code", code)?;
+                validate_optional_resource(cwd.as_ref())?;
+                if let Some(outcome) = outcome {
+                    bounded_option("code signal", outcome.signal.as_deref(), ID_MAX_BYTES)?;
+                    bounded_option(
+                        "code process id",
+                        outcome.process_id.as_deref(),
+                        ID_MAX_BYTES,
+                    )?;
+                }
+            }
+            Self::Process {
+                process_id, input, ..
+            } => {
+                required_bounded("process id", process_id, ID_MAX_BYTES)?;
+                validate_optional_text(input.as_ref())?;
+            }
+            Self::Orchestration {
+                runtime,
+                executed_children,
+                executed_child_count,
+                ..
+            } => {
+                bounded_option("orchestration runtime", runtime.as_deref(), ID_MAX_BYTES)?;
+                bounded_collection(
+                    "executed child links",
+                    executed_children.len(),
+                    CANONICAL_LIST_LIMIT,
+                )?;
+                for child in executed_children {
+                    required_bounded("executed child id", child, ID_MAX_BYTES)?;
+                }
+                if let Some(total) = executed_child_count {
+                    reduced_count("executed child links", executed_children.len(), *total)?;
+                }
+            }
+            Self::WebSearch {
+                query,
+                allowed_domains,
+                blocked_domains,
+                outcome,
+            } => {
+                bounded_option("web-search query", query.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+                validate_scalar_list("allowed domains", allowed_domains, CANONICAL_LIST_LIMIT)?;
+                validate_scalar_list("blocked domains", blocked_domains, CANONICAL_LIST_LIMIT)?;
+                if let Some(outcome) = outcome {
+                    bounded_collection("web sources", outcome.sources.len(), WEB_SOURCE_LIMIT)?;
+                    reduced_count("web sources", outcome.sources.len(), outcome.total_count)?;
+                    for source in &outcome.sources {
+                        bounded_option(
+                            "web source title",
+                            source.title.as_deref(),
+                            CORE_SCALAR_MAX_BYTES,
+                        )?;
+                        required_bounded("web source URL", &source.url, CORE_SCALAR_MAX_BYTES)?;
+                    }
+                }
+            }
+            Self::WebNavigate {
+                url,
+                pattern,
+                outcome,
+                ..
+            } => {
+                validate_optional_resource(url.as_ref())?;
+                bounded_option(
+                    "find-in-page pattern",
+                    pattern.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                validate_fetch_outcome(outcome.as_ref())?;
+            }
+            Self::WebFetch {
+                url,
+                purpose,
+                outcome,
+            } => {
+                url.validate()?;
+                bounded_option(
+                    "web-fetch purpose",
+                    purpose.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                validate_fetch_outcome(outcome.as_ref())?;
+            }
+            Self::Delegate {
+                agent_kind,
+                name,
+                model,
+                mode,
+                objective,
+                child_session_id,
+                resume_id,
+                orphan_result_summary,
+                ..
+            } => {
+                bounded_option("delegate agent kind", agent_kind.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("delegate name", name.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("delegate model", model.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("delegate mode", mode.as_deref(), ID_MAX_BYTES)?;
+                validate_required_text("delegate objective", objective)?;
+                bounded_option(
+                    "delegate child session",
+                    child_session_id.as_deref(),
+                    ID_MAX_BYTES,
+                )?;
+                bounded_option("delegate resume id", resume_id.as_deref(), ID_MAX_BYTES)?;
+                validate_optional_text(orphan_result_summary.as_ref())?;
+                if child_session_id.is_some() && orphan_result_summary.is_some() {
+                    return Err(CanonicalError::Invalid(
+                        "delegate result summary duplicates a linked child transcript".into(),
+                    ));
+                }
+            }
+            Self::Task {
+                task_id,
+                subject,
+                description,
+                owner,
+                blocker_ids,
+                ..
+            } => {
+                bounded_option("task id", task_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("task subject", subject.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+                validate_optional_text(description.as_ref())?;
+                bounded_option("task owner", owner.as_deref(), ID_MAX_BYTES)?;
+                validate_id_list("task blocker ids", blocker_ids, CANONICAL_LIST_LIMIT)?;
+            }
+            Self::Plan {
+                plan_id,
+                title,
+                summary,
+                ..
+            } => {
+                bounded_option("plan id", plan_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("plan title", title.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+                validate_optional_text(summary.as_ref())?;
+            }
+            Self::Collaborate {
+                recipient,
+                team,
+                summary,
+                body,
+                linked_session_id,
+                delivery_id,
+                outcome,
+                ..
+            } => {
+                bounded_option(
+                    "collaboration recipient",
+                    recipient.as_deref(),
+                    ID_MAX_BYTES,
+                )?;
+                bounded_option("collaboration team", team.as_deref(), ID_MAX_BYTES)?;
+                bounded_option(
+                    "collaboration summary",
+                    summary.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                validate_optional_text(body.as_ref())?;
+                bounded_option(
+                    "collaboration session id",
+                    linked_session_id.as_deref(),
+                    ID_MAX_BYTES,
+                )?;
+                bounded_option(
+                    "collaboration delivery id",
+                    delivery_id.as_deref(),
+                    ID_MAX_BYTES,
+                )?;
+                if let Some(outcome) = outcome {
+                    bounded_collection(
+                        "collaboration participants",
+                        outcome.participants.len(),
+                        CANONICAL_LIST_LIMIT,
+                    )?;
+                    reduced_count(
+                        "collaboration participants",
+                        outcome.participants.len(),
+                        outcome.total_count,
+                    )?;
+                    for participant in &outcome.participants {
+                        required_bounded("collaborator name", &participant.name, ID_MAX_BYTES)?;
+                        bounded_option(
+                            "collaborator role",
+                            participant.role.as_deref(),
+                            ID_MAX_BYTES,
+                        )?;
+                        bounded_option(
+                            "collaborator session id",
+                            participant.session_id.as_deref(),
+                            ID_MAX_BYTES,
+                        )?;
+                    }
+                }
+            }
+            Self::Question { questions, answers } => {
+                for question in questions {
+                    required_bounded("question id", &question.id, ID_MAX_BYTES)?;
+                    validate_required_text("question prompt", &question.prompt)?;
+                    bounded_option(
+                        "question header",
+                        question.header.as_deref(),
+                        CORE_SCALAR_MAX_BYTES,
+                    )?;
+                    bounded_collection(
+                        "question options",
+                        question.options.len(),
+                        CANONICAL_LIST_LIMIT,
+                    )?;
+                    for option in &question.options {
+                        required_bounded("question option id", &option.id, ID_MAX_BYTES)?;
+                        required_bounded(
+                            "question option label",
+                            &option.label,
+                            CORE_SCALAR_MAX_BYTES,
+                        )?;
+                        bounded_option(
+                            "question option description",
+                            option.description.as_deref(),
+                            CORE_SCALAR_MAX_BYTES,
+                        )?;
+                    }
+                }
+                for answer in answers {
+                    required_bounded("answer question id", &answer.question_id, ID_MAX_BYTES)?;
+                    bounded_collection("answer values", answer.values.len(), CANONICAL_LIST_LIMIT)?;
+                    for value in &answer.values {
+                        value.validate()?;
+                    }
+                }
+            }
+            Self::Skill { name, arguments } => {
+                required_bounded("skill name", name, ID_MAX_BYTES)?;
+                validate_optional_text(arguments.as_ref())?;
+            }
+            Self::Workflow {
+                name,
+                path,
+                arguments,
+                objective,
+                resume_id,
+                ..
+            } => {
+                bounded_option("workflow name", name.as_deref(), ID_MAX_BYTES)?;
+                validate_optional_resource(path.as_ref())?;
+                validate_optional_text(arguments.as_ref())?;
+                validate_optional_text(objective.as_ref())?;
+                bounded_option("workflow resume id", resume_id.as_deref(), ID_MAX_BYTES)?;
+            }
+            Self::Schedule {
+                schedule_id,
+                reason,
+                objective,
+                ..
+            } => {
+                bounded_option("schedule id", schedule_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("schedule reason", reason.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+                validate_optional_text(objective.as_ref())?;
+            }
+            Self::Artifact {
+                name,
+                description,
+                resources,
+                media,
+                ..
+            } => {
+                bounded_option("artifact name", name.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+                validate_optional_text(description.as_ref())?;
+                bounded_collection("artifact resources", resources.len(), CANONICAL_LIST_LIMIT)?;
+                validate_resources(resources)?;
+                if let Some(media) = media {
+                    bounded_option(
+                        "artifact media type",
+                        media.media_type.as_deref(),
+                        ID_MAX_BYTES,
+                    )?;
+                }
+            }
+            Self::ToolDiscovery {
+                query,
+                matches,
+                total_count,
+            } => {
+                required_bounded("tool discovery query", query, CORE_SCALAR_MAX_BYTES)?;
+                validate_id_list("tool discovery matches", matches, CANONICAL_LIST_LIMIT)?;
+                reduced_count("tool discovery matches", matches.len(), *total_count)?;
+            }
+            Self::Mode { workspace, .. } => validate_optional_resource(workspace.as_ref())?,
+            Self::Finding {
+                findings,
+                total_count,
+            } => {
+                bounded_collection("findings", findings.len(), CANONICAL_LIST_LIMIT)?;
+                reduced_count("findings", findings.len(), *total_count)?;
+                for finding in findings {
+                    required_bounded("finding title", &finding.title, CORE_SCALAR_MAX_BYTES)?;
+                    validate_optional_text(finding.summary.as_ref())?;
+                    bounded_collection(
+                        "finding resources",
+                        finding.resources.len(),
+                        CANONICAL_LIST_LIMIT,
+                    )?;
+                    validate_resources(&finding.resources)?;
+                }
+            }
+            Self::Notification {
+                channel,
+                destination,
+                summary,
+                delivery_id,
+            } => {
+                bounded_option("notification channel", channel.as_deref(), ID_MAX_BYTES)?;
+                bounded_option(
+                    "notification destination",
+                    destination.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                validate_required_text("notification summary", summary)?;
+                bounded_option(
+                    "notification delivery id",
+                    delivery_id.as_deref(),
+                    ID_MAX_BYTES,
+                )?;
+            }
+            Self::StructuredOutput { document } => validate_document(document)?,
+            Self::External {
+                provider,
+                operation,
+                subject,
+                fields,
+                resources,
+            } => {
+                bounded_option("external provider", provider.as_deref(), ID_MAX_BYTES)?;
+                required_bounded("external operation", operation, ID_MAX_BYTES)?;
+                bounded_option(
+                    "external subject",
+                    subject.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                bounded_collection("external fields", fields.len(), EXTERNAL_FIELD_LIMIT)?;
+                bounded_collection("external resources", resources.len(), CANONICAL_LIST_LIMIT)?;
+                for field in fields {
+                    required_bounded(
+                        "external field label",
+                        &field.label,
+                        EXTERNAL_LABEL_MAX_BYTES,
+                    )?;
+                    validate_display_value(&field.value)?;
+                }
+                validate_resources(resources)?;
+            }
+            Self::Unknown {} => {}
+        }
+        Ok(())
+    }
+}
+
+fn externalize_optional_text(value: &mut Option<CanonicalText>, assets: &mut Vec<ProjectionAsset>) {
+    if let Some(value) = value {
+        externalize_text(value, assets);
+    }
+}
+
+fn externalize_text(value: &mut CanonicalText, assets: &mut Vec<ProjectionAsset>) {
+    let CanonicalText::Inline { text } = value else {
+        return;
+    };
+    if text.len() <= INLINE_TEXT_MAX_BYTES {
+        return;
+    }
+    let (replacement, asset) = CanonicalText::externalize(std::mem::take(text));
+    *value = replacement;
+    if let Some(asset) = asset {
+        assets.push(asset);
+    }
+}
+
+fn externalize_document(document: &mut CanonicalDocument, assets: &mut Vec<ProjectionAsset>) {
+    if !matches!(document, CanonicalDocument::Inline { .. }) {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(document) else {
+        return;
+    };
+    if bytes.len() <= INLINE_TEXT_MAX_BYTES {
+        return;
+    }
+    let CanonicalDocument::Inline { title, summary, .. } = document else {
+        unreachable!("document kind checked before serialization")
+    };
+    let preview = summary
+        .as_ref()
+        .map(CanonicalText::as_preview)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| std::str::from_utf8(&bytes).unwrap_or_default());
+    let preview = utf8_prefix(preview, TEXT_PREVIEW_MAX_BYTES).to_owned();
+    let title = title.clone();
+    let asset = ProjectionAsset::new("application/vnd.rosetta.canonical-document+json", bytes)
+        .expect("canonical document JSON is an allowlisted projection member");
+    let reference = AssetRef {
+        url: asset
+            .url()
+            .expect("canonical document media type has a stable extension"),
+        digest: asset.digest.clone(),
+        media_type: asset.media_type.clone(),
+        byte_len: u64::try_from(asset.bytes.len()).unwrap_or(u64::MAX),
+    };
+    *document = CanonicalDocument::Member {
+        asset: reference,
+        title,
+        preview,
+    };
+    assets.push(asset);
+}
+
+fn validate_optional_text(value: Option<&CanonicalText>) -> Result<(), CanonicalError> {
+    if let Some(value) = value {
+        value.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_required_text(
+    field: &'static str,
+    value: &CanonicalText,
+) -> Result<(), CanonicalError> {
+    value.validate()?;
+    if value.as_preview().trim().is_empty() {
+        return Err(CanonicalError::Invalid(format!("{field} is empty")));
+    }
+    Ok(())
+}
+
+fn validate_optional_resource(value: Option<&ResourceRef>) -> Result<(), CanonicalError> {
+    if let Some(value) = value {
+        value.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_resources(values: &[ResourceRef]) -> Result<(), CanonicalError> {
+    for value in values {
+        value.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_scalar_list(
+    field: &'static str,
+    values: &[String],
+    limit: usize,
+) -> Result<(), CanonicalError> {
+    bounded_collection(field, values.len(), limit)?;
+    for value in values {
+        required_bounded(field, value, CORE_SCALAR_MAX_BYTES)?;
+    }
+    Ok(())
+}
+
+fn validate_id_list(
+    field: &'static str,
+    values: &[String],
+    limit: usize,
+) -> Result<(), CanonicalError> {
+    bounded_collection(field, values.len(), limit)?;
+    for value in values {
+        required_bounded(field, value, ID_MAX_BYTES)?;
+    }
+    Ok(())
+}
+
+fn validate_fetch_outcome(value: Option<&FetchOutcome>) -> Result<(), CanonicalError> {
+    if let Some(value) = value {
+        bounded_option(
+            "fetch final URL",
+            value.final_url.as_deref(),
+            CORE_SCALAR_MAX_BYTES,
+        )?;
+        bounded_option("fetch title", value.title.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+    }
+    Ok(())
+}
+
+fn reduced_count(field: &'static str, retained: usize, total: u64) -> Result<(), CanonicalError> {
+    if total < u64::try_from(retained).unwrap_or(u64::MAX) {
+        return Err(CanonicalError::Invalid(format!(
+            "{field} total is smaller than the retained list"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_display_scalar(value: &DisplayScalar) -> Result<(), CanonicalError> {
+    match value {
+        DisplayScalar::Text(value) | DisplayScalar::Number(value) => {
+            bounded("external scalar", value, EXTERNAL_VALUE_MAX_BYTES)
+        }
+        DisplayScalar::Boolean(_) => Ok(()),
+    }
+}
+
+fn validate_display_value(value: &DisplayValue) -> Result<(), CanonicalError> {
+    match value {
+        DisplayValue::Text(value) | DisplayValue::Number(value) => {
+            bounded("external value", value, EXTERNAL_VALUE_MAX_BYTES)
+        }
+        DisplayValue::Boolean(_) => Ok(()),
+        DisplayValue::Resource(resource) => resource.validate(),
+        DisplayValue::List(values) => {
+            bounded_collection("external list values", values.len(), CANONICAL_LIST_LIMIT)?;
+            for value in values {
+                validate_display_scalar(value)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_document(document: &CanonicalDocument) -> Result<(), CanonicalError> {
+    match document {
+        CanonicalDocument::Inline {
+            title,
+            summary,
+            blocks,
+            resources,
+        } => {
+            bounded_option("document title", title.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+            validate_optional_text(summary.as_ref())?;
+            validate_document_blocks(blocks, 1)?;
+            validate_resources(resources)?;
+            let bytes = serde_json::to_vec(document)
+                .map_err(|error| CanonicalError::Invalid(error.to_string()))?
+                .len();
+            if bytes > INLINE_TEXT_MAX_BYTES {
+                return Err(CanonicalError::Overflow {
+                    field: "canonical document",
+                    bytes,
+                    limit: INLINE_TEXT_MAX_BYTES,
+                });
+            }
+        }
+        CanonicalDocument::Member {
+            asset,
+            title,
+            preview,
+        } => {
+            asset.validate()?;
+            if asset.media_type != "application/vnd.rosetta.canonical-document+json" {
+                return Err(CanonicalError::Invalid(
+                    "canonical document member has the wrong media type".into(),
+                ));
+            }
+            bounded_option("document title", title.as_deref(), CORE_SCALAR_MAX_BYTES)?;
+            bounded("document preview", preview, TEXT_PREVIEW_MAX_BYTES)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_document_blocks(blocks: &[DocumentBlock], depth: usize) -> Result<(), CanonicalError> {
+    if depth > DOCUMENT_MAX_DEPTH {
+        return Err(CanonicalError::Invalid(
+            "canonical document exceeds maximum section depth".into(),
+        ));
+    }
+    for block in blocks {
+        match block {
+            DocumentBlock::Field { field } => {
+                required_bounded(
+                    "document field label",
+                    &field.label,
+                    EXTERNAL_LABEL_MAX_BYTES,
+                )?;
+                validate_display_value(&field.value)?;
+            }
+            DocumentBlock::List { heading, items } => {
+                bounded_option(
+                    "document list heading",
+                    heading.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                for item in items {
+                    validate_display_scalar(item)?;
+                }
+            }
+            DocumentBlock::Table {
+                heading,
+                columns,
+                rows,
+                total_rows,
+            } => {
+                bounded_option(
+                    "document table heading",
+                    heading.as_deref(),
+                    CORE_SCALAR_MAX_BYTES,
+                )?;
+                for column in columns {
+                    required_bounded("document table column", column, EXTERNAL_LABEL_MAX_BYTES)?;
+                }
+                reduced_count("document table rows", rows.len(), *total_rows)?;
+                for row in rows {
+                    if row.len() != columns.len() {
+                        return Err(CanonicalError::Invalid(
+                            "document table row width does not match its columns".into(),
+                        ));
+                    }
+                    for value in row {
+                        validate_display_scalar(value)?;
+                    }
+                }
+            }
+            DocumentBlock::Section { heading, blocks } => {
+                required_bounded("document section heading", heading, CORE_SCALAR_MAX_BYTES)?;
+                validate_document_blocks(blocks, depth + 1)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -999,8 +2060,19 @@ impl ToolInteraction {
     }
 
     pub fn validate(&self) -> Result<(), CanonicalError> {
-        bounded("tool correlation key", &self.correlation.key, ID_MAX_BYTES)?;
-        bounded("tool name", &self.native.name, ID_MAX_BYTES)?;
+        required_bounded("tool correlation key", &self.correlation.key, ID_MAX_BYTES)?;
+        required_bounded("tool name", &self.native.name, ID_MAX_BYTES)?;
+        bounded_option("tool native id", self.native.id.as_deref(), ID_MAX_BYTES)?;
+        bounded_option(
+            "tool namespace",
+            self.native.namespace.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option(
+            "tool provider",
+            self.native.provider.as_deref(),
+            ID_MAX_BYTES,
+        )?;
         if self.status.basis == StatusBasis::SourceFinalization
             && self.status.value != ToolStatus::Unknown
         {
@@ -1025,17 +2097,17 @@ impl ToolInteraction {
                 }
             }
         }
-        if let Some(timing) = self.timing {
-            if timing
+        if let Some(timing) = self.timing
+            && timing
                 .completed_at
                 .zip(timing.started_at)
                 .is_some_and(|(end, start)| end < start)
-            {
-                return Err(CanonicalError::Invalid(
-                    "tool completion precedes tool start".into(),
-                ));
-            }
+        {
+            return Err(CanonicalError::Invalid(
+                "tool completion precedes tool start".into(),
+            ));
         }
+        self.action.validate()?;
         Ok(())
     }
 
@@ -1055,11 +2127,13 @@ impl ToolInteraction {
                 rank: 100,
                 order: evidence.clone(),
             };
-            if stamp_wins(state.native_id.as_ref(), &stamp) {
-                self.native.id = Some(native_id.clone());
-                state.native_id = Some(stamp);
-                changed = true;
-            }
+            changed |= merge_optional_value(
+                &mut self.native.id,
+                &Some(native_id.clone()),
+                state,
+                ToolField::NativeId,
+                &stamp,
+            );
         }
 
         if let Some(request) = &patch.request {
@@ -1068,11 +2142,13 @@ impl ToolInteraction {
                 rank: 100,
                 order: evidence.clone(),
             };
-            if stamp_wins(state.request.as_ref(), &stamp) {
-                self.action = request.action.clone();
-                state.request = Some(stamp);
-                changed = true;
-            }
+            changed |= merge_action_fields(
+                &mut self.action,
+                &request.action,
+                ToolPatchPhase::Request,
+                state,
+                &stamp,
+            );
         }
 
         if let Some(outcome) = &patch.outcome {
@@ -1081,14 +2157,13 @@ impl ToolInteraction {
                 rank: 110,
                 order: evidence.clone(),
             };
-            if stamp_wins(state.outcome.as_ref(), &stamp) {
-                // Outcome projectors currently produce the complete closed
-                // action variant. There is still no native-object escape
-                // hatch, and family changes are rejected above.
-                self.action = outcome.action.clone();
-                state.outcome = Some(stamp);
-                changed = true;
-            }
+            changed |= merge_action_fields(
+                &mut self.action,
+                &outcome.action,
+                ToolPatchPhase::Outcome,
+                state,
+                &stamp,
+            );
         }
 
         if let Some(status) = patch.status {
@@ -1096,11 +2171,13 @@ impl ToolInteraction {
                 rank: status_rank(status.basis),
                 order: evidence.clone(),
             };
-            if stamp_wins(state.status.as_ref(), &stamp) {
-                self.status = status;
-                state.status = Some(stamp);
-                changed = true;
-            }
+            changed |= merge_required_value(
+                &mut self.status,
+                &status,
+                state,
+                ToolField::LifecycleStatus,
+                &stamp,
+            );
         }
 
         if let Some(failure) = &patch.failure {
@@ -1108,9 +2185,34 @@ impl ToolInteraction {
                 rank: patch.status.map_or(100, |status| status_rank(status.basis)),
                 order: evidence.clone(),
             };
-            if stamp_wins(state.failure.as_ref(), &stamp) {
-                self.failure = Some(failure.clone());
-                state.failure = Some(stamp);
+            let mut merged = self.failure.clone().unwrap_or(ToolFailure {
+                kind: failure.kind,
+                summary: None,
+                diagnostic: None,
+            });
+            let mut failure_changed = merge_required_value(
+                &mut merged.kind,
+                &failure.kind,
+                state,
+                ToolField::FailureKind,
+                &stamp,
+            );
+            failure_changed |= merge_optional_value(
+                &mut merged.summary,
+                &failure.summary,
+                state,
+                ToolField::FailureSummary,
+                &stamp,
+            );
+            failure_changed |= merge_optional_value(
+                &mut merged.diagnostic,
+                &failure.diagnostic,
+                state,
+                ToolField::FailureDiagnostic,
+                &stamp,
+            );
+            if failure_changed {
+                self.failure = Some(merged);
                 changed = true;
             }
         }
@@ -1120,9 +2222,34 @@ impl ToolInteraction {
                 rank: patch.status.map_or(100, |status| status_rank(status.basis)),
                 order: evidence.clone(),
             };
-            if stamp_wins(state.timing.as_ref(), &stamp) {
-                self.timing = Some(timing);
-                state.timing = Some(stamp);
+            let mut merged = self.timing.unwrap_or(ToolTiming {
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            });
+            let mut timing_changed = merge_optional_value(
+                &mut merged.started_at,
+                &timing.started_at,
+                state,
+                ToolField::StartedAt,
+                &stamp,
+            );
+            timing_changed |= merge_optional_value(
+                &mut merged.completed_at,
+                &timing.completed_at,
+                state,
+                ToolField::CompletedAt,
+                &stamp,
+            );
+            timing_changed |= merge_optional_value(
+                &mut merged.duration_ms,
+                &timing.duration_ms,
+                state,
+                ToolField::DurationMs,
+                &stamp,
+            );
+            if timing_changed {
+                self.timing = Some(merged);
                 changed = true;
             }
         }
@@ -1177,11 +2304,798 @@ fn checked_action_family(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolPatchPhase {
+    Request,
+    Outcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ToolField {
+    NativeId,
+    LifecycleStatus,
+    FailureKind,
+    FailureSummary,
+    FailureDiagnostic,
+    StartedAt,
+    CompletedAt,
+    DurationMs,
+    Targets,
+    Outcome,
+    Directory,
+    Depth,
+    Filter,
+    Query,
+    Mode,
+    Roots,
+    Filters,
+    Operation,
+    Path,
+    Changes,
+    Command,
+    Cwd,
+    TimeoutMs,
+    Background,
+    Language,
+    Code,
+    ProcessId,
+    Input,
+    Runtime,
+    Trace,
+    ExecutedChildren,
+    ExecutedChildCount,
+    AllowedDomains,
+    BlockedDomains,
+    Url,
+    Pattern,
+    Purpose,
+    AgentKind,
+    Name,
+    Model,
+    Objective,
+    ChildSessionId,
+    ResumeId,
+    OrphanResultSummary,
+    TaskId,
+    Subject,
+    Description,
+    TaskStatus,
+    Owner,
+    BlockerIds,
+    PlanId,
+    Title,
+    Summary,
+    StepCount,
+    Recipient,
+    Team,
+    Body,
+    LinkedSessionId,
+    DeliveryId,
+    Questions,
+    Answers,
+    Arguments,
+    ScheduleId,
+    DueAt,
+    DelayMs,
+    Reason,
+    ArtifactKind,
+    Resources,
+    Media,
+    Matches,
+    TotalCount,
+    Workspace,
+    Findings,
+    Channel,
+    Destination,
+    Document,
+    Provider,
+    Fields,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ToolFieldStamp {
+    field: ToolField,
+    stamp: EvidenceStamp,
+}
+
 fn stamp_wins(current: Option<&EvidenceStamp>, incoming: &EvidenceStamp) -> bool {
     current.is_none_or(|current| {
         incoming.rank > current.rank
             || (incoming.rank == current.rank && incoming.order > current.order)
     })
+}
+
+fn update_field_stamp(
+    state: &mut ToolMergeState,
+    field: ToolField,
+    incoming: &EvidenceStamp,
+) -> bool {
+    match state
+        .fields
+        .binary_search_by_key(&field, |entry| entry.field)
+    {
+        Ok(index) if stamp_wins(Some(&state.fields[index].stamp), incoming) => {
+            state.fields[index].stamp = incoming.clone();
+            true
+        }
+        Ok(_) => false,
+        Err(index) => {
+            state.fields.insert(
+                index,
+                ToolFieldStamp {
+                    field,
+                    stamp: incoming.clone(),
+                },
+            );
+            true
+        }
+    }
+}
+
+fn merge_required_value<T: Clone + PartialEq>(
+    current: &mut T,
+    incoming: &T,
+    state: &mut ToolMergeState,
+    field: ToolField,
+    stamp: &EvidenceStamp,
+) -> bool {
+    if !update_field_stamp(state, field, stamp) {
+        return false;
+    }
+    if current != incoming {
+        current.clone_from(incoming);
+    }
+    true
+}
+
+fn merge_optional_value<T: Clone + PartialEq>(
+    current: &mut Option<T>,
+    incoming: &Option<T>,
+    state: &mut ToolMergeState,
+    field: ToolField,
+    stamp: &EvidenceStamp,
+) -> bool {
+    let Some(incoming) = incoming else {
+        return false;
+    };
+    if !update_field_stamp(state, field, stamp) {
+        return false;
+    }
+    if current.as_ref() != Some(incoming) {
+        *current = Some(incoming.clone());
+    }
+    true
+}
+
+fn merge_action_fields(
+    current: &mut ToolAction,
+    incoming: &ToolAction,
+    phase: ToolPatchPhase,
+    state: &mut ToolMergeState,
+    stamp: &EvidenceStamp,
+) -> bool {
+    if current.kind() == ToolActionKind::Unknown && incoming.kind() != ToolActionKind::Unknown {
+        *current = incoming.clone();
+    }
+
+    let mut changed = false;
+    macro_rules! required {
+        ($field:ident, $current:expr, $incoming:expr) => {
+            changed |= merge_required_value($current, $incoming, state, ToolField::$field, stamp)
+        };
+    }
+    macro_rules! optional {
+        ($field:ident, $current:expr, $incoming:expr) => {
+            changed |= merge_optional_value($current, $incoming, state, ToolField::$field, stamp)
+        };
+    }
+
+    match (current, incoming) {
+        (
+            ToolAction::FileRead {
+                targets: current_targets,
+                outcome: current_outcome,
+            },
+            ToolAction::FileRead {
+                targets: incoming_targets,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => required!(Targets, current_targets, incoming_targets),
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::FileList {
+                directory: current_directory,
+                depth: current_depth,
+                filter: current_filter,
+                outcome: current_outcome,
+            },
+            ToolAction::FileList {
+                directory: incoming_directory,
+                depth: incoming_depth,
+                filter: incoming_filter,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Directory, current_directory, incoming_directory);
+                optional!(Depth, current_depth, incoming_depth);
+                optional!(Filter, current_filter, incoming_filter);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::FileSearch {
+                query: current_query,
+                mode: current_mode,
+                roots: current_roots,
+                filters: current_filters,
+                outcome: current_outcome,
+            },
+            ToolAction::FileSearch {
+                query: incoming_query,
+                mode: incoming_mode,
+                roots: incoming_roots,
+                filters: incoming_filters,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Query, current_query, incoming_query);
+                required!(Mode, current_mode, incoming_mode);
+                required!(Roots, current_roots, incoming_roots);
+                required!(Filters, current_filters, incoming_filters);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::CodeLookup {
+                operation: current_operation,
+                query: current_query,
+                path: current_path,
+                outcome: current_outcome,
+            },
+            ToolAction::CodeLookup {
+                operation: incoming_operation,
+                query: incoming_query,
+                path: incoming_path,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Operation, current_operation, incoming_operation);
+                required!(Query, current_query, incoming_query);
+                optional!(Path, current_path, incoming_path);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::FileChange {
+                changes: current_changes,
+            },
+            ToolAction::FileChange {
+                changes: incoming_changes,
+            },
+        ) => required!(Changes, current_changes, incoming_changes),
+        (
+            ToolAction::Shell {
+                command: current_command,
+                cwd: current_cwd,
+                timeout_ms: current_timeout,
+                background: current_background,
+                outcome: current_outcome,
+            },
+            ToolAction::Shell {
+                command: incoming_command,
+                cwd: incoming_cwd,
+                timeout_ms: incoming_timeout,
+                background: incoming_background,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Command, current_command, incoming_command);
+                optional!(Cwd, current_cwd, incoming_cwd);
+                optional!(TimeoutMs, current_timeout, incoming_timeout);
+                required!(Background, current_background, incoming_background);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::CodeExecute {
+                language: current_language,
+                code: current_code,
+                cwd: current_cwd,
+                outcome: current_outcome,
+            },
+            ToolAction::CodeExecute {
+                language: incoming_language,
+                code: incoming_code,
+                cwd: incoming_cwd,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                optional!(Language, current_language, incoming_language);
+                required!(Code, current_code, incoming_code);
+                optional!(Cwd, current_cwd, incoming_cwd);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::Process {
+                operation: current_operation,
+                process_id: current_process_id,
+                input: current_input,
+                outcome: current_outcome,
+            },
+            ToolAction::Process {
+                operation: incoming_operation,
+                process_id: incoming_process_id,
+                input: incoming_input,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Operation, current_operation, incoming_operation);
+                required!(ProcessId, current_process_id, incoming_process_id);
+                optional!(Input, current_input, incoming_input);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::Orchestration {
+                runtime: current_runtime,
+                trace: current_trace,
+                executed_children: current_children,
+                executed_child_count: current_count,
+            },
+            ToolAction::Orchestration {
+                runtime: incoming_runtime,
+                trace: incoming_trace,
+                executed_children: incoming_children,
+                executed_child_count: incoming_count,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                optional!(Runtime, current_runtime, incoming_runtime);
+                required!(Trace, current_trace, incoming_trace);
+            }
+            ToolPatchPhase::Outcome => {
+                required!(ExecutedChildren, current_children, incoming_children);
+                optional!(ExecutedChildCount, current_count, incoming_count);
+            }
+        },
+        (
+            ToolAction::WebSearch {
+                query: current_query,
+                allowed_domains: current_allowed,
+                blocked_domains: current_blocked,
+                outcome: current_outcome,
+            },
+            ToolAction::WebSearch {
+                query: incoming_query,
+                allowed_domains: incoming_allowed,
+                blocked_domains: incoming_blocked,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                optional!(Query, current_query, incoming_query);
+                required!(AllowedDomains, current_allowed, incoming_allowed);
+                required!(BlockedDomains, current_blocked, incoming_blocked);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::WebNavigate {
+                operation: current_operation,
+                url: current_url,
+                pattern: current_pattern,
+                outcome: current_outcome,
+            },
+            ToolAction::WebNavigate {
+                operation: incoming_operation,
+                url: incoming_url,
+                pattern: incoming_pattern,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Operation, current_operation, incoming_operation);
+                optional!(Url, current_url, incoming_url);
+                optional!(Pattern, current_pattern, incoming_pattern);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::WebFetch {
+                url: current_url,
+                purpose: current_purpose,
+                outcome: current_outcome,
+            },
+            ToolAction::WebFetch {
+                url: incoming_url,
+                purpose: incoming_purpose,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Url, current_url, incoming_url);
+                optional!(Purpose, current_purpose, incoming_purpose);
+            }
+            ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
+        },
+        (
+            ToolAction::Delegate {
+                agent_kind: current_agent_kind,
+                name: current_name,
+                model: current_model,
+                mode: current_mode,
+                objective: current_objective,
+                child_session_id: current_child_session,
+                resume_id: current_resume_id,
+                background: current_background,
+                orphan_result_summary: current_orphan_summary,
+            },
+            ToolAction::Delegate {
+                agent_kind: incoming_agent_kind,
+                name: incoming_name,
+                model: incoming_model,
+                mode: incoming_mode,
+                objective: incoming_objective,
+                child_session_id: incoming_child_session,
+                resume_id: incoming_resume_id,
+                background: incoming_background,
+                orphan_result_summary: incoming_orphan_summary,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                optional!(AgentKind, current_agent_kind, incoming_agent_kind);
+                optional!(Name, current_name, incoming_name);
+                optional!(Model, current_model, incoming_model);
+                optional!(Mode, current_mode, incoming_mode);
+                required!(Objective, current_objective, incoming_objective);
+                optional!(ResumeId, current_resume_id, incoming_resume_id);
+                required!(Background, current_background, incoming_background);
+            }
+            ToolPatchPhase::Outcome => {
+                optional!(
+                    ChildSessionId,
+                    current_child_session,
+                    incoming_child_session
+                );
+                optional!(
+                    OrphanResultSummary,
+                    current_orphan_summary,
+                    incoming_orphan_summary
+                );
+            }
+        },
+        (
+            ToolAction::Task {
+                operation: current_operation,
+                task_id: current_task_id,
+                subject: current_subject,
+                description: current_description,
+                status: current_status,
+                owner: current_owner,
+                blocker_ids: current_blockers,
+            },
+            ToolAction::Task {
+                operation: incoming_operation,
+                task_id: incoming_task_id,
+                subject: incoming_subject,
+                description: incoming_description,
+                status: incoming_status,
+                owner: incoming_owner,
+                blocker_ids: incoming_blockers,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Operation, current_operation, incoming_operation);
+                optional!(TaskId, current_task_id, incoming_task_id);
+                optional!(Subject, current_subject, incoming_subject);
+                optional!(Description, current_description, incoming_description);
+                optional!(Owner, current_owner, incoming_owner);
+                required!(BlockerIds, current_blockers, incoming_blockers);
+            }
+            ToolPatchPhase::Outcome => optional!(TaskStatus, current_status, incoming_status),
+        },
+        (
+            ToolAction::Plan {
+                operation: current_operation,
+                plan_id: current_plan_id,
+                title: current_title,
+                summary: current_summary,
+                step_count: current_step_count,
+            },
+            ToolAction::Plan {
+                operation: incoming_operation,
+                plan_id: incoming_plan_id,
+                title: incoming_title,
+                summary: incoming_summary,
+                step_count: incoming_step_count,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Request {
+                required!(Operation, current_operation, incoming_operation);
+                optional!(PlanId, current_plan_id, incoming_plan_id);
+                optional!(Title, current_title, incoming_title);
+                optional!(Summary, current_summary, incoming_summary);
+                optional!(StepCount, current_step_count, incoming_step_count);
+            }
+        }
+        (
+            ToolAction::Collaborate {
+                operation: current_operation,
+                recipient: current_recipient,
+                team: current_team,
+                summary: current_summary,
+                body: current_body,
+                linked_session_id: current_linked_session,
+                delivery_id: current_delivery_id,
+                outcome: current_outcome,
+            },
+            ToolAction::Collaborate {
+                operation: incoming_operation,
+                recipient: incoming_recipient,
+                team: incoming_team,
+                summary: incoming_summary,
+                body: incoming_body,
+                linked_session_id: incoming_linked_session,
+                delivery_id: incoming_delivery_id,
+                outcome: incoming_outcome,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Operation, current_operation, incoming_operation);
+                optional!(Recipient, current_recipient, incoming_recipient);
+                optional!(Team, current_team, incoming_team);
+                optional!(Summary, current_summary, incoming_summary);
+                optional!(Body, current_body, incoming_body);
+                optional!(
+                    LinkedSessionId,
+                    current_linked_session,
+                    incoming_linked_session
+                );
+            }
+            ToolPatchPhase::Outcome => {
+                optional!(DeliveryId, current_delivery_id, incoming_delivery_id);
+                optional!(Outcome, current_outcome, incoming_outcome);
+            }
+        },
+        (
+            ToolAction::Question {
+                questions: current_questions,
+                answers: current_answers,
+            },
+            ToolAction::Question {
+                questions: incoming_questions,
+                answers: incoming_answers,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Questions, current_questions, incoming_questions)
+            }
+            ToolPatchPhase::Outcome => required!(Answers, current_answers, incoming_answers),
+        },
+        (
+            ToolAction::Skill {
+                name: current_name,
+                arguments: current_arguments,
+            },
+            ToolAction::Skill {
+                name: incoming_name,
+                arguments: incoming_arguments,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Request {
+                required!(Name, current_name, incoming_name);
+                optional!(Arguments, current_arguments, incoming_arguments);
+            }
+        }
+        (
+            ToolAction::Workflow {
+                name: current_name,
+                path: current_path,
+                arguments: current_arguments,
+                objective: current_objective,
+                resume_id: current_resume_id,
+                background: current_background,
+            },
+            ToolAction::Workflow {
+                name: incoming_name,
+                path: incoming_path,
+                arguments: incoming_arguments,
+                objective: incoming_objective,
+                resume_id: incoming_resume_id,
+                background: incoming_background,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Request {
+                optional!(Name, current_name, incoming_name);
+                optional!(Path, current_path, incoming_path);
+                optional!(Arguments, current_arguments, incoming_arguments);
+                optional!(Objective, current_objective, incoming_objective);
+                optional!(ResumeId, current_resume_id, incoming_resume_id);
+                required!(Background, current_background, incoming_background);
+            }
+        }
+        (
+            ToolAction::Schedule {
+                operation: current_operation,
+                schedule_id: current_schedule_id,
+                due_at: current_due_at,
+                delay_ms: current_delay,
+                reason: current_reason,
+                objective: current_objective,
+            },
+            ToolAction::Schedule {
+                operation: incoming_operation,
+                schedule_id: incoming_schedule_id,
+                due_at: incoming_due_at,
+                delay_ms: incoming_delay,
+                reason: incoming_reason,
+                objective: incoming_objective,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Request {
+                required!(Operation, current_operation, incoming_operation);
+                optional!(ScheduleId, current_schedule_id, incoming_schedule_id);
+                optional!(DueAt, current_due_at, incoming_due_at);
+                optional!(DelayMs, current_delay, incoming_delay);
+                optional!(Reason, current_reason, incoming_reason);
+                optional!(Objective, current_objective, incoming_objective);
+            }
+        }
+        (
+            ToolAction::Artifact {
+                operation: current_operation,
+                artifact_kind: current_kind,
+                name: current_name,
+                description: current_description,
+                resources: current_resources,
+                media: current_media,
+            },
+            ToolAction::Artifact {
+                operation: incoming_operation,
+                artifact_kind: incoming_kind,
+                name: incoming_name,
+                description: incoming_description,
+                resources: incoming_resources,
+                media: incoming_media,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                required!(Operation, current_operation, incoming_operation);
+                required!(ArtifactKind, current_kind, incoming_kind);
+                optional!(Name, current_name, incoming_name);
+                optional!(Description, current_description, incoming_description);
+            }
+            ToolPatchPhase::Outcome => {
+                required!(Resources, current_resources, incoming_resources);
+                optional!(Media, current_media, incoming_media);
+            }
+        },
+        (
+            ToolAction::ToolDiscovery {
+                query: current_query,
+                matches: current_matches,
+                total_count: current_total,
+            },
+            ToolAction::ToolDiscovery {
+                query: incoming_query,
+                matches: incoming_matches,
+                total_count: incoming_total,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => required!(Query, current_query, incoming_query),
+            ToolPatchPhase::Outcome => {
+                required!(Matches, current_matches, incoming_matches);
+                required!(TotalCount, current_total, incoming_total);
+            }
+        },
+        (
+            ToolAction::Mode {
+                operation: current_operation,
+                mode: current_mode,
+                workspace: current_workspace,
+            },
+            ToolAction::Mode {
+                operation: incoming_operation,
+                mode: incoming_mode,
+                workspace: incoming_workspace,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Request {
+                required!(Operation, current_operation, incoming_operation);
+                required!(Mode, current_mode, incoming_mode);
+                optional!(Workspace, current_workspace, incoming_workspace);
+            }
+        }
+        (
+            ToolAction::Finding {
+                findings: current_findings,
+                total_count: current_total,
+            },
+            ToolAction::Finding {
+                findings: incoming_findings,
+                total_count: incoming_total,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Outcome {
+                required!(Findings, current_findings, incoming_findings);
+                required!(TotalCount, current_total, incoming_total);
+            }
+        }
+        (
+            ToolAction::Notification {
+                channel: current_channel,
+                destination: current_destination,
+                summary: current_summary,
+                delivery_id: current_delivery_id,
+            },
+            ToolAction::Notification {
+                channel: incoming_channel,
+                destination: incoming_destination,
+                summary: incoming_summary,
+                delivery_id: incoming_delivery_id,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                optional!(Channel, current_channel, incoming_channel);
+                optional!(Destination, current_destination, incoming_destination);
+                required!(Summary, current_summary, incoming_summary);
+            }
+            ToolPatchPhase::Outcome => {
+                optional!(DeliveryId, current_delivery_id, incoming_delivery_id)
+            }
+        },
+        (
+            ToolAction::StructuredOutput {
+                document: current_document,
+            },
+            ToolAction::StructuredOutput {
+                document: incoming_document,
+            },
+        ) => {
+            if phase == ToolPatchPhase::Outcome {
+                required!(Document, current_document, incoming_document);
+            }
+        }
+        (
+            ToolAction::External {
+                provider: current_provider,
+                operation: current_operation,
+                subject: current_subject,
+                fields: current_fields,
+                resources: current_resources,
+            },
+            ToolAction::External {
+                provider: incoming_provider,
+                operation: incoming_operation,
+                subject: incoming_subject,
+                fields: incoming_fields,
+                resources: incoming_resources,
+            },
+        ) => match phase {
+            ToolPatchPhase::Request => {
+                optional!(Provider, current_provider, incoming_provider);
+                required!(Operation, current_operation, incoming_operation);
+                optional!(Subject, current_subject, incoming_subject);
+            }
+            ToolPatchPhase::Outcome => {
+                required!(Fields, current_fields, incoming_fields);
+                required!(Resources, current_resources, incoming_resources);
+            }
+        },
+        (ToolAction::Unknown {}, ToolAction::Unknown {}) => {}
+        _ => unreachable!("tool action family was checked before field merge"),
+    }
+    changed
 }
 
 fn status_rank(basis: StatusBasis) -> u16 {
@@ -1211,7 +3125,7 @@ pub enum TimelineBody {
         text: CanonicalText,
     },
     ToolUse {
-        tool: ToolInteraction,
+        tool: Box<ToolInteraction>,
     },
     Notice {
         notice: Notice,
@@ -1219,6 +3133,29 @@ pub enum TimelineBody {
     Summary {
         purpose: SummaryPurpose,
         text: CanonicalText,
+    },
+}
+
+/// Closed non-tool payload stored in `message.detail`. Inline prose remains
+/// in the indexed `content` column; this carries only typed references and
+/// lifecycle meaning, never a native object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessageDetail {
+    Prose {
+        text_member: Option<AssetRef>,
+        attachments: Vec<AttachmentRef>,
+        citations: Vec<CitationRef>,
+    },
+    Thinking {
+        text_member: Option<AssetRef>,
+    },
+    Notice {
+        notice: Notice,
+    },
+    Summary {
+        purpose: SummaryPurpose,
+        text_member: Option<AssetRef>,
     },
 }
 
@@ -1238,18 +3175,68 @@ pub struct TimelineEntry {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub body: TimelineBody,
+    /// Native tool invocation that owns a spawned child-session entry.
+    pub parent_tool_native_id: Option<String>,
     pub usage: TokenSnapshot,
     pub provenance: Provenance,
 }
 
 impl TimelineEntry {
     pub fn validate(&self) -> Result<(), CanonicalError> {
-        bounded("timeline id", &self.timeline_id, ID_MAX_BYTES)?;
-        bounded("session id", &self.session_id, ID_MAX_BYTES)?;
-        bounded("group id", &self.group.id, ID_MAX_BYTES)?;
+        required_bounded("timeline id", &self.timeline_id, ID_MAX_BYTES)?;
+        required_bounded("session id", &self.session_id, ID_MAX_BYTES)?;
+        required_bounded("group id", &self.group.id, ID_MAX_BYTES)?;
+        if self.ordinal < 0 {
+            return Err(CanonicalError::Invalid(
+                "timeline ordinal must be non-negative".into(),
+            ));
+        }
+        if let Some(response) = &self.response {
+            required_bounded("response id", &response.id, ID_MAX_BYTES)?;
+        }
+        bounded_option("native message id", self.native_id.as_deref(), ID_MAX_BYTES)?;
+        bounded_option(
+            "parent native message id",
+            self.parent_native_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option("model", self.model.as_deref(), ID_MAX_BYTES)?;
+        bounded_option("effort", self.effort.as_deref(), ID_MAX_BYTES)?;
+        bounded_option(
+            "parent tool native id",
+            self.parent_tool_native_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option(
+            "agent version",
+            self.provenance.agent_version.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        if [
+            self.usage.input,
+            self.usage.output,
+            self.usage.cache_read,
+            self.usage.cache_write,
+            self.usage.thinking,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value < 0)
+        {
+            return Err(CanonicalError::Invalid(
+                "token snapshots cannot be negative".into(),
+            ));
+        }
         if self.response.is_some() != self.block_index.is_some() {
             return Err(CanonicalError::Invalid(
                 "response and block_index must be present together".into(),
+            ));
+        }
+        if self.parent_tool_native_id.is_some()
+            && !matches!(&self.body, TimelineBody::ToolUse { .. })
+        {
+            return Err(CanonicalError::Invalid(
+                "only tool-use entries may anchor a child session".into(),
             ));
         }
         match &self.body {
@@ -1269,8 +3256,43 @@ impl TimelineEntry {
                     "agent entry has neither text, attachments, nor citations".into(),
                 ));
             }
+            TimelineBody::User {
+                text: Some(text), ..
+            }
+            | TimelineBody::Agent {
+                text: Some(text), ..
+            }
+            | TimelineBody::Thinking { text }
+            | TimelineBody::Summary { text, .. } => text.validate()?,
             TimelineBody::ToolUse { tool } => tool.validate()?,
+            TimelineBody::Notice { notice } => notice.validate()?,
             _ => {}
+        }
+        match &self.body {
+            TimelineBody::User { attachments, .. } => {
+                bounded_collection("user attachments", attachments.len(), CANONICAL_LIST_LIMIT)?;
+                for attachment in attachments {
+                    attachment.validate()?;
+                }
+            }
+            TimelineBody::Agent {
+                attachments,
+                citations,
+                ..
+            } => {
+                bounded_collection("agent attachments", attachments.len(), CANONICAL_LIST_LIMIT)?;
+                bounded_collection("agent citations", citations.len(), CANONICAL_LIST_LIMIT)?;
+                for attachment in attachments {
+                    attachment.validate()?;
+                }
+                for citation in citations {
+                    citation.validate()?;
+                }
+            }
+            TimelineBody::ToolUse { .. } => {}
+            TimelineBody::Thinking { .. }
+            | TimelineBody::Notice { .. }
+            | TimelineBody::Summary { .. } => {}
         }
         Ok(())
     }
@@ -1348,21 +3370,32 @@ pub enum ToolMutation {
         session_id: String,
         correlation_key: String,
         evidence: EvidenceOrder,
-        patch: ToolUpdatePatch,
+        patch: Box<ToolUpdatePatch>,
     },
 }
 
-/// Private deterministic merge stamps.  One request/outcome stamp is enough
-/// because typed action merging fills absent fields regardless of age and
-/// replaces existing fields only when the incoming stamp wins.
+/// Private deterministic merge stamps. Values remain in the closed public
+/// action; this state stores only one evidence stamp per canonical field.
+/// Sorted storage makes byte serialization independent of arrival order.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolMergeState {
-    pub native_id: Option<EvidenceStamp>,
-    pub request: Option<EvidenceStamp>,
-    pub outcome: Option<EvidenceStamp>,
-    pub status: Option<EvidenceStamp>,
-    pub failure: Option<EvidenceStamp>,
-    pub timing: Option<EvidenceStamp>,
+    fields: Vec<ToolFieldStamp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchLane {
+    Prose,
+    Target,
+    Intent,
+    Change,
+    Tool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMember {
+    pub lane: SearchLane,
+    pub asset: AssetRef,
+    pub preview: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1372,6 +3405,7 @@ pub struct SearchLanes {
     pub intent: String,
     pub change: String,
     pub tool: String,
+    pub members: Vec<SearchMember>,
 }
 
 impl SearchLanes {
@@ -1384,6 +3418,24 @@ impl SearchLanes {
         }
         lane.push_str(value);
     }
+
+    fn push_text(&mut self, lane: SearchLane, value: &CanonicalText) {
+        let target = match lane {
+            SearchLane::Prose => &mut self.prose,
+            SearchLane::Target => &mut self.target,
+            SearchLane::Intent => &mut self.intent,
+            SearchLane::Change => &mut self.change,
+            SearchLane::Tool => &mut self.tool,
+        };
+        Self::push(target, value.as_preview());
+        if let CanonicalText::Member { asset, preview, .. } = value {
+            self.members.push(SearchMember {
+                lane,
+                asset: asset.clone(),
+                preview: preview.clone(),
+            });
+        }
+    }
 }
 
 impl TimelineEntry {
@@ -1394,7 +3446,7 @@ impl TimelineEntry {
         match &self.body {
             TimelineBody::User { text, attachments } => {
                 if let Some(text) = text {
-                    SearchLanes::push(&mut lanes.prose, text.as_preview());
+                    lanes.push_text(SearchLane::Prose, text);
                 }
                 for attachment in attachments {
                     SearchLanes::push(&mut lanes.target, attachment.source.display_value());
@@ -1406,7 +3458,7 @@ impl TimelineEntry {
                 citations,
             } => {
                 if let Some(text) = text {
-                    SearchLanes::push(&mut lanes.prose, text.as_preview());
+                    lanes.push_text(SearchLane::Prose, text);
                 }
                 for attachment in attachments {
                     SearchLanes::push(&mut lanes.target, attachment.source.display_value());
@@ -1421,7 +3473,7 @@ impl TimelineEntry {
                 }
             }
             TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
-                SearchLanes::push(&mut lanes.prose, text.as_preview());
+                lanes.push_text(SearchLane::Prose, text);
             }
             TimelineBody::Notice { .. } => {}
             TimelineBody::ToolUse { tool } => {
@@ -1430,6 +3482,7 @@ impl TimelineEntry {
                 SearchLanes::push(&mut lanes.intent, &tool_lanes.intent);
                 SearchLanes::push(&mut lanes.change, &tool_lanes.change);
                 SearchLanes::push(&mut lanes.tool, &tool_lanes.tool);
+                lanes.members.extend(tool_lanes.members);
             }
         }
         lanes
@@ -1478,12 +3531,12 @@ impl ToolAction {
                         resource(lanes, v);
                     }
                     if let Some(v) = &change.diff {
-                        SearchLanes::push(&mut lanes.change, v.as_preview());
+                        lanes.push_text(SearchLane::Change, v);
                     }
                 }
             }
             Self::Shell { command, cwd, .. } => {
-                SearchLanes::push(&mut lanes.intent, command.as_preview());
+                lanes.push_text(SearchLane::Intent, command);
                 if let Some(v) = cwd {
                     resource(lanes, v);
                 }
@@ -1497,7 +3550,7 @@ impl ToolAction {
                 if let Some(v) = language {
                     SearchLanes::push(&mut lanes.tool, v);
                 }
-                SearchLanes::push(&mut lanes.intent, code.as_preview());
+                lanes.push_text(SearchLane::Intent, code);
                 if let Some(v) = cwd {
                     resource(lanes, v);
                 }
@@ -1507,7 +3560,7 @@ impl ToolAction {
             } => {
                 SearchLanes::push(&mut lanes.target, process_id);
                 if let Some(v) = input {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
             }
             Self::Orchestration { .. } => {}
@@ -1584,7 +3637,7 @@ impl ToolAction {
                 if let Some(v) = name {
                     SearchLanes::push(&mut lanes.tool, v);
                 }
-                SearchLanes::push(&mut lanes.intent, objective.as_preview());
+                lanes.push_text(SearchLane::Intent, objective);
             }
             Self::Task {
                 subject,
@@ -1596,7 +3649,7 @@ impl ToolAction {
                     SearchLanes::push(&mut lanes.intent, v);
                 }
                 if let Some(v) = description {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
                 if let Some(v) = owner {
                     SearchLanes::push(&mut lanes.target, v);
@@ -1607,7 +3660,7 @@ impl ToolAction {
                     SearchLanes::push(&mut lanes.intent, v);
                 }
                 if let Some(v) = summary {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
             }
             Self::Collaborate {
@@ -1627,23 +3680,23 @@ impl ToolAction {
                     SearchLanes::push(&mut lanes.intent, v);
                 }
                 if let Some(v) = body {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
             }
             Self::Question { questions, answers } => {
                 for v in questions {
-                    SearchLanes::push(&mut lanes.intent, v.prompt.as_preview());
+                    lanes.push_text(SearchLane::Intent, &v.prompt);
                 }
                 for v in answers {
                     for answer in &v.values {
-                        SearchLanes::push(&mut lanes.intent, answer.as_preview());
+                        lanes.push_text(SearchLane::Intent, answer);
                     }
                 }
             }
             Self::Skill { name, arguments } => {
                 SearchLanes::push(&mut lanes.tool, name);
                 if let Some(v) = arguments {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
             }
             Self::Workflow {
@@ -1660,10 +3713,10 @@ impl ToolAction {
                     resource(lanes, v);
                 }
                 if let Some(v) = arguments {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
                 if let Some(v) = objective {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
             }
             Self::Schedule {
@@ -1679,7 +3732,7 @@ impl ToolAction {
                     SearchLanes::push(&mut lanes.intent, v);
                 }
                 if let Some(v) = objective {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
             }
             Self::Artifact {
@@ -1692,7 +3745,7 @@ impl ToolAction {
                     SearchLanes::push(&mut lanes.target, v);
                 }
                 if let Some(v) = description {
-                    SearchLanes::push(&mut lanes.intent, v.as_preview());
+                    lanes.push_text(SearchLane::Intent, v);
                 }
                 resources.iter().for_each(|v| resource(lanes, v));
             }
@@ -1711,7 +3764,7 @@ impl ToolAction {
                 for finding in findings {
                     SearchLanes::push(&mut lanes.intent, &finding.title);
                     if let Some(v) = &finding.summary {
-                        SearchLanes::push(&mut lanes.intent, v.as_preview());
+                        lanes.push_text(SearchLane::Intent, v);
                     }
                     finding.resources.iter().for_each(|v| resource(lanes, v));
                 }
@@ -1724,7 +3777,7 @@ impl ToolAction {
                 if let Some(v) = destination {
                     SearchLanes::push(&mut lanes.target, v);
                 }
-                SearchLanes::push(&mut lanes.intent, summary.as_preview());
+                lanes.push_text(SearchLane::Intent, summary);
             }
             Self::StructuredOutput { document } => document.extract_search(lanes),
             Self::External {
@@ -1789,7 +3842,7 @@ impl CanonicalDocument {
                     SearchLanes::push(&mut lanes.prose, v);
                 }
                 if let Some(v) = summary {
-                    SearchLanes::push(&mut lanes.prose, v.as_preview());
+                    lanes.push_text(SearchLane::Prose, v);
                 }
                 for block in blocks {
                     block.extract_search(lanes);
@@ -1905,6 +3958,37 @@ fn bounded(field: &'static str, value: &str, limit: usize) -> Result<(), Canonic
     }
 }
 
+fn required_bounded(field: &'static str, value: &str, limit: usize) -> Result<(), CanonicalError> {
+    if value.trim().is_empty() {
+        return Err(CanonicalError::Invalid(format!("{field} is empty")));
+    }
+    bounded(field, value, limit)
+}
+
+fn bounded_option(
+    field: &'static str,
+    value: Option<&str>,
+    limit: usize,
+) -> Result<(), CanonicalError> {
+    if let Some(value) = value {
+        bounded(field, value, limit)?;
+    }
+    Ok(())
+}
+
+fn bounded_collection(
+    field: &'static str,
+    count: usize,
+    limit: usize,
+) -> Result<(), CanonicalError> {
+    if count > limit {
+        return Err(CanonicalError::Invalid(format!(
+            "{field} has {count} entries; limit is {limit}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1936,6 +4020,7 @@ mod tests {
             model: None,
             effort: None,
             body,
+            parent_tool_native_id: None,
             usage: TokenSnapshot::default(),
             provenance: Provenance {
                 agent_version: None,
@@ -1966,6 +4051,76 @@ mod tests {
         assert!(row.validate().is_err());
         row.block_index = Some(0);
         assert!(row.validate().is_ok());
+    }
+
+    #[test]
+    fn attachment_references_must_match_their_content_addressed_member() {
+        let asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+        let reference = AssetRef {
+            url: asset.url().unwrap(),
+            digest: asset.digest,
+            media_type: asset.media_type,
+            byte_len: asset.bytes.len() as u64,
+        };
+        let mut row = base(TimelineBody::User {
+            text: None,
+            attachments: vec![AttachmentRef {
+                kind: AttachmentKind::Image,
+                name: None,
+                media_type: Some("image/png".into()),
+                byte_len: Some(reference.byte_len),
+                source: ResourceRef::Asset { asset: reference },
+                dimensions: None,
+            }],
+        });
+        assert!(row.validate().is_ok());
+        let TimelineBody::User { attachments, .. } = &mut row.body else {
+            unreachable!()
+        };
+        attachments[0].byte_len = Some(1);
+        assert!(row.validate().is_err());
+    }
+
+    #[test]
+    fn citation_ranges_are_bounded_ordered_unicode_spans() {
+        let mut row = base(TimelineBody::Agent {
+            text: None,
+            attachments: Vec::new(),
+            citations: vec![CitationRef {
+                source_id: Some("source-1".into()),
+                provider: None,
+                title: None,
+                source: None,
+                message_ranges: vec![TextRange { start: 3, end: 7 }],
+            }],
+        });
+        assert!(row.validate().is_ok());
+        let TimelineBody::Agent { citations, .. } = &mut row.body else {
+            unreachable!()
+        };
+        citations[0]
+            .message_ranges
+            .push(TextRange { start: 6, end: 9 });
+        assert!(row.validate().is_err());
+    }
+
+    #[test]
+    fn nested_tool_collections_cannot_bypass_the_canonical_bounds() {
+        let tool = ToolInteraction {
+            action: ToolAction::WebSearch {
+                query: Some("bounded query".into()),
+                allowed_domains: (0..=CANONICAL_LIST_LIMIT)
+                    .map(|index| format!("{index}.example"))
+                    .collect(),
+                blocked_domains: Vec::new(),
+                outcome: None,
+            },
+            ..ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "web_search")
+        };
+        let row = base(TimelineBody::ToolUse {
+            tool: Box::new(tool),
+        });
+        assert!(row.validate().is_err());
     }
 
     #[test]
@@ -2059,9 +4214,140 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_request_fields_converge_independently() {
+        fn opener() -> ToolInteraction {
+            ToolInteraction {
+                action: ToolAction::Shell {
+                    command: CanonicalText::inline("opener").unwrap(),
+                    cwd: None,
+                    timeout_ms: None,
+                    background: false,
+                    outcome: None,
+                },
+                ..ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "bash")
+            }
+        }
+        fn request(
+            command: &str,
+            cwd: Option<&str>,
+            timeout_ms: Option<u64>,
+            background: bool,
+        ) -> ToolUpdatePatch {
+            ToolUpdatePatch {
+                request: Some(ToolRequestPatch {
+                    action: ToolAction::Shell {
+                        command: CanonicalText::inline(command).unwrap(),
+                        cwd: cwd.map(|path| ResourceRef::Directory {
+                            path: path.into(),
+                            resolved: true,
+                        }),
+                        timeout_ms,
+                        background,
+                        outcome: None,
+                    },
+                }),
+                ..Default::default()
+            }
+        }
+
+        let older = request("older command", Some("/repo"), None, false);
+        let newer = request("newer command", None, Some(30_000), true);
+
+        let mut forward = opener();
+        let mut forward_state = ToolMergeState::default();
+        forward
+            .apply_patch(&mut forward_state, &newer, &evidence("a", 10))
+            .unwrap();
+        forward
+            .apply_patch(&mut forward_state, &older, &evidence("a", 5))
+            .unwrap();
+
+        let mut reverse = opener();
+        let mut reverse_state = ToolMergeState::default();
+        reverse
+            .apply_patch(&mut reverse_state, &older, &evidence("a", 5))
+            .unwrap();
+        reverse
+            .apply_patch(&mut reverse_state, &newer, &evidence("a", 10))
+            .unwrap();
+
+        assert_eq!(forward, reverse);
+        assert_eq!(forward_state, reverse_state);
+        let ToolAction::Shell {
+            command,
+            cwd,
+            timeout_ms,
+            background,
+            ..
+        } = &forward.action
+        else {
+            panic!("shell action");
+        };
+        assert_eq!(command.as_preview(), "newer command");
+        assert_eq!(cwd.as_ref().map(ResourceRef::display_value), Some("/repo"));
+        assert_eq!(*timeout_ms, Some(30_000));
+        assert!(*background);
+    }
+
+    #[test]
+    fn lifecycle_outcome_patch_cannot_replace_request_fields() {
+        let mut tool = ToolInteraction {
+            action: ToolAction::Shell {
+                command: CanonicalText::inline("keep request").unwrap(),
+                cwd: Some(ResourceRef::Directory {
+                    path: "/repo".into(),
+                    resolved: true,
+                }),
+                timeout_ms: Some(10_000),
+                background: false,
+                outcome: None,
+            },
+            ..ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "bash")
+        };
+        let patch = ToolUpdatePatch {
+            outcome: Some(ToolOutcomePatch {
+                action: ToolAction::Shell {
+                    command: CanonicalText::inline("native result copy").unwrap(),
+                    cwd: None,
+                    timeout_ms: None,
+                    background: true,
+                    outcome: Some(ShellOutcome {
+                        exit_code: Some(0),
+                        signal: None,
+                        process_id: None,
+                    }),
+                },
+            }),
+            ..Default::default()
+        };
+        tool.apply_patch(
+            &mut ToolMergeState::default(),
+            &patch,
+            &evidence("result", 1),
+        )
+        .unwrap();
+
+        let ToolAction::Shell {
+            command,
+            cwd,
+            timeout_ms,
+            background,
+            outcome,
+        } = &tool.action
+        else {
+            panic!("shell action");
+        };
+        assert_eq!(command.as_preview(), "keep request");
+        assert_eq!(cwd.as_ref().map(ResourceRef::display_value), Some("/repo"));
+        assert_eq!(*timeout_ms, Some(10_000));
+        assert!(!background);
+        assert_eq!(outcome.as_ref().and_then(|value| value.exit_code), Some(0));
+    }
+
+    #[test]
     fn search_extracts_only_declared_fields() {
         let row = base(TimelineBody::ToolUse {
-            tool: ToolInteraction {
+            tool: Box::new(ToolInteraction {
                 correlation: ToolCorrelation {
                     key: "t1".into(),
                     derivation: CorrelationDerivation::NativeId,
@@ -2092,7 +4378,7 @@ mod tests {
                 },
                 failure: None,
                 timing: None,
-            },
+            }),
         });
         let lanes = row.search_lanes();
         assert_eq!(lanes.intent, "git status");
@@ -2104,7 +4390,7 @@ mod tests {
     #[test]
     fn opaque_orchestration_is_not_searchable() {
         let row = base(TimelineBody::ToolUse {
-            tool: ToolInteraction {
+            tool: Box::new(ToolInteraction {
                 correlation: ToolCorrelation {
                     key: "opaque".into(),
                     derivation: CorrelationDerivation::Synthetic,
@@ -2127,7 +4413,7 @@ mod tests {
                 },
                 failure: None,
                 timing: None,
-            },
+            }),
         });
         assert_eq!(row.search_lanes(), SearchLanes::default());
     }
@@ -2135,7 +4421,11 @@ mod tests {
     #[test]
     fn unknown_tools_index_only_the_native_name() {
         let row = base(TimelineBody::ToolUse {
-            tool: ToolInteraction::unknown("t1", CorrelationDerivation::Synthetic, "mystery"),
+            tool: Box::new(ToolInteraction::unknown(
+                "t1",
+                CorrelationDerivation::Synthetic,
+                "mystery",
+            )),
         });
         let lanes = row.search_lanes();
         assert_eq!(lanes.tool, "mystery");

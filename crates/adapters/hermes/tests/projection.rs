@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use rosetta_adapter_hermes::{HermesAdapter, spec};
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_capture::{SnapshotOutcome, snapshot_db};
-use rosetta_core::rows::MessageKind;
-use rosetta_core::timeline::{ToolAction, ToolStatus};
+use rosetta_core::timeline::{TimelineBody, TimelineEntry, ToolAction, ToolStatus};
 use rosetta_core::{IngestOp, ids};
 
 const VERSION: &str = "0.20.5";
@@ -70,7 +69,7 @@ fn normalize_scenario(scenario: &str) -> Vec<IngestOp> {
     ops
 }
 
-fn messages(ops: &[IngestOp]) -> Vec<&rosetta_core::rows::MessageRow> {
+fn messages(ops: &[IngestOp]) -> Vec<&TimelineEntry> {
     ops.iter()
         .filter_map(|op| match op {
             IngestOp::Message(row) => Some(row.as_ref()),
@@ -79,22 +78,44 @@ fn messages(ops: &[IngestOp]) -> Vec<&rosetta_core::rows::MessageRow> {
         .collect()
 }
 
+fn body_kind(row: &TimelineEntry) -> &'static str {
+    match &row.body {
+        TimelineBody::User { .. } => "user",
+        TimelineBody::Agent { .. } => "agent",
+        TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::ToolUse { .. } => "tool_use",
+        TimelineBody::Notice { .. } => "notice",
+        TimelineBody::Summary { .. } => "summary",
+    }
+}
+
+fn text(row: &TimelineEntry) -> Option<&str> {
+    match &row.body {
+        TimelineBody::User { text, .. } | TimelineBody::Agent { text, .. } => {
+            text.as_ref().map(|text| text.as_preview())
+        }
+        TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
+            Some(text.as_preview())
+        }
+        TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
+    }
+}
+
 #[test]
-fn basic_chat_projects_system_workspace_and_flat_timeline() {
+fn basic_chat_drops_system_prompt_and_projects_flat_timeline() {
     let ops = normalize_scenario("basic-chat");
-    assert!(matches!(ops[0], IngestOp::Message(ref row) if row.kind == MessageKind::System));
     assert!(ops.iter().any(|op| matches!(op, IngestOp::WorkspaceObs(_))));
 
     let rows = messages(&ops);
     assert_eq!(
-        rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
-        [MessageKind::System, MessageKind::User, MessageKind::Agent]
+        rows.iter().map(|row| body_kind(row)).collect::<Vec<_>>(),
+        ["user", "agent"]
     );
     assert_eq!(
         rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
-        [0, 1, 2]
+        [1, 2]
     );
-    assert!(rows.iter().all(|row| row.usage.is_none()));
+    assert!(rows.iter().all(|row| row.usage.is_empty()));
     let usage: Vec<_> = ops
         .iter()
         .filter_map(|op| match op {
@@ -118,22 +139,20 @@ fn tool_result_merges_without_consuming_an_ordinal() {
     let ops = normalize_scenario("tool-use");
     let rows = messages(&ops);
     assert_eq!(
-        rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
-        [
-            MessageKind::System,
-            MessageKind::User,
-            MessageKind::ToolUse,
-            MessageKind::Agent,
-        ]
+        rows.iter().map(|row| body_kind(row)).collect::<Vec<_>>(),
+        ["user", "tool_use", "agent"]
     );
     assert_eq!(
         rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
-        [0, 1, 2, 3]
+        [1, 2, 3]
     );
 
     let call = rows
         .iter()
-        .find_map(|row| row.tool.as_ref())
+        .find_map(|row| match &row.body {
+            TimelineBody::ToolUse { tool } => Some(tool),
+            _ => None,
+        })
         .expect("tool call");
     assert_eq!(call.native.id.as_deref(), Some("call_mock_0002"));
     assert_eq!(call.native.name, "terminal");
@@ -167,20 +186,14 @@ fn resume_keeps_native_message_id_order() {
     let rows = normalize_scenario("resume");
     let rows = messages(&rows);
     assert_eq!(
-        rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
-        [
-            MessageKind::System,
-            MessageKind::User,
-            MessageKind::Agent,
-            MessageKind::User,
-            MessageKind::Agent,
-        ]
+        rows.iter().map(|row| body_kind(row)).collect::<Vec<_>>(),
+        ["user", "agent", "user", "agent"]
     );
     assert_eq!(
         rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
-        [0, 1, 2, 3, 4]
+        [1, 2, 3, 4]
     );
-    assert!(rows[3].content.as_deref().unwrap().contains("goodbye"));
+    assert!(text(rows[2]).unwrap().contains("goodbye"));
 }
 
 #[test]

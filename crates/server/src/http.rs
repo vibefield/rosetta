@@ -260,31 +260,33 @@ async fn asset(
     UrlPath(name): UrlPath<String>,
 ) -> Result<Response, Failure> {
     let media_type =
-        asset_media_type(&name).ok_or_else(|| Failure::not_found("no such image asset"))?;
+        asset_media_type(&name).ok_or_else(|| Failure::not_found("no such projection asset"))?;
     let db = state.db.clone();
     let expected_digest = name[..64].to_owned();
     let path_name = name.clone();
     let bytes = tokio::task::spawn_blocking(move || {
-        let path = assets::image_root(&db).join(path_name);
+        let path = assets::asset_root(&db).join(path_name);
         let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
-                Failure::not_found("no such image asset")
+                Failure::not_found("no such projection asset")
             } else {
-                Failure::internal(format!("stating image asset: {error}"))
+                Failure::internal(format!("stating projection asset: {error}"))
             }
         })?;
         if !metadata.file_type().is_file() {
-            return Err(Failure::not_found("no such image asset"));
+            return Err(Failure::not_found("no such projection asset"));
         }
         let bytes = std::fs::read(path)
-            .map_err(|error| Failure::internal(format!("reading image asset: {error}")))?;
+            .map_err(|error| Failure::internal(format!("reading projection asset: {error}")))?;
         if blake3::hash(&bytes).to_hex().as_str() != expected_digest {
-            return Err(Failure::internal("image asset failed its content hash"));
+            return Err(Failure::internal(
+                "projection asset failed its content hash",
+            ));
         }
         Ok(bytes)
     })
     .await
-    .map_err(|error| Failure::internal(format!("image read task failed: {error}")))??;
+    .map_err(|error| Failure::internal(format!("asset read task failed: {error}")))??;
 
     let mut response = Response::new(Body::from(bytes));
     response
@@ -315,6 +317,9 @@ fn asset_media_type(name: &str) -> Option<&'static str> {
         "jpg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
+        "pdf" => Some("application/pdf"),
+        "json" => Some("application/vnd.rosetta.canonical-document+json"),
+        "txt" => Some("text/plain; charset=utf-8"),
         _ => None,
     }
 }
@@ -495,9 +500,9 @@ async fn timeline(
                 Some(cursor.before)
             }
         };
-        let messages = queries::timeline_page(conn, &id, before, limit).map_err(store_err)?;
-        let cursor = if messages.len() as i64 == limit {
-            messages.first().map(|oldest| {
+        let entries = queries::timeline_page(conn, &id, before, limit).map_err(store_err)?;
+        let cursor = if entries.len() as i64 == limit {
+            entries.first().map(|oldest| {
                 TimelineCursor {
                     session_id: id.clone(),
                     before: oldest.ordinal,
@@ -508,7 +513,7 @@ async fn timeline(
         } else {
             None
         };
-        Ok(TimelinePage { messages, cursor })
+        Ok(TimelinePage { entries, cursor })
     })
     .await?;
     Ok(Json(page))

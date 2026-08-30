@@ -57,66 +57,78 @@
       }
     },
     {
-      "frame": "timeline_snapshot",
-      "messages": [
+      "entries": [
         {
-          "agent_version": "2.1.240",
-          "branch_tool_id": "toolu_0",
-          "content": null,
-          "effort": "high",
-          "kind": "tool_use",
-          "model": "claude-opus-5",
-          "ordinal": 7,
-          "parent_uuid": "u0",
-          "session_id": "s1",
-          "src_cursor": 4,
-          "src_offset": 1024,
-          "subtype": "sub",
-          "timeline_id": "t1",
-          "tool": {
-            "action": {
-              "background": false,
-              "command": {
-                "text": "true",
-                "type": "inline"
+          "at": 3600000,
+          "block_index": 0,
+          "body": {
+            "tool": {
+              "action": {
+                "background": false,
+                "command": {
+                  "text": "true",
+                  "type": "inline"
+                },
+                "cwd": null,
+                "outcome": {
+                  "exit_code": 0,
+                  "process_id": null,
+                  "signal": null
+                },
+                "timeout_ms": null,
+                "type": "shell"
               },
-              "cwd": null,
-              "outcome": {
-                "exit_code": 0,
-                "process_id": null,
-                "signal": null
+              "correlation": {
+                "derivation": "native_id",
+                "key": "toolu_1"
               },
-              "timeout_ms": null,
-              "type": "shell"
+              "failure": null,
+              "native": {
+                "id": "toolu_1",
+                "name": "Bash",
+                "namespace": null,
+                "provider": null
+              },
+              "status": {
+                "basis": "native_terminal_record",
+                "value": "succeeded"
+              },
+              "timing": null
             },
-            "correlation": {
-              "derivation": "native_id",
-              "key": "toolu_1"
-            },
-            "failure": null,
-            "native": {
-              "id": "toolu_1",
-              "name": "Bash",
-              "namespace": null,
-              "provider": null
-            },
-            "status": {
-              "basis": "native_terminal_record",
-              "value": "succeeded"
-            },
-            "timing": null
+            "type": "tool_use"
           },
-          "ts": 3600000,
+          "effort": "high",
+          "group": {
+            "derivation": "native",
+            "id": "turn-1",
+            "kind": "human_turn"
+          },
+          "model": "claude-opus-5",
+          "native_id": "u1",
+          "ordinal": 7,
+          "parent_native_id": "u0",
+          "parent_tool_native_id": "toolu_0",
+          "provenance": {
+            "agent_version": "2.1.240",
+            "src_cursor": 4,
+            "src_offset": 1024
+          },
+          "response": {
+            "derivation": "native",
+            "id": "response-1"
+          },
+          "session_id": "s1",
+          "timeline_id": "t1",
           "usage": {
             "cache_read": 3,
             "cache_write": 2,
             "input": 10,
             "output": 5,
             "thinking": 1
-          },
-          "uuid": "u1"
+          }
         }
       ],
+      "frame": "timeline_snapshot",
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -210,53 +222,66 @@
   ],
   "mutations": [
     {
-      "agent_version": "2.1.240",
-      "branch_tool_id": "toolu_0",
-      "content": null,
-      "effort": "high",
-      "kind": "tool_use",
-      "model": "claude-opus-5",
-      "ordinal": 7,
-      "parent_uuid": "u0",
-      "session_id": "s1",
-      "src_cursor": 4,
-      "src_offset": 1024,
-      "subtype": "sub",
-      "timeline_id": "t1",
-      "tool": {
-        "action": {
-          "background": false,
-          "command": {
-            "text": "true",
-            "type": "inline"
+      "at": 3600000,
+      "block_index": 0,
+      "body": {
+        "tool": {
+          "action": {
+            "background": false,
+            "command": {
+              "text": "true",
+              "type": "inline"
+            },
+            "cwd": null,
+            "outcome": {
+              "exit_code": 0,
+              "process_id": null,
+              "signal": null
+            },
+            "timeout_ms": null,
+            "type": "shell"
           },
-          "cwd": null,
-          "outcome": {
-            "exit_code": 0,
-            "process_id": null,
-            "signal": null
+          "correlation": {
+            "derivation": "native_id",
+            "key": "toolu_1"
           },
-          "timeout_ms": null,
-          "type": "shell"
+          "failure": null,
+          "native": {
+            "id": "toolu_1",
+            "name": "Bash",
+            "namespace": null,
+            "provider": null
+          },
+          "status": {
+            "basis": "native_terminal_record",
+            "value": "succeeded"
+          },
+          "timing": null
         },
-        "correlation": {
-          "derivation": "native_id",
-          "key": "toolu_1"
-        },
-        "failure": null,
-        "native": {
-          "id": "toolu_1",
-          "name": "Bash",
-          "namespace": null,
-          "provider": null
-        },
-        "status": {
-          "basis": "native_terminal_record",
-          "value": "succeeded"
-        },
-        "timing": null
+        "type": "tool_use"
       },
-      "ts": 3600000,
+      "effort": "high",
+      "group": {
+        "derivation": "native",
+        "id": "turn-1",
+        "kind": "human_turn"
+      },
+      "model": "claude-opus-5",
+      "native_id": "u1",
+      "ordinal": 7,
+      "parent_native_id": "u0",
+      "parent_tool_native_id": "toolu_0",
+      "provenance": {
+        "agent_version": "2.1.240",
+        "src_cursor": 4,
+        "src_offset": 1024
+      },
+      "response": {
+        "derivation": "native",
+        "id": "response-1"
+      },
+      "session_id": "s1",
+      "timeline_id": "t1",
       "type": "message",
       "usage": {
         "cache_read": 3,
@@ -264,8 +289,7 @@
         "input": 10,
         "output": 5,
         "thinking": 1
-      },
-      "uuid": "u1"
+      }
     },
     {
       "at": 3700000,
@@ -516,7 +540,7 @@
       "uptime_ms": 60000
     },
     "protocol_version": 2,
-    "schema_version": 5,
+    "schema_version": 9,
     "search": {
       "projection_epoch": "epoch-1",
       "readiness": "catching-up",
@@ -525,63 +549,75 @@
   },
   "timeline_page": {
     "cursor": "{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}",
-    "messages": [
+    "entries": [
       {
-        "agent_version": "2.1.240",
-        "branch_tool_id": "toolu_0",
-        "content": null,
-        "effort": "high",
-        "kind": "tool_use",
-        "model": "claude-opus-5",
-        "ordinal": 7,
-        "parent_uuid": "u0",
-        "session_id": "s1",
-        "src_cursor": 4,
-        "src_offset": 1024,
-        "subtype": "sub",
-        "timeline_id": "t1",
-        "tool": {
-          "action": {
-            "background": false,
-            "command": {
-              "text": "true",
-              "type": "inline"
+        "at": 3600000,
+        "block_index": 0,
+        "body": {
+          "tool": {
+            "action": {
+              "background": false,
+              "command": {
+                "text": "true",
+                "type": "inline"
+              },
+              "cwd": null,
+              "outcome": {
+                "exit_code": 0,
+                "process_id": null,
+                "signal": null
+              },
+              "timeout_ms": null,
+              "type": "shell"
             },
-            "cwd": null,
-            "outcome": {
-              "exit_code": 0,
-              "process_id": null,
-              "signal": null
+            "correlation": {
+              "derivation": "native_id",
+              "key": "toolu_1"
             },
-            "timeout_ms": null,
-            "type": "shell"
+            "failure": null,
+            "native": {
+              "id": "toolu_1",
+              "name": "Bash",
+              "namespace": null,
+              "provider": null
+            },
+            "status": {
+              "basis": "native_terminal_record",
+              "value": "succeeded"
+            },
+            "timing": null
           },
-          "correlation": {
-            "derivation": "native_id",
-            "key": "toolu_1"
-          },
-          "failure": null,
-          "native": {
-            "id": "toolu_1",
-            "name": "Bash",
-            "namespace": null,
-            "provider": null
-          },
-          "status": {
-            "basis": "native_terminal_record",
-            "value": "succeeded"
-          },
-          "timing": null
+          "type": "tool_use"
         },
-        "ts": 3600000,
+        "effort": "high",
+        "group": {
+          "derivation": "native",
+          "id": "turn-1",
+          "kind": "human_turn"
+        },
+        "model": "claude-opus-5",
+        "native_id": "u1",
+        "ordinal": 7,
+        "parent_native_id": "u0",
+        "parent_tool_native_id": "toolu_0",
+        "provenance": {
+          "agent_version": "2.1.240",
+          "src_cursor": 4,
+          "src_offset": 1024
+        },
+        "response": {
+          "derivation": "native",
+          "id": "response-1"
+        },
+        "session_id": "s1",
+        "timeline_id": "t1",
         "usage": {
           "cache_read": 3,
           "cache_write": 2,
           "input": 10,
           "output": 5,
           "thinking": 1
-        },
-        "uuid": "u1"
+        }
       }
     ]
   },

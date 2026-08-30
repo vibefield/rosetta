@@ -11,76 +11,129 @@
         "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0"
       },
       {
-        "agent_version": "2.1.241",
-        "branch_tool_id": null,
-        "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+        "at": 1787625319522,
+        "block_index": 0,
+        "body": {
+          "attachments": [],
+          "citations": [],
+          "text": {
+            "text": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+            "type": "inline"
+          },
+          "type": "agent"
+        },
         "effort": "high",
-        "kind": "agent",
+        "group": {
+          "derivation": "native",
+          "id": "msg_mock_0003",
+          "kind": "agent_cycle"
+        },
         "model": "claude-opus-5",
+        "native_id": "53c2aa15-7f97-4928-8f4b-a769bc364b91",
         "op": "message",
         "ordinal": 0,
-        "parent_uuid": "4b373a96-0402-4f31-9667-381f1fca175f",
+        "parent_native_id": "4b373a96-0402-4f31-9667-381f1fca175f",
+        "parent_tool_native_id": null,
+        "provenance": {
+          "agent_version": "2.1.241",
+          "src_cursor": 2,
+          "src_offset": 83
+        },
+        "response": {
+          "derivation": "native",
+          "id": "msg_mock_0003"
+        },
         "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0",
-        "src_cursor": 2,
-        "src_offset": 83,
-        "subtype": null,
         "timeline_id": "645649a929d3141abd48466ce461dc9e48f7e91a114d32eefa11ccb2ee50592c",
-        "tool": null,
-        "ts": 1787625319522,
         "usage": {
           "cache_read": 0,
           "cache_write": 0,
           "input": 128,
           "output": 32,
           "thinking": 0
-        },
-        "uuid": "53c2aa15-7f97-4928-8f4b-a769bc364b91"
+        }
       },
       {
-        "agent_version": "2.1.241",
-        "branch_tool_id": null,
-        "content": "Continue: say goodbye.",
+        "at": 1787625319878,
+        "block_index": null,
+        "body": {
+          "attachments": [],
+          "text": {
+            "text": "Continue: say goodbye.",
+            "type": "inline"
+          },
+          "type": "user"
+        },
         "effort": null,
-        "kind": "user",
+        "group": {
+          "derivation": "native",
+          "id": "1fd307fc-07cd-4510-b5c0-d2a726ec9457",
+          "kind": "human_turn"
+        },
         "model": null,
+        "native_id": "1fd307fc-07cd-4510-b5c0-d2a726ec9457",
         "op": "message",
         "ordinal": 1,
-        "parent_uuid": "53c2aa15-7f97-4928-8f4b-a769bc364b91",
+        "parent_native_id": "53c2aa15-7f97-4928-8f4b-a769bc364b91",
+        "parent_tool_native_id": null,
+        "provenance": {
+          "agent_version": "2.1.241",
+          "src_cursor": 6,
+          "src_offset": 1591
+        },
+        "response": null,
         "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0",
-        "src_cursor": 6,
-        "src_offset": 1591,
-        "subtype": null,
         "timeline_id": "ff3f1fbedf67ffe48050465bd77dbc0b02656306b510998e2bacc04697f2b42c",
-        "tool": null,
-        "ts": 1787625319878,
-        "usage": null,
-        "uuid": "1fd307fc-07cd-4510-b5c0-d2a726ec9457"
+        "usage": {
+          "cache_read": null,
+          "cache_write": null,
+          "input": null,
+          "output": null,
+          "thinking": null
+        }
       },
       {
-        "agent_version": "2.1.241",
-        "branch_tool_id": null,
-        "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+        "at": 1787625319897,
+        "block_index": 0,
+        "body": {
+          "attachments": [],
+          "citations": [],
+          "text": {
+            "text": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+            "type": "inline"
+          },
+          "type": "agent"
+        },
         "effort": "high",
-        "kind": "agent",
+        "group": {
+          "derivation": "native",
+          "id": "msg_mock_0004",
+          "kind": "agent_cycle"
+        },
         "model": "claude-opus-5",
+        "native_id": "3604caa6-46fd-472e-ad24-92b01fb6d6c7",
         "op": "message",
         "ordinal": 2,
-        "parent_uuid": "1fd307fc-07cd-4510-b5c0-d2a726ec9457",
+        "parent_native_id": "1fd307fc-07cd-4510-b5c0-d2a726ec9457",
+        "parent_tool_native_id": null,
+        "provenance": {
+          "agent_version": "2.1.241",
+          "src_cursor": 7,
+          "src_offset": 2107
+        },
+        "response": {
+          "derivation": "native",
+          "id": "msg_mock_0004"
+        },
         "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0",
-        "src_cursor": 7,
-        "src_offset": 2107,
-        "subtype": null,
         "timeline_id": "0effde8b1b9287958ac00e75049a383680d601ac3d6ad6f7f2281d401fe370e5",
-        "tool": null,
-        "ts": 1787625319897,
         "usage": {
           "cache_read": 0,
           "cache_write": 0,
           "input": 128,
           "output": 32,
           "thinking": 0
-        },
-        "uuid": "3604caa6-46fd-472e-ad24-92b01fb6d6c7"
+        }
       }
     ],
     "transcript": "projects/-private-tmp-rosetta-farm-resume-project/469a2e13-c3ed-4909-89af-056a5ab04a4e.jsonl"

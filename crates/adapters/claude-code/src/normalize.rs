@@ -10,13 +10,19 @@
 //! derived from the session id plus a stable discriminator, so replaying a file
 //! twice produces byte-identical ops.
 
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TokenSnapshot, WorkspaceObsRow,
 };
-use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
-use rosetta_core::{IngestOp, fold, ids};
+use rosetta_core::timeline::{
+    AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
+    ResourceRef, ResponseGroup, StatusBasis, TimelineGroup,
+};
+use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -169,6 +175,8 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
 
     let mut text = String::new();
     let mut results: Vec<ToolResultBlock<'_>> = Vec::new();
+    let mut attachments = Vec::new();
+    let mut assets = Vec::new();
     let mut has_other_block = false;
     match &line.message.content {
         UserContent::Text(prompt) => text.push_str(prompt),
@@ -188,9 +196,25 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
                         content: content.as_ref(),
                         is_error: *is_error,
                     }),
-                    // Images, documents and block kinds we do not know: no text
-                    // to carry, but the turn itself still happened.
-                    _ => has_other_block = true,
+                    UserContentBlock::Known(KnownUserBlock::Image { source, .. }) => {
+                        match authored_attachment(AttachmentKind::Image, source) {
+                            Some((attachment, asset)) => {
+                                attachments.push(attachment);
+                                assets.extend(asset);
+                            }
+                            None => has_other_block = true,
+                        }
+                    }
+                    UserContentBlock::Known(KnownUserBlock::Document { source, .. }) => {
+                        match authored_attachment(AttachmentKind::Document, source) {
+                            Some((attachment, asset)) => {
+                                attachments.push(attachment);
+                                assets.extend(asset);
+                            }
+                            None => has_other_block = true,
+                        }
+                    }
+                    UserContentBlock::Other(_) => has_other_block = true,
                 }
             }
         }
@@ -198,9 +222,20 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
 
     // A turn made only of tool_results is the report-back for a tool call — it
     // folds into that call's row instead of becoming a row of its own.
-    if !text.is_empty() || has_other_block || results.is_empty() {
+    if !text.is_empty() || !attachments.is_empty() || has_other_block || results.is_empty() {
         let mut row = emit.row(&seed, MessageKind::User, &line.uuid);
         row.content = (!text.is_empty()).then_some(text);
+        row.attachments = attachments;
+        row.group = Some(TimelineGroup {
+            id: line.uuid.clone(),
+            kind: GroupKind::HumanTurn,
+            derivation: GroupDerivation::Native,
+        });
+        emit.ops.extend(
+            assets
+                .into_iter()
+                .map(|asset| IngestOp::ProjectionAsset { asset }),
+        );
         emit.push_row(row);
     }
 
@@ -241,17 +276,25 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 id, name, input, ..
             }) => {
                 let mut row = emit.row(&seed, MessageKind::ToolUse, &discriminator);
-                row.tool = Some(
-                    crate::tool::project_request(
-                        Some(&line.version),
-                        name,
-                        input,
-                        Some(&line.cwd),
-                        id,
-                        Some(id),
-                        None,
-                    )
-                    .unwrap_or_else(|_| {
+                let projected = crate::tool::project_request(
+                    Some(&line.version),
+                    name,
+                    input,
+                    Some(&line.cwd),
+                    id,
+                    Some(id),
+                    None,
+                );
+                row.tool = Some(match projected {
+                    Ok(tool) => tool,
+                    Err(error) => {
+                        emit.drift(
+                            error.drift_code(),
+                            &projection_record_kind("request", None, name),
+                            projection_shape_paths(input),
+                            ts,
+                            Some(&line.version),
+                        );
                         unknown_interaction(
                             id,
                             CorrelationDerivation::NativeId,
@@ -260,8 +303,8 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                             name,
                             None,
                         )
-                    }),
-                );
+                    }
+                });
                 if SPAWN_TOOLS.contains(&name.as_str()) {
                     row.branch_tool_id = Some(id.clone());
                 }
@@ -280,6 +323,18 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
     if rows.is_empty() {
         let row = emit.row(&seed, MessageKind::Agent, &format!("{}#0", line.uuid));
         rows.push((row, None));
+    }
+    for (block_index, (row, _)) in rows.iter_mut().enumerate() {
+        row.group = Some(TimelineGroup {
+            id: line.message.id.clone(),
+            kind: GroupKind::AgentCycle,
+            derivation: GroupDerivation::Native,
+        });
+        row.response = Some(ResponseGroup {
+            id: line.message.id.clone(),
+            derivation: GroupDerivation::Native,
+        });
+        row.block_index = Some(u32::try_from(block_index).unwrap_or(u32::MAX));
     }
     if let Some(usage) = line.message.usage.as_ref() {
         attach_usage(&mut rows, usage);
@@ -429,6 +484,116 @@ fn result_text(content: Option<&Value>) -> Option<String> {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AuthoredSource {
+    Base64 {
+        media_type: String,
+        data: String,
+    },
+    Url {
+        url: String,
+    },
+    Text {
+        data: String,
+        #[serde(default)]
+        media_type: Option<String>,
+    },
+}
+
+/// Strictly decode only user-authored attachment sources. Tool-result media
+/// never calls this path. Invalid labels or bytes stay recoverable in the raw
+/// ledger and do not create a projection member that would fail the batch.
+fn authored_attachment(
+    kind: AttachmentKind,
+    source: &Value,
+) -> Option<(AttachmentRef, Option<ProjectionAsset>)> {
+    match serde_json::from_value::<AuthoredSource>(source.clone()).ok()? {
+        AuthoredSource::Url { url } if !url.is_empty() => Some((
+            AttachmentRef {
+                kind,
+                name: None,
+                media_type: None,
+                byte_len: None,
+                source: ResourceRef::Url { url },
+                dimensions: None,
+            },
+            None,
+        )),
+        AuthoredSource::Base64 { media_type, data } => {
+            let media_type = canonical_media_type(&media_type)?;
+            if kind == AttachmentKind::Image && !media_type.starts_with("image/") {
+                return None;
+            }
+            let bytes = STANDARD.decode(data).ok()?;
+            if bytes.is_empty() || !member_magic_matches(media_type, &bytes) {
+                return None;
+            }
+            member_attachment(kind, media_type, bytes)
+        }
+        AuthoredSource::Text { data, media_type } if kind == AttachmentKind::Document => {
+            if data.is_empty()
+                || media_type.as_deref().is_some_and(|value| {
+                    canonical_media_type(value) != Some("text/plain; charset=utf-8")
+                })
+            {
+                return None;
+            }
+            member_attachment(kind, "text/plain; charset=utf-8", data.into_bytes())
+        }
+        _ => None,
+    }
+}
+
+fn member_attachment(
+    kind: AttachmentKind,
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> Option<(AttachmentRef, Option<ProjectionAsset>)> {
+    let asset = ProjectionAsset::new(media_type, bytes)?;
+    let reference = AssetRef {
+        url: asset.url()?,
+        digest: asset.digest.clone(),
+        media_type: asset.media_type.clone(),
+        byte_len: u64::try_from(asset.bytes.len()).ok()?,
+    };
+    Some((
+        AttachmentRef {
+            kind,
+            name: None,
+            media_type: Some(asset.media_type.clone()),
+            byte_len: Some(reference.byte_len),
+            source: ResourceRef::Asset { asset: reference },
+            dimensions: None,
+        },
+        Some(asset),
+    ))
+}
+
+fn canonical_media_type(media_type: &str) -> Option<&'static str> {
+    match media_type.to_ascii_lowercase().as_str() {
+        "image/png" => Some("image/png"),
+        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
+        "image/gif" => Some("image/gif"),
+        "image/webp" => Some("image/webp"),
+        "application/pdf" => Some("application/pdf"),
+        "text/plain" | "text/plain; charset=utf-8" => Some("text/plain; charset=utf-8"),
+        _ => None,
+    }
+}
+
+fn member_magic_matches(media_type: &str, bytes: &[u8]) -> bool {
+    match media_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        "application/pdf" => bytes.starts_with(b"%PDF-"),
+        "text/plain; charset=utf-8" => std::str::from_utf8(bytes).is_ok(),
+        _ => false,
+    }
+}
+
 // --------------------------------------------------------------------- plumbing
 
 struct ToolResultBlock<'a> {
@@ -479,6 +644,11 @@ impl<'a> Emit<'a> {
             effort: seed.effort.map(str::to_owned),
             content: None,
             tool: None,
+            attachments: Vec::new(),
+            citations: Vec::new(),
+            group: None,
+            response: None,
+            block_index: None,
             branch_tool_id: None,
             usage: None,
             // Claude Code stamps the writing CLI version on every record, which
@@ -493,7 +663,7 @@ impl<'a> Emit<'a> {
     }
 
     fn push_row(&mut self, row: MessageRow) {
-        self.ops.push(IngestOp::Message(Box::new(row)));
+        IngestOp::push_message(&mut self.ops, row);
     }
 
     fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
@@ -506,13 +676,13 @@ impl<'a> Emit<'a> {
             session_id: self.session_id.clone(),
             correlation_key: result.tool_use_id.to_owned(),
             evidence: self.ctx.evidence(mutation_index),
-            patch: terminal_update(
+            patch: Box::new(terminal_update(
                 result.is_error,
                 true,
                 StatusBasis::NativeTerminalRecord,
                 at,
                 diagnostic.as_deref(),
-            ),
+            )),
             at,
         });
     }

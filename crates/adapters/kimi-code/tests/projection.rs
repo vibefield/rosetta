@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, FileStat, LineStatus, NormalizeCtx};
-use rosetta_core::rows::{MessageKind, MessageRow, SessionRole, TaskStatus};
-use rosetta_core::timeline::{ToolAction, ToolStatus};
+use rosetta_core::rows::{SessionRole, TaskStatus};
+use rosetta_core::timeline::{
+    AttachmentKind, ResourceRef, TimelineBody, TimelineEntry, ToolAction, ToolStatus,
+};
 use rosetta_core::{IngestOp, ids};
 use serde_json::json;
 
@@ -108,13 +110,43 @@ fn skim(path: &Path) -> rosetta_adapter_support::SkimResult {
     )
 }
 
-fn messages(ops: &[IngestOp]) -> Vec<&MessageRow> {
+fn messages(ops: &[IngestOp]) -> Vec<&TimelineEntry> {
     ops.iter()
         .filter_map(|op| match op {
             IngestOp::Message(row) => Some(&**row),
             _ => None,
         })
         .collect()
+}
+
+fn body_kind(row: &TimelineEntry) -> &'static str {
+    match &row.body {
+        TimelineBody::User { .. } => "user",
+        TimelineBody::Agent { .. } => "agent",
+        TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::ToolUse { .. } => "tool_use",
+        TimelineBody::Notice { .. } => "notice",
+        TimelineBody::Summary { .. } => "summary",
+    }
+}
+
+fn text(row: &TimelineEntry) -> Option<&str> {
+    match &row.body {
+        TimelineBody::User { text, .. } | TimelineBody::Agent { text, .. } => {
+            text.as_ref().map(|text| text.as_preview())
+        }
+        TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
+            Some(text.as_preview())
+        }
+        TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
+    }
+}
+
+fn tool(row: &TimelineEntry) -> Option<&rosetta_core::ToolInteraction> {
+    match &row.body {
+        TimelineBody::ToolUse { tool } => Some(tool),
+        _ => None,
+    }
 }
 
 #[test]
@@ -204,14 +236,23 @@ fn root_and_child_wires_have_separate_ordinals_and_state() {
     let root = messages(&root_ops);
     let child = messages(&child_ops);
     assert_eq!(root.first().expect("root timeline").ordinal, 0);
-    assert_eq!(child.first().expect("child timeline").ordinal, 0);
-    assert_eq!(root.last().unwrap().ordinal, root.len() as i64 - 1);
-    assert_eq!(child.last().unwrap().ordinal, child.len() as i64 - 1);
+    // The child opens with ledger-only context records. Draft ordinals retain
+    // source order here; global finalization makes the public projection dense.
+    assert_eq!(child.first().expect("child timeline").ordinal, 1);
+    assert!(
+        root.windows(2)
+            .all(|rows| rows[0].ordinal < rows[1].ordinal)
+    );
+    assert!(
+        child
+            .windows(2)
+            .all(|rows| rows[0].ordinal < rows[1].ordinal)
+    );
     assert!(
         root.iter()
-            .any(|row| row.branch_tool_id.as_deref() == Some("call_mock_0005"))
+            .any(|row| row.parent_tool_native_id.as_deref() == Some("call_mock_0005"))
     );
-    assert!(child.iter().all(|row| row.branch_tool_id.is_none()));
+    assert!(child.iter().all(|row| row.parent_tool_native_id.is_none()));
 
     let root_state = KimiCodeAdapter
         .checkpoint_state(root_ctx.state.as_deref())
@@ -230,23 +271,16 @@ fn duplicate_prompt_and_usage_rails_emit_once() {
     let (_, ops, _) = replay(&wire_fixture("tool-use", "main"));
     let rows = messages(&ops);
     assert_eq!(
-        rows.iter()
-            .filter(|row| row.kind == MessageKind::User)
-            .count(),
+        rows.iter().filter(|row| body_kind(row) == "user").count(),
         1,
         "turn.prompt must not duplicate context.append_message"
     );
     let response_rows: Vec<_> = rows
         .iter()
-        .filter(|row| {
-            matches!(
-                row.kind,
-                MessageKind::Agent | MessageKind::Thinking | MessageKind::ToolUse
-            )
-        })
+        .filter(|row| matches!(body_kind(row), "agent" | "thinking" | "tool_use"))
         .collect();
     assert_eq!(response_rows.len(), 2);
-    assert!(response_rows.iter().all(|row| row.usage.is_some()));
+    assert!(response_rows.iter().all(|row| !row.usage.is_empty()));
     assert!(
         ops.iter().all(|op| !matches!(op, IngestOp::Usage { .. })),
         "step.end must not duplicate usage.record"
@@ -272,7 +306,7 @@ fn session_scoped_usage_is_not_misattributed_to_a_response() {
     let [IngestOp::Message(row)] = response.ops.as_slice() else {
         panic!("expected one response row, got {:?}", response.ops);
     };
-    assert_eq!(row.usage, None);
+    assert!(row.usage.is_empty());
 }
 
 #[test]
@@ -280,14 +314,11 @@ fn tool_results_are_merge_ops_not_timeline_rows() {
     let (_, ops, _) = replay(&wire_fixture("tool-use", "main"));
     let tool_rows: Vec<_> = messages(&ops)
         .into_iter()
-        .filter(|row| row.kind == MessageKind::ToolUse)
+        .filter(|row| body_kind(row) == "tool_use")
         .collect();
     assert_eq!(tool_rows.len(), 1);
     assert_eq!(
-        tool_rows[0]
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.native.id.as_deref()),
+        tool(tool_rows[0]).and_then(|tool| tool.native.id.as_deref()),
         Some("call_mock_0001")
     );
     let results: Vec<_> = ops
@@ -298,7 +329,7 @@ fn tool_results_are_merge_ops_not_timeline_rows() {
 }
 
 #[test]
-fn writer_declared_media_parts_parse_without_indexing_media_references() {
+fn writer_declared_authored_media_projects_typed_references() {
     let mut ctx = synthetic_context();
     let message = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -309,7 +340,13 @@ fn writer_declared_media_parts_parse_without_indexing_media_references() {
     let [IngestOp::Message(row)] = message.ops.as_slice() else {
         panic!("expected one message row, got {:?}", message.ops);
     };
-    assert_eq!(row.content.as_deref(), Some("before\nafter"));
+    assert_eq!(text(row), Some("before\nafter"));
+    let TimelineBody::User { attachments, .. } = &row.body else {
+        panic!("expected authored user body")
+    };
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].kind, AttachmentKind::Image);
+    assert!(matches!(attachments[0].source, ResourceRef::Url { .. }));
 
     let media_only = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -323,7 +360,11 @@ fn writer_declared_media_parts_parse_without_indexing_media_references() {
             media_only.ops
         );
     };
-    assert_eq!(row.content, None);
+    let TimelineBody::User { text, attachments } = &row.body else {
+        panic!("expected media-only user body")
+    };
+    assert!(text.is_none());
+    assert_eq!(attachments.len(), 1);
 
     ctx.src_offset = Some(99);
     let assistant_media = KimiCodeAdapter.ingest_line(
@@ -338,9 +379,16 @@ fn writer_declared_media_parts_parse_without_indexing_media_references() {
             assistant_media.ops
         );
     };
-    assert_eq!(row.kind, MessageKind::Agent);
-    assert_eq!(row.uuid, None);
-    assert_eq!(row.content, None);
+    let TimelineBody::Agent {
+        text, attachments, ..
+    } = &row.body
+    else {
+        panic!("expected assistant media body")
+    };
+    assert!(text.is_none());
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].kind, AttachmentKind::Video);
+    assert_eq!(row.native_id, None);
 }
 
 #[test]
@@ -352,11 +400,16 @@ fn writer_optional_tool_fields_and_multimodal_results_are_bounded() {
         br#"{"type":"context.append_loop_event","event":{"type":"tool.call","stepUuid":"step-1","toolCallId":"call-media","name":"ReadMediaFile","extras":{"provider":"mock"}},"time":1}"#,
     );
     assert_eq!(call.status, LineStatus::Parsed);
-    let [IngestOp::Message(row)] = call.ops.as_slice() else {
-        panic!("expected one tool call row, got {:?}", call.ops);
+    let [IngestOp::Drift(drift), IngestOp::Message(row)] = call.ops.as_slice() else {
+        panic!(
+            "expected projector drift and one tool call row, got {:?}",
+            call.ops
+        );
     };
-    let tool = row.tool.as_ref().expect("tool call");
-    assert_eq!(row.uuid, None);
+    assert_eq!(drift.error_code, "projection_missing_field");
+    assert_eq!(drift.record_kind, "tool/request/ReadMediaFile");
+    let tool = tool(row).expect("tool call");
+    assert_eq!(row.native_id, None);
     assert!(matches!(tool.action, ToolAction::Unknown {}));
 
     let result = KimiCodeAdapter.ingest_line(
@@ -459,8 +512,8 @@ fn organic_config_compaction_and_todos_project_canonical_facts() {
     let [IngestOp::Message(summary)] = compaction.ops.as_slice() else {
         panic!("expected compaction summary, got {:?}", compaction.ops);
     };
-    assert_eq!(summary.kind, MessageKind::Summary);
-    assert_eq!(summary.content.as_deref(), Some("preserved context"));
+    assert_eq!(body_kind(summary), "summary");
+    assert_eq!(text(summary), Some("preserved context"));
 
     let todos = KimiCodeAdapter.ingest_line(
         &mut ctx,

@@ -175,9 +175,9 @@ async fn timeline_snapshot(
     stamp: Stamp,
 ) -> Result<ServerFrame, Failure> {
     with_read(db, move |conn| {
-        let messages = queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
+        let entries = queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
             .map_err(|error| Failure::internal(format!("{error}")))?;
-        Ok(ServerFrame::TimelineSnapshot { stamp, messages })
+        Ok(ServerFrame::TimelineSnapshot { stamp, entries })
     })
     .await
 }
@@ -489,29 +489,35 @@ mod tests {
 
     impl Harness {
         fn append(&mut self, timeline_id: &str) {
+            let row = MessageRow {
+                timeline_id: timeline_id.into(),
+                session_id: "s1".into(),
+                ordinal: 0,
+                kind: MessageKind::User,
+                subtype: None,
+                uuid: None,
+                parent_uuid: None,
+                ts: Some(3_600_000),
+                model: None,
+                effort: None,
+                content: Some(format!("content of {timeline_id}")),
+                tool: None,
+                attachments: Vec::new(),
+                citations: Vec::new(),
+                group: None,
+                response: None,
+                block_index: None,
+                branch_tool_id: None,
+                usage: None,
+                agent_version: None,
+                // Real pipeline rows always carry provenance; the
+                // activation sweep deletes by it.
+                src_cursor: Some(self.cursor),
+                src_offset: None,
+            };
             self.store
                 .apply(&Batch {
-                    ops: vec![IngestOp::Message(Box::new(MessageRow {
-                        timeline_id: timeline_id.into(),
-                        session_id: "s1".into(),
-                        ordinal: 0,
-                        kind: MessageKind::User,
-                        subtype: None,
-                        uuid: None,
-                        parent_uuid: None,
-                        ts: Some(3_600_000),
-                        model: None,
-                        effort: None,
-                        content: Some(format!("content of {timeline_id}")),
-                        tool: None,
-                        branch_tool_id: None,
-                        usage: None,
-                        agent_version: None,
-                        // Real pipeline rows always carry provenance; the
-                        // activation sweep deletes by it.
-                        src_cursor: Some(self.cursor),
-                        src_offset: None,
-                    }))],
+                    ops: IngestOp::project_message(row),
                     checkpoints: vec![],
                     source: Some(SourceWrite {
                         cursor_id: self.cursor,
@@ -552,8 +558,8 @@ mod tests {
             let seen = frames.lock().unwrap();
             assert!(matches!(seen[0], ServerFrame::Hello { stamp: Some(_), .. }));
             match &seen[1] {
-                ServerFrame::TimelineSnapshot { messages, .. } => {
-                    assert_eq!(messages.len(), 1, "snapshot covers the pre-subscribe row");
+                ServerFrame::TimelineSnapshot { entries, .. } => {
+                    assert_eq!(entries.len(), 1, "snapshot covers the pre-subscribe row");
                 }
                 other => panic!("expected snapshot, got {other:?}"),
             }
@@ -597,8 +603,8 @@ mod tests {
             let seen = frames.lock().unwrap();
             assert!(matches!(seen[3], ServerFrame::Resync));
             match &seen[4] {
-                ServerFrame::TimelineSnapshot { messages, .. } => {
-                    assert!(messages.is_empty(), "the empty activation swept the rows");
+                ServerFrame::TimelineSnapshot { entries, .. } => {
+                    assert!(entries.is_empty(), "the empty activation swept the rows");
                 }
                 other => panic!("expected replacement snapshot, got {other:?}"),
             }

@@ -11,7 +11,9 @@
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
     StreamState, TokenSnapshot, WorkspaceObsRow,
@@ -314,7 +316,7 @@ fn response_item(
                 stamp_model(&mut row, state);
                 begin_response(state, &row.timeline_id);
             }
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         "reasoning" => {
@@ -324,15 +326,17 @@ fn response_item(
                 block_text(item.summary.as_deref()).or_else(|| block_text(item.content.as_deref()));
             stamp_model(&mut row, state);
             begin_response(state, &row.timeline_id);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         "agent_message" => {
-            let mut row = row(ctx, discriminator, MessageKind::System, ts);
+            let mut row = row(ctx, discriminator, MessageKind::Agent, ts);
             row.uuid = item.id.clone();
             row.subtype = Some("agent_message".to_owned());
             row.content = block_text(item.content.as_deref());
-            ops.push(IngestOp::Message(Box::new(row)));
+            stamp_model(&mut row, state);
+            begin_response(state, &row.timeline_id);
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         "function_call" | "custom_tool_call" => {
@@ -361,17 +365,26 @@ fn response_item(
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
             row.uuid = item.id.clone();
             stamp_model(&mut row, state);
-            row.tool = Some(
-                crate::tool::project_request(
-                    ctx.agent_version.as_deref(),
-                    &name,
-                    &input,
-                    state.cwd.as_deref(),
-                    &tool_id,
-                    Some(&tool_id),
-                    item.namespace.as_deref(),
-                )
-                .unwrap_or_else(|_| {
+            let projected = crate::tool::project_request(
+                ctx.agent_version.as_deref(),
+                &name,
+                &input,
+                state.cwd.as_deref(),
+                &tool_id,
+                Some(&tool_id),
+                item.namespace.as_deref(),
+            );
+            row.tool = Some(match projected {
+                Ok(tool) => tool,
+                Err(error) => {
+                    ops.push(drift(
+                        ctx,
+                        stream_id,
+                        &projection_record_kind("request", item.namespace.as_deref(), &name),
+                        error.drift_code(),
+                        &projection_shape_paths(&input),
+                        ts,
+                    ));
                     unknown_interaction(
                         &tool_id,
                         CorrelationDerivation::NativeId,
@@ -380,13 +393,13 @@ fn response_item(
                         &name,
                         item.namespace.clone(),
                     )
-                }),
-            );
+                }
+            });
             // A tool call IS a response: the model produced it, and the
             // token_count that follows belongs to it.
             begin_response(state, &row.timeline_id);
             let timeline_id = row.timeline_id.clone();
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
 
             for edit in patch_body(&name, &input)
                 .map(patch_edits)
@@ -422,13 +435,13 @@ fn response_item(
                 evidence: ctx.evidence(0),
                 // The record declares no status field — success stays UNKNOWN
                 // rather than being sniffed out of its text.
-                patch: terminal_update(
+                patch: Box::new(terminal_update(
                     is_error,
                     false,
                     StatusBasis::NativeTerminalRecord,
                     ts,
                     output.as_deref(),
-                ),
+                )),
                 at: ts,
             });
             LineStatus::Parsed
@@ -440,23 +453,36 @@ fn response_item(
             let native_id = item.call_id.as_deref().or(item.id.as_deref());
             let correlation_key = native_id.unwrap_or(discriminator);
             let mut input = tool_input(item.arguments.as_ref());
-            if let Some(execution) = item.execution.as_ref() {
-                if let Some(map) = input.as_object_mut() {
-                    map.entry("execution")
-                        .or_insert_with(|| Value::String(execution.clone()));
-                }
+            if let Some(execution) = item.execution.as_ref()
+                && let Some(map) = input.as_object_mut()
+            {
+                map.entry("execution")
+                    .or_insert_with(|| Value::String(execution.clone()));
             }
-            row.tool = Some(
-                crate::tool::project_request(
-                    ctx.agent_version.as_deref(),
-                    "tool_search_call",
-                    &input,
-                    state.cwd.as_deref(),
-                    correlation_key,
-                    native_id,
-                    item.namespace.as_deref(),
-                )
-                .unwrap_or_else(|_| {
+            let projected = crate::tool::project_request(
+                ctx.agent_version.as_deref(),
+                "tool_search_call",
+                &input,
+                state.cwd.as_deref(),
+                correlation_key,
+                native_id,
+                item.namespace.as_deref(),
+            );
+            row.tool = Some(match projected {
+                Ok(tool) => tool,
+                Err(error) => {
+                    ops.push(drift(
+                        ctx,
+                        stream_id,
+                        &projection_record_kind(
+                            "request",
+                            item.namespace.as_deref(),
+                            "tool_search_call",
+                        ),
+                        error.drift_code(),
+                        &projection_shape_paths(&input),
+                        ts,
+                    ));
                     unknown_interaction(
                         correlation_key,
                         if native_id.is_some() {
@@ -469,10 +495,10 @@ fn response_item(
                         "tool_search_call",
                         item.namespace.clone(),
                     )
-                }),
-            );
+                }
+            });
             begin_response(state, &row.timeline_id);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         "tool_search_output" => {
@@ -485,13 +511,13 @@ fn response_item(
                 session_id: ctx.session_id.clone(),
                 correlation_key: tool_id,
                 evidence: ctx.evidence(0),
-                patch: terminal_update(
+                patch: Box::new(terminal_update(
                     status_error(item.status.as_deref()),
                     false,
                     StatusBasis::NativeState,
                     ts,
                     None,
-                ),
+                )),
                 at: ts,
             });
             LineStatus::Parsed
@@ -508,7 +534,7 @@ fn response_item(
             stamp_model(&mut row, state);
             let native_id = item.call_id.as_deref().or(item.id.as_deref());
             let correlation_key = native_id.unwrap_or(discriminator);
-            let mut tool = crate::tool::project_request(
+            let projected = crate::tool::project_request(
                 ctx.agent_version.as_deref(),
                 name,
                 &input,
@@ -516,21 +542,32 @@ fn response_item(
                 correlation_key,
                 native_id,
                 item.namespace.as_deref(),
-            )
-            .unwrap_or_else(|_| {
-                unknown_interaction(
-                    correlation_key,
-                    if native_id.is_some() {
-                        CorrelationDerivation::NativeId
-                    } else {
-                        CorrelationDerivation::Synthetic
-                    },
-                    native_id.map(str::to_owned),
-                    item.namespace.clone(),
-                    name,
-                    item.namespace.clone(),
-                )
-            });
+            );
+            let mut tool = match projected {
+                Ok(tool) => tool,
+                Err(error) => {
+                    ops.push(drift(
+                        ctx,
+                        stream_id,
+                        &projection_record_kind("request", item.namespace.as_deref(), name),
+                        error.drift_code(),
+                        &projection_shape_paths(&input),
+                        ts,
+                    ));
+                    unknown_interaction(
+                        correlation_key,
+                        if native_id.is_some() {
+                            CorrelationDerivation::NativeId
+                        } else {
+                            CorrelationDerivation::Synthetic
+                        },
+                        native_id.map(str::to_owned),
+                        item.namespace.clone(),
+                        name,
+                        item.namespace.clone(),
+                    )
+                }
+            };
             let is_error = status_error(item.status.as_deref());
             let patch = terminal_update(
                 is_error,
@@ -549,7 +586,7 @@ fn response_item(
             tool.timing = patch.timing;
             row.tool = Some(tool);
             begin_response(state, &row.timeline_id);
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         other => undeclared(
@@ -579,7 +616,7 @@ fn compacted(
     let mut row = row(ctx, discriminator, MessageKind::Summary, ts);
     row.subtype = Some("compacted".to_owned());
     row.content = Some(item.message.clone());
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
 fn inter_agent_communication(
@@ -592,11 +629,11 @@ fn inter_agent_communication(
     if item.content.trim().is_empty() {
         return;
     }
-    let mut row = row(ctx, discriminator, MessageKind::System, ts);
+    let mut row = row(ctx, discriminator, MessageKind::Agent, ts);
     row.uuid = item.id.clone();
     row.subtype = Some("inter_agent_communication".to_owned());
     row.content = Some(item.content.clone());
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
 fn realtime_item(
@@ -621,10 +658,12 @@ fn realtime_item(
     row.uuid = Some(item.id.clone());
     row.subtype = Some("realtime_transcript".to_owned());
     row.content = Some(content);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
 }
 
-/// Lifecycle and telemetry events. Only `token_count` projects.
+/// Lifecycle and telemetry events. Token counters project as usage; completed
+/// command items project the native status/exit-code fact that the later
+/// text-only `function_call_output` record cannot provide.
 fn event_msg(
     ctx: &mut NormalizeCtx,
     state: &mut CodexState,
@@ -633,18 +672,119 @@ fn event_msg(
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) -> LineStatus {
-    if event.event_type != "token_count" {
-        return undeclared(
+    match event.event_type.as_str() {
+        "token_count" => {
+            token_count(ctx, state, event, ts, ops);
+            LineStatus::Parsed
+        }
+        "item_completed" => item_completed(ctx, stream_id, event, ts, ops),
+        _ => undeclared(
             ctx,
             stream_id,
             spec::declared_event_subtypes().contains(&event.event_type),
             &format!("event_msg/{}", event.event_type),
             ts,
             ops,
-        );
+        ),
     }
-    token_count(ctx, state, event, ts, ops);
+}
+
+fn item_completed(
+    ctx: &NormalizeCtx,
+    stream_id: &str,
+    event: &EventMsg,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) -> LineStatus {
+    let Some(item) = event.item.as_ref() else {
+        return hard_into(
+            ctx,
+            stream_id,
+            "event_msg/item_completed",
+            "missing_item",
+            ts,
+            ops,
+        );
+    };
+    let Some(item_type) = item.get("type").and_then(Value::as_str) else {
+        return hard_into(
+            ctx,
+            stream_id,
+            "event_msg/item_completed",
+            "missing_item_type",
+            ts,
+            ops,
+        );
+    };
+
+    // AgentMessage/UserMessage are redundant delivery telemetry: their
+    // canonical prose comes from response_item, which carries richer response
+    // and provenance identity. CommandExecution is the one reviewed lifecycle
+    // fact in the current writer schema.
+    if item_type != "CommandExecution" {
+        return LineStatus::Parsed;
+    }
+
+    let Some(correlation_key) = item.get("id").and_then(Value::as_str) else {
+        return hard_into(
+            ctx,
+            stream_id,
+            "event_msg/item_completed/CommandExecution",
+            "missing_item_id",
+            ts,
+            ops,
+        );
+    };
+    let completed_at = event
+        .completed_at_ms
+        .and_then(|value| i64::try_from(value).ok())
+        .or(ts);
+    let is_error = item
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| code != 0)
+        .or_else(|| {
+            item.get("status")
+                .and_then(Value::as_str)
+                .and_then(|status| status_error(Some(status)))
+        });
+    let diagnostic = is_error.is_some_and(|value| value).then(|| {
+        item.get("stderr")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+            .or_else(|| item.get("aggregated_output").and_then(Value::as_str))
+    });
+    let mut patch = terminal_update(
+        is_error,
+        false,
+        StatusBasis::NativeState,
+        completed_at,
+        diagnostic.flatten(),
+    );
+    if let Some(timing) = patch.timing.as_mut() {
+        timing.duration_ms = item.get("duration").and_then(command_duration_ms);
+        timing.started_at = timing.duration_ms.and_then(|duration| {
+            i64::try_from(duration)
+                .ok()
+                .and_then(|duration| completed_at.map(|at| at.saturating_sub(duration)))
+        });
+    }
+    ops.push(IngestOp::ToolUpdate {
+        session_id: ctx.session_id.clone(),
+        correlation_key: correlation_key.to_owned(),
+        evidence: ctx.evidence(0),
+        patch: Box::new(patch),
+        at: completed_at,
+    });
     LineStatus::Parsed
+}
+
+fn command_duration_ms(value: &Value) -> Option<u64> {
+    let seconds = value.get("secs").and_then(Value::as_u64)?;
+    let nanos = value.get("nanos").and_then(Value::as_u64).unwrap_or(0);
+    seconds
+        .checked_mul(1_000)?
+        .checked_add(nanos.saturating_add(999_999) / 1_000_000)
 }
 
 /// THE CODEX TRAP (docs/canonical-model.html, `usage_bucket`): "codex token
@@ -741,6 +881,11 @@ fn row(
         effort: None,
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),
@@ -792,9 +937,7 @@ fn tool_input(arguments: Option<&Value>) -> Value {
 /// Select only a human-readable failure diagnostic. Successful output never
 /// calls this helper and no native object crosses the canonical boundary.
 fn tool_output_text(output: Option<&Value>) -> Option<String> {
-    let Some(output) = output else {
-        return None;
-    };
+    let output = output?;
     match output {
         Value::String(text) => Some(text.clone()),
         Value::Array(blocks) => {

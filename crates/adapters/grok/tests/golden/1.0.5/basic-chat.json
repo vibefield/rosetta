@@ -4,40 +4,79 @@
     "timeline_id": "91ba882f4639ab3f3cecd265683d3dccc4a50753097bdcf1a9b3d005f487a743",
     "session_id": "c356b5fde1b443ecea4d795617b76133706f5552dfdf69ce10713e725f6a43fc",
     "ordinal": 0,
-    "kind": "user",
-    "subtype": null,
-    "uuid": "01a03752-d5a9-73f3-b99f-139cb363ccac-2",
-    "parent_uuid": null,
-    "ts": 1787634571426,
+    "group": {
+      "id": "91ba882f4639ab3f3cecd265683d3dccc4a50753097bdcf1a9b3d005f487a743",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "01a03752-d5a9-73f3-b99f-139cb363ccac-2",
+    "parent_native_id": null,
+    "at": 1787634571426,
     "model": null,
     "effort": null,
-    "content": "Reply with a short greeting.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 1,
-    "src_offset": 0
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Reply with a short greeting."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 1,
+      "src_offset": 0
+    }
   },
   {
     "op": "message",
     "timeline_id": "cee98512f531e123d0eb4152c175e792b3072c3414634173f22a9939ec17a9e1",
     "session_id": "c356b5fde1b443ecea4d795617b76133706f5552dfdf69ce10713e725f6a43fc",
     "ordinal": 1,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": "01a03752-d5a9-73f3-b99f-139cb363ccac-4",
-    "parent_uuid": null,
-    "ts": 1787634571431,
+    "group": {
+      "id": "cee98512f531e123d0eb4152c175e792b3072c3414634173f22a9939ec17a9e1",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "01a03752-d5a9-73f3-b99f-139cb363ccac-4",
+    "parent_native_id": null,
+    "at": 1787634571431,
     "model": "mock-model",
     "effort": null,
-    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 2,
-    "src_offset": 368
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 2,
+      "src_offset": 368
+    }
   },
   {
     "op": "usage",

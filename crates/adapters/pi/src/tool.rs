@@ -72,7 +72,7 @@ pub fn project_request(
         }
         _ => unreachable!("Pi registry and projector are closed together"),
     };
-    Ok(open_interaction(
+    open_interaction(
         correlation_key,
         if native_id.is_some() {
             CorrelationDerivation::NativeId
@@ -84,7 +84,7 @@ pub fn project_request(
         name,
         None,
         action,
-    ))
+    )
 }
 
 #[cfg(test)]

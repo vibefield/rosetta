@@ -27,68 +27,94 @@
     "timeline_id": "39ce2af3f2b5e3d7152f64752cc72175aded545402b4f51932133a5b47a0ed1f",
     "session_id": "1b205c955ddc9ae73219f866a2a84d62ae4462e38308f39dc6b2dc9175163ef5",
     "ordinal": 0,
-    "kind": "user",
-    "subtype": null,
-    "uuid": "f7e218f6",
-    "parent_uuid": "869b3be0",
-    "ts": 1787635746499,
+    "group": {
+      "id": "39ce2af3f2b5e3d7152f64752cc72175aded545402b4f51932133a5b47a0ed1f",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "f7e218f6",
+    "parent_native_id": "869b3be0",
+    "at": 1787635746499,
     "model": null,
     "effort": null,
-    "content": "Run the echo command now. [use-tool]",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 4,
-    "src_offset": 400
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Run the echo command now. [use-tool]"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 4,
+      "src_offset": 400
+    }
   },
   {
     "op": "message",
     "timeline_id": "c70c0b188b8720f0929006ff9c4ac19ca2a281f8cdc9f68ac411477f200d2e3b",
     "session_id": "1b205c955ddc9ae73219f866a2a84d62ae4462e38308f39dc6b2dc9175163ef5",
     "ordinal": 1,
-    "kind": "tool_use",
-    "subtype": null,
-    "uuid": "428d1e77",
-    "parent_uuid": "f7e218f6",
-    "ts": 1787635746528,
+    "group": {
+      "id": "c70c0b188b8720f0929006ff9c4ac19ca2a281f8cdc9f68ac411477f200d2e3b",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "428d1e77",
+    "parent_native_id": "f7e218f6",
+    "at": 1787635746528,
     "model": "mock-model",
     "effort": "off",
-    "content": null,
-    "tool": {
-      "correlation": {
-        "key": "call_mock_0001",
-        "derivation": "native_id"
-      },
-      "native": {
-        "id": "call_mock_0001",
-        "namespace": null,
-        "name": "bash",
-        "provider": null
-      },
-      "status": {
-        "value": "pending",
-        "basis": "request_observed"
-      },
-      "action": {
-        "type": "shell",
-        "command": {
-          "type": "inline",
-          "text": "echo rosetta-mock"
+    "body": {
+      "type": "tool_use",
+      "tool": {
+        "correlation": {
+          "key": "call_mock_0001",
+          "derivation": "native_id"
         },
-        "cwd": {
-          "type": "directory",
-          "path": "<PROJECT>",
-          "resolved": false
+        "native": {
+          "id": "call_mock_0001",
+          "namespace": null,
+          "name": "bash",
+          "provider": null
         },
-        "timeout_ms": null,
-        "background": false,
-        "outcome": null
-      },
-      "failure": null,
-      "timing": null
+        "status": {
+          "value": "pending",
+          "basis": "request_observed"
+        },
+        "action": {
+          "type": "shell",
+          "command": {
+            "type": "inline",
+            "text": "echo rosetta-mock"
+          },
+          "cwd": {
+            "type": "directory",
+            "path": "<PROJECT>",
+            "resolved": false
+          },
+          "timeout_ms": null,
+          "background": false,
+          "outcome": null
+        },
+        "failure": null,
+        "timing": null
+      }
     },
-    "branch_tool_id": null,
+    "parent_tool_native_id": null,
     "usage": {
       "input": 128,
       "output": 32,
@@ -96,9 +122,11 @@
       "cache_write": 0,
       "thinking": 0
     },
-    "agent_version": null,
-    "src_cursor": 5,
-    "src_offset": 622
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 622
+    }
   },
   {
     "op": "tool_update",
@@ -132,16 +160,28 @@
     "timeline_id": "033c6599ab6f49e667cee0378e4571899920c6d2d543ffef0a05d64d8d9c563f",
     "session_id": "1b205c955ddc9ae73219f866a2a84d62ae4462e38308f39dc6b2dc9175163ef5",
     "ordinal": 2,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": "e9ed552a",
-    "parent_uuid": "858561ba",
-    "ts": 1787635746541,
+    "group": {
+      "id": "033c6599ab6f49e667cee0378e4571899920c6d2d543ffef0a05d64d8d9c563f",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "e9ed552a",
+    "parent_native_id": "858561ba",
+    "at": 1787635746541,
     "model": "mock-model",
     "effort": "off",
-    "content": "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
-    "tool": null,
-    "branch_tool_id": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
     "usage": {
       "input": 128,
       "output": 32,
@@ -149,8 +189,10 @@
       "cache_write": 0,
       "thinking": 0
     },
-    "agent_version": null,
-    "src_cursor": 7,
-    "src_offset": 1473
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 7,
+      "src_offset": 1473
+    }
   }
 ]

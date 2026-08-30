@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionRole, SessionRow,
     StreamState, TaskRow, TaskStatus, TokenSnapshot, ToolCall, WorkspaceObsRow,
@@ -128,13 +130,14 @@ pub fn ingest_line(
         ));
     }
 
-    project(ctx, state, &record, ts, &mut ops);
+    project(ctx, state, stream_id, &record, ts, &mut ops);
     LineOutcome::parsed(ops)
 }
 
 fn project(
     ctx: &mut NormalizeCtx,
     state: &mut CopilotState,
+    stream_id: &str,
     record: &EventLine,
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
@@ -157,13 +160,14 @@ fn project(
             thinking.content = Some(reasoning.content.clone());
             state.response = Some(thinking.timeline_id.clone());
             state.response_usage = TokenSnapshot::default();
-            ops.push(IngestOp::Message(Box::new(thinking)));
+            IngestOp::push_message(ops, thinking);
         }
         EventPayload::ExternalToolRequested(request) => {
             if state.seen_tools.insert(request.tool_call_id.clone()) {
                 tool_event(
                     ctx,
                     state,
+                    stream_id,
                     record,
                     ToolEvent {
                         call_id: &request.tool_call_id,
@@ -253,7 +257,7 @@ fn project(
                 .clone()
                 .or_else(|| (message.role != "system").then(|| message.role.clone()));
             row.content = Some(message.content.clone());
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
         }
         EventPayload::UserMessage(message) => {
             let mut row = row(
@@ -264,10 +268,10 @@ fn project(
                 ts,
             );
             row.content = Some(message.content.clone());
-            ops.push(IngestOp::Message(Box::new(row)));
+            IngestOp::push_message(ops, row);
         }
         EventPayload::AssistantMessage(message) => {
-            assistant_message(ctx, state, record, message, ts, ops);
+            assistant_message(ctx, state, stream_id, record, message, ts, ops);
         }
         EventPayload::ToolExecutionStart(start) => {
             if let Some(model) = &start.model {
@@ -287,14 +291,17 @@ fn project(
                 tool_row.tool = Some(project_tool(
                     ctx,
                     state,
+                    stream_id,
                     &start.tool_call_id,
                     name,
                     start.mcp_server_name.as_deref(),
                     start.arguments.as_ref(),
+                    ts,
+                    ops,
                 ));
                 state.response = Some(tool_row.timeline_id.clone());
                 state.response_usage = TokenSnapshot::default();
-                ops.push(IngestOp::Message(Box::new(tool_row)));
+                IngestOp::push_message(ops, tool_row);
             }
         }
         EventPayload::ToolExecutionComplete(complete) => {
@@ -457,6 +464,7 @@ fn project(
                 tool_event(
                     ctx,
                     state,
+                    stream_id,
                     record,
                     ToolEvent {
                         call_id: &request.tool_call_id,
@@ -493,7 +501,7 @@ fn system_row(
     );
     message.subtype = Some(subtype.to_owned());
     message.content = Some(content);
-    ops.push(IngestOp::Message(Box::new(message)));
+    IngestOp::push_message(ops, message);
 }
 
 fn summary_row(
@@ -513,7 +521,7 @@ fn summary_row(
     );
     message.subtype = Some(subtype.to_owned());
     message.content = Some(content);
-    ops.push(IngestOp::Message(Box::new(message)));
+    IngestOp::push_message(ops, message);
 }
 
 fn notice_row(
@@ -544,6 +552,7 @@ struct ToolEvent<'a> {
 fn tool_event(
     ctx: &mut NormalizeCtx,
     state: &mut CopilotState,
+    stream_id: &str,
     record: &EventLine,
     event: ToolEvent<'_>,
     ops: &mut Vec<IngestOp>,
@@ -560,14 +569,17 @@ fn tool_event(
     tool.tool = Some(project_tool(
         ctx,
         state,
+        stream_id,
         event.call_id,
         event.name,
         event.namespace,
         event.input.as_ref(),
+        event.ts,
+        ops,
     ));
     state.response = Some(tool.timeline_id.clone());
     state.response_usage = TokenSnapshot::default();
-    ops.push(IngestOp::Message(Box::new(tool)));
+    IngestOp::push_message(ops, tool);
 }
 
 struct TaskFact {
@@ -696,6 +708,7 @@ fn subagent_failed(
 fn assistant_message(
     ctx: &mut NormalizeCtx,
     state: &mut CopilotState,
+    stream_id: &str,
     record: &EventLine,
     message: &AssistantMessage,
     ts: Option<Ms>,
@@ -747,10 +760,12 @@ fn assistant_message(
             rows.push(tool_request_row(
                 ctx,
                 state,
+                stream_id,
                 record,
                 request,
                 effective_model.clone(),
                 ts,
+                ops,
             ));
         }
     }
@@ -790,19 +805,23 @@ fn assistant_message(
     state.response = Some(rows[target].timeline_id.clone());
     state.response_usage = usage;
 
-    ops.extend(
-        rows.into_iter()
-            .map(|message| IngestOp::Message(Box::new(message))),
-    );
+    for message in rows {
+        IngestOp::push_message(ops, message);
+    }
 }
 
+// Tool projection is deliberately passed its complete native envelope rather
+// than reading ambient process state.
+#[allow(clippy::too_many_arguments)]
 fn tool_request_row(
     ctx: &mut NormalizeCtx,
     state: &CopilotState,
+    stream_id: &str,
     record: &EventLine,
     request: &ToolRequest,
     model: Option<String>,
     ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
 ) -> MessageRow {
     let mut tool_row = row(
         ctx,
@@ -817,24 +836,31 @@ fn tool_request_row(
     tool_row.tool = Some(project_tool(
         ctx,
         state,
+        stream_id,
         &request.tool_call_id,
         name,
         request.mcp_server_name.as_deref(),
         request.arguments.as_ref(),
+        ts,
+        ops,
     ));
     tool_row
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_tool(
     ctx: &NormalizeCtx,
     state: &CopilotState,
+    stream_id: &str,
     correlation_key: &str,
     name: &str,
     namespace: Option<&str>,
     input: Option<&Value>,
+    at: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
 ) -> ToolCall {
     let input = input.unwrap_or(&Value::Null);
-    crate::tool::project_request(
+    let projected = crate::tool::project_request(
         ctx.agent_version.as_deref(),
         name,
         input,
@@ -845,17 +871,28 @@ fn project_tool(
         correlation_key,
         Some(correlation_key),
         namespace,
-    )
-    .unwrap_or_else(|_| {
-        unknown_interaction(
-            correlation_key,
-            CorrelationDerivation::NativeId,
-            Some(correlation_key.to_owned()),
-            namespace.map(str::to_owned),
-            name,
-            namespace.map(str::to_owned),
-        )
-    })
+    );
+    match projected {
+        Ok(tool) => tool,
+        Err(error) => {
+            ops.push(drift(
+                ctx,
+                stream_id,
+                &projection_record_kind("request", namespace, name),
+                error.drift_code(),
+                &projection_shape_paths(input),
+                at,
+            ));
+            unknown_interaction(
+                correlation_key,
+                CorrelationDerivation::NativeId,
+                Some(correlation_key.to_owned()),
+                namespace.map(str::to_owned),
+                name,
+                namespace.map(str::to_owned),
+            )
+        }
+    }
 }
 
 fn tool_result(
@@ -877,13 +914,13 @@ fn tool_result(
         session_id: ctx.session_id.clone(),
         correlation_key: complete.tool_call_id.clone(),
         evidence: ctx.evidence(0),
-        patch: terminal_update(
+        patch: Box::new(terminal_update(
             Some(!complete.success),
             true,
             StatusBasis::NativeTerminalRecord,
             ts,
             diagnostic.as_deref(),
-        ),
+        )),
         at: ts,
     });
 }
@@ -1067,6 +1104,11 @@ fn row(
         effort: None,
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),
@@ -1179,8 +1221,8 @@ mod tests {
         CopilotState, all_reported_components_zero, display_text, ingest_line, model_metrics,
     };
     use rosetta_adapter_support::adapter::{LineStatus, NormalizeCtx};
-    use rosetta_core::IngestOp;
-    use rosetta_core::rows::{MessageKind, TaskStatus, TokenSnapshot};
+    use rosetta_core::rows::{TaskStatus, TokenSnapshot};
+    use rosetta_core::{IngestOp, TimelineBody};
     use serde_json::json;
 
     fn context() -> NormalizeCtx {
@@ -1284,8 +1326,10 @@ mod tests {
         );
         match reasoning.ops.as_slice() {
             [IngestOp::Message(row)] => {
-                assert_eq!(row.kind, MessageKind::Thinking);
-                assert_eq!(row.content.as_deref(), Some("Check the tree."));
+                let TimelineBody::Thinking { text } = &row.body else {
+                    panic!("expected thinking body, got {:?}", row.body);
+                };
+                assert_eq!(text.as_preview(), "Check the tree.");
             }
             other => panic!("expected a thinking row, got {other:?}"),
         }

@@ -140,8 +140,8 @@ fn apply_adapter_goldens(adapter: &str, kind: &str) -> (u64, u64, u64) {
         // pipeline's job, so strip them here rather than fake a cursor table.
         for op in &mut ops {
             if let IngestOp::Message(row) = op {
-                row.src_cursor = None;
-                row.src_offset = None;
+                row.provenance.src_cursor = None;
+                row.provenance.src_offset = None;
             }
         }
         store

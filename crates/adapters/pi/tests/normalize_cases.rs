@@ -1,8 +1,7 @@
 use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::adapter::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::IngestOp;
-use rosetta_core::rows::{MessageKind, MessageRow};
-use rosetta_core::timeline::ToolStatus;
+use rosetta_core::timeline::{TimelineBody, TimelineEntry, ToolStatus};
 use serde_json::{Value, json};
 
 fn assistant(id: &str, parent: &str, text: &str) -> Value {
@@ -60,13 +59,24 @@ fn run(lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
     (ops, statuses)
 }
 
-fn messages(ops: &[IngestOp]) -> Vec<&MessageRow> {
+fn messages(ops: &[IngestOp]) -> Vec<&TimelineEntry> {
     ops.iter()
         .filter_map(|op| match op {
             IngestOp::Message(row) => Some(&**row),
             _ => None,
         })
         .collect()
+}
+
+fn body_kind(row: &TimelineEntry) -> &'static str {
+    match &row.body {
+        TimelineBody::User { .. } => "user",
+        TimelineBody::Agent { .. } => "agent",
+        TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::ToolUse { .. } => "tool_use",
+        TimelineBody::Notice { .. } => "notice",
+        TimelineBody::Summary { .. } => "summary",
+    }
 }
 
 #[test]
@@ -88,7 +98,7 @@ fn entry_tree_metadata_survives_but_ordinals_stay_presentation_order() {
     );
     assert_eq!(
         rows.iter()
-            .map(|row| (row.uuid.as_deref(), row.parent_uuid.as_deref()))
+            .map(|row| (row.native_id.as_deref(), row.parent_native_id.as_deref()))
             .collect::<Vec<_>>(),
         [
             (Some("root"), None),
@@ -124,8 +134,8 @@ fn branch_local_settings_follow_ancestry_not_the_latest_line() {
         rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
         [0, 1, 2]
     );
-    assert_eq!(rows[2].uuid.as_deref(), Some("high-answer"));
-    assert_eq!(rows[2].parent_uuid.as_deref(), Some("high-user"));
+    assert_eq!(rows[2].native_id.as_deref(), Some("high-answer"));
+    assert_eq!(rows[2].parent_native_id.as_deref(), Some("high-user"));
     assert_eq!(rows[2].effort.as_deref(), Some("high"));
 }
 
@@ -158,12 +168,8 @@ fn assistant_blocks_split_and_usage_is_per_response() {
     let (ops, _) = run(&[line]);
     let rows = messages(&ops);
     assert_eq!(
-        rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
-        [
-            MessageKind::Thinking,
-            MessageKind::Agent,
-            MessageKind::ToolUse
-        ]
+        rows.iter().map(|row| body_kind(row)).collect::<Vec<_>>(),
+        ["thinking", "agent", "tool_use"]
     );
     assert_eq!(
         rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
@@ -171,11 +177,11 @@ fn assistant_blocks_split_and_usage_is_per_response() {
     );
     assert!(
         rows.iter()
-            .all(|row| row.uuid.as_deref() == Some("response"))
+            .all(|row| row.native_id.as_deref() == Some("response"))
     );
-    assert_eq!(rows[1].usage.expect("usage on text row").thinking, None);
-    assert_eq!(rows[0].usage, None);
-    assert_eq!(rows[2].usage, None);
+    assert_eq!(rows[1].usage.thinking, None);
+    assert!(rows[0].usage.is_empty());
+    assert!(rows[2].usage.is_empty());
 }
 
 #[test]

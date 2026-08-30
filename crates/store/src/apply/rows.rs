@@ -9,16 +9,17 @@ use std::time::Instant;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::fold::{HOUR_MS, hour_bucket};
-use rosetta_core::rows::{MessageRow, Ms, TokenSnapshot};
+use rosetta_core::rows::{Ms, TokenSnapshot};
+use rosetta_core::timeline::StatusBasis;
 use rosetta_core::{
-    EvidenceOrder, IngestOp, SourceIdentity, ToolInteraction, ToolMergeState, ToolUpdatePatch,
+    EvidenceOrder, IngestOp, SourceIdentity, TimelineBody, TimelineEntry, ToolInteraction,
+    ToolMergeState, ToolStatus, ToolStatusFact, ToolUpdatePatch,
 };
 
 use crate::StoreError;
 use crate::hot::{Effects, Mutation};
-use crate::tool_codec;
+use crate::{message_codec, tool_codec};
 
-use super::metadata::refresh_session_title;
 use super::{ApplyStats, apply_op, elapsed_nanos};
 
 /// Derived structures maintained by this apply. A private cold rebuild turns
@@ -44,25 +45,19 @@ struct PendingSession {
 }
 
 impl PendingSession {
-    fn matches(&self, row: &MessageRow) -> bool {
+    fn matches(&self, row: &TimelineEntry) -> bool {
         self.usage.contains(&row.timeline_id)
     }
 
     fn insert(&mut self, kind: &str, target: &str) {
-        match kind {
-            "usage" => {
-                self.usage.insert(target.to_string());
-            }
-            _ => {}
+        if kind == "usage" {
+            self.usage.insert(target.to_string());
         }
     }
 
     fn remove(&mut self, kind: &str, target: &str) {
-        match kind {
-            "usage" => {
-                self.usage.remove(target);
-            }
-            _ => {}
+        if kind == "usage" {
+            self.usage.remove(target);
         }
     }
 }
@@ -71,7 +66,7 @@ impl PendingGate {
     fn should_lookup(
         &mut self,
         tx: &Transaction,
-        row: &MessageRow,
+        row: &TimelineEntry,
         stats: &mut ApplyStats,
     ) -> Result<bool, StoreError> {
         if let Some(session) = self.sessions.get(&row.session_id) {
@@ -390,6 +385,76 @@ fn update_encoded_tool(
     Ok(())
 }
 
+/// Add one low-authority terminal fallback for every opener in a completed
+/// source generation. The fact is source-owned and therefore disappears on a
+/// rewrite; any native state or terminal record outranks it. Retaining the
+/// fallback even while a sibling terminal fact is active lets reconciliation
+/// return to `unknown`, never to a fabricated pending/success state, if that
+/// sibling fact later vanishes.
+pub(super) fn finalize_source_tools(
+    tx: &Transaction,
+    cursor_id: i64,
+    generation: u64,
+) -> Result<usize, StoreError> {
+    let path: String = tx
+        .prepare_cached("SELECT path FROM ingest_cursor WHERE id = ?1")?
+        .query_row(params![cursor_id], |row| row.get(0))?;
+    let source_identity = SourceIdentity(format!("{path}#source-finalization"));
+    let evidence = EvidenceOrder {
+        source_identity,
+        generation,
+        record_offset: i64::MAX as u64,
+        mutation_index: u32::MAX,
+    };
+    let patch = ToolUpdatePatch {
+        status: Some(ToolStatusFact {
+            value: ToolStatus::Unknown,
+            basis: StatusBasis::SourceFinalization,
+        }),
+        ..ToolUpdatePatch::default()
+    };
+    let targets = {
+        let mut statement = tx.prepare_cached(
+            "SELECT session_id, tool_correlation_key
+             FROM message
+             WHERE src_cursor = ?1 AND type = 'tool_use'
+             ORDER BY id",
+        )?;
+        statement
+            .query_map(params![cursor_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for (session_id, correlation_key) in &targets {
+        persist_tool_fact(
+            tx,
+            session_id,
+            correlation_key,
+            &evidence,
+            &patch,
+            None,
+            Some(cursor_id),
+        )?;
+        let old = load_old_by_tool(tx, session_id, correlation_key)?.ok_or_else(|| {
+            StoreError::ProjectionInvalid {
+                message: format!(
+                    "tool opener vanished during source finalization for {session_id}/{correlation_key}"
+                ),
+            }
+        })?;
+        let opener = old.tool_open.ok_or_else(|| StoreError::ProjectionInvalid {
+            message: format!(
+                "tool row {} is missing its closed opener during source finalization",
+                old.timeline_id
+            ),
+        })?;
+        let (tool, merge_state, _) = fold_tool_facts(tx, session_id, opener)?;
+        update_encoded_tool(tx, old.id, &tool, &merge_state)?;
+    }
+    Ok(targets.len())
+}
+
 /// Remove one source generation's active typed facts and repair any opener
 /// owned by a different source. Rows owned by the swept source are about to be
 /// deleted and will fold surviving sibling facts when their replacement opens.
@@ -540,7 +605,7 @@ fn bucket_model(model: Option<&str>) -> &str {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_message(
     tx: &Transaction,
-    row: &MessageRow,
+    row: &TimelineEntry,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
@@ -565,19 +630,37 @@ pub(super) fn apply_message(
         dirty_buckets,
         maintenance,
         &row.session_id,
-        row.ts,
+        row.at,
         row.model.as_deref(),
     );
-    let new_usage = row.usage.unwrap_or_default();
+    let new_usage = row.usage;
+    let incoming_tool = match &row.body {
+        TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
+        _ => None,
+    };
     let (tool, tool_merge_state, folded_tool_facts) =
-        resolved_open_tool(tx, &row.session_id, row.tool.as_ref(), old.as_ref())?;
+        resolved_open_tool(tx, &row.session_id, incoming_tool, old.as_ref())?;
     stats.tool_results_merged = stats
         .tool_results_merged
         .saturating_add(u64::try_from(folded_tool_facts).unwrap_or(u64::MAX));
-    let tool_open = row.tool.as_ref().map(serde_json::to_string).transpose()?;
+    let tool_open = incoming_tool.map(serde_json::to_string).transpose()?;
     let encoded = tool_codec::encode(tool.as_ref(), tool_merge_state.as_ref())?;
     let mut emitted = row.clone();
-    emitted.tool = tool;
+    if let Some(tool) = tool {
+        emitted.body = TimelineBody::ToolUse {
+            tool: Box::new(tool),
+        };
+    }
+    let message = message_codec::encode(&emitted)?;
+    let response_id = emitted
+        .response
+        .as_ref()
+        .map(|response| response.id.as_str());
+    let response_derivation = emitted
+        .response
+        .as_ref()
+        .map(|response| message_codec::derivation_name(response.derivation));
+    let block_index = emitted.block_index.map(i64::from);
 
     let started = Instant::now();
     let written = (|| -> Result<(), StoreError> {
@@ -585,32 +668,40 @@ pub(super) fn apply_message(
             Some(_) => {
                 tx.prepare_cached(
                     "UPDATE message SET
-                       session_id = ?2, ordinal = ?3, type = ?4, subtype = ?5, uuid = ?6,
-                       parent_uuid = ?7, ts = ?8, model = ?9, effort = ?10, content = ?11,
-                       tool_correlation_key = ?12, tool_correlation_kind = ?13,
-                       tool_native_id = ?14, tool_namespace = ?15, tool_provider = ?16,
-                       tool_name = ?17, tool_kind = ?18, tool_status = ?19,
-                       tool_status_basis = ?20, tool_detail = ?21, tool_merge_state = ?22,
-                       tool_error_kind = ?23, tool_error_summary = ?24, tool_diagnostic = ?25,
-                       tool_started_at = ?26, tool_completed_at = ?27, tool_duration_ms = ?28,
-                       branch_tool_id = ?29, in_tokens = ?30, out_tokens = ?31,
-                       cache_r_tokens = ?32, cache_w_tokens = ?33, think_tokens = ?34,
-                       agent_version = ?35, src_cursor = ?36, src_offset = ?37,
-                       tool_open = ?38
+                       session_id = ?2, ordinal = ?3, group_id = ?4, group_kind = ?5,
+                       group_derivation = ?6, response_id = ?7, response_derivation = ?8,
+                       block_index = ?9, type = ?10, uuid = ?11, parent_uuid = ?12,
+                       ts = ?13, model = ?14, effort = ?15, content = ?16, detail = ?17,
+                       tool_correlation_key = ?18, tool_correlation_kind = ?19,
+                       tool_native_id = ?20, tool_namespace = ?21, tool_provider = ?22,
+                       tool_name = ?23, tool_kind = ?24, tool_status = ?25,
+                       tool_status_basis = ?26, tool_detail = ?27, tool_merge_state = ?28,
+                       tool_error_kind = ?29, tool_error_summary = ?30, tool_diagnostic = ?31,
+                       tool_started_at = ?32, tool_completed_at = ?33, tool_duration_ms = ?34,
+                       parent_tool_native_id = ?35, in_tokens = ?36, out_tokens = ?37,
+                       cache_r_tokens = ?38, cache_w_tokens = ?39, think_tokens = ?40,
+                       agent_version = ?41, src_cursor = ?42, src_offset = ?43,
+                       tool_open = ?44
                      WHERE timeline_id = ?1",
                 )?
                 .execute(params![
-                    row.timeline_id,
-                    row.session_id,
-                    row.ordinal,
-                    row.kind.as_str(),
-                    row.subtype,
-                    row.uuid,
-                    row.parent_uuid,
-                    row.ts,
-                    row.model,
-                    row.effort,
-                    row.content,
+                    emitted.timeline_id,
+                    emitted.session_id,
+                    emitted.ordinal,
+                    emitted.group.id,
+                    message_codec::group_kind_name(emitted.group.kind),
+                    message_codec::derivation_name(emitted.group.derivation),
+                    response_id,
+                    response_derivation,
+                    block_index,
+                    message.kind,
+                    emitted.native_id,
+                    emitted.parent_native_id,
+                    emitted.at,
+                    emitted.model,
+                    emitted.effort,
+                    message.content,
+                    message.detail,
                     encoded.correlation_key,
                     encoded.correlation_kind,
                     encoded.native_id,
@@ -628,15 +719,15 @@ pub(super) fn apply_message(
                     encoded.started_at,
                     encoded.completed_at,
                     encoded.duration_ms,
-                    row.branch_tool_id,
+                    emitted.parent_tool_native_id,
                     new_usage.input,
                     new_usage.output,
                     new_usage.cache_read,
                     new_usage.cache_write,
                     new_usage.thinking,
-                    row.agent_version,
-                    row.src_cursor,
-                    row.src_offset,
+                    emitted.provenance.agent_version,
+                    emitted.provenance.src_cursor,
+                    emitted.provenance.src_offset,
                     tool_open,
                 ])?;
                 stats.messages_updated += 1;
@@ -644,30 +735,38 @@ pub(super) fn apply_message(
             None => {
                 tx.prepare_cached(
                     "INSERT INTO message
-                       (timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
-                        model, effort, content, tool_correlation_key, tool_correlation_kind,
+                       (timeline_id, session_id, ordinal, group_id, group_kind, group_derivation,
+                        response_id, response_derivation, block_index, type, uuid, parent_uuid, ts,
+                        model, effort, content, detail, tool_correlation_key, tool_correlation_kind,
                         tool_native_id, tool_namespace, tool_provider, tool_name, tool_kind,
                         tool_status, tool_status_basis, tool_detail, tool_merge_state,
                         tool_error_kind, tool_error_summary, tool_diagnostic, tool_started_at,
-                        tool_completed_at, tool_duration_ms, branch_tool_id, in_tokens, out_tokens,
-                        cache_r_tokens, cache_w_tokens, think_tokens, agent_version, src_cursor,
-                        src_offset, tool_open)
+                        tool_completed_at, tool_duration_ms, parent_tool_native_id, in_tokens,
+                        out_tokens, cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
+                        src_cursor, src_offset, tool_open)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                              ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
-                             ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
+                             ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38,
+                             ?39, ?40, ?41, ?42, ?43, ?44)",
                 )?
                 .execute(params![
-                    row.timeline_id,
-                    row.session_id,
-                    row.ordinal,
-                    row.kind.as_str(),
-                    row.subtype,
-                    row.uuid,
-                    row.parent_uuid,
-                    row.ts,
-                    row.model,
-                    row.effort,
-                    row.content,
+                    emitted.timeline_id,
+                    emitted.session_id,
+                    emitted.ordinal,
+                    emitted.group.id,
+                    message_codec::group_kind_name(emitted.group.kind),
+                    message_codec::derivation_name(emitted.group.derivation),
+                    response_id,
+                    response_derivation,
+                    block_index,
+                    message.kind,
+                    emitted.native_id,
+                    emitted.parent_native_id,
+                    emitted.at,
+                    emitted.model,
+                    emitted.effort,
+                    message.content,
+                    message.detail,
                     encoded.correlation_key,
                     encoded.correlation_kind,
                     encoded.native_id,
@@ -685,15 +784,15 @@ pub(super) fn apply_message(
                     encoded.started_at,
                     encoded.completed_at,
                     encoded.duration_ms,
-                    row.branch_tool_id,
+                    emitted.parent_tool_native_id,
                     new_usage.input,
                     new_usage.output,
                     new_usage.cache_read,
                     new_usage.cache_write,
                     new_usage.thinking,
-                    row.agent_version,
-                    row.src_cursor,
-                    row.src_offset,
+                    emitted.provenance.agent_version,
+                    emitted.provenance.src_cursor,
+                    emitted.provenance.src_offset,
                     tool_open,
                 ])?;
                 stats.messages_inserted += 1;
@@ -703,13 +802,7 @@ pub(super) fn apply_message(
     })();
     stats.profile.message_write_nanos += elapsed_nanos(started);
     written?;
-    if matches!(
-        row.subtype.as_deref(),
-        Some("ai_title" | "custom_title" | "title_fallback")
-    ) {
-        refresh_session_title(tx, &row.session_id)?;
-    }
-    touch_session(tx, &row.session_id, row.ts, stats)?;
+    touch_session(tx, &row.session_id, row.at, stats)?;
     if let Some(fx) = effects.as_deref_mut() {
         fx.push(Mutation::Message(Box::new(emitted.clone())));
     }
@@ -801,7 +894,7 @@ pub(super) fn apply_tool_update(
             fx.push(Mutation::ToolUpdated {
                 session_id: session_id.to_string(),
                 timeline_id: old.timeline_id.clone(),
-                tool,
+                tool: Box::new(tool),
                 at,
             });
         }
@@ -934,7 +1027,7 @@ pub(super) fn queue_pending(
 /// the target so subscribers never observe an intermediate committed state.
 fn apply_pending_for_message(
     tx: &Transaction,
-    row: &MessageRow,
+    row: &TimelineEntry,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,

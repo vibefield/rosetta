@@ -5,11 +5,14 @@
 //! usage later carried by `step.end`. This projection takes the message rail
 //! and the dedicated usage rail exactly once.
 
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot, WorkspaceObsRow,
 };
+use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ResourceRef};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -267,7 +270,7 @@ fn context_compaction(
     let mut summary = row(ctx, &discriminator, MessageKind::Summary, Some(ts));
     summary.subtype = Some("context.apply_compaction".to_owned());
     summary.content = Some(content.to_owned());
-    ops.push(IngestOp::Message(Box::new(summary)));
+    IngestOp::push_message(ops, summary);
     LineStatus::Parsed
 }
 
@@ -428,7 +431,8 @@ fn context_message(
     row.subtype = subtype;
     row.uuid.clone_from(&line.message.id);
     row.content = content;
-    ops.push(IngestOp::Message(Box::new(row)));
+    row.attachments = content_attachments(&line.message.content);
+    IngestOp::push_message(ops, row);
     LineStatus::Parsed
 }
 
@@ -519,8 +523,9 @@ fn content_part(
     row.uuid.clone_from(&line.event.uuid);
     row.parent_uuid.clone_from(&line.event.parent_uuid);
     row.content = content;
+    row.attachments = content_attachments(std::slice::from_ref(part));
     stamp_response(&mut row, state);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
     LineStatus::Parsed
 }
 
@@ -571,16 +576,25 @@ fn tool_call(
     let mut row = row(ctx, &discriminator, MessageKind::ToolUse, Some(ts));
     row.uuid.clone_from(&line.event.uuid);
     row.parent_uuid.clone_from(&line.event.parent_uuid);
-    row.tool = Some(
-        crate::tool::project_request(
-            ctx.agent_version.as_deref(),
-            name,
-            &input,
-            state.workspace.as_deref(),
-            tool_id,
-            Some(tool_id),
-        )
-        .unwrap_or_else(|_| {
+    let projected = crate::tool::project_request(
+        ctx.agent_version.as_deref(),
+        name,
+        &input,
+        state.workspace.as_deref(),
+        tool_id,
+        Some(tool_id),
+    );
+    row.tool = Some(match projected {
+        Ok(tool) => tool,
+        Err(error) => {
+            ops.push(drift(
+                ctx,
+                stream_id,
+                &projection_record_kind("request", None, name),
+                error.drift_code(),
+                &projection_shape_paths(&input),
+                Some(ts),
+            ));
             unknown_interaction(
                 tool_id.to_owned(),
                 rosetta_core::CorrelationDerivation::NativeId,
@@ -589,13 +603,13 @@ fn tool_call(
                 name.to_owned(),
                 None,
             )
-        }),
-    );
+        }
+    });
     if name == "Agent" {
         row.branch_tool_id = Some(tool_id.to_owned());
     }
     stamp_response(&mut row, state);
-    ops.push(IngestOp::Message(Box::new(row)));
+    IngestOp::push_message(ops, row);
     LineStatus::Parsed
 }
 
@@ -652,13 +666,13 @@ fn tool_result(
         session_id: ctx.session_id.clone(),
         correlation_key: tool_id.to_owned(),
         evidence: ctx.evidence(0),
-        patch: terminal_update(
+        patch: Box::new(terminal_update(
             result.is_error,
             true,
             rosetta_core::StatusBasis::NativeTerminalRecord,
             Some(ts),
             text.as_deref(),
-        ),
+        )),
         at: Some(ts),
     });
     LineStatus::Parsed
@@ -761,6 +775,11 @@ fn row(
         effort: None,
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),
@@ -810,6 +829,33 @@ fn content_text(blocks: &[ContentBlock]) -> Result<Option<String>, ContentPartEr
     }
     let joined = text.join("\n");
     Ok((!joined.is_empty()).then_some(joined))
+}
+
+/// Kimi persists authored media as references, not bytes. Preserve only that
+/// user-facing reference and its coarse kind; encrypted/context payloads and
+/// tool-result media never call this helper.
+fn content_attachments(blocks: &[ContentBlock]) -> Vec<AttachmentRef> {
+    blocks
+        .iter()
+        .filter_map(|block| {
+            let (kind, media) = match block.block_type.as_str() {
+                "image_url" => (AttachmentKind::Image, block.image_url.as_ref()?),
+                "audio_url" => (AttachmentKind::Audio, block.audio_url.as_ref()?),
+                "video_url" => (AttachmentKind::Video, block.video_url.as_ref()?),
+                _ => return None,
+            };
+            (!media.url.is_empty()).then(|| AttachmentRef {
+                kind,
+                name: media.id.clone(),
+                media_type: None,
+                byte_len: None,
+                source: ResourceRef::Url {
+                    url: media.url.clone(),
+                },
+                dimensions: None,
+            })
+        })
+        .collect()
 }
 
 fn usage_snapshot(usage: &RecordedUsage) -> Option<TokenSnapshot> {

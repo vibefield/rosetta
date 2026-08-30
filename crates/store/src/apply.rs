@@ -71,11 +71,11 @@ pub struct Batch {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ApplyStats {
-    pub image_assets: u64,
-    pub image_files_written: u64,
-    pub image_files_reused: u64,
-    pub image_bytes: u64,
-    pub image_write_nanos: u64,
+    pub projection_assets: u64,
+    pub asset_files_written: u64,
+    pub asset_files_reused: u64,
+    pub asset_bytes: u64,
+    pub asset_write_nanos: u64,
     pub messages_inserted: u64,
     pub messages_updated: u64,
     pub tool_results_merged: u64,
@@ -138,11 +138,11 @@ pub struct ApplyProfile {
 
 impl ApplyStats {
     pub fn merge_from(&mut self, batch: &Self) {
-        self.image_assets += batch.image_assets;
-        self.image_files_written += batch.image_files_written;
-        self.image_files_reused += batch.image_files_reused;
-        self.image_bytes += batch.image_bytes;
-        self.image_write_nanos += batch.image_write_nanos;
+        self.projection_assets += batch.projection_assets;
+        self.asset_files_written += batch.asset_files_written;
+        self.asset_files_reused += batch.asset_files_reused;
+        self.asset_bytes += batch.asset_bytes;
+        self.asset_write_nanos += batch.asset_write_nanos;
         self.messages_inserted += batch.messages_inserted;
         self.messages_updated += batch.messages_updated;
         self.tool_results_merged += batch.tool_results_merged;
@@ -233,8 +233,8 @@ use metadata::{
 };
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, PendingGate, apply_message, apply_tool_update, apply_usage, mark_bucket,
-    queue_pending, rebuild_bucket, remove_source_tool_facts, touch_session,
+    BucketKey, PendingGate, apply_message, apply_tool_update, apply_usage, finalize_source_tools,
+    mark_bucket, queue_pending, rebuild_bucket, remove_source_tool_facts, touch_session,
 };
 
 fn apply_workspace_obs(
@@ -718,6 +718,7 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workspace_obs WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM session_title_fact WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM tool_update_fact WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM pending_merge WHERE src_cursor = ?1 LIMIT 1)",
         )?
@@ -772,6 +773,7 @@ fn remove_cursor_projection(
         "DELETE FROM plan WHERE src_cursor = ?1",
         "DELETE FROM workspace_obs WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
+        "DELETE FROM session_title_fact WHERE src_cursor = ?1",
         "DELETE FROM pending_merge WHERE src_cursor = ?1",
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
@@ -1052,6 +1054,8 @@ fn activate_cursor(
         )?;
     }
 
+    finalize_source_tools(tx, source.cursor_id, source.generation)?;
+
     profile_renumber_session(tx, &source.session_id, stats)?;
     tx.prepare_cached("DELETE FROM source_op WHERE cursor_id = ?1")?
         .execute(params![source.cursor_id])?;
@@ -1135,7 +1139,7 @@ fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), S
 /// runs for direct applies AND for staged ops at activation.
 fn note_touch(fx: &mut Effects, op: &IngestOp) {
     match op {
-        IngestOp::ImageAsset { .. } => {}
+        IngestOp::ProjectionAsset { .. } => {}
         IngestOp::Runtime(row) => {
             fx.touched_runtimes.insert(row.id.clone());
         }
@@ -1189,11 +1193,13 @@ fn apply_op(
         note_touch(fx, op);
     }
     match op {
-        IngestOp::ImageAsset { .. } => {}
+        IngestOp::ProjectionAsset { .. } => {}
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
         IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,
-        IngestOp::SessionTitle(row) => profile_other(stats, || apply_session_title(tx, row))?,
+        IngestOp::SessionTitle(row) => {
+            profile_other(stats, || apply_session_title(tx, row, src_cursor))?
+        }
         IngestOp::Message(row) => apply_message(
             tx,
             row,
@@ -1385,6 +1391,7 @@ pub(crate) fn apply_batch(
                             },
                         )?;
                         if source.mode == SourceMode::Activate {
+                            finalize_source_tools(tx, source.cursor_id, source.generation)?;
                             set_active_generation(tx, source, active_generation)?;
                             if progressive_public && progressive_source_needs_renumber(tx, source)?
                             {

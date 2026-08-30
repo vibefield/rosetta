@@ -247,54 +247,67 @@ fn text_preview(value: Option<String>) -> Value {
 }
 
 fn message_value(row: &Row<'_>) -> rusqlite::Result<Value> {
+    let detail: Option<Value> = row
+        .get::<_, Option<String>>(16)?
+        .and_then(|value| serde_json::from_str(&value).ok());
     let tool_detail: Option<Value> = row
-        .get::<_, Option<String>>(20)?
+        .get::<_, Option<String>>(26)?
         .and_then(|value| serde_json::from_str(&value).ok());
     Ok(json!({
         "timelineId": row.get::<_, String>(0)?,
         "sessionId": row.get::<_, String>(1)?,
         "ordinal": row.get::<_, i64>(2)?,
-        "type": row.get::<_, String>(3)?,
-        "subtype": row.get::<_, Option<String>>(4)?,
-        "uuid": row.get::<_, Option<String>>(5)?,
-        "parentUuid": row.get::<_, Option<String>>(6)?,
-        "ts": row.get::<_, Option<i64>>(7)?,
-        "model": row.get::<_, Option<String>>(8)?,
-        "effort": row.get::<_, Option<String>>(9)?,
-        "content": text_preview(row.get::<_, Option<String>>(10)?),
+        "group": {
+            "id": row.get::<_, String>(3)?,
+            "kind": row.get::<_, String>(4)?,
+            "derivation": row.get::<_, String>(5)?,
+        },
+        "response": {
+            "id": row.get::<_, Option<String>>(6)?,
+            "derivation": row.get::<_, Option<String>>(7)?,
+        },
+        "blockIndex": row.get::<_, Option<i64>>(8)?,
+        "type": row.get::<_, String>(9)?,
+        "uuid": row.get::<_, Option<String>>(10)?,
+        "parentUuid": row.get::<_, Option<String>>(11)?,
+        "ts": row.get::<_, Option<i64>>(12)?,
+        "model": row.get::<_, Option<String>>(13)?,
+        "effort": row.get::<_, Option<String>>(14)?,
+        "content": text_preview(row.get::<_, Option<String>>(15)?),
+        "detail": detail,
         "tool": {
-            "correlationKey": row.get::<_, Option<String>>(11)?,
-            "correlationKind": row.get::<_, Option<String>>(12)?,
-            "nativeId": row.get::<_, Option<String>>(13)?,
-            "namespace": row.get::<_, Option<String>>(14)?,
-            "provider": row.get::<_, Option<String>>(15)?,
-            "name": row.get::<_, Option<String>>(16)?,
-            "kind": row.get::<_, Option<String>>(17)?,
-            "status": row.get::<_, Option<String>>(18)?,
-            "statusBasis": row.get::<_, Option<String>>(19)?,
+            "correlationKey": row.get::<_, Option<String>>(17)?,
+            "correlationKind": row.get::<_, Option<String>>(18)?,
+            "nativeId": row.get::<_, Option<String>>(19)?,
+            "namespace": row.get::<_, Option<String>>(20)?,
+            "provider": row.get::<_, Option<String>>(21)?,
+            "name": row.get::<_, Option<String>>(22)?,
+            "kind": row.get::<_, Option<String>>(23)?,
+            "status": row.get::<_, Option<String>>(24)?,
+            "statusBasis": row.get::<_, Option<String>>(25)?,
             "detail": tool_detail,
             "failure": {
-                "kind": row.get::<_, Option<String>>(21)?,
-                "summary": row.get::<_, Option<String>>(22)?,
-                "diagnostic": text_preview(row.get::<_, Option<String>>(23)?),
+                "kind": row.get::<_, Option<String>>(27)?,
+                "summary": row.get::<_, Option<String>>(28)?,
+                "diagnostic": text_preview(row.get::<_, Option<String>>(29)?),
             },
             "timing": {
-                "startedAt": row.get::<_, Option<i64>>(24)?,
-                "completedAt": row.get::<_, Option<i64>>(25)?,
-                "durationMs": row.get::<_, Option<i64>>(26)?,
+                "startedAt": row.get::<_, Option<i64>>(30)?,
+                "completedAt": row.get::<_, Option<i64>>(31)?,
+                "durationMs": row.get::<_, Option<i64>>(32)?,
             },
         },
-        "branchToolId": row.get::<_, Option<String>>(27)?,
+        "parentToolNativeId": row.get::<_, Option<String>>(33)?,
         "usage": {
-            "input": row.get::<_, Option<i64>>(28)?,
-            "output": row.get::<_, Option<i64>>(29)?,
-            "cacheRead": row.get::<_, Option<i64>>(30)?,
-            "cacheWrite": row.get::<_, Option<i64>>(31)?,
-            "thinking": row.get::<_, Option<i64>>(32)?,
+            "input": row.get::<_, Option<i64>>(34)?,
+            "output": row.get::<_, Option<i64>>(35)?,
+            "cacheRead": row.get::<_, Option<i64>>(36)?,
+            "cacheWrite": row.get::<_, Option<i64>>(37)?,
+            "thinking": row.get::<_, Option<i64>>(38)?,
         },
-        "agentVersion": row.get::<_, Option<String>>(33)?,
-        "srcCursor": row.get::<_, Option<i64>>(34)?,
-        "srcOffset": row.get::<_, Option<i64>>(35)?,
+        "agentVersion": row.get::<_, Option<String>>(39)?,
+        "srcCursor": row.get::<_, Option<i64>>(40)?,
+        "srcOffset": row.get::<_, Option<i64>>(41)?,
     }))
 }
 
@@ -302,11 +315,13 @@ fn sample_message(
     connection: &Connection,
     timeline_id: Option<&str>,
 ) -> Result<Option<Value>, String> {
-    const COLUMNS: &str = "timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
-        model, effort, content, tool_correlation_key, tool_correlation_kind, tool_native_id,
+    const COLUMNS: &str = "timeline_id, session_id, ordinal,
+        group_id, group_kind, group_derivation, response_id, response_derivation, block_index,
+        type, uuid, parent_uuid, ts, model, effort, content, detail,
+        tool_correlation_key, tool_correlation_kind, tool_native_id,
         tool_namespace, tool_provider, tool_name, tool_kind, tool_status, tool_status_basis,
         tool_detail, tool_error_kind, tool_error_summary, tool_diagnostic, tool_started_at,
-        tool_completed_at, tool_duration_ms, branch_tool_id, in_tokens, out_tokens,
+        tool_completed_at, tool_duration_ms, parent_tool_native_id, in_tokens, out_tokens,
         cache_r_tokens, cache_w_tokens, think_tokens, agent_version, src_cursor, src_offset";
     let exact = match timeline_id {
         Some(timeline_id) => connection

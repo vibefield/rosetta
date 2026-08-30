@@ -75,7 +75,7 @@ pub fn project_request(
         }
         _ => unreachable!("OpenCode registry and projector are closed together"),
     };
-    Ok(open_interaction(
+    open_interaction(
         correlation_key,
         CorrelationDerivation::NativeId,
         native_id.map(str::to_owned),
@@ -83,7 +83,7 @@ pub fn project_request(
         name,
         None,
         action,
-    ))
+    )
 }
 
 #[cfg(test)]

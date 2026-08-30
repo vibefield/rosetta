@@ -27,36 +27,67 @@
     "timeline_id": "add82fac02a4dc3b8220f5a6e819de2207c50beb7c2f2913ab2484d3afdab250",
     "session_id": "edf09adb4284cd68acca596b5e5221c92ece857f511e616b10e9070149842def",
     "ordinal": 0,
-    "kind": "user",
-    "subtype": null,
-    "uuid": "306f0217",
-    "parent_uuid": "724a4cc4",
-    "ts": 1787635747945,
+    "group": {
+      "id": "add82fac02a4dc3b8220f5a6e819de2207c50beb7c2f2913ab2484d3afdab250",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "306f0217",
+    "parent_native_id": "724a4cc4",
+    "at": 1787635747945,
     "model": null,
     "effort": null,
-    "content": "This request must fail. [error]",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 4,
-    "src_offset": 400
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "This request must fail. [error]"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 4,
+      "src_offset": 400
+    }
   },
   {
     "op": "message",
     "timeline_id": "866d411f8c5ea992dd49ccf0526f088a4ed61308919488fa37696ea135470fc7",
     "session_id": "edf09adb4284cd68acca596b5e5221c92ece857f511e616b10e9070149842def",
     "ordinal": 1,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": "a8900984",
-    "parent_uuid": "306f0217",
-    "ts": 1787635747976,
+    "group": {
+      "id": "866d411f8c5ea992dd49ccf0526f088a4ed61308919488fa37696ea135470fc7",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "a8900984",
+    "parent_native_id": "306f0217",
+    "at": 1787635747976,
     "model": "mock-model",
     "effort": "off",
-    "content": "Rosetta mockmodel refused this request.",
-    "tool": null,
-    "branch_tool_id": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Rosetta mockmodel refused this request."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
     "usage": {
       "input": 128,
       "output": 32,
@@ -64,8 +95,10 @@
       "cache_write": 0,
       "thinking": 0
     },
-    "agent_version": null,
-    "src_cursor": 5,
-    "src_offset": 617
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 617
+    }
   }
 ]

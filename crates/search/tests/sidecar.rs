@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use rosetta_core::rows::{
     MessageKind, MessageRow, RuntimeRow, SessionRole, SessionRow, StreamState, WorkspaceObsRow,
 };
+use rosetta_core::timeline::SearchLane;
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, EvidenceOrder, FailureKind, IngestOp, NativeToolRef,
     SourceIdentity, StatusBasis, ToolAction, ToolCorrelation, ToolFailure, ToolInteraction,
@@ -62,12 +63,23 @@ fn message(id: &str, session_id: &str, ordinal: i64, text: &str) -> MessageRow {
         effort: None,
         content: Some(text.into()),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
         src_cursor: None,
         src_offset: None,
     }
+}
+
+fn message_op(row: MessageRow) -> IngestOp {
+    let mut ops = IngestOp::project_message(row);
+    assert_eq!(ops.len(), 1);
+    ops.pop().unwrap()
 }
 
 fn tool_message() -> MessageRow {
@@ -126,9 +138,9 @@ fn canonical(dir: &tempfile::TempDir) -> (std::path::PathBuf, Store) {
                 IngestOp::Runtime(runtime()),
                 IngestOp::SessionMeta(session("s1", None)),
                 IngestOp::SessionMeta(session("s2", None)),
-                IngestOp::Message(Box::new(message("m1", "s1", 0, "alpha beta beta"))),
-                IngestOp::Message(Box::new(message("m2", "s1", 1, "alpha gamma"))),
-                IngestOp::Message(Box::new(message("m3", "s2", 0, "beta delta alpha"))),
+                message_op(message("m1", "s1", 0, "alpha beta beta")),
+                message_op(message("m2", "s1", 1, "alpha gamma")),
+                message_op(message("m3", "s2", 0, "beta delta alpha")),
             ],
             checkpoints: vec![],
             source: None,
@@ -218,7 +230,7 @@ fn sidecar_indexes_only_explicit_typed_tool_lanes() {
     store
         .apply(&Batch {
             ops: vec![
-                IngestOp::Message(Box::new(tool_message())),
+                message_op(tool_message()),
                 IngestOp::ToolUpdate {
                     session_id: "s1".into(),
                     correlation_key: "tool-semantic".into(),
@@ -228,7 +240,7 @@ fn sidecar_indexes_only_explicit_typed_tool_lanes() {
                         record_offset: 1,
                         mutation_index: 0,
                     },
-                    patch: ToolUpdatePatch {
+                    patch: Box::new(ToolUpdatePatch {
                         status: Some(ToolStatusFact {
                             value: ToolStatus::Failed,
                             basis: StatusBasis::NativeTerminalRecord,
@@ -239,7 +251,7 @@ fn sidecar_indexes_only_explicit_typed_tool_lanes() {
                             diagnostic: None,
                         }),
                         ..Default::default()
-                    },
+                    }),
                     at: None,
                 },
             ],
@@ -277,6 +289,115 @@ fn sidecar_indexes_only_explicit_typed_tool_lanes() {
 }
 
 #[test]
+fn sidecar_resolves_full_committed_prose_members_not_only_the_preview() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, mut store) = canonical(&dir);
+    let text = format!(
+        "{} deepmembersentinel",
+        "ordinary preview words ".repeat(2_000)
+    );
+    let ops = IngestOp::project_message(message("member", "s1", 4, &text));
+    assert!(matches!(
+        ops.first(),
+        Some(IngestOp::ProjectionAsset { .. })
+    ));
+    store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let mut observed_preview = None;
+    queries::visit_session_search_documents(store.conn(), "s1", |document| {
+        if document.timeline_id == "member" {
+            assert!(
+                document
+                    .members
+                    .iter()
+                    .any(|member| member.lane == SearchLane::Prose)
+            );
+            observed_preview = Some(document.prose);
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        !observed_preview
+            .expect("member search document")
+            .contains("deepmembersentinel")
+    );
+
+    let search = Fts5SidecarSearch::new(&path);
+    synchronize_fts5_once(&search, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+    let hits = search.search(query("deepmembersentinel")).unwrap().hits;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].timeline_id, "member");
+}
+
+#[test]
+fn sidecar_resolves_full_tool_intent_members_not_only_the_preview() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, mut store) = canonical(&dir);
+    let command = format!(
+        "{} deeptoolintentsentinel",
+        "ordinary command prefix ".repeat(2_000)
+    );
+    let mut row = tool_message();
+    row.timeline_id = "tool-member".into();
+    row.ordinal = 5;
+    let Some(tool) = row.tool.as_mut() else {
+        panic!("tool fixture");
+    };
+    tool.correlation.key = "tool-member".into();
+    tool.native.id = Some("tool-member".into());
+    tool.action = ToolAction::Shell {
+        command: CanonicalText::Inline {
+            text: command.clone(),
+        },
+        cwd: None,
+        timeout_ms: None,
+        background: false,
+        outcome: None,
+    };
+    let ops = IngestOp::project_message(row);
+    assert!(matches!(
+        ops.first(),
+        Some(IngestOp::ProjectionAsset { .. })
+    ));
+    store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+
+    queries::visit_session_search_documents(store.conn(), "s1", |document| {
+        if document.timeline_id == "tool-member" {
+            assert!(
+                document
+                    .members
+                    .iter()
+                    .any(|member| member.lane == SearchLane::Intent)
+            );
+            assert!(!document.intent.contains("deeptoolintentsentinel"));
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    let search = Fts5SidecarSearch::new(&path);
+    synchronize_fts5_once(&search, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+    let hits = search.search(query("deeptoolintentsentinel")).unwrap().hits;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].timeline_id, "tool-member");
+}
+
+#[test]
 fn commit_before_ack_replays_and_live_repair_catches_up() {
     let dir = tempfile::TempDir::new().unwrap();
     let (path, mut store) = canonical(&dir);
@@ -298,12 +419,7 @@ fn commit_before_ack_replays_and_live_repair_catches_up() {
 
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message(
-                "m2",
-                "s1",
-                1,
-                "epsilon replacement",
-            )))],
+            ops: vec![message_op(message("m2", "s1", 1, "epsilon replacement"))],
             checkpoints: vec![],
             source: None,
         })
@@ -400,12 +516,12 @@ fn background_worker_wakes_repairs_and_delivers_acknowledgements() {
 
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message(
+            ops: vec![message_op(message(
                 "m2",
                 "s1",
                 1,
                 "worker wake replacement",
-            )))],
+            ))],
             checkpoints: vec![],
             source: None,
         })

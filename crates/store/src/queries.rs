@@ -5,12 +5,11 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use rosetta_core::rows::{
-    MessageKind, MessageRow, Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
-    TokenSnapshot,
-};
+use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
+use rosetta_core::timeline::SearchMember;
+use rosetta_core::{TimelineBody, TimelineEntry};
 
-use crate::{StoreError, tool_codec};
+use crate::{StoreError, message_codec};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -100,8 +99,8 @@ pub struct SearchRepair {
 }
 
 /// Complete search document materialized from canonical rows. Search owns its
-/// physical index, but SQLite remains the only source from which a document is
-/// built or repaired.
+/// physical index, while SQLite plus its verified projection members remain
+/// the only source from which a document is built or repaired.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchDocument {
     pub id: i64,
@@ -113,6 +112,10 @@ pub struct SearchDocument {
     pub ts: Option<Ms>,
     pub kind: String,
     pub is_error: Option<bool>,
+    /// The detached worker resolves these committed UTF-8 members into their
+    /// declared semantic lanes before FTS insertion. The strings below retain
+    /// bounded previews for diagnostic in-process queries.
+    pub members: Vec<SearchMember>,
     pub prose: String,
     pub target: String,
     pub intent: String,
@@ -196,23 +199,16 @@ fn visit_search_documents_where(
         None => statement.query([])?,
     };
     while let Some(row) = rows.next()? {
-        let (tool, _) = tool_codec::decode(row)?;
-        let mut lanes = tool
-            .as_ref()
-            .map_or_else(rosetta_core::SearchLanes::default, |tool| {
-                tool.search_lanes()
-            });
-        if let Some(content) = row.get::<_, Option<String>>("content")? {
-            if !lanes.prose.is_empty() {
-                lanes.prose.push('\n');
-            }
-            lanes.prose.push_str(&content);
-        }
-        let status = tool.as_ref().map(|tool| tool.status.value);
+        let entry = message_codec::decode(row)?;
+        let lanes = entry.search_lanes();
+        let status = match &entry.body {
+            TimelineBody::ToolUse { tool } => Some(tool.status.value),
+            _ => None,
+        };
         visit(SearchDocument {
             id: row.get("id")?,
-            timeline_id: row.get("timeline_id")?,
-            session_id: row.get("session_id")?,
+            timeline_id: entry.timeline_id,
+            session_id: entry.session_id,
             runtime_id: row.get("search_runtime_id")?,
             agent: row.get("search_agent")?,
             project_id: row.get("search_project_id")?,
@@ -229,6 +225,7 @@ fn visit_search_documents_where(
                 | rosetta_core::ToolStatus::Running
                 | rosetta_core::ToolStatus::Unknown => None,
             }),
+            members: lanes.members,
             prose: lanes.prose,
             target: lanes.target,
             intent: lanes.intent,
@@ -266,17 +263,6 @@ pub struct CursorState {
     pub session_id: String,
 }
 
-fn parse_kind(text: &str) -> MessageKind {
-    match text {
-        "user" => MessageKind::User,
-        "agent" => MessageKind::Agent,
-        "thinking" => MessageKind::Thinking,
-        "tool_use" => MessageKind::ToolUse,
-        "summary" => MessageKind::Summary,
-        _ => MessageKind::System,
-    }
-}
-
 fn parse_role(text: &str) -> SessionRole {
     match text {
         "subagent" => SessionRole::Subagent,
@@ -291,37 +277,6 @@ fn parse_state(text: &str) -> StreamState {
         "indexed" => StreamState::Indexed,
         _ => StreamState::Pending,
     }
-}
-
-fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
-    let kind: String = row.get("type")?;
-    let (tool, _) = tool_codec::decode(row)?;
-    let usage = TokenSnapshot {
-        input: row.get("in_tokens")?,
-        output: row.get("out_tokens")?,
-        cache_read: row.get("cache_r_tokens")?,
-        cache_write: row.get("cache_w_tokens")?,
-        thinking: row.get("think_tokens")?,
-    };
-    Ok(MessageRow {
-        timeline_id: row.get("timeline_id")?,
-        session_id: row.get("session_id")?,
-        ordinal: row.get("ordinal")?,
-        kind: parse_kind(&kind),
-        subtype: row.get("subtype")?,
-        uuid: row.get("uuid")?,
-        parent_uuid: row.get("parent_uuid")?,
-        ts: row.get("ts")?,
-        model: row.get("model")?,
-        effort: row.get("effort")?,
-        content: row.get("content")?,
-        tool,
-        branch_tool_id: row.get("branch_tool_id")?,
-        usage: if usage.is_empty() { None } else { Some(usage) },
-        agent_version: row.get("agent_version")?,
-        src_cursor: row.get("src_cursor")?,
-        src_offset: row.get("src_offset")?,
-    })
 }
 
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -529,7 +484,7 @@ pub fn timeline_page(
     session_id: &str,
     before: Option<i64>,
     limit: i64,
-) -> Result<Vec<MessageRow>, StoreError> {
+) -> Result<Vec<TimelineEntry>, StoreError> {
     let mut stmt = conn.prepare_cached(
         "SELECT * FROM (
            SELECT * FROM message
@@ -539,7 +494,7 @@ pub fn timeline_page(
     )?;
     let rows = stmt.query_map(
         params![session_id, before.unwrap_or(i64::MAX), limit],
-        message_from_row,
+        message_codec::decode,
     )?;
     let mut out = Vec::new();
     for row in rows {

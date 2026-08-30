@@ -17,9 +17,9 @@
 use serde::{Deserialize, Serialize};
 
 pub use rosetta_core::rows::{
-    MessageKind, MessageRow, Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
-    TokenSnapshot, ToolCall,
+    Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, TokenSnapshot,
 };
+pub use rosetta_core::{TimelineBody, TimelineEntry};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
@@ -244,7 +244,7 @@ pub struct SessionResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TimelinePage {
-    pub messages: Vec<MessageRow>,
+    pub entries: Vec<TimelineEntry>,
     /// Opaque continuation for the next older page; `None` at the top of
     /// the timeline. Expires (HTTP 410, [`ErrorCode::CursorExpired`]) when
     /// the session's projection was rewritten under it.
@@ -361,7 +361,7 @@ pub enum ServerFrame {
     /// pages through the REST timeline endpoint.
     TimelineSnapshot {
         stamp: Stamp,
-        messages: Vec<MessageRow>,
+        entries: Vec<TimelineEntry>,
     },
     /// The full metadata surface, served from the resident mirror.
     MetaSnapshot {

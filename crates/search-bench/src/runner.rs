@@ -452,7 +452,7 @@ mod tests {
                         updated_at: 2,
                         stream_state: StreamState::Indexed,
                     }),
-                    IngestOp::Message(Box::new(MessageRow {
+                    IngestOp::project_message(MessageRow {
                         timeline_id: "m".into(),
                         session_id: "s".into(),
                         ordinal: 0,
@@ -465,12 +465,19 @@ mod tests {
                         effort: None,
                         content: Some("detached needle".into()),
                         tool: None,
+                        attachments: Vec::new(),
+                        citations: Vec::new(),
+                        group: None,
+                        response: None,
+                        block_index: None,
                         branch_tool_id: None,
                         usage: None,
                         agent_version: None,
                         src_cursor: None,
                         src_offset: None,
-                    })),
+                    })
+                    .pop()
+                    .expect("one canonical message"),
                 ],
                 checkpoints: vec![],
                 source: None,

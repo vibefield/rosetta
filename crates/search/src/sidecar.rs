@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness, SearchState};
 
-pub(crate) const SEARCH_SCHEMA_VERSION: i64 = 2;
+pub(crate) const SEARCH_SCHEMA_VERSION: i64 = 3;
 
 pub(crate) const SEARCH_DDL: &str = r#"
 CREATE TABLE search_state (

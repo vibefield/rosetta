@@ -91,12 +91,23 @@ fn message(id: &str, ordinal: i64, ts: i64) -> MessageRow {
         effort: None,
         content: Some(format!("searchable {id}")),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
         src_cursor: None,
         src_offset: Some(ordinal),
     }
+}
+
+fn message_op(row: MessageRow) -> IngestOp {
+    let mut ops = IngestOp::project_message(row);
+    assert_eq!(ops.len(), 1);
+    ops.pop().unwrap()
 }
 
 fn query_plan(conn: &Connection, sql: &str) -> Vec<String> {
@@ -182,7 +193,7 @@ fn one_batch_rebuilds_each_changed_bucket_once() {
                 output: Some(1),
                 ..Default::default()
             });
-            IngestOp::Message(Box::new(row))
+            message_op(row)
         })
         .collect();
     let stats = store
@@ -231,7 +242,7 @@ fn initial_activation_skips_the_sweep_and_rewrite_sweeps_once() {
     first.src_cursor = Some(cursor.id);
     let first_stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(first))],
+            ops: vec![message_op(first)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: cursor.id,
@@ -250,7 +261,7 @@ fn initial_activation_skips_the_sweep_and_rewrite_sweeps_once() {
     second.src_cursor = Some(cursor.id);
     let rewrite_stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(second))],
+            ops: vec![message_op(second)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: cursor.id,
@@ -295,10 +306,7 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
     ));
     store
         .apply(&Batch {
-            ops: vec![
-                IngestOp::Message(Box::new(before_epoch)),
-                IngestOp::Message(Box::new(tool_without_native_id)),
-            ],
+            ops: vec![message_op(before_epoch), message_op(tool_without_native_id)],
             checkpoints: vec![],
             source: None,
         })
@@ -375,7 +383,7 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
 
     let live_stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(message("live", 2, 20)))],
+            ops: vec![message_op(message("live", 2, 20))],
             checkpoints: vec![],
             source: None,
         })
@@ -398,7 +406,7 @@ fn cold_first_generation_projects_without_the_source_journal() {
     first.src_cursor = Some(cursor_id);
     let staged = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(first))],
+            ops: vec![message_op(first)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -435,7 +443,7 @@ fn cold_first_generation_projects_without_the_source_journal() {
     second.src_cursor = Some(cursor_id);
     let activated = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(second))],
+            ops: vec![message_op(second)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -486,7 +494,7 @@ fn cold_finalize_renumbers_all_sources_in_one_set_pass() {
         row.src_offset = Some(0);
         let stats = store
             .apply(&Batch {
-                ops: vec![IngestOp::Message(Box::new(row))],
+                ops: vec![message_op(row)],
                 checkpoints: vec![],
                 source: Some(SourceWrite {
                     cursor_id,
@@ -545,7 +553,7 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
     stale.src_cursor = Some(cursor_id);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(stale))],
+            ops: vec![message_op(stale)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -561,7 +569,7 @@ fn cold_retry_before_first_activation_sweeps_the_incomplete_generation() {
     fresh.src_cursor = Some(cursor_id);
     let restarted = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(fresh))],
+            ops: vec![message_op(fresh)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -612,7 +620,7 @@ fn cold_replacement_after_activation_still_swaps_from_the_journal() {
     old.src_cursor = Some(cursor_id);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(old))],
+            ops: vec![message_op(old)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -628,7 +636,7 @@ fn cold_replacement_after_activation_still_swaps_from_the_journal() {
     replacement.src_cursor = Some(cursor_id);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(replacement))],
+            ops: vec![message_op(replacement)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -697,7 +705,7 @@ fn abandoned_cold_generation_cannot_be_finalized() {
     partial.src_cursor = Some(cursor_id);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(partial))],
+            ops: vec![message_op(partial)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -744,7 +752,7 @@ fn incomplete_cold_generation_cannot_be_finalized() {
     partial.src_cursor = Some(cursor_id);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(partial))],
+            ops: vec![message_op(partial)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -772,7 +780,7 @@ fn large_cold_session_defers_ranking_until_finalization() {
         .map(|ordinal| {
             let mut row = message(&format!("cold-large-{ordinal}"), ordinal, ordinal);
             row.src_cursor = Some(cursor_id);
-            IngestOp::Message(Box::new(row))
+            message_op(row)
         })
         .collect();
     let activation = store

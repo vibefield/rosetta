@@ -184,11 +184,7 @@ pub fn project_request(
             }
         }
         ToolActionKind::Task => ToolAction::Task {
-            operation: if lookup_name == "update_goal" {
-                TaskOp::Update
-            } else {
-                TaskOp::Update
-            },
+            operation: TaskOp::Update,
             task_id: first_string(input, &["id", "goal_id", "task_id"]).map(str::to_owned),
             subject: first_string(input, &["title", "subject"]).map(str::to_owned),
             description: first_string(input, &["description", "content", "goal"])
@@ -280,7 +276,7 @@ pub fn project_request(
         },
         _ => unreachable!("Grok registry and projector are closed together"),
     };
-    Ok(open_interaction(
+    open_interaction(
         correlation_key,
         CorrelationDerivation::NativeId,
         native_id.map(str::to_owned),
@@ -288,7 +284,7 @@ pub fn project_request(
         name,
         None,
         action,
-    ))
+    )
 }
 
 fn task_status(value: &str) -> Option<TaskStatus> {

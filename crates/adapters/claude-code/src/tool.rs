@@ -198,7 +198,7 @@ pub fn project_request(
         }
         _ => unreachable!("Claude registry and projector are closed together"),
     };
-    Ok(open_interaction(
+    open_interaction(
         correlation_key,
         CorrelationDerivation::NativeId,
         native_id.map(str::to_owned),
@@ -206,7 +206,7 @@ pub fn project_request(
         name,
         namespace.map(str::to_owned),
         action,
-    ))
+    )
 }
 
 fn project_read(input: &Value, cwd: Option<&str>) -> Result<ToolAction, ProjectionError> {

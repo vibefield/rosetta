@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 
-use rosetta_core::ToolInteraction;
-use rosetta_core::rows::{MessageRow, Ms, ProjectRow, RuntimeRow, SessionRow, TokenSnapshot};
+use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRow, TokenSnapshot};
+use rosetta_core::{TimelineBody, TimelineEntry, ToolInteraction};
 
 use crate::{StoreError, queries};
 
@@ -38,13 +38,13 @@ use crate::{StoreError, queries};
 pub enum Mutation {
     /// Full message-row upsert — insert or replacement — carrying the
     /// ordinal the apply chose.
-    Message(Box<MessageRow>),
+    Message(Box<TimelineEntry>),
     /// Final typed tool state after a lifecycle patch merged into its opener.
     /// Native result bodies never enter this mutation log.
     ToolUpdated {
         session_id: String,
         timeline_id: String,
-        tool: ToolInteraction,
+        tool: Box<ToolInteraction>,
         at: Option<Ms>,
     },
     /// Response-level usage replacement; `model` and `ts` are the row's
@@ -88,14 +88,26 @@ impl Mutation {
         const BASE: usize = 160;
         let strings = match self {
             Self::Message(row) => {
-                row.content.as_deref().map_or(0, str::len)
-                    + row.tool.as_ref().map_or(0, |tool| {
-                        tool.native.name.len()
-                            + tool.failure.as_ref().map_or(0, |failure| {
-                                failure.summary.as_deref().map_or(0, str::len)
-                                    + failure.diagnostic.as_deref().map_or(0, str::len)
-                            })
-                    })
+                let prose = match &row.body {
+                    TimelineBody::User { text, .. } | TimelineBody::Agent { text, .. } => {
+                        text.as_ref().map_or(0, |text| text.as_preview().len())
+                    }
+                    TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
+                        text.as_preview().len()
+                    }
+                    TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => 0,
+                };
+                prose
+                    + match &row.body {
+                        TimelineBody::ToolUse { tool } => {
+                            tool.native.name.len()
+                                + tool.failure.as_ref().map_or(0, |failure| {
+                                    failure.summary.as_deref().map_or(0, str::len)
+                                        + failure.diagnostic.as_deref().map_or(0, str::len)
+                                })
+                        }
+                        _ => 0,
+                    }
             }
             Self::ToolUpdated { tool, .. } => {
                 tool.native.name.len()

@@ -10,8 +10,8 @@ use rosetta_core::rows::{
 };
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, EvidenceOrder, IngestOp, NativeToolRef, SourceIdentity,
-    StatusBasis, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
-    ToolUpdatePatch,
+    StatusBasis, TimelineBody, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus,
+    ToolStatusFact, ToolUpdatePatch,
 };
 use rosetta_store::hot::{Effects, MetaMirror, Mutation};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
@@ -74,12 +74,23 @@ fn message(timeline_id: &str, ordinal: i64) -> MessageRow {
         effort: None,
         content: Some(format!("content of {timeline_id}")),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
         src_cursor: None,
         src_offset: None,
     }
+}
+
+fn message_op(row: MessageRow) -> IngestOp {
+    let mut ops = IngestOp::project_message(row);
+    assert_eq!(ops.len(), 1);
+    ops.pop().unwrap()
 }
 
 fn shell_tool(key: &str, command: &str) -> ToolInteraction {
@@ -120,13 +131,13 @@ fn succeeded_update(key: &str) -> IngestOp {
             record_offset: 1,
             mutation_index: 0,
         },
-        patch: ToolUpdatePatch {
+        patch: Box::new(ToolUpdatePatch {
             status: Some(ToolStatusFact {
                 value: ToolStatus::Succeeded,
                 basis: StatusBasis::NativeTerminalRecord,
             }),
             ..Default::default()
-        },
+        }),
         at: Some(3_700_000),
     }
 }
@@ -196,8 +207,8 @@ fn append_mode_emits_rows_with_apply_time_ordinals_and_merge_patches() {
     store
         .apply(&Batch {
             ops: vec![
-                IngestOp::Message(Box::new(message("m-user", 0))),
-                IngestOp::Message(Box::new(call)),
+                message_op(message("m-user", 0)),
+                message_op(call),
                 succeeded_update("toolu_1"),
                 IngestOp::Usage {
                     session_id: "s1".into(),
@@ -262,7 +273,7 @@ fn append_mode_emits_rows_with_apply_time_ordinals_and_merge_patches() {
     edited.content = Some("edited content".into());
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(edited))],
+            ops: vec![message_op(edited)],
             checkpoints: vec![],
             source: Some(source(cursor, 0, 0, SourceMode::Append)),
         })
@@ -271,7 +282,11 @@ fn append_mode_emits_rows_with_apply_time_ordinals_and_merge_patches() {
     assert_eq!(effects.mutations.len(), 1);
     match &effects.mutations[0] {
         Mutation::Message(row) => {
-            assert_eq!(row.content.as_deref(), Some("edited content"));
+            assert!(matches!(
+                &row.body,
+                TimelineBody::User { text: Some(text), .. }
+                    if text.as_preview() == "edited content"
+            ));
             assert_eq!(row.ordinal, 0, "replacement keeps the existing ordinal");
         }
         other => panic!("expected message mutation, got {other:?}"),
@@ -287,8 +302,8 @@ fn activation_collapses_to_a_single_sweep_marker() {
     store.drain_effects();
 
     let staged: Vec<IngestOp> = vec![
-        IngestOp::Message(Box::new(message("g1-a", 0))),
-        IngestOp::Message(Box::new(message("g1-b", 1))),
+        message_op(message("g1-a", 0)),
+        message_op(message("g1-b", 1)),
     ];
     let count = staged.len() as u64;
     store

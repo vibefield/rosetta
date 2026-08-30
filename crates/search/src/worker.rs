@@ -13,8 +13,9 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rosetta_store::StoreError;
+use rosetta_core::timeline::SearchLane;
 use rosetta_store::queries::{self, ProjectionState, SearchDocument};
+use rosetta_store::{StoreError, assets};
 use rusqlite::{Connection, OpenFlags, params};
 
 use crate::SearchError;
@@ -49,10 +50,19 @@ fn canonical_snapshot(path: &Path) -> Result<(Connection, ProjectionState), Sear
 }
 
 fn insert_document(
-    document: &SearchDocument,
+    canonical_path: &Path,
+    mut document: SearchDocument,
     metadata: &mut rusqlite::Statement<'_>,
     fts: &mut rusqlite::Statement<'_>,
 ) -> Result<(), StoreError> {
+    let members = std::mem::take(&mut document.members);
+    for member in &members {
+        remove_preview(search_lane(&mut document, member.lane), &member.preview);
+    }
+    for member in members {
+        let text = assets::read_text_member(canonical_path, &member.asset)?;
+        push_search_value(search_lane(&mut document, member.lane), &text);
+    }
     metadata.execute(params![
         document.id,
         document.timeline_id,
@@ -75,10 +85,59 @@ fn insert_document(
     Ok(())
 }
 
+fn search_lane(document: &mut SearchDocument, lane: SearchLane) -> &mut String {
+    match lane {
+        SearchLane::Prose => &mut document.prose,
+        SearchLane::Target => &mut document.target,
+        SearchLane::Intent => &mut document.intent,
+        SearchLane::Change => &mut document.change,
+        SearchLane::Tool => &mut document.tool,
+    }
+}
+
+fn push_search_value(lane: &mut String, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if !lane.is_empty() {
+        lane.push('\n');
+    }
+    lane.push_str(value);
+}
+
+/// Remove exactly one preview value from the newline-composed lane before
+/// adding its full member. Preview text itself may contain newlines, so this
+/// checks only the boundaries around the complete byte string rather than
+/// splitting it into lines.
+fn remove_preview(lane: &mut String, preview: &str) {
+    if preview.is_empty() {
+        return;
+    }
+    let mut from = 0;
+    while let Some(relative) = lane[from..].find(preview) {
+        let start = from + relative;
+        let end = start + preview.len();
+        let before = start == 0 || lane.as_bytes()[start - 1] == b'\n';
+        let after = end == lane.len() || lane.as_bytes()[end] == b'\n';
+        if before && after {
+            if start == 0 && end < lane.len() {
+                lane.replace_range(start..end + 1, "");
+            } else if start > 0 {
+                lane.replace_range(start - 1..end, "");
+            } else {
+                lane.clear();
+            }
+            return;
+        }
+        from = end;
+    }
+}
+
 fn finish_private_generation(
     conn: &mut Connection,
     state: &ProjectionState,
     canonical: &Connection,
+    canonical_path: &Path,
     stop: &AtomicBool,
 ) -> Result<u64, SearchError> {
     conn.execute_batch(
@@ -113,7 +172,7 @@ fn finish_private_generation(
                 message: "search build interrupted".into(),
             });
         }
-        insert_document(&document, &mut metadata, &mut fts)
+        insert_document(canonical_path, document, &mut metadata, &mut fts)
     })
     .map_err(|error| backend(format!("building search documents: {error}")))?;
     drop(fts);
@@ -193,7 +252,7 @@ fn full_build(
     let temporary = temporary.into_temp_path();
     let mut conn = Connection::open(&temporary)
         .map_err(|error| backend(format!("opening private search generation: {error}")))?;
-    finish_private_generation(&mut conn, state, canonical, stop)?;
+    finish_private_generation(&mut conn, state, canonical, search.canonical_path(), stop)?;
     drop(conn);
     if stop.load(Ordering::SeqCst) {
         return Err(backend("search build interrupted"));
@@ -286,7 +345,7 @@ fn repair_generation(
             .execute(params![repair.key])
             .map_err(|error| backend(format!("deleting stale search metadata: {error}")))?;
         queries::visit_session_search_documents(canonical, &repair.key, |document| {
-            insert_document(&document, &mut metadata, &mut fts)
+            insert_document(search.canonical_path(), document, &mut metadata, &mut fts)
         })
         .map_err(|error| backend(format!("reloading repaired search session: {error}")))?;
     }

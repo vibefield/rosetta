@@ -34,11 +34,11 @@ pub enum Metric {
     ReadNanos,
     NormalizeNanos,
     ApplyNanos,
-    ImageAssets,
-    ImageFilesWritten,
-    ImageFilesReused,
-    ImageBytes,
-    ImageWriteNanos,
+    ProjectionAssets,
+    AssetFilesWritten,
+    AssetFilesReused,
+    AssetBytes,
+    AssetWriteNanos,
     LedgerReadNanos,
     LedgerWriteNanos,
     LedgerFrames,
@@ -94,7 +94,7 @@ pub enum Metric {
     BulkIndexNanos,
     BulkValidateNanos,
     BulkPragmaNanos,
-    BulkImageSyncNanos,
+    BulkAssetSyncNanos,
     PublishNanos,
     SearchSyncNanos,
 }
@@ -122,11 +122,11 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::ReadNanos, "read time"),
     (Metric::NormalizeNanos, "normalize time"),
     (Metric::ApplyNanos, "apply time"),
-    (Metric::ImageAssets, "image assets"),
-    (Metric::ImageFilesWritten, "image files written"),
-    (Metric::ImageFilesReused, "image files reused"),
-    (Metric::ImageBytes, "decoded image bytes"),
-    (Metric::ImageWriteNanos, "image materialization time"),
+    (Metric::ProjectionAssets, "projection assets"),
+    (Metric::AssetFilesWritten, "asset files written"),
+    (Metric::AssetFilesReused, "asset files reused"),
+    (Metric::AssetBytes, "materialized asset bytes"),
+    (Metric::AssetWriteNanos, "asset materialization time"),
     (Metric::LedgerReadNanos, "ledger read time"),
     (Metric::LedgerWriteNanos, "ledger write time"),
     (Metric::LedgerFrames, "ledger frames"),
@@ -188,7 +188,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::BulkIndexNanos, "bulk index time"),
     (Metric::BulkValidateNanos, "bulk validate time"),
     (Metric::BulkPragmaNanos, "bulk pragma time"),
-    (Metric::BulkImageSyncNanos, "bulk image sync time"),
+    (Metric::BulkAssetSyncNanos, "bulk asset sync time"),
     (Metric::PublishNanos, "publication time"),
     (Metric::SearchSyncNanos, "detached search sync time"),
 ];
@@ -414,11 +414,11 @@ impl Instrument {
     pub fn apply(&self, store: &mut Store, batch: &Batch) -> Result<ApplyStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || store.apply(batch));
         if let Ok(stats) = &result {
-            self.add(Metric::ImageAssets, stats.image_assets);
-            self.add(Metric::ImageFilesWritten, stats.image_files_written);
-            self.add(Metric::ImageFilesReused, stats.image_files_reused);
-            self.add(Metric::ImageBytes, stats.image_bytes);
-            self.add(Metric::ImageWriteNanos, stats.image_write_nanos);
+            self.add(Metric::ProjectionAssets, stats.projection_assets);
+            self.add(Metric::AssetFilesWritten, stats.asset_files_written);
+            self.add(Metric::AssetFilesReused, stats.asset_files_reused);
+            self.add(Metric::AssetBytes, stats.asset_bytes);
+            self.add(Metric::AssetWriteNanos, stats.asset_write_nanos);
             self.add(Metric::SourceStageNanos, stats.source_stage_nanos);
             self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
             self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
@@ -495,7 +495,7 @@ impl Instrument {
         self.add(Metric::SqliteCommitNanos, stats.commit_nanos);
         self.add(Metric::BulkValidateNanos, stats.validate_nanos);
         self.add(Metric::BulkPragmaNanos, stats.pragma_nanos);
-        self.add(Metric::BulkImageSyncNanos, stats.image_sync_nanos);
+        self.add(Metric::BulkAssetSyncNanos, stats.asset_sync_nanos);
     }
 
     /// Human-readable report: raw counters plus the derived rates the bench
@@ -716,7 +716,7 @@ mod tests {
     fn boundary_evidence_follows_one_native_record_into_its_real_write_batch() {
         let instrument = Instrument::new();
         instrument.enable_boundary_evidence();
-        let message = IngestOp::Message(Box::new(MessageRow {
+        let mut messages = IngestOp::project_message(MessageRow {
             timeline_id: "timeline-1".to_string(),
             session_id: "session-1".to_string(),
             ordinal: 7,
@@ -729,12 +729,18 @@ mod tests {
             effort: None,
             content: Some("canonical content".to_string()),
             tool: None,
+            attachments: Vec::new(),
+            citations: Vec::new(),
+            group: None,
+            response: None,
+            block_index: None,
             branch_tool_id: None,
             usage: None,
             agent_version: Some("1.0".to_string()),
             src_cursor: Some(9),
             src_offset: Some(12),
-        }));
+        });
+        let message = messages.pop().expect("one canonical message");
         let outcome = LineOutcome::parsed(vec![message.clone()]);
         instrument.observe_normalization(
             "transcript",

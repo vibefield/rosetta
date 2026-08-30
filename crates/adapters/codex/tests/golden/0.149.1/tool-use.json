@@ -24,115 +24,175 @@
   },
   {
     "op": "message",
-    "timeline_id": "2e1a9b9b441514e29a7be1a57e5bafba43acfde54e969b70c7ede31f388e5779",
-    "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
-    "ordinal": 0,
-    "kind": "system",
-    "subtype": "developer",
-    "uuid": "msg_01a036c5-7013-7210-9c51-dcc2a751aceb",
-    "parent_uuid": null,
-    "ts": 1787625304083,
-    "model": null,
-    "effort": null,
-    "content": "<skills_instructions>\n## Skills\nA skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.\n### Available skills\n- imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas. (file: <SCENARIO_DIR>/codex-home/skills/.system/imagegen/SKILL.md)\n- openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, customization, automations, and self-knowledge—including 'you,' 'your,' 'this app,' or 'this coding agent' when they refer to Codex—and for OpenAI APIs/products and ChatGPT Work. Also use for model choice/migration, prompting, SDKs, Responses, Realtime, agents, evals, and Chat/Work/Codex comparisons. Do not use for generic app/software tasks that merely mention Codex. (file: <SCENARIO_DIR>/codex-home/skills/.system/openai-docs/SKILL.md)\n- plugin-creator: Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, valid manifest defaults, and personal-marketplace entries by default. Use when Codex needs to create a new personal plugin, add optional plugin structure, generate or update marketplace entries for plugin ordering and availability metadata, or update an existing local plugin during development with the CLI-driven cachebuster and reinstall flow. (file: <SCENARIO_DIR>/codex-home/skills/.system/plugin-creator/SKILL.md)\n- skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: <SCENARIO_DIR>/codex-home/skills/.system/skill-creator/SKILL.md)\n- skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos). (file: <SCENARIO_DIR>/codex-home/skills/.system/skill-installer/SKILL.md)\n</skills_instructions>\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.\n</permissions instructions>",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": "0.149.1",
-    "src_cursor": 3,
-    "src_offset": 22018
-  },
-  {
-    "op": "message",
     "timeline_id": "99812f067421126c76228953aea99d9b7dc90b7e01d1da8666cb9e4efcf895a0",
     "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
     "ordinal": 1,
-    "kind": "user",
-    "subtype": null,
-    "uuid": "msg_01a036c5-7013-7210-9c51-dcd60feab109",
-    "parent_uuid": null,
-    "ts": 1787625304083,
+    "group": {
+      "id": "99812f067421126c76228953aea99d9b7dc90b7e01d1da8666cb9e4efcf895a0",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "msg_01a036c5-7013-7210-9c51-dcd60feab109",
+    "parent_native_id": null,
+    "at": 1787625304083,
     "model": null,
     "effort": null,
-    "content": "<environment_context>\n  <cwd>/private/tmp/rosetta-farm/tool-use/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-08-24</current_date>\n  <timezone>America/Los_Angeles</timezone>\n  <filesystem><workspace_roots><root>/private/tmp/rosetta-farm/tool-use/project</root></workspace_roots><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>\n</environment_context>",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": "0.149.1",
-    "src_cursor": 4,
-    "src_offset": 25546
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "<environment_context>\n  <cwd>/private/tmp/rosetta-farm/tool-use/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-08-24</current_date>\n  <timezone>America/Los_Angeles</timezone>\n  <filesystem><workspace_roots><root>/private/tmp/rosetta-farm/tool-use/project</root></workspace_roots><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>\n</environment_context>"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": "0.149.1",
+      "src_cursor": 4,
+      "src_offset": 25546
+    }
   },
   {
     "op": "message",
     "timeline_id": "b1dadb0a11f4f048efcfc62a4fb72840773253078bc41869734b61da2d58acde",
     "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
     "ordinal": 2,
-    "kind": "user",
-    "subtype": null,
-    "uuid": "msg_01a036c5-701d-7ac1-9e33-e7b95368e762",
-    "parent_uuid": null,
-    "ts": 1787625304093,
+    "group": {
+      "id": "b1dadb0a11f4f048efcfc62a4fb72840773253078bc41869734b61da2d58acde",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "msg_01a036c5-701d-7ac1-9e33-e7b95368e762",
+    "parent_native_id": null,
+    "at": 1787625304093,
     "model": null,
     "effort": null,
-    "content": "Run the echo command now. [use-tool]",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": "0.149.1",
-    "src_cursor": 7,
-    "src_offset": 30923
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Run the echo command now. [use-tool]"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": "0.149.1",
+      "src_cursor": 7,
+      "src_offset": 30923
+    }
   },
   {
     "op": "message",
     "timeline_id": "f3583aecb24a3b617a84873d0398f6851c847759044e61cf38975693f8487443",
     "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
     "ordinal": 3,
-    "kind": "tool_use",
-    "subtype": null,
-    "uuid": "fc_mock_0001",
-    "parent_uuid": null,
-    "ts": 1787625304102,
+    "group": {
+      "id": "f3583aecb24a3b617a84873d0398f6851c847759044e61cf38975693f8487443",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "fc_mock_0001",
+    "parent_native_id": null,
+    "at": 1787625304102,
     "model": "mock-model",
     "effort": null,
-    "content": null,
-    "tool": {
-      "correlation": {
-        "key": "call_mock_0001",
-        "derivation": "native_id"
-      },
-      "native": {
-        "id": "call_mock_0001",
-        "namespace": null,
-        "name": "exec_command",
-        "provider": null
-      },
+    "body": {
+      "type": "tool_use",
+      "tool": {
+        "correlation": {
+          "key": "call_mock_0001",
+          "derivation": "native_id"
+        },
+        "native": {
+          "id": "call_mock_0001",
+          "namespace": null,
+          "name": "exec_command",
+          "provider": null
+        },
+        "status": {
+          "value": "pending",
+          "basis": "request_observed"
+        },
+        "action": {
+          "type": "shell",
+          "command": {
+            "type": "inline",
+            "text": "echo rosetta-mock"
+          },
+          "cwd": {
+            "type": "directory",
+            "path": "/private/tmp/rosetta-farm/tool-use/project",
+            "resolved": true
+          },
+          "timeout_ms": null,
+          "background": false,
+          "outcome": null
+        },
+        "failure": null,
+        "timing": null
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": "0.149.1",
+      "src_cursor": 9,
+      "src_offset": 31735
+    }
+  },
+  {
+    "op": "tool_update",
+    "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
+    "correlation_key": "call_mock_0001",
+    "evidence": {
+      "source_identity": "direct:445624f3fccd60870052446ea698ea1861496f4904b62271dbe337684b131bf9/f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
+      "generation": 0,
+      "record_offset": 32057,
+      "mutation_index": 0
+    },
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
       "status": {
-        "value": "pending",
-        "basis": "request_observed"
-      },
-      "action": {
-        "type": "shell",
-        "command": {
-          "type": "inline",
-          "text": "echo rosetta-mock"
-        },
-        "cwd": {
-          "type": "directory",
-          "path": "/private/tmp/rosetta-farm/tool-use/project",
-          "resolved": true
-        },
-        "timeout_ms": null,
-        "background": false,
-        "outcome": null
+        "value": "succeeded",
+        "basis": "native_state"
       },
       "failure": null,
-      "timing": null
+      "timing": {
+        "started_at": 1787625304176,
+        "completed_at": 1787625304177,
+        "duration_ms": 1
+      }
     },
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": "0.149.1",
-    "src_cursor": 9,
-    "src_offset": 31735
+    "at": 1787625304177
   },
   {
     "op": "tool_update",
@@ -180,20 +240,40 @@
     "timeline_id": "c19e03f654d591d5efe1cae693b23213c2de4531e689d57c5814bbf7d1399664",
     "session_id": "f244c1c0e137908d48cebc74c3892372768fa4f956d8c9aef25d2c5161f51257",
     "ordinal": 4,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": "msg_mock_0002",
-    "parent_uuid": null,
-    "ts": 1787625304186,
+    "group": {
+      "id": "c19e03f654d591d5efe1cae693b23213c2de4531e689d57c5814bbf7d1399664",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "msg_mock_0002",
+    "parent_native_id": null,
+    "at": 1787625304186,
     "model": "mock-model",
     "effort": null,
-    "content": "The tool ran successfully and printed: rosetta-mock. Scenario complete.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": "0.149.1",
-    "src_cursor": 14,
-    "src_offset": 34337
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": "0.149.1",
+      "src_cursor": 14,
+      "src_offset": 34337
+    }
   },
   {
     "op": "usage",

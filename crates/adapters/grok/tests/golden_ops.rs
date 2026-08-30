@@ -9,7 +9,7 @@ use rosetta_adapter_grok::{GrokAdapter, spec};
 use rosetta_adapter_support::adapter::{
     AgentAdapter, FileStat, LineStatus, NormalizeCtx, StreamDriver,
 };
-use rosetta_core::timeline::ToolStatus;
+use rosetta_core::timeline::{TimelineBody, ToolStatus};
 use rosetta_core::{IngestOp, ids};
 use serde_json::json;
 
@@ -22,6 +22,13 @@ fn fixtures_root() -> PathBuf {
 
 fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
+}
+
+fn agent_prose(row: &rosetta_core::TimelineEntry) -> Option<&str> {
+    match &row.body {
+        TimelineBody::Agent { text, .. } => text.as_ref().map(|text| text.as_preview()),
+        _ => None,
+    }
 }
 
 fn fixture_files(name: &str) -> Vec<PathBuf> {
@@ -251,8 +258,8 @@ fn chunks_refine_one_logical_message() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].timeline_id, messages[1].timeline_id);
     assert_eq!(messages[0].ordinal, messages[1].ordinal);
-    assert_eq!(messages[0].content.as_deref(), Some("hel"));
-    assert_eq!(messages[1].content.as_deref(), Some("hello"));
+    assert_eq!(agent_prose(&messages[0]), Some("hel"));
+    assert_eq!(agent_prose(&messages[1]), Some("hello"));
 }
 
 #[test]

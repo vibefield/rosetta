@@ -4,79 +4,124 @@
     "timeline_id": "cb9970eee515794018d062b3c8826abd89711e14a7bd100e83219ea51a970847",
     "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
     "ordinal": 0,
-    "kind": "user",
-    "subtype": null,
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634643000,
+    "group": {
+      "id": "cb9970eee515794018d062b3c8826abd89711e14a7bd100e83219ea51a970847",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634643000,
     "model": null,
     "effort": null,
-    "content": "<USER_REQUEST>\nReply with a short greeting.\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-08-24T22:10:43-07:00.\n</ADDITIONAL_METADATA>",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 1,
-    "src_offset": 0
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "<USER_REQUEST>\nReply with a short greeting.\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-08-24T22:10:43-07:00.\n</ADDITIONAL_METADATA>"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 1,
+      "src_offset": 0
+    }
   },
   {
     "op": "message",
     "timeline_id": "876faad2a3c747fcd7abde48d21a36621c353320e17f0c64e10ebaaa053d6f80",
     "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
     "ordinal": 1,
-    "kind": "agent",
-    "subtype": null,
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634643000,
+    "group": {
+      "id": "876faad2a3c747fcd7abde48d21a36621c353320e17f0c64e10ebaaa053d6f80",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634643000,
     "model": null,
     "effort": null,
-    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 2,
-    "src_offset": 290
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 2,
+      "src_offset": 290
+    }
   },
   {
     "op": "message",
     "timeline_id": "5c234bc370f6b348cfdd64653c92d222961888784fe196b82127b7420584c4cf",
     "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
     "ordinal": 2,
-    "kind": "summary",
-    "subtype": "CHECKPOINT",
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634643000,
+    "group": {
+      "id": "5c234bc370f6b348cfdd64653c92d222961888784fe196b82127b7420584c4cf",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1787634643000,
     "model": null,
     "effort": null,
-    "content": "{{ CHECKPOINT 0 }}\n **The earlier parts of this conversation have been truncated due to its long length. The following content summarizes the truncated context so that you may continue your work. **\n\n\n# USER Objective:\nHello from rosetta mockmodel. This is a deterministic scripted response.\n\n# User Requests\nThe following were user requests from the truncated conversation in chronological order:\n1. Reply with a short greeting.\n\n# Conversation Logs\n\nReference the following log files for the full, untruncated conversation:\n\n- <SCENARIO_DIR>/home/.gemini/antigravity-cli/brain/bd6ccc47-c565-40ec-a71a-ae53ce0b3481/.system_generated/logs/transcript.jsonl\n\n**IMPORTANT: this summary is just for your reference. You may respond to my previous and future messages, but DO NOT ACKNOWLEDGE THIS CHECKPOINT MESSAGE. JUST READ IT BUT DO NOT MENTION IT, RESPOND TO IT, OR TAKE ACTION BECAUSE OF IT.**",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 3,
-    "src_offset": 487
+    "body": {
+      "type": "summary",
+      "purpose": "compaction",
+      "text": {
+        "type": "inline",
+        "text": "{{ CHECKPOINT 0 }}\n **The earlier parts of this conversation have been truncated due to its long length. The following content summarizes the truncated context so that you may continue your work. **\n\n\n# USER Objective:\nHello from rosetta mockmodel. This is a deterministic scripted response.\n\n# User Requests\nThe following were user requests from the truncated conversation in chronological order:\n1. Reply with a short greeting.\n\n# Conversation Logs\n\nReference the following log files for the full, untruncated conversation:\n\n- <SCENARIO_DIR>/home/.gemini/antigravity-cli/brain/bd6ccc47-c565-40ec-a71a-ae53ce0b3481/.system_generated/logs/transcript.jsonl\n\n**IMPORTANT: this summary is just for your reference. You may respond to my previous and future messages, but DO NOT ACKNOWLEDGE THIS CHECKPOINT MESSAGE. JUST READ IT BUT DO NOT MENTION IT, RESPOND TO IT, OR TAKE ACTION BECAUSE OF IT.**"
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 3,
+      "src_offset": 487
+    }
   },
   {
-    "op": "message",
-    "timeline_id": "9855108283cdef584a0460621a6b4bd7602d141969000cc0055fdcf5bb0f6ec0",
+    "op": "session_title",
     "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
-    "ordinal": 3,
-    "kind": "summary",
-    "subtype": "title_fallback",
-    "uuid": null,
-    "parent_uuid": null,
-    "ts": 1787634643000,
-    "model": null,
-    "effort": null,
-    "content": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
-    "tool": null,
-    "branch_tool_id": null,
-    "usage": null,
-    "agent_version": null,
-    "src_cursor": 3,
-    "src_offset": 487
+    "title": "Hello from rosetta mockmodel. This is a deterministic scripted response.",
+    "kind": "fallback",
+    "at": 1787634643000
   }
 ]

@@ -5,9 +5,12 @@ use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole,
     SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot,
 };
-use rosetta_core::timeline::{ReadTarget, ResourceRef};
+use rosetta_core::timeline::{
+    AttachmentKind, AttachmentRef, CitationRef, INLINE_TEXT_MAX_BYTES, ReadTarget, ResourceRef,
+    TextRange, TimelineBody, TimelineEntry,
+};
 use rosetta_core::{
-    CanonicalText, CorrelationDerivation, EvidenceOrder, ImageAsset, IngestOp, NativeToolRef,
+    CanonicalText, CorrelationDerivation, EvidenceOrder, IngestOp, NativeToolRef, ProjectionAsset,
     SourceIdentity, StatusBasis, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus,
     ToolStatusFact, ToolUpdatePatch,
 };
@@ -67,13 +70,31 @@ fn message(timeline_id: &str, ordinal: i64, kind: MessageKind) -> MessageRow {
         ts: Some(3_600_000 + ordinal * 1000),
         model: Some("claude-opus-5".into()),
         effort: None,
-        content: None,
+        content: Some(format!("message {timeline_id}")),
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: None,
         src_cursor: None,
         src_offset: None,
+    }
+}
+
+fn message_op(row: MessageRow) -> IngestOp {
+    let mut ops = IngestOp::project_message(row);
+    assert_eq!(ops.len(), 1, "test message must close to exactly one op");
+    ops.pop().unwrap()
+}
+
+fn entry_tool(entry: &TimelineEntry) -> Option<&ToolInteraction> {
+    match &entry.body {
+        TimelineBody::ToolUse { tool } => Some(tool),
+        _ => None,
     }
 }
 
@@ -141,13 +162,13 @@ fn status_update(key: &str, status: ToolStatus, record_offset: u64) -> IngestOp 
             record_offset,
             mutation_index: 0,
         },
-        patch: ToolUpdatePatch {
+        patch: Box::new(ToolUpdatePatch {
             status: Some(ToolStatusFact {
                 value: status,
                 basis: StatusBasis::NativeTerminalRecord,
             }),
             ..Default::default()
-        },
+        }),
         at: Some(3_700_000),
     }
 }
@@ -175,16 +196,16 @@ fn image_asset_and_typed_tool_update_commit_without_embedding_bytes() {
     call.tool = Some(read_tool("toolu_image", "/fixture/image.png"));
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(call))],
+            ops: vec![message_op(call)],
             ..Batch::default()
         })
         .unwrap();
 
-    let asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    let asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
     let stats = store
         .apply(&Batch {
             ops: vec![
-                IngestOp::ImageAsset {
+                IngestOp::ProjectionAsset {
                     asset: asset.clone(),
                 },
                 status_update("toolu_image", ToolStatus::Succeeded, 1),
@@ -193,15 +214,15 @@ fn image_asset_and_typed_tool_update_commit_without_embedding_bytes() {
         })
         .unwrap();
 
-    assert_eq!(stats.image_assets, 1);
-    assert_eq!(stats.image_files_written, 1);
+    assert_eq!(stats.projection_assets, 1);
+    assert_eq!(stats.asset_files_written, 1);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(
-        page[0].tool.as_ref().unwrap().status.value,
+        entry_tool(&page[0]).unwrap().status.value,
         ToolStatus::Succeeded
     );
     assert_eq!(
-        std::fs::read(assets::image_root(&projection).join(asset.file_name().unwrap())).unwrap(),
+        std::fs::read(assets::asset_root(&projection).join(asset.file_name().unwrap())).unwrap(),
         asset.bytes
     );
 }
@@ -211,12 +232,15 @@ fn invalid_image_asset_fails_before_any_sql_row_commits() {
     let directory = tempfile::tempdir().unwrap();
     let projection = directory.path().join("rosetta.sqlite");
     let mut store = Store::open(&projection).unwrap();
-    let mut asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    let mut asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
     asset.digest = "0".repeat(64);
 
     let error = store
         .apply(&Batch {
-            ops: vec![IngestOp::Runtime(runtime()), IngestOp::ImageAsset { asset }],
+            ops: vec![
+                IngestOp::Runtime(runtime()),
+                IngestOp::ProjectionAsset { asset },
+            ],
             ..Batch::default()
         })
         .unwrap_err();
@@ -229,7 +253,89 @@ fn invalid_image_asset_fails_before_any_sql_row_commits() {
             .unwrap(),
         0
     );
-    assert!(!assets::image_root(&projection).exists());
+    assert!(!assets::asset_root(&projection).exists());
+}
+
+#[test]
+fn closed_message_codec_round_trips_members_attachments_and_citations() {
+    let directory = tempfile::tempdir().unwrap();
+    let projection = directory.path().join("rosetta.sqlite");
+    let mut store = Store::open(&projection).unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let prose = "member-backed prose ".repeat(INLINE_TEXT_MAX_BYTES / 4);
+    let mut row = message("typed-agent", 0, MessageKind::Agent);
+    row.content = Some(prose.clone());
+    row.attachments.push(AttachmentRef {
+        kind: AttachmentKind::Document,
+        name: Some("design.pdf".into()),
+        media_type: Some("application/pdf".into()),
+        byte_len: None,
+        source: ResourceRef::Url {
+            url: "https://example.test/design.pdf".into(),
+        },
+        dimensions: None,
+    });
+    row.citations.push(CitationRef {
+        source_id: Some("source-1".into()),
+        provider: Some("fixture".into()),
+        title: Some("Design source".into()),
+        source: Some(ResourceRef::Url {
+            url: "https://example.test/source".into(),
+        }),
+        message_ranges: vec![TextRange { start: 0, end: 6 }],
+    });
+    let ops = IngestOp::project_message(row);
+    assert!(matches!(
+        ops.first(),
+        Some(IngestOp::ProjectionAsset { .. })
+    ));
+    let asset = match &ops[0] {
+        IngestOp::ProjectionAsset { asset } => asset.clone(),
+        _ => unreachable!(),
+    };
+    store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let [entry] = page.as_slice() else {
+        panic!("expected exactly one timeline entry, got {page:#?}");
+    };
+    let TimelineBody::Agent {
+        text: Some(CanonicalText::Member { byte_len, .. }),
+        attachments,
+        citations,
+    } = &entry.body
+    else {
+        panic!("expected a member-backed agent body, got {:?}", entry.body);
+    };
+    assert_eq!(*byte_len, prose.len() as u64);
+    assert_eq!(attachments[0].name.as_deref(), Some("design.pdf"));
+    assert_eq!(
+        citations[0].message_ranges,
+        vec![TextRange { start: 0, end: 6 }]
+    );
+    assert_eq!(
+        std::fs::read(assets::asset_root(&projection).join(asset.file_name().unwrap())).unwrap(),
+        prose.as_bytes()
+    );
+    let (kind, content, detail): (String, Option<String>, Option<String>) = store
+        .conn()
+        .query_row(
+            "SELECT type, content, detail FROM message WHERE timeline_id = 'typed-agent'",
+            [],
+            |record| Ok((record.get(0)?, record.get(1)?, record.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "agent");
+    assert!(content.is_some_and(|content| content.len() <= 2 * 1024));
+    let detail = detail.expect("closed message detail");
+    assert!(!detail.contains(&prose));
+    assert!(!detail.contains("payload"));
 }
 
 #[test]
@@ -254,7 +360,7 @@ fn streamed_title_singletons_refine_meta_with_custom_precedence() {
     generated.content = Some("generated stream title".into());
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(generated.clone()))],
+            ops: vec![message_op(generated.clone())],
             checkpoints: vec![],
             source: None,
         })
@@ -273,7 +379,7 @@ fn streamed_title_singletons_refine_meta_with_custom_precedence() {
     custom.content = Some("explicit title".into());
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(custom))],
+            ops: vec![message_op(custom)],
             checkpoints: vec![],
             source: None,
         })
@@ -283,7 +389,7 @@ fn streamed_title_singletons_refine_meta_with_custom_precedence() {
     generated.content = Some("later generated title".into());
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(generated))],
+            ops: vec![message_op(generated)],
             checkpoints: vec![],
             source: None,
         })
@@ -329,7 +435,7 @@ fn explicit_meta_title_outranks_a_newer_stream_fallback() {
     fallback.ts = Some(12_000);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(fallback))],
+            ops: vec![message_op(fallback)],
             checkpoints: vec![],
             source: None,
         })
@@ -356,7 +462,7 @@ fn search_breaks_equal_rank_ties_by_timeline_identity_before_limit() {
         .map(|(ordinal, timeline_id)| {
             let mut row = message(timeline_id, ordinal as i64, MessageKind::Agent);
             row.content = Some("identical equilibrium phrase".into());
-            IngestOp::Message(Box::new(row))
+            message_op(row)
         })
         .collect();
     store
@@ -386,7 +492,7 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
     call.tool = Some(shell_tool("toolu_1", "cargo test"));
     let stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(call))],
+            ops: vec![message_op(call)],
             checkpoints: vec![],
             source: None,
         })
@@ -410,7 +516,7 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
     assert_eq!(stats.profile.session_touch_attempts, 1);
 
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
-    let tool = page[0].tool.as_ref().unwrap();
+    let tool = entry_tool(&page[0]).unwrap();
     assert_eq!(tool.status.value, ToolStatus::Succeeded);
 
     // Native result text never crossed the typed op boundary. The reviewed
@@ -444,7 +550,7 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
     late_call.tool = Some(shell_tool("toolu_missing", "true"));
     let stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(late_call))],
+            ops: vec![message_op(late_call)],
             checkpoints: vec![],
             source: None,
         })
@@ -470,7 +576,7 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
         .find(|row| row.timeline_id == "m-tool-late")
         .unwrap();
     assert_eq!(
-        late.tool.as_ref().unwrap().status.value,
+        entry_tool(late).unwrap().status.value,
         ToolStatus::Succeeded
     );
 }
@@ -508,7 +614,7 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
     opener.src_offset = Some(0);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(opener))],
+            ops: vec![message_op(opener)],
             source: Some(SourceWrite {
                 cursor_id: opener_cursor.id,
                 session_id: "s1".into(),
@@ -541,13 +647,13 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
             record_offset: 0,
             mutation_index: 0,
         },
-        patch: ToolUpdatePatch {
+        patch: Box::new(ToolUpdatePatch {
             status: Some(ToolStatusFact {
                 value: ToolStatus::Succeeded,
                 basis: StatusBasis::NativeTerminalRecord,
             }),
             ..Default::default()
-        },
+        }),
         at: Some(3_700_000),
     };
     store
@@ -576,9 +682,7 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
         })
         .unwrap();
     assert_eq!(
-        queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0]
-            .tool
-            .as_ref()
+        entry_tool(&queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0])
             .unwrap()
             .status
             .value,
@@ -586,7 +690,9 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
     );
 
     // An empty replacement generation means the terminal record vanished.
-    // The sibling-owned opener must return to its request-observed state.
+    // The completed opener source retains its low-authority finalization fact,
+    // so reconciliation returns to unknown rather than fabricating success or
+    // presenting a completed historical call as still pending.
     store
         .apply(&Batch {
             source: Some(SourceWrite {
@@ -611,19 +717,17 @@ fn replacing_a_sibling_source_subtracts_its_tool_fact() {
             ..Batch::default()
         })
         .unwrap();
-    let tool = queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0]
-        .tool
-        .clone()
-        .unwrap();
-    assert_eq!(tool.status.value, ToolStatus::Pending);
-    assert_eq!(tool.status.basis, StatusBasis::RequestObserved);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let tool = entry_tool(&page[0]).cloned().unwrap();
+    assert_eq!(tool.status.value, ToolStatus::Unknown);
+    assert_eq!(tool.status.basis, StatusBasis::SourceFinalization);
     assert_eq!(
         store
             .conn()
             .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
-        0
+        1
     );
 }
 
@@ -633,11 +737,11 @@ fn empty_pending_table_is_checked_once_for_the_whole_batch() {
     store.apply(&base_batch()).unwrap();
     let ops = (0..16)
         .map(|ordinal| {
-            IngestOp::Message(Box::new(message(
+            message_op(message(
                 &format!("empty-gate-{ordinal}"),
                 ordinal,
                 MessageKind::User,
-            )))
+            ))
         })
         .collect();
 
@@ -665,7 +769,7 @@ fn queued_tool_update_folds_from_the_typed_fact_table_inside_the_same_batch() {
         .apply(&Batch {
             ops: vec![
                 status_update("same-batch-tool", ToolStatus::Succeeded, 3),
-                IngestOp::Message(Box::new(call)),
+                message_op(call),
             ],
             checkpoints: vec![],
             source: None,
@@ -690,7 +794,7 @@ fn queued_tool_update_folds_from_the_typed_fact_table_inside_the_same_batch() {
     );
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(
-        page[0].tool.as_ref().unwrap().status.value,
+        entry_tool(&page[0]).unwrap().status.value,
         ToolStatus::Succeeded
     );
 }
@@ -708,10 +812,10 @@ fn every_pre_opener_tool_fact_is_retained_and_folded() {
             record_offset: 1,
             mutation_index: 0,
         },
-        patch: ToolUpdatePatch {
+        patch: Box::new(ToolUpdatePatch {
             native_id: Some("native-enriched".into()),
             ..Default::default()
-        },
+        }),
         at: Some(3_600_001),
     };
     let mut terminal = status_update("multi-fact-tool", ToolStatus::Succeeded, 2);
@@ -724,15 +828,13 @@ fn every_pre_opener_tool_fact_is_retained_and_folded() {
 
     store
         .apply(&Batch {
-            ops: vec![native_id, terminal, IngestOp::Message(Box::new(opener))],
+            ops: vec![native_id, terminal, message_op(opener)],
             ..Batch::default()
         })
         .unwrap();
 
-    let tool = queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0]
-        .tool
-        .clone()
-        .unwrap();
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let tool = entry_tool(&page[0]).cloned().unwrap();
     assert_eq!(tool.native.id.as_deref(), Some("native-enriched"));
     assert_eq!(tool.status.value, ToolStatus::Succeeded);
     assert_eq!(
@@ -789,11 +891,11 @@ fn unrelated_pending_target_does_not_force_message_lookups() {
         .unwrap();
     let ops = (0..16)
         .map(|ordinal| {
-            IngestOp::Message(Box::new(message(
+            message_op(message(
                 &format!("unrelated-{ordinal}"),
                 ordinal,
                 MessageKind::User,
-            )))
+            ))
         })
         .collect();
 
@@ -845,7 +947,7 @@ fn pending_target_in_one_session_does_not_poison_another() {
                 MessageKind::User,
             );
             row.session_id = "s2".into();
-            IngestOp::Message(Box::new(row))
+            message_op(row)
         })
         .collect();
 
@@ -875,7 +977,7 @@ fn usage_replacement_never_double_counts_and_preserves_unknownness() {
     });
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(reply))],
+            ops: vec![message_op(reply)],
             checkpoints: vec![],
             source: None,
         })
@@ -947,10 +1049,7 @@ fn model_days_and_hour_profile_are_views_of_the_heatmap_sum() {
     });
     store
         .apply(&Batch {
-            ops: vec![
-                IngestOp::Message(Box::new(a)),
-                IngestOp::Message(Box::new(b)),
-            ],
+            ops: vec![message_op(a), message_op(b)],
             checkpoints: vec![],
             source: None,
         })
@@ -1014,8 +1113,8 @@ fn contribution_folds_subagents_into_their_root() {
     store
         .apply(&Batch {
             ops: vec![
-                IngestOp::Message(Box::new(root_msg)),
-                IngestOp::Message(Box::new(sub_msg)),
+                message_op(root_msg),
+                message_op(sub_msg),
                 IngestOp::FileEdit(FileEditRow {
                     session_id: "s2".into(),
                     message_timeline_id: None,
@@ -1115,11 +1214,7 @@ fn checkpoint_cas_rolls_back_the_whole_batch_on_conflict() {
 
     // Stale expected state: the CAS fails AND the batch's row never lands.
     let result = store.apply(&Batch {
-        ops: vec![IngestOp::Message(Box::new(message(
-            "m-torn",
-            0,
-            MessageKind::User,
-        )))],
+        ops: vec![message_op(message("m-torn", 0, MessageKind::User))],
         checkpoints: vec![CheckpointUpdate {
             runtime_id: "rt1".into(),
             stream: "transcript".into(),
@@ -1152,7 +1247,7 @@ fn reingesting_the_same_message_is_idempotent() {
     });
     reply.content = Some("hello".into());
     let batch = Batch {
-        ops: vec![IngestOp::Message(Box::new(reply))],
+        ops: vec![message_op(reply)],
         checkpoints: vec![],
         source: None,
     };
@@ -1263,7 +1358,7 @@ fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
     });
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(row.clone()))],
+            ops: vec![message_op(row.clone())],
             checkpoints: vec![],
             source: None,
         })
@@ -1277,7 +1372,7 @@ fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
     row.usage = None;
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(row))],
+            ops: vec![message_op(row)],
             checkpoints: vec![],
             source: None,
         })
@@ -1607,8 +1702,8 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     m2.src_cursor = Some(cursor.id);
     m2.src_offset = Some(100);
     let gen1: Vec<IngestOp> = vec![
-        IngestOp::Message(Box::new(m1)),
-        IngestOp::Message(Box::new(m2)),
+        message_op(m1),
+        message_op(m2),
         status_update("toolu_g1", ToolStatus::Succeeded, 101),
         IngestOp::WorkspaceObs(WorkspaceObsRow {
             session_id: "s1".into(),
@@ -1652,6 +1747,12 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
                 ..Default::default()
             },
         }),
+        IngestOp::SessionTitle(SessionTitleRow {
+            session_id: "s1".into(),
+            title: "generation-one title".into(),
+            kind: TitleKind::Generated,
+            at: 3_600_000,
+        }),
     ];
     let staged = gen1.len() as u64;
     store
@@ -1691,6 +1792,15 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 1);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM session_title_fact"), 1);
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("generation-one title")
+    );
     assert_eq!(queries::search(store.conn(), "alpha", 5).unwrap().len(), 1);
 
     // Generation 2 rewrite: a single, different message. Everything from
@@ -1705,7 +1815,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     m3.src_offset = Some(0);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(m3))],
+            ops: vec![message_op(m3)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: cursor.id,
@@ -1740,6 +1850,11 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     assert_eq!(count(&store, "SELECT COUNT(*) FROM plan"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM task"), 0);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM session_usage"), 0);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM session_title_fact"), 0);
+    assert_eq!(
+        queries::session(store.conn(), "s1").unwrap().unwrap().title,
+        None
+    );
     assert_eq!(queries::search(store.conn(), "alpha", 5).unwrap().len(), 0);
     assert_eq!(queries::search(store.conn(), "omega", 5).unwrap().len(), 1);
     let (buckets, tokens): (i64, i64) = store
@@ -1769,7 +1884,7 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     m4.src_offset = Some(500);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(m4))],
+            ops: vec![message_op(m4)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: cursor.id,
@@ -1812,7 +1927,7 @@ fn abandoning_an_unclean_generation_keeps_the_active_projection_and_drift() {
     clean.src_cursor = Some(cursor.id);
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(clean))],
+            ops: vec![message_op(clean)],
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: cursor.id,
@@ -1830,7 +1945,7 @@ fn abandoning_an_unclean_generation_keeps_the_active_projection_and_drift() {
     store
         .apply(&Batch {
             ops: vec![
-                IngestOp::Message(Box::new(partial)),
+                message_op(partial),
                 IngestOp::Drift(DriftFact {
                     runtime_id: "rt1".into(),
                     agent_version: "1".into(),
@@ -1974,7 +2089,7 @@ fn message_timestamps_only_write_when_the_session_clock_advances() {
     let before = store.conn().total_changes();
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(older))],
+            ops: vec![message_op(older)],
             checkpoints: vec![],
             source: None,
         })
@@ -1988,7 +2103,7 @@ fn message_timestamps_only_write_when_the_session_clock_advances() {
     let before = store.conn().total_changes();
     store
         .apply(&Batch {
-            ops: vec![IngestOp::Message(Box::new(newer))],
+            ops: vec![message_op(newer)],
             checkpoints: vec![],
             source: None,
         })

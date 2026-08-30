@@ -8,7 +8,9 @@
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
@@ -188,15 +190,22 @@ fn planner_response(
         let discriminator = tool_discriminator(line.step_index, index);
         let mut row = emit.row_with_discriminator(&discriminator, MessageKind::ToolUse, at);
         let tool_id = discriminator.clone();
-        row.tool = Some(
-            crate::tool::project_request(
-                emit.ctx.agent_version.as_deref(),
-                &call.name,
-                &call.args,
-                None,
-                &tool_id,
-            )
-            .unwrap_or_else(|_| {
+        let projected = crate::tool::project_request(
+            emit.ctx.agent_version.as_deref(),
+            &call.name,
+            &call.args,
+            None,
+            &tool_id,
+        );
+        row.tool = Some(match projected {
+            Ok(tool) => tool,
+            Err(error) => {
+                emit.drift(
+                    &projection_record_kind("request", None, &call.name),
+                    error.drift_code(),
+                    &projection_shape_paths(&call.args),
+                    at,
+                );
                 unknown_interaction(
                     tool_id.clone(),
                     rosetta_core::CorrelationDerivation::Positional,
@@ -205,8 +214,8 @@ fn planner_response(
                     call.name.clone(),
                     None,
                 )
-            }),
-        );
+            }
+        });
         emit.message(row);
         state.push(tool_id, call.name.clone());
     }
@@ -312,13 +321,13 @@ fn tool_result(
         session_id: emit.session_id.clone(),
         correlation_key: tool_id,
         evidence: emit.ctx.evidence(0),
-        patch: terminal_update(
+        patch: Box::new(terminal_update(
             is_error,
             true,
             rosetta_core::StatusBasis::NativeTerminalRecord,
             at,
             result.as_deref(),
-        ),
+        )),
         at,
     });
     LineStatus::Parsed
@@ -377,6 +386,11 @@ impl<'a> Emit<'a> {
             effort: None,
             content: None,
             tool: None,
+            attachments: Vec::new(),
+            citations: Vec::new(),
+            group: None,
+            response: None,
+            block_index: None,
             branch_tool_id: None,
             usage: None,
             agent_version: self.ctx.agent_version.clone(),
@@ -386,7 +400,7 @@ impl<'a> Emit<'a> {
     }
 
     fn message(&mut self, row: MessageRow) {
-        self.ops.push(IngestOp::Message(Box::new(row)));
+        IngestOp::push_message(&mut self.ops, row);
     }
 
     fn drift(&mut self, record_kind: &str, code: &str, paths: &[String], at: Option<Ms>) {
@@ -491,8 +505,8 @@ mod tests {
     use crate::AntigravityAdapter;
     use crate::spec;
     use rosetta_adapter_support::adapter::{AgentAdapter, LineStatus, NormalizeCtx};
-    use rosetta_core::rows::MessageKind;
-    use rosetta_core::{IngestOp, ids};
+    use rosetta_core::timeline::SummaryPurpose;
+    use rosetta_core::{IngestOp, TimelineBody, ids};
     use serde_json::{Value, json};
 
     fn context() -> NormalizeCtx {
@@ -523,11 +537,10 @@ mod tests {
         );
         let tool_id = match call.ops.as_slice() {
             [IngestOp::Message(row)] => {
-                assert_eq!(row.kind, MessageKind::ToolUse);
-                row.tool
-                    .as_ref()
-                    .map(|tool| tool.correlation.key.clone())
-                    .expect("tool correlation key")
+                let TimelineBody::ToolUse { tool } = &row.body else {
+                    panic!("expected tool body, got {:?}", row.body);
+                };
+                tool.correlation.key.clone()
             }
             other => panic!("expected one tool row, got {other:?}"),
         };
@@ -580,9 +593,13 @@ mod tests {
         assert_eq!(outcome.status, LineStatus::Parsed);
         match outcome.ops.as_slice() {
             [IngestOp::Message(row)] => {
-                assert_eq!(row.kind, MessageKind::Agent);
-                assert_eq!(row.subtype.as_deref(), Some("GENERIC"));
-                assert_eq!(row.content.as_deref(), Some("finished"));
+                let TimelineBody::Agent {
+                    text: Some(text), ..
+                } = &row.body
+                else {
+                    panic!("expected agent prose, got {:?}", row.body);
+                };
+                assert_eq!(text.as_preview(), "finished");
             }
             other => panic!("expected one agent message, got {other:?}"),
         }
@@ -604,17 +621,13 @@ mod tests {
         );
         assert_eq!(outcome.status, LineStatus::Parsed);
         match outcome.ops.as_slice() {
-            [IngestOp::Message(summary), IngestOp::Message(title)] => {
-                assert_eq!(summary.subtype.as_deref(), Some("CHECKPOINT"));
-                assert!(
-                    summary
-                        .content
-                        .as_deref()
-                        .unwrap()
-                        .contains("User Requests")
-                );
-                assert_eq!(title.subtype.as_deref(), Some("title_fallback"));
-                assert_eq!(title.content.as_deref(), Some("Map the system carefully"));
+            [IngestOp::Message(summary), IngestOp::SessionTitle(title)] => {
+                let TimelineBody::Summary { purpose, text } = &summary.body else {
+                    panic!("expected checkpoint summary, got {:?}", summary.body);
+                };
+                assert_eq!(*purpose, SummaryPurpose::Compaction);
+                assert!(text.as_preview().contains("User Requests"));
+                assert_eq!(title.title, "Map the system carefully");
             }
             other => panic!("expected checkpoint plus title fallback, got {other:?}"),
         }

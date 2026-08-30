@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 10;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -85,6 +85,26 @@ CREATE TABLE IF NOT EXISTS session (
   -- Earlier observations may refine the assignment; later cwd changes may not.
   project_assigned_at INTEGER
 );
+
+-- Source-owned title candidates. `refresh_session_title` is the sole
+-- consumer: it deterministically selects one bounded candidate for the
+-- public session row. Keeping provenance here lets generation replacement
+-- subtract a vanished title without putting title records back into the
+-- closed timeline table.
+CREATE TABLE IF NOT EXISTS session_title_fact (
+  id         INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES session(id),
+  title      TEXT NOT NULL,
+  rank       INTEGER NOT NULL CHECK (rank BETWEEN 1 AND 3),
+  at         INTEGER NOT NULL,
+  src_cursor INTEGER REFERENCES ingest_cursor(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS session_title_fact_identity
+  ON session_title_fact(
+    session_id, title, rank, at, COALESCE(src_cursor, -1)
+  );
+CREATE INDEX IF NOT EXISTS session_title_fact_src
+  ON session_title_fact(src_cursor);
 
 CREATE TABLE IF NOT EXISTS workspace_obs (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -171,14 +191,24 @@ CREATE TABLE IF NOT EXISTS message (
   timeline_id    TEXT NOT NULL UNIQUE,
   session_id     TEXT NOT NULL REFERENCES session(id),
   ordinal        INTEGER NOT NULL,
-  type           TEXT NOT NULL,
-  subtype        TEXT,
+  group_id       TEXT NOT NULL,
+  group_kind     TEXT NOT NULL CHECK (group_kind IN
+                    ('human_turn','agent_cycle','parent_invocation','system_cycle','synthetic')),
+  group_derivation TEXT NOT NULL CHECK (group_derivation IN
+                    ('native','parent_linked','ordered','synthetic')),
+  response_id    TEXT,
+  response_derivation TEXT CHECK (response_derivation IS NULL OR response_derivation IN
+                    ('native','parent_linked','ordered','synthetic')),
+  block_index    INTEGER CHECK (block_index IS NULL OR block_index >= 0),
+  type           TEXT NOT NULL CHECK (type IN
+                    ('user','agent','thinking','tool_use','notice','summary')),
   uuid           TEXT,
   parent_uuid    TEXT,
   ts             INTEGER,
   model          TEXT,
   effort         TEXT,
-  content        TEXT,
+  content        TEXT,                    -- inline prose or member preview
+  detail         TEXT CHECK (detail IS NULL OR json_valid(detail)),
   tool_correlation_key TEXT,
   tool_correlation_kind TEXT CHECK (tool_correlation_kind IS NULL OR tool_correlation_kind IN
                     ('native_id','parent_linked','positional','synthetic')),
@@ -206,7 +236,7 @@ CREATE TABLE IF NOT EXISTS message (
   tool_started_at INTEGER,
   tool_completed_at INTEGER,
   tool_duration_ms INTEGER CHECK (tool_duration_ms IS NULL OR tool_duration_ms >= 0),
-  branch_tool_id TEXT,
+  parent_tool_native_id TEXT,
   in_tokens      INTEGER,
   out_tokens     INTEGER,
   cache_r_tokens INTEGER,
@@ -216,7 +246,7 @@ CREATE TABLE IF NOT EXISTS message (
   src_cursor     INTEGER REFERENCES ingest_cursor(id),
   src_offset     INTEGER CHECK (src_offset IS NULL OR src_offset >= 0),
   UNIQUE (session_id, ordinal),
-  CHECK ((type = 'tool_use' AND content IS NULL
+  CHECK ((type = 'tool_use' AND content IS NULL AND detail IS NULL
           AND tool_correlation_key IS NOT NULL AND tool_correlation_kind IS NOT NULL
           AND tool_name IS NOT NULL AND tool_kind IS NOT NULL
           AND tool_status IS NOT NULL AND tool_status_basis IS NOT NULL
@@ -228,9 +258,23 @@ CREATE TABLE IF NOT EXISTS message (
           AND tool_namespace IS NULL AND tool_provider IS NULL AND tool_name IS NULL
           AND tool_kind IS NULL AND tool_status IS NULL AND tool_status_basis IS NULL
           AND tool_detail IS NULL AND tool_open IS NULL AND tool_merge_state IS NULL
+          AND parent_tool_native_id IS NULL
           AND tool_error_kind IS NULL AND tool_error_summary IS NULL
           AND tool_diagnostic IS NULL AND tool_started_at IS NULL
           AND tool_completed_at IS NULL AND tool_duration_ms IS NULL)),
+  CHECK ((type IN ('user','agent') AND (content IS NOT NULL OR detail IS NOT NULL))
+      OR (type = 'thinking' AND content IS NOT NULL)
+      OR (type = 'summary' AND content IS NOT NULL AND detail IS NOT NULL)
+      OR (type = 'notice' AND content IS NULL AND detail IS NOT NULL)
+      OR (type = 'tool_use' AND content IS NULL)),
+  CHECK (detail IS NULL OR
+      (type IN ('user','agent') AND json_extract(detail, '$.type') = 'prose') OR
+      (type = 'thinking' AND json_extract(detail, '$.type') = 'thinking') OR
+      (type = 'notice' AND json_extract(detail, '$.type') = 'notice') OR
+      (type = 'summary' AND json_extract(detail, '$.type') = 'summary')),
+  CHECK ((response_id IS NULL AND response_derivation IS NULL AND block_index IS NULL)
+      OR (response_id IS NOT NULL AND response_derivation IS NOT NULL
+          AND block_index IS NOT NULL)),
   CHECK (tool_status_basis != 'source_finalization' OR tool_status = 'unknown'),
   CHECK (tool_error_summary IS NULL OR tool_error_kind IS NOT NULL),
   CHECK (tool_diagnostic IS NULL OR tool_error_kind IS NOT NULL),
@@ -239,6 +283,8 @@ CREATE TABLE IF NOT EXISTS message (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS message_tool_correlation
   ON message(session_id, tool_correlation_key) WHERE type = 'tool_use';
+CREATE UNIQUE INDEX IF NOT EXISTS message_response_block
+  ON message(session_id, response_id, block_index) WHERE response_id IS NOT NULL;
 
 -- Active, reduced lifecycle evidence. This is not a native-op journal: each
 -- row contains only the closed ToolUpdatePatch and exists solely so source

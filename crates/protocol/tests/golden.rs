@@ -6,18 +6,18 @@
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
 use rosetta_core::timeline::{
-    CanonicalText, CorrelationDerivation, NativeToolRef, ShellOutcome, StatusBasis, ToolAction,
-    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind, NativeToolRef, Provenance,
+    ResponseGroup, ShellOutcome, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup,
+    ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, ContributionResponse, ContributionRow,
     DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest, EnableResponse, ErrorCode,
-    HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, MessageKind,
-    MessageRow, ModelDay, Mutation, PROTOCOL_VERSION, ProjectRow, ProjectsResponse,
-    RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness,
-    SearchRequest, SearchResponse, SearchState, ServerFrame, SessionResponse, SessionRole,
-    SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState, TimelinePage, TokenSnapshot,
-    UsageResponse,
+    HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, ModelDay,
+    Mutation, PROTOCOL_VERSION, ProjectRow, ProjectsResponse, RuntimeBackfill, RuntimeIngestStatus,
+    RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse,
+    SearchState, ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp,
+    StatusResponse, StreamState, TimelinePage, TokenSnapshot, UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -62,59 +62,74 @@ fn session_row() -> SessionRow {
     }
 }
 
-fn message_row() -> MessageRow {
-    MessageRow {
+fn tool_interaction() -> ToolInteraction {
+    ToolInteraction {
+        correlation: ToolCorrelation {
+            key: "toolu_1".into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some("toolu_1".into()),
+            namespace: None,
+            name: "Bash".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Succeeded,
+            basis: StatusBasis::NativeTerminalRecord,
+        },
+        action: ToolAction::Shell {
+            command: CanonicalText::inline("true").unwrap(),
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: Some(ShellOutcome {
+                exit_code: Some(0),
+                signal: None,
+                process_id: None,
+            }),
+        },
+        failure: None,
+        timing: None,
+    }
+}
+
+fn timeline_entry() -> TimelineEntry {
+    TimelineEntry {
         timeline_id: "t1".into(),
         session_id: "s1".into(),
         ordinal: 7,
-        kind: MessageKind::ToolUse,
-        subtype: Some("sub".into()),
-        uuid: Some("u1".into()),
-        parent_uuid: Some("u0".into()),
-        ts: Some(3_600_000),
+        group: TimelineGroup {
+            id: "turn-1".into(),
+            kind: GroupKind::HumanTurn,
+            derivation: GroupDerivation::Native,
+        },
+        response: Some(ResponseGroup {
+            id: "response-1".into(),
+            derivation: GroupDerivation::Native,
+        }),
+        block_index: Some(0),
+        native_id: Some("u1".into()),
+        parent_native_id: Some("u0".into()),
+        at: Some(3_600_000),
         model: Some("claude-opus-5".into()),
         effort: Some("high".into()),
-        content: None,
-        tool: Some(ToolInteraction {
-            correlation: ToolCorrelation {
-                key: "toolu_1".into(),
-                derivation: CorrelationDerivation::NativeId,
-            },
-            native: NativeToolRef {
-                id: Some("toolu_1".into()),
-                namespace: None,
-                name: "Bash".into(),
-                provider: None,
-            },
-            status: ToolStatusFact {
-                value: ToolStatus::Succeeded,
-                basis: StatusBasis::NativeTerminalRecord,
-            },
-            action: ToolAction::Shell {
-                command: CanonicalText::inline("true").unwrap(),
-                cwd: None,
-                timeout_ms: None,
-                background: false,
-                outcome: Some(ShellOutcome {
-                    exit_code: Some(0),
-                    signal: None,
-                    process_id: None,
-                }),
-            },
-            failure: None,
-            timing: None,
-        }),
-        branch_tool_id: Some("toolu_0".into()),
-        usage: Some(TokenSnapshot {
+        body: TimelineBody::ToolUse {
+            tool: Box::new(tool_interaction()),
+        },
+        parent_tool_native_id: Some("toolu_0".into()),
+        usage: TokenSnapshot {
             input: Some(10),
             output: Some(5),
             cache_read: Some(3),
             cache_write: Some(2),
             thinking: Some(1),
-        }),
-        agent_version: Some("2.1.240".into()),
-        src_cursor: Some(4),
-        src_offset: Some(1024),
+        },
+        provenance: Provenance {
+            agent_version: Some("2.1.240".into()),
+            src_cursor: Some(4),
+            src_offset: Some(1024),
+        },
     }
 }
 
@@ -133,7 +148,7 @@ fn stamp() -> Stamp {
 fn exemplars() -> serde_json::Value {
     let status = StatusResponse {
         protocol_version: PROTOCOL_VERSION,
-        schema_version: 5,
+        schema_version: 9,
         canonical_ready: true,
         search: search_state(),
         daemon: Some(DaemonStatus {
@@ -174,11 +189,11 @@ fn exemplars() -> serde_json::Value {
         }),
     };
     let mutations = vec![
-        Mutation::Message(Box::new(message_row())),
+        Mutation::Message(Box::new(timeline_entry())),
         Mutation::ToolUpdated {
             session_id: "s1".into(),
             timeline_id: "t1".into(),
-            tool: message_row().tool.unwrap(),
+            tool: Box::new(tool_interaction()),
             at: Some(3_700_000),
         },
         Mutation::Usage {
@@ -208,7 +223,7 @@ fn exemplars() -> serde_json::Value {
         },
         ServerFrame::TimelineSnapshot {
             stamp: stamp(),
-            messages: vec![message_row()],
+            entries: vec![timeline_entry()],
         },
         ServerFrame::MetaSnapshot {
             runtimes: vec![runtime_row()],
@@ -237,7 +252,7 @@ fn exemplars() -> serde_json::Value {
         "sessions": SessionsResponse { sessions: vec![session_row()] },
         "session": SessionResponse { session: session_row() },
         "timeline_page": TimelinePage {
-            messages: vec![message_row()],
+            entries: vec![timeline_entry()],
             cursor: Some("{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}".into()),
         },
         "search_request": SearchRequest {

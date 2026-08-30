@@ -60,7 +60,11 @@ impl OpEvidence {
                     match op {
                         "message" => {
                             self.messages += 1;
-                            if object.get("usage").is_some_and(|usage| !usage.is_null()) {
+                            if object
+                                .get("usage")
+                                .and_then(Value::as_object)
+                                .is_some_and(|usage| usage.values().any(|value| !value.is_null()))
+                            {
                                 self.inline_usage += 1;
                             }
                             if let (Some(session), Some(timeline)) = (
@@ -70,7 +74,9 @@ impl OpEvidence {
                                 self.messages_seen
                                     .insert((session.to_owned(), timeline.to_owned()));
                                 if let Some(correlation_key) = object
-                                    .get("tool")
+                                    .get("body")
+                                    .and_then(Value::as_object)
+                                    .and_then(|body| body.get("tool"))
                                     .and_then(Value::as_object)
                                     .and_then(|tool| tool.get("correlation"))
                                     .and_then(Value::as_object)

@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
-use rosetta_adapter_support::tool::{terminal_update, unknown_interaction};
+use rosetta_adapter_support::tool::{
+    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, PlanRow, TaskRow, TaskStatus,
     TokenSnapshot,
@@ -112,7 +114,7 @@ fn project(
         "user_message_chunk" => user_chunk(ctx, state, line, ops),
         "agent_message_chunk" => response_chunk(ctx, state, line, MessageKind::Agent, ops),
         "agent_thought_chunk" => response_chunk(ctx, state, line, MessageKind::Thinking, ops),
-        "tool_call" => tool_call(ctx, state, line, ops),
+        "tool_call" => tool_call(ctx, state, stream_id, line, ops),
         "tool_call_update" => tool_result(ctx, line, ops),
         "turn_completed" => turn_completed(ctx, state, line, ops),
         "auto_compact_started" => simple_message(
@@ -332,7 +334,7 @@ fn accumulate_message(
     append(&mut row.content, spec.text, spec.separator);
     row.src_cursor = ctx.src_cursor;
     row.src_offset = ctx.src_offset;
-    ops.push(IngestOp::Message(Box::new(row.clone())));
+    IngestOp::push_message(ops, row.clone());
 }
 
 fn append(target: &mut Option<String>, text: Option<&str>, separator: &str) {
@@ -351,6 +353,7 @@ fn append(target: &mut Option<String>, text: Option<&str>, separator: &str) {
 fn tool_call(
     ctx: &mut NormalizeCtx,
     state: &mut GrokState,
+    stream_id: &str,
     line: &UpdateLine,
     ops: &mut Vec<IngestOp>,
 ) -> Result<(), ()> {
@@ -374,16 +377,25 @@ fn tool_call(
     let mut message = row(ctx, &discriminator, MessageKind::ToolUse, stamp(line));
     message.uuid = Some(event_id.to_owned());
     message.model = state.current_model.clone();
-    message.tool = Some(
-        crate::tool::project_request(
-            ctx.agent_version.as_deref(),
-            name,
-            &input,
-            None,
-            tool_id,
-            Some(tool_id),
-        )
-        .unwrap_or_else(|_| {
+    let projected = crate::tool::project_request(
+        ctx.agent_version.as_deref(),
+        name,
+        &input,
+        None,
+        tool_id,
+        Some(tool_id),
+    );
+    message.tool = Some(match projected {
+        Ok(tool) => tool,
+        Err(error) => {
+            ops.push(drift(
+                ctx,
+                stream_id,
+                &projection_record_kind("request", None, name),
+                error.drift_code(),
+                &projection_shape_paths(&input),
+                stamp(line),
+            ));
             unknown_interaction(
                 tool_id,
                 CorrelationDerivation::NativeId,
@@ -392,10 +404,10 @@ fn tool_call(
                 name,
                 None,
             )
-        }),
-    );
+        }
+    });
     let timeline_id = message.timeline_id.clone();
-    ops.push(IngestOp::Message(Box::new(message)));
+    IngestOp::push_message(ops, message);
 
     if let Some(edit) = file_edit(
         &ctx.session_id,
@@ -477,7 +489,7 @@ fn tool_result(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -
         session_id: ctx.session_id.clone(),
         correlation_key: tool_id.to_owned(),
         evidence: ctx.evidence(0),
-        patch: terminal_update(
+        patch: Box::new(terminal_update(
             is_error,
             terminal_error.is_none(),
             StatusBasis::NativeState,
@@ -486,7 +498,7 @@ fn tool_result(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -
                 .is_some_and(|value| value)
                 .then_some(result.as_deref())
                 .flatten(),
-        ),
+        )),
         at: stamp(line),
     });
     Ok(())
@@ -635,7 +647,7 @@ fn simple_message(
     message.subtype = Some(subtype.to_owned());
     message.uuid = Some(event.to_owned());
     message.content = content;
-    ops.push(IngestOp::Message(Box::new(message)));
+    IngestOp::push_message(ops, message);
     Ok(())
 }
 
@@ -761,6 +773,11 @@ fn row(
         effort: None,
         content: None,
         tool: None,
+        attachments: Vec::new(),
+        citations: Vec::new(),
+        group: None,
+        response: None,
+        block_index: None,
         branch_tool_id: None,
         usage: None,
         agent_version: ctx.agent_version.clone(),

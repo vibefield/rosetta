@@ -9,9 +9,9 @@ use std::cmp::Ordering;
 
 use rosetta_core::timeline::{
     CORE_SCALAR_MAX_BYTES, CanonicalError, CanonicalText, CorrelationDerivation,
-    FAILURE_DIAGNOSTIC_MAX_BYTES, FAILURE_DIAGNOSTIC_MAX_LINES, NativeToolRef, ResourceRef,
-    StatusBasis, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction,
-    ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
+    FAILURE_DIAGNOSTIC_MAX_BYTES, FAILURE_DIAGNOSTIC_MAX_LINES, ID_MAX_BYTES, NativeToolRef,
+    ResourceRef, StatusBasis, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure,
+    ToolInteraction, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
 };
 use serde_json::Value;
 
@@ -248,6 +248,115 @@ pub enum ProjectionError {
     Bounds(CanonicalError),
 }
 
+impl ProjectionError {
+    /// Stable aggregate key for a projector refusal. The rejected native
+    /// object stays only in the raw ledger; adapters combine this code with a
+    /// privacy-safe structural shape and one ledger sample reference.
+    pub const fn drift_code(&self) -> &'static str {
+        match self {
+            Self::MissingWriterVersion => "projection_missing_writer_version",
+            Self::Unregistered { .. } => "projection_unregistered",
+            Self::MissingField(_) => "projection_missing_field",
+            Self::InvalidField(_) => "projection_invalid_field",
+            Self::InvalidRegistration(_) => "projection_invalid_registration",
+            Self::Bounds(_) => "projection_bounds",
+        }
+    }
+}
+
+pub fn projection_record_kind(phase: &str, namespace: Option<&str>, name: &str) -> String {
+    let name = bounded_shape_component(name);
+    namespace.map_or_else(
+        || format!("tool/{phase}/{name}"),
+        |namespace| {
+            let namespace = bounded_shape_component(namespace);
+            format!("tool/{phase}/{namespace}/{name}")
+        },
+    )
+}
+
+fn bounded_shape_component(value: &str) -> String {
+    const PREFIX_BYTES: usize = 96;
+    if value.len() <= PREFIX_BYTES {
+        return value.to_owned();
+    }
+    let mut boundary = PREFIX_BYTES;
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    let digest = rosetta_core::ids::shape_hash(&[value.to_owned()]);
+    format!("{}~{digest}", &value[..boundary])
+}
+
+/// Describe a rejected value by keys and JSON kinds only. Values never enter
+/// drift aggregates, and traversal is deliberately bounded so malformed or
+/// adversarial native payloads cannot create a second payload sink.
+pub fn projection_shape_paths(value: &Value) -> Vec<String> {
+    const MAX_PATHS: usize = 64;
+    const MAX_DEPTH: usize = 6;
+
+    fn kind(value: &Value) -> &'static str {
+        match value {
+            Value::Null => "null",
+            Value::Bool(_) => "bool",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        }
+    }
+
+    fn walk(value: &Value, prefix: &str, depth: usize, out: &mut Vec<String>) {
+        if out.len() >= MAX_PATHS {
+            return;
+        }
+        if depth >= MAX_DEPTH {
+            out.push(format!("{prefix}:depth_limit"));
+            return;
+        }
+        match value {
+            Value::Object(object) => {
+                let mut keys: Vec<_> = object.keys().collect();
+                keys.sort_unstable();
+                for native_key in keys {
+                    if out.len() >= MAX_PATHS {
+                        break;
+                    }
+                    let child = &object[native_key];
+                    let key = bounded_shape_component(native_key);
+                    let path = if prefix.is_empty() {
+                        key
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    out.push(format!("{path}:{}", kind(child)));
+                    if matches!(child, Value::Object(_) | Value::Array(_)) {
+                        walk(child, &path, depth + 1, out);
+                    }
+                }
+            }
+            Value::Array(values) => {
+                out.push(format!("{prefix}[]:len_class_{}", values.len().min(20)));
+                if let Some(first) = values.first() {
+                    let path = format!("{prefix}[]");
+                    out.push(format!("{path}:{}", kind(first)));
+                    if matches!(first, Value::Object(_) | Value::Array(_)) {
+                        walk(first, &path, depth + 1, out);
+                    }
+                }
+            }
+            scalar => out.push(format!("{prefix}:{}", kind(scalar))),
+        }
+    }
+
+    let mut paths = Vec::new();
+    walk(value, "$", 0, &mut paths);
+    if paths.len() == MAX_PATHS {
+        paths.push("$:path_limit".to_owned());
+    }
+    paths
+}
+
 impl std::fmt::Display for ProjectionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -279,7 +388,11 @@ impl From<CanonicalError> for ProjectionError {
 }
 
 pub fn canonical_text(value: impl Into<String>) -> Result<CanonicalText, ProjectionError> {
-    Ok(CanonicalText::inline(value)?)
+    // This is a normalizer-local draft. `IngestOp::project_message` walks the
+    // closed action and externalizes any value above the inline limit before
+    // validation, so user-critical commands/diffs/objectives are never turned
+    // into an unknown action merely because they need a projection member.
+    Ok(CanonicalText::Inline { text: value.into() })
 }
 
 pub fn bounded_scalar(
@@ -292,6 +405,18 @@ pub fn bounded_scalar(
             field,
             bytes: value.len(),
             limit: CORE_SCALAR_MAX_BYTES,
+        }));
+    }
+    Ok(value)
+}
+
+fn bounded_id(field: &'static str, value: impl Into<String>) -> Result<String, ProjectionError> {
+    let value = value.into();
+    if value.len() > ID_MAX_BYTES {
+        return Err(ProjectionError::Bounds(CanonicalError::Overflow {
+            field,
+            bytes: value.len(),
+            limit: ID_MAX_BYTES,
         }));
     }
     Ok(value)
@@ -397,17 +522,23 @@ pub fn open_interaction(
     native_name: impl Into<String>,
     provider: Option<String>,
     action: ToolAction,
-) -> ToolInteraction {
-    ToolInteraction {
+) -> Result<ToolInteraction, ProjectionError> {
+    Ok(ToolInteraction {
         correlation: ToolCorrelation {
-            key: correlation_key.into(),
+            key: bounded_id("tool correlation key", correlation_key)?,
             derivation: correlation_derivation,
         },
         native: NativeToolRef {
-            id: native_id,
-            namespace,
-            name: native_name.into(),
-            provider,
+            id: native_id
+                .map(|value| bounded_id("tool native id", value))
+                .transpose()?,
+            namespace: namespace
+                .map(|value| bounded_id("tool namespace", value))
+                .transpose()?,
+            name: bounded_id("tool name", native_name)?,
+            provider: provider
+                .map(|value| bounded_id("tool provider", value))
+                .transpose()?,
         },
         status: ToolStatusFact {
             value: ToolStatus::Pending,
@@ -416,7 +547,7 @@ pub fn open_interaction(
         action,
         failure: None,
         timing: None,
-    }
+    })
 }
 
 pub fn unknown_interaction(
@@ -427,11 +558,15 @@ pub fn unknown_interaction(
     native_name: impl Into<String>,
     provider: Option<String>,
 ) -> ToolInteraction {
-    let mut interaction =
-        ToolInteraction::unknown(correlation_key, correlation_derivation, native_name);
-    interaction.native.id = native_id;
-    interaction.native.namespace = namespace;
-    interaction.native.provider = provider;
+    let bounded = |value: String| bounded_shape_component(&value);
+    let mut interaction = ToolInteraction::unknown(
+        bounded(correlation_key.into()),
+        correlation_derivation,
+        bounded(native_name.into()),
+    );
+    interaction.native.id = native_id.map(bounded);
+    interaction.native.namespace = namespace.map(bounded);
+    interaction.native.provider = provider.map(bounded);
     interaction
 }
 
@@ -585,5 +720,26 @@ mod tests {
         let duplicate = [REGISTRY[0], REGISTRY[0]];
         assert!(validate_registry(&duplicate).is_err());
         assert!(validate_registry(REGISTRY).is_ok());
+    }
+
+    #[test]
+    fn projection_drift_shape_is_bounded_and_never_contains_values() {
+        let mut value = serde_json::json!({
+            "command": "private-command-value",
+            "nested": {"token": "private-token-value"},
+            "items": [{"path": "/private/path"}],
+        });
+        let object = value.as_object_mut().unwrap();
+        for index in 0..100 {
+            object.insert(format!("zz_extra_{index:03}"), Value::Bool(true));
+        }
+        let paths = projection_shape_paths(&value);
+        assert!(paths.len() <= 65);
+        assert!(paths.iter().any(|path| path == "$.command:string"));
+        assert!(paths.iter().any(|path| path == "$.nested.token:string"));
+        let debug = paths.join("\n");
+        assert!(!debug.contains("private-command-value"));
+        assert!(!debug.contains("private-token-value"));
+        assert!(!debug.contains("/private/path"));
     }
 }
