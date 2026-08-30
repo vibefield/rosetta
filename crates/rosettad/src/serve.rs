@@ -273,6 +273,7 @@ fn fold_stream(total: &mut StreamReport, part: StreamReport) {
     total.conflicts += part.conflicts;
     total.retries_exhausted += part.retries_exhausted;
     total.files_incomplete += part.files_incomplete;
+    total.files_paused += part.files_paused;
     total.sessions_indexed += part.sessions_indexed;
     total.siblings_healed += part.siblings_healed;
     total.stats.messages_inserted += part.stats.messages_inserted;

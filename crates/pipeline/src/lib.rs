@@ -72,6 +72,30 @@ impl std::fmt::Display for PipelineError {
 
 impl std::error::Error for PipelineError {}
 
+/// Byte-governed bound for one starter pass over a fresh JSONL source. The
+/// pass stops at the first batch boundary at or past `max_bytes`, activates
+/// the clean prefix, and seals its generation — the unread remainder becomes
+/// ordinary append growth for a later completion pass. Bytes govern because
+/// they bound the slice's wall time (and boost preemption); the record floor
+/// guarantees minimum content when single records are huge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SliceBudget {
+    /// Soft byte target; the stop check runs at batch boundaries, so one
+    /// budgeted batch of overshoot is expected.
+    pub max_bytes: u64,
+    /// Never pause before this many complete records. Also the record
+    /// granularity of budgeted batches — and therefore of the stop check.
+    pub min_records: u32,
+}
+
+impl SliceBudget {
+    /// Starting default until the ingest-bench sweep picks the sweet spot.
+    pub const STARTER: Self = Self {
+        max_bytes: 256 * 1024,
+        min_records: 24,
+    };
+}
+
 /// Bounds for one ingest run. Every limit is explicit so the profiler can
 /// attribute cost to a knob.
 #[derive(Debug, Clone)]
@@ -92,6 +116,11 @@ pub struct IngestOptions {
     /// Files per runtime that receive a rotating forced replay each run. This
     /// is the bounded audit lane for same-size rewrites outside the tail anchor.
     pub audit_files_per_run: usize,
+    /// `Some` bounds each JSONL pass to a starter slice (fresh first
+    /// generations early-activate at the boundary; active generations simply
+    /// pause). `None` — the default, and the setting for finite ingest,
+    /// rebuild, audits, and completion passes — reads every source to EOF.
+    pub starter_budget: Option<SliceBudget>,
 }
 
 impl Default for IngestOptions {
@@ -105,6 +134,7 @@ impl Default for IngestOptions {
             tail: TailConfig::json_lines(),
             max_retries: 3,
             audit_files_per_run: 1,
+            starter_budget: None,
         }
     }
 }

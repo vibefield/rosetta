@@ -515,6 +515,7 @@ fn merge_stream(total: &mut StreamReport, tick: StreamReport) {
     total.conflicts += tick.conflicts;
     total.retries_exhausted += tick.retries_exhausted;
     total.files_incomplete += tick.files_incomplete;
+    total.files_paused += tick.files_paused;
     total.sessions_indexed += tick.sessions_indexed;
     merge_stats(&mut total.stats, &tick.stats);
 }

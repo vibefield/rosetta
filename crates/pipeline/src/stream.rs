@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
-use rosetta_capture::{TailItem, TailRead, Tailer, Transition};
+use rosetta_capture::{TailConfig, TailItem, TailRead, Tailer, Transition};
 use rosetta_core::IngestOp;
 use rosetta_core::fold::CumulativeUsage;
 use rosetta_core::rows::{DriftFact, RuntimeRow, StreamState};
@@ -41,6 +41,9 @@ pub struct StreamReport {
     pub conflicts: u64,
     pub retries_exhausted: u64,
     pub files_incomplete: u64,
+    /// Files a starter budget paused on purpose: a clean prefix is active and
+    /// the remainder awaits a completion pass. Deliberate, never a failure.
+    pub files_paused: u64,
     pub sessions_indexed: u64,
     /// Same-session sibling files force-replayed after another file's
     /// generation restart, so cross-file merges land in the rebuilt rows.
@@ -118,7 +121,7 @@ pub fn stream_backfill_into(
         };
         report.files += 1;
         let restarts_before = report.generations_restarted;
-        let complete = ingest_file(
+        let outcome = ingest_file(
             adapter,
             runtime,
             root,
@@ -135,12 +138,15 @@ pub fn stream_backfill_into(
             restarted_sessions.insert(file.session_id.clone());
             restarted_files.insert(file.relative_path.clone());
         }
+        let complete = outcome == FilePass::Finished(true);
         file_health.insert(file.relative_path.clone(), complete);
         session_health
             .entry(file.session_id.clone())
             .and_modify(|healthy| *healthy &= complete);
-        if !complete {
-            report.files_incomplete += 1;
+        match outcome {
+            FilePass::Paused => report.files_paused += 1,
+            FilePass::Finished(true) => {}
+            FilePass::Finished(false) => report.files_incomplete += 1,
         }
     }
 
@@ -156,7 +162,7 @@ pub fn stream_backfill_into(
             continue;
         }
         report.siblings_healed += 1;
-        let complete = ingest_file(
+        let outcome = ingest_file(
             adapter,
             runtime,
             root,
@@ -169,12 +175,15 @@ pub fn stream_backfill_into(
             true, // forced replay
             ledger.as_deref_mut(),
         )?;
+        let complete = outcome == FilePass::Finished(true);
         file_health.insert(file.relative_path.clone(), complete);
         session_health
             .entry(file.session_id.clone())
             .and_modify(|healthy| *healthy &= complete);
-        if !complete {
-            report.files_incomplete += 1;
+        match outcome {
+            FilePass::Paused => report.files_paused += 1,
+            FilePass::Finished(true) => {}
+            FilePass::Finished(false) => report.files_incomplete += 1,
         }
     }
 
@@ -267,6 +276,18 @@ pub(crate) fn rotating_audit_paths(
         .collect())
 }
 
+/// How one pass over one source file ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FilePass {
+    /// The whole source was read; `true` means a clean generation is fully
+    /// active with no partial suffix (today's completion condition).
+    Finished(bool),
+    /// A starter budget stopped the pass at a record boundary: the clean
+    /// prefix is active (and its generation sealed in the ledger), so the
+    /// unread remainder is ordinary append growth for a later pass.
+    Paused,
+}
+
 /// Load-or-create the cursor row for a file, returning its rowid and the
 /// EXACT stored blob (the CAS expectation, decodable or not).
 pub(crate) fn cursor_row(
@@ -318,7 +339,7 @@ fn ingest_file(
     report: &mut StreamReport,
     audit_requested: bool,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
-) -> Result<bool, PipelineError> {
+) -> Result<FilePass, PipelineError> {
     let path = root.join(&file.relative_path);
     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
     if cursor.session_id != file.session_id {
@@ -383,23 +404,44 @@ fn ingest_file(
         generation_clean = checkpoint.generation_clean;
     }
 
+    // A starter budget applies only where pausing cannot regress what a
+    // reader already sees: a fresh source's first generation (early Activate
+    // turns the unread remainder into ordinary growth) or append growth of
+    // the already-active generation. A replacement generation ignores it so
+    // the previous complete content stays visible until the full swap.
+    let mut budget = opts
+        .starter_budget
+        .filter(|_| active_generation == 0 || source_generation == active_generation);
+    let budget_tailer = match budget {
+        Some(slice) => Some(Tailer::new(TailConfig {
+            // The record floor is also the stop-check granularity: budgeted
+            // batches frame at most this many records per transaction.
+            max_records_per_batch: slice.min_records.max(1) as usize,
+            ..opts.tail.clone()
+        })?),
+        None => None,
+    };
+    let read_tailer = budget_tailer.as_ref().unwrap_or(tailer);
+    let mut budget_bytes = 0_u64;
+    let mut budget_records = 0_u64;
+
     let mut retries = 0_u32;
     let mut force_replay =
         audit_requested && tail.is_some() && source_generation == active_generation;
     loop {
         let read = instrument.time(Metric::ReadNanos, || {
-            tailer.read(&path, tail.as_ref(), force_replay)
+            read_tailer.read(&path, tail.as_ref(), force_replay)
         })?;
         let batch = match read {
             TailRead::Missing => {
                 report.files_missing += 1;
-                return Ok(false);
+                return Ok(FilePass::Finished(false));
             }
             TailRead::Retry => {
                 retries += 1;
                 if retries > opts.max_retries {
                     report.retries_exhausted += 1;
-                    return Ok(false);
+                    return Ok(FilePass::Finished(false));
                 }
                 continue;
             }
@@ -407,10 +449,17 @@ fn ingest_file(
         };
         force_replay = false;
         instrument.add(Metric::BytesRead, batch.bytes_read);
+        budget_bytes = budget_bytes.saturating_add(batch.bytes_read);
 
         if batch.transition.starts_new_generation()
             && !matches!(batch.transition, Transition::Initial)
         {
+            if active_generation > 0 {
+                // A rewrite mid-pass is a replacement generation: pausing it
+                // early would hide previously complete content, so the
+                // budget stops applying.
+                budget = None;
+            }
             report.generations_restarted += 1;
             source_generation = source_generation
                 .max(active_generation)
@@ -431,6 +480,7 @@ fn ingest_file(
             match item {
                 TailItem::Record(record) => {
                     report.records += 1;
+                    budget_records += 1;
                     instrument.add(Metric::RecordsFramed, 1);
                     ctx.src_offset = Some(record.start_offset as i64);
                     ctx.source_generation = source_generation;
@@ -494,9 +544,20 @@ fn ingest_file(
             .checked_add(ops.len() as u64)
             .ok_or_else(|| PipelineError::Config("source sequence overflowed".to_string()))?;
         let complete = !batch.more_available && batch.checkpoint.incomplete_suffix_len == 0;
+        // The slice boundary: enough clean bytes and complete records are
+        // framed that this pass may stop. A fresh generation stops by
+        // ACTIVATING and sealing its prefix, so the unread remainder becomes
+        // ordinary append growth — indistinguishable from the file having
+        // ended here and then grown.
+        let budget_stop = !complete
+            && generation_clean
+            && generation_raw_complete
+            && budget.is_some_and(|slice| {
+                budget_bytes >= slice.max_bytes && budget_records >= u64::from(slice.min_records)
+            });
         let source_mode = if source_generation == active_generation {
             SourceMode::Append
-        } else if complete && generation_clean {
+        } else if (complete || budget_stop) && generation_clean {
             SourceMode::Activate
         } else if complete {
             SourceMode::Abandon
@@ -553,7 +614,10 @@ fn ingest_file(
                     ledger.append_raw(&source, source_generation, raw)?;
                     wrote = true;
                 }
-                if source_generation != active_generation && complete && generation_raw_complete {
+                if source_generation != active_generation
+                    && (complete || budget_stop)
+                    && generation_raw_complete
+                {
                     ledger.complete_generation(
                         &source,
                         source_generation,
@@ -597,7 +661,7 @@ fn ingest_file(
                 // Another writer owns this file now; abandon it untouched.
                 report.conflicts += 1;
                 instrument.add(Metric::CheckpointConflicts, 1);
-                return Ok(false);
+                return Ok(FilePass::Finished(false));
             }
             Err(error) => return Err(error.into()),
         };
@@ -612,17 +676,24 @@ fn ingest_file(
         }
         highest_generation = highest_generation.max(source_generation);
         tail = Some(batch.checkpoint);
+        if budget_stop {
+            // The prefix is active and its checkpoint durable; the rest of
+            // this file is a later completion pass's work.
+            return Ok(FilePass::Paused);
+        }
         if !batch.more_available {
             // An incomplete trailing record stays unconsumed until the file
             // grows; looping now would re-frame the same bytes forever.
             break;
         }
     }
-    Ok(generation_clean
-        && active_generation == source_generation
-        && tail
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.incomplete_suffix_len == 0))
+    Ok(FilePass::Finished(
+        generation_clean
+            && active_generation == source_generation
+            && tail
+                .as_ref()
+                .is_some_and(|checkpoint| checkpoint.incomplete_suffix_len == 0),
+    ))
 }
 
 pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
