@@ -309,6 +309,10 @@ function buildStageReport(events, processWallMs, agent) {
   const readMs = metricMs(stream, 'read time');
   const normalizeMs = metricMs(stream, 'normalize time');
   const applyMs = metricMs(stream, 'apply time');
+  const toolReconcileMs = metricMs(stream, 'tool reconciliation time');
+  const sqliteApplyMs = applyMs === null
+    ? null
+    : Math.max(0, applyMs - (toolReconcileMs ?? 0));
   const streamKnown = [readMs, normalizeMs, ledgerAppendMs, applyMs]
     .filter((value) => value !== null)
     .reduce((sum, value) => sum + value, 0);
@@ -389,18 +393,22 @@ function buildStageReport(events, processWallMs, agent) {
         step: 6,
         name: 'fold / merge',
         purpose: 'Reconcile records that describe different pieces of one logical message, tool call, usage event, or workspace fact.',
-        actualWork: 'Workspace enrichment runs in memory, while tool-result, usage, pending-record, and deterministic-identity merges happen inside Store::apply. There is no standalone generic fold transaction or exclusive timer today.',
-        measuredMs: null,
-        basis: 'not a standalone boundary: enrichment is unmetered and merge work is inside canonical apply',
-        details: {},
+        actualWork: 'For a private cold build, source-generation-owned tool openers, lifecycle updates, response usage, and file edits stay in a runtime-scoped buffer. After every source is sealed, Rosetta groups correlations and folds ordered evidence once in RAM, then emits final tool rows and reduced subtraction facts. Live and progressive/public ingestion retain transaction-local reconciliation.',
+        measuredMs: round(toolReconcileMs),
+        basis: 'exclusive private-cold reconciliation-plan timer: RAM fold plus at most one set read of prior closed state',
+        details: {
+          toolRowsReconciled: countMetric(stream, 'bulk tool rows reconciled'),
+          reducedFactsWritten: countMetric(stream, 'bulk tool facts written'),
+          factWriteMs: round(metricMs(stream, 'tool fact write time')),
+        },
       },
       {
         step: 7,
         name: 'canonical SQLite apply',
         purpose: 'Advance canonical rows and the source checkpoint atomically so the projection can never outrun its replay position.',
-        actualWork: 'One SQLite transaction reconciles the source generation, applies IngestOps, performs message/tool/usage/session and pending merges, writes the checkpoint with compare-and-swap semantics, records search dirtiness, and commits.',
-        measuredMs: round(applyMs),
-        basis: 'end-to-end Store::apply timers; child timers overlap this parent',
+        actualWork: 'Source batches atomically apply ordinary canonical operations and advance checkpoint CAS state. At the private runtime boundary, one additional transaction writes each RAM-reconciled tool row once, persists only reduced source-owned facts needed for future rewrite subtraction, and applies deferred usage/file-edit links after their targets exist.',
+        measuredMs: round(sqliteApplyMs),
+        basis: 'end-to-end Store apply wall less the exclusive RAM reconciliation timer; child SQLite timers overlap this remainder',
         details: {
           sourceStageMs: round(metricMs(stream, 'source staging time')),
           canonicalApplyMs: round(metricMs(stream, 'canonical apply time')),
@@ -486,7 +494,7 @@ function printStageTable(stageReport) {
   }
   console.log(`\nprocess wall                               ${formatMs(stageReport.processWallMs)}`);
   console.log(`phase-wall residual (startup/setup/events) ${formatMs(stageReport.processResidualMs)}`);
-  console.log('\nRows 4 and 6 are deliberately not assigned synthetic costs; see the report basis fields.');
+  console.log('\nRow 4 is deliberately not assigned a synthetic cost; see the report basis field.');
 }
 
 async function profileSelection({
@@ -617,7 +625,7 @@ async function profileSelection({
       implementationFacts: [
         'The current stream path parses and normalizes before appending the corresponding raw-ledger frame; ledger append still precedes SQLite apply.',
         'Parse and normalize share AgentAdapter::ingest_line and cannot currently be timed separately.',
-        'There is no standalone generic fold/merge boundary; enrichment is unmetered and merge work lands inside canonical SQLite apply.',
+        'Private cold ingest has an exclusive RAM tool-lifecycle fold at the runtime boundary; live/progressive merge work remains transactional inside canonical SQLite apply.',
         'The deferred raw-ledger durability barrier currently runs before global SQLite finalization.',
         'Parent timers and their child timers overlap and must not be summed.',
         ...(boundaryEvidence ? [`Boundary evidence collection reported ${round(boundaryEvidence.diagnosticOverheadMs)} ms of SQLite snapshot-query overhead outside the nested production timers. The pre-finalization query is process residual; the post-finalization query is inside the finalize-publish phase wall, and the external process wall includes both.`] : []),
