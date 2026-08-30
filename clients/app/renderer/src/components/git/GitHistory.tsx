@@ -75,7 +75,7 @@ export function GitHistory({
           <span className="ah-commit__l1">
             <strong title={commit.subject}>{commit.subject}</strong>
           </span>
-          <span className="ah-sessmeta">
+          <span className="ah-commit__meta">
             <span>{commit.author}</span>
             <span>·</span>
             {commit.merge ? (
