@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
-use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
     TokenSnapshot,
 };
+use rosetta_core::{CorrelationDerivation, IngestOp, ToolInteraction};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
 
 fn runtime() -> RuntimeRow {
@@ -287,6 +287,12 @@ fn cold_rebuild_defers_and_then_materializes_derived_structures() {
     });
     let mut tool_without_native_id = message("tool-call", 1, 10);
     tool_without_native_id.kind = MessageKind::ToolUse;
+    tool_without_native_id.content = None;
+    tool_without_native_id.tool = Some(ToolInteraction::unknown(
+        "synthetic-tool-call",
+        CorrelationDerivation::Synthetic,
+        "unknown_fixture_tool",
+    ));
     store
         .apply(&Batch {
             ops: vec![

@@ -1,8 +1,9 @@
 //! Canonical references to large binary projection assets.
 //!
 //! Adapters stay pure: they may decode a native inline image and emit an
-//! [`ImageAsset`] alongside a payload containing [`ImageAsset::url`]. The
-//! store materializes the bytes before committing that URL. Bytes are skipped
+//! [`ImageAsset`] alongside a typed attachment containing
+//! [`ImageAsset::url`]. The store materializes the bytes before committing
+//! that URL. Bytes are skipped
 //! by serde because `source_op` is only temporary replacement staging; the
 //! durable raw ledger always retains the native Base64 and can recreate them.
 

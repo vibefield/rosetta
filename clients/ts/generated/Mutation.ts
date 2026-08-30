@@ -4,7 +4,7 @@ import type { ProjectRow } from "./ProjectRow";
 import type { RuntimeRow } from "./RuntimeRow";
 import type { SessionRow } from "./SessionRow";
 import type { TokenSnapshot } from "./TokenSnapshot";
-import type { JsonValue } from "./serde_json/JsonValue";
+import type { ToolInteraction } from "./ToolInteraction";
 
 /**
  * One projected mutation, as written. At-least-once redelivery is safe:
@@ -12,4 +12,4 @@ import type { JsonValue } from "./serde_json/JsonValue";
  * This is a wire type: the hub serializes it into WebSocket frames, tagged
  * by `type`.
  */
-export type Mutation = { "type": "message" } & MessageRow | { "type": "tool_result", session_id: string, timeline_id: string, result: string | null, payload: JsonValue | null, is_error: boolean | null, at: number | null, } | { "type": "usage", session_id: string, timeline_id: string, ts: number | null, model: string | null, tokens: TokenSnapshot, } | { "type": "session_swept", session_id: string, } | { "type": "session" } & SessionRow | { "type": "project" } & ProjectRow | { "type": "runtime" } & RuntimeRow;
+export type Mutation = { "type": "message" } & MessageRow | { "type": "tool_updated", session_id: string, timeline_id: string, tool: ToolInteraction, at: number | null, } | { "type": "usage", session_id: string, timeline_id: string, ts: number | null, model: string | null, tokens: TokenSnapshot, } | { "type": "session_swept", session_id: string, } | { "type": "session" } & SessionRow | { "type": "project" } & ProjectRow | { "type": "runtime" } & RuntimeRow;

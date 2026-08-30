@@ -50,7 +50,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 1,
+      "protocol_version": 2,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -62,7 +62,7 @@
         {
           "agent_version": "2.1.240",
           "branch_tool_id": "toolu_0",
-          "content": "body",
+          "content": null,
           "effort": "high",
           "kind": "tool_use",
           "model": "claude-opus-5",
@@ -74,16 +74,37 @@
           "subtype": "sub",
           "timeline_id": "t1",
           "tool": {
-            "input": {
-              "command": "true"
+            "action": {
+              "background": false,
+              "command": {
+                "text": "true",
+                "type": "inline"
+              },
+              "cwd": null,
+              "outcome": {
+                "exit_code": 0,
+                "process_id": null,
+                "signal": null
+              },
+              "timeout_ms": null,
+              "type": "shell"
             },
-            "is_error": false,
-            "name": "Bash",
-            "payload": {
-              "exit": 0
+            "correlation": {
+              "derivation": "native_id",
+              "key": "toolu_1"
             },
-            "result": "ok",
-            "tool_id": "toolu_1"
+            "failure": null,
+            "native": {
+              "id": "toolu_1",
+              "name": "Bash",
+              "namespace": null,
+              "provider": null
+            },
+            "status": {
+              "basis": "native_terminal_record",
+              "value": "succeeded"
+            },
+            "timing": null
           },
           "ts": 3600000,
           "usage": {
@@ -191,7 +212,7 @@
     {
       "agent_version": "2.1.240",
       "branch_tool_id": "toolu_0",
-      "content": "body",
+      "content": null,
       "effort": "high",
       "kind": "tool_use",
       "model": "claude-opus-5",
@@ -203,16 +224,37 @@
       "subtype": "sub",
       "timeline_id": "t1",
       "tool": {
-        "input": {
-          "command": "true"
+        "action": {
+          "background": false,
+          "command": {
+            "text": "true",
+            "type": "inline"
+          },
+          "cwd": null,
+          "outcome": {
+            "exit_code": 0,
+            "process_id": null,
+            "signal": null
+          },
+          "timeout_ms": null,
+          "type": "shell"
         },
-        "is_error": false,
-        "name": "Bash",
-        "payload": {
-          "exit": 0
+        "correlation": {
+          "derivation": "native_id",
+          "key": "toolu_1"
         },
-        "result": "ok",
-        "tool_id": "toolu_1"
+        "failure": null,
+        "native": {
+          "id": "toolu_1",
+          "name": "Bash",
+          "namespace": null,
+          "provider": null
+        },
+        "status": {
+          "basis": "native_terminal_record",
+          "value": "succeeded"
+        },
+        "timing": null
       },
       "ts": 3600000,
       "type": "message",
@@ -227,14 +269,42 @@
     },
     {
       "at": 3700000,
-      "is_error": false,
-      "payload": {
-        "exit": 0
-      },
-      "result": "ok",
       "session_id": "s1",
       "timeline_id": "t1",
-      "type": "tool_result"
+      "tool": {
+        "action": {
+          "background": false,
+          "command": {
+            "text": "true",
+            "type": "inline"
+          },
+          "cwd": null,
+          "outcome": {
+            "exit_code": 0,
+            "process_id": null,
+            "signal": null
+          },
+          "timeout_ms": null,
+          "type": "shell"
+        },
+        "correlation": {
+          "derivation": "native_id",
+          "key": "toolu_1"
+        },
+        "failure": null,
+        "native": {
+          "id": "toolu_1",
+          "name": "Bash",
+          "namespace": null,
+          "provider": null
+        },
+        "status": {
+          "basis": "native_terminal_record",
+          "value": "succeeded"
+        },
+        "timing": null
+      },
+      "type": "tool_updated"
     },
     {
       "model": "claude-opus-5",
@@ -311,7 +381,7 @@
       }
     ]
   },
-  "protocol_version": 1,
+  "protocol_version": 2,
   "runtimes": {
     "runtimes": [
       {
@@ -445,7 +515,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 1,
+    "protocol_version": 2,
     "schema_version": 5,
     "search": {
       "projection_epoch": "epoch-1",
@@ -459,7 +529,7 @@
       {
         "agent_version": "2.1.240",
         "branch_tool_id": "toolu_0",
-        "content": "body",
+        "content": null,
         "effort": "high",
         "kind": "tool_use",
         "model": "claude-opus-5",
@@ -471,16 +541,37 @@
         "subtype": "sub",
         "timeline_id": "t1",
         "tool": {
-          "input": {
-            "command": "true"
+          "action": {
+            "background": false,
+            "command": {
+              "text": "true",
+              "type": "inline"
+            },
+            "cwd": null,
+            "outcome": {
+              "exit_code": 0,
+              "process_id": null,
+              "signal": null
+            },
+            "timeout_ms": null,
+            "type": "shell"
           },
-          "is_error": false,
-          "name": "Bash",
-          "payload": {
-            "exit": 0
+          "correlation": {
+            "derivation": "native_id",
+            "key": "toolu_1"
           },
-          "result": "ok",
-          "tool_id": "toolu_1"
+          "failure": null,
+          "native": {
+            "id": "toolu_1",
+            "name": "Bash",
+            "namespace": null,
+            "provider": null
+          },
+          "status": {
+            "basis": "native_terminal_record",
+            "value": "succeeded"
+          },
+          "timing": null
         },
         "ts": 3600000,
         "usage": {

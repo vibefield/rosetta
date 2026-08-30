@@ -98,7 +98,7 @@ fn affected_sessions(
                 IngestOp::Message(row) => {
                     sessions.insert(row.session_id.clone());
                 }
-                IngestOp::ToolResult { session_id, .. } => {
+                IngestOp::ToolUpdate { session_id, .. } => {
                     sessions.insert(session_id.clone());
                 }
                 _ => {}

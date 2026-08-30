@@ -71,6 +71,12 @@
     "op": "tool_update",
     "session_id": "3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
     "correlation_key": "call_mock_0004",
+    "evidence": {
+      "source_identity": "direct:64fb212bf8c11c78467654884e5097fe509d7a56d81f164ac26bd5f789dc4303/3eb58f9e1a87fa2d8249813f76a4b33efe3d3d98f18a7a7303e23c453a063a11",
+      "generation": 0,
+      "record_offset": 2158,
+      "mutation_index": 0
+    },
     "patch": {
       "native_id": null,
       "request": null,

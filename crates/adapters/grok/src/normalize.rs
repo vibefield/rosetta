@@ -476,6 +476,7 @@ fn tool_result(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -
     ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
         correlation_key: tool_id.to_owned(),
+        evidence: ctx.evidence(0),
         patch: terminal_update(
             is_error,
             terminal_error.is_none(),

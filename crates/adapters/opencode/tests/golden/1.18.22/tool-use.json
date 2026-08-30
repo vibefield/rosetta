@@ -89,6 +89,12 @@
     "op": "tool_update",
     "session_id": "7991503d635ec55aa38591f391f84c9041b30bd87a894beaf7dd0c86c4d8c9fb",
     "correlation_key": "call_mock_0003",
+    "evidence": {
+      "source_identity": "direct:6bea304b8a702687d19a09038a2cdc392b130cb00275f7949f6643224f49618e/7991503d635ec55aa38591f391f84c9041b30bd87a894beaf7dd0c86c4d8c9fb",
+      "generation": 0,
+      "record_offset": 2,
+      "mutation_index": 1
+    },
     "patch": {
       "native_id": null,
       "request": null,

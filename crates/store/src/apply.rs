@@ -233,8 +233,8 @@ use metadata::{
 };
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, OldRow, PendingGate, apply_message, apply_tool_result, apply_usage, fts_delete,
-    mark_bucket, queue_pending, rebuild_bucket, touch_session,
+    BucketKey, PendingGate, apply_message, apply_tool_update, apply_usage, mark_bucket,
+    queue_pending, rebuild_bucket, remove_source_tool_facts, touch_session,
 };
 
 fn apply_workspace_obs(
@@ -718,6 +718,7 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workspace_obs WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM tool_update_fact WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM pending_merge WHERE src_cursor = ?1 LIMIT 1)",
         )?
         .query_row(params![cursor_id], |row| row.get(0))?;
@@ -763,6 +764,7 @@ fn remove_cursor_projection(
             );
         }
     }
+    remove_source_tool_facts(tx, cursor_id)?;
     for sql in [
         "DELETE FROM file_edit WHERE src_cursor = ?1",
         "DELETE FROM git_commit WHERE src_cursor = ?1",
@@ -782,35 +784,27 @@ fn remove_cursor_projection(
     )?
     .execute(params![cursor_id])?;
 
-    if maintenance.fts || maintenance.buckets {
+    if maintenance.buckets {
         let mut stmt = tx.prepare_cached(
-            "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
+            "SELECT session_id, model, ts
              FROM message WHERE src_cursor = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![cursor_id], |row| {
-            Ok(OldRow {
-                id: row.get(0)?,
-                timeline_id: row.get(1)?,
-                session_id: row.get(2)?,
-                content: row.get(3)?,
-                tool_input: row.get(4)?,
-                tool_result: row.get(5)?,
-                model: row.get(6)?,
-                ts: row.get(7)?,
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<Ms>>(2)?,
+            ))
         })?;
         let old_rows = rows.collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
-        for old in &old_rows {
-            if maintenance.fts {
-                fts_delete(tx, old)?;
-            }
+        for (session_id, model, ts) in &old_rows {
             mark_bucket(
                 dirty_buckets,
                 maintenance,
-                &old.session_id,
-                old.ts,
-                old.model.as_deref(),
+                session_id,
+                *ts,
+                model.as_deref(),
             );
         }
     }
@@ -1032,7 +1026,7 @@ fn activate_cursor(
                 )?;
             }
             IngestOp::FileEdit(_) => edits.push(op),
-            IngestOp::ToolResult { .. } | IngestOp::Usage { .. } => merges.push(op),
+            IngestOp::ToolUpdate { .. } | IngestOp::Usage { .. } => merges.push(op),
             _ => apply_op(
                 tx,
                 op,
@@ -1159,7 +1153,7 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
         IngestOp::Message(row) => {
             fx.touched_sessions.insert(row.session_id.clone());
         }
-        IngestOp::ToolResult { session_id, .. } | IngestOp::Usage { session_id, .. } => {
+        IngestOp::ToolUpdate { session_id, .. } | IngestOp::Usage { session_id, .. } => {
             fx.touched_sessions.insert(session_id.clone());
         }
         IngestOp::SessionUsage(row) => {
@@ -1209,28 +1203,27 @@ fn apply_op(
             pending_gate,
             effects,
         )?,
-        IngestOp::ToolResult {
+        IngestOp::ToolUpdate {
             session_id,
-            tool_id,
-            result,
-            payload,
-            is_error,
+            correlation_key,
+            evidence,
+            patch,
             at,
         } => {
-            if !apply_tool_result(
+            apply_tool_update(
                 tx,
                 session_id,
-                tool_id,
-                result.as_deref(),
-                payload.as_ref(),
-                *is_error,
+                correlation_key,
+                evidence,
+                patch,
                 *at,
+                src_cursor,
                 stats,
-                maintenance,
                 effects,
-            )? {
-                queue_pending(tx, op, src_cursor, stats, pending_gate)?;
-            }
+            )?;
+            // The closed fact table is itself the waiting room. It keeps
+            // every evidence tuple (not only the newest target) and the
+            // opener folds all active facts when it arrives.
         }
         IngestOp::Usage {
             session_id,

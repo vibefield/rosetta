@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 
+use rosetta_core::ToolInteraction;
 use rosetta_core::rows::{MessageRow, Ms, ProjectRow, RuntimeRow, SessionRow, TokenSnapshot};
 
 use crate::{StoreError, queries};
@@ -38,13 +39,12 @@ pub enum Mutation {
     /// Full message-row upsert — insert or replacement — carrying the
     /// ordinal the apply chose.
     Message(Box<MessageRow>),
-    /// A tool result merged into the earlier call row.
-    ToolResult {
+    /// Final typed tool state after a lifecycle patch merged into its opener.
+    /// Native result bodies never enter this mutation log.
+    ToolUpdated {
         session_id: String,
         timeline_id: String,
-        result: Option<String>,
-        payload: Option<serde_json::Value>,
-        is_error: Option<bool>,
+        tool: ToolInteraction,
         at: Option<Ms>,
     },
     /// Response-level usage replacement; `model` and `ts` are the row's
@@ -75,7 +75,7 @@ impl Mutation {
     pub fn session_scope(&self) -> Option<&str> {
         match self {
             Self::Message(row) => Some(&row.session_id),
-            Self::ToolResult { session_id, .. }
+            Self::ToolUpdated { session_id, .. }
             | Self::Usage { session_id, .. }
             | Self::SessionSwept { session_id } => Some(session_id),
             Self::Session(_) | Self::Project(_) | Self::Runtime(_) => None,
@@ -90,10 +90,20 @@ impl Mutation {
             Self::Message(row) => {
                 row.content.as_deref().map_or(0, str::len)
                     + row.tool.as_ref().map_or(0, |tool| {
-                        tool.name.len() + tool.result.as_deref().map_or(0, str::len)
+                        tool.native.name.len()
+                            + tool.failure.as_ref().map_or(0, |failure| {
+                                failure.summary.as_deref().map_or(0, str::len)
+                                    + failure.diagnostic.as_deref().map_or(0, str::len)
+                            })
                     })
             }
-            Self::ToolResult { result, .. } => result.as_deref().map_or(0, str::len),
+            Self::ToolUpdated { tool, .. } => {
+                tool.native.name.len()
+                    + tool.failure.as_ref().map_or(0, |failure| {
+                        failure.summary.as_deref().map_or(0, str::len)
+                            + failure.diagnostic.as_deref().map_or(0, str::len)
+                    })
+            }
             Self::Session(row) => {
                 row.title.as_deref().map_or(0, str::len)
                     + row.summary.as_deref().map_or(0, str::len)

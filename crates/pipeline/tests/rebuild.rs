@@ -42,7 +42,8 @@ fn snapshot(store: &Store) -> Snapshot {
             .len(),
         indexed_sessions: one("SELECT COUNT(*) FROM session WHERE stream_state = 'indexed'"),
         messages: one("SELECT COUNT(*) FROM message"),
-        tool_rows: one("SELECT COUNT(*) FROM message WHERE tool_result IS NOT NULL"),
+        tool_rows: one("SELECT COUNT(*) FROM message
+             WHERE type = 'tool_use' AND tool_status = 'succeeded'"),
         fts_hits: queries::search(store.conn(), "synthetic", 500)
             .unwrap()
             .len(),

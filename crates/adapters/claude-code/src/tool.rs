@@ -25,6 +25,7 @@ const fn registration(name: &'static str, action_kind: ToolActionKind) -> Projec
     ProjectorRegistration {
         agent: AGENT,
         writer_versions: VersionRange::exact(PINNED_WRITER_VERSION),
+        accepts_unversioned: false,
         native: NativeToolSelector {
             namespace: None,
             name,

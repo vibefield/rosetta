@@ -19,6 +19,7 @@ const fn registration(name: &'static str, action_kind: ToolActionKind) -> Projec
     ProjectorRegistration {
         agent: AGENT,
         writer_versions: VersionRange::exact(PINNED_WRITER_VERSION),
+        accepts_unversioned: true,
         native: NativeToolSelector {
             namespace: None,
             name,
@@ -50,13 +51,7 @@ pub fn project_request(
     correlation_key: &str,
     native_id: Option<&str>,
 ) -> Result<ToolInteraction, ProjectionError> {
-    let registration = lookup_registration(
-        REGISTRATIONS,
-        AGENT,
-        writer_version.or(Some(PINNED_WRITER_VERSION)),
-        None,
-        name,
-    )?;
+    let registration = lookup_registration(REGISTRATIONS, AGENT, writer_version, None, name)?;
     let action = match registration.action_kind {
         ToolActionKind::FileRead => {
             let path = first_string(input, &["path", "file_path"])

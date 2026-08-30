@@ -25,7 +25,7 @@ pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

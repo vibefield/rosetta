@@ -99,6 +99,12 @@
     "op": "tool_update",
     "session_id": "6c306d1aea82c7563fbb4977260b3f2d42e4554c1fa8fab2fb80599db0508bc7",
     "correlation_key": "call_mock_0002",
+    "evidence": {
+      "source_identity": "direct:dd2333a83e2b8bc46a3d9eb06b8907a6ee74ae862dbddb61bc86fb3e3ecc0831/6c306d1aea82c7563fbb4977260b3f2d42e4554c1fa8fab2fb80599db0508bc7",
+      "generation": 0,
+      "record_offset": 2,
+      "mutation_index": 0
+    },
     "patch": {
       "native_id": null,
       "request": null,

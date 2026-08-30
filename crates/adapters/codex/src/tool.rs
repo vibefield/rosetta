@@ -27,6 +27,7 @@ const fn registration(
             min_inclusive: FIXTURE_WRITER_VERSION,
             max_inclusive: CURRENT_WRITER_VERSION,
         },
+        accepts_unversioned: false,
         native: NativeToolSelector { namespace, name },
         action_kind,
         status_policy: StatusPolicy::ExplicitLifecycle,
@@ -70,13 +71,7 @@ pub fn project_request(
     native_id: Option<&str>,
     namespace: Option<&str>,
 ) -> Result<ToolInteraction, ProjectionError> {
-    let registration = lookup_registration(
-        REGISTRATIONS,
-        AGENT,
-        writer_version.or(Some(FIXTURE_WRITER_VERSION)),
-        namespace,
-        name,
-    )?;
+    let registration = lookup_registration(REGISTRATIONS, AGENT, writer_version, namespace, name)?;
     let action = match registration.action_kind {
         ToolActionKind::Orchestration => ToolAction::Orchestration {
             runtime: first_string(input, &["runtime"]).map(str::to_owned),

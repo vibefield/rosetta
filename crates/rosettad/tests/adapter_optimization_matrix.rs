@@ -38,7 +38,7 @@ fn adapters() -> Vec<&'static dyn AgentAdapter> {
 struct OpEvidence {
     files: usize,
     messages: usize,
-    tool_results: usize,
+    tool_updates: usize,
     usage_merges: usize,
     inline_usage: usize,
     result_before_call: usize,
@@ -69,25 +69,27 @@ impl OpEvidence {
                             ) {
                                 self.messages_seen
                                     .insert((session.to_owned(), timeline.to_owned()));
-                                if let Some(tool_id) = object
+                                if let Some(correlation_key) = object
                                     .get("tool")
                                     .and_then(Value::as_object)
-                                    .and_then(|tool| tool.get("tool_id"))
+                                    .and_then(|tool| tool.get("correlation"))
+                                    .and_then(Value::as_object)
+                                    .and_then(|correlation| correlation.get("key"))
                                     .and_then(Value::as_str)
                                 {
                                     self.tool_calls_seen
-                                        .insert((session.to_owned(), tool_id.to_owned()));
+                                        .insert((session.to_owned(), correlation_key.to_owned()));
                                 }
                             }
                         }
-                        "tool_result" => {
-                            self.tool_results += 1;
-                            if let (Some(session), Some(tool_id)) = (
+                        "tool_update" => {
+                            self.tool_updates += 1;
+                            if let (Some(session), Some(correlation_key)) = (
                                 object.get("session_id").and_then(Value::as_str),
-                                object.get("tool_id").and_then(Value::as_str),
+                                object.get("correlation_key").and_then(Value::as_str),
                             ) && !self
                                 .tool_calls_seen
-                                .contains(&(session.to_owned(), tool_id.to_owned()))
+                                .contains(&(session.to_owned(), correlation_key.to_owned()))
                             {
                                 self.result_before_call += 1;
                             }
@@ -331,8 +333,8 @@ fn canonical_goldens_characterize_shared_store_work() {
         assert!(evidence.files > 0, "{kind} has no canonical-op goldens");
         assert!(evidence.messages > 0, "{kind} has no Message evidence");
         assert!(
-            evidence.tool_results > 0,
-            "{kind} has no ToolResult merge evidence"
+            evidence.tool_updates > 0,
+            "{kind} has no typed tool-update evidence"
         );
         assert_eq!(
             evidence.result_before_call, 0,

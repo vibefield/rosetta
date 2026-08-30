@@ -247,6 +247,9 @@ fn text_preview(value: Option<String>) -> Value {
 }
 
 fn message_value(row: &Row<'_>) -> rusqlite::Result<Value> {
+    let tool_detail: Option<Value> = row
+        .get::<_, Option<String>>(20)?
+        .and_then(|value| serde_json::from_str(&value).ok());
     Ok(json!({
         "timelineId": row.get::<_, String>(0)?,
         "sessionId": row.get::<_, String>(1)?,
@@ -260,24 +263,38 @@ fn message_value(row: &Row<'_>) -> rusqlite::Result<Value> {
         "effort": row.get::<_, Option<String>>(9)?,
         "content": text_preview(row.get::<_, Option<String>>(10)?),
         "tool": {
-            "id": row.get::<_, Option<String>>(11)?,
-            "name": row.get::<_, Option<String>>(12)?,
-            "input": text_preview(row.get::<_, Option<String>>(13)?),
-            "result": text_preview(row.get::<_, Option<String>>(14)?),
-            "payload": text_preview(row.get::<_, Option<String>>(15)?),
-            "isError": row.get::<_, Option<bool>>(16)?,
+            "correlationKey": row.get::<_, Option<String>>(11)?,
+            "correlationKind": row.get::<_, Option<String>>(12)?,
+            "nativeId": row.get::<_, Option<String>>(13)?,
+            "namespace": row.get::<_, Option<String>>(14)?,
+            "provider": row.get::<_, Option<String>>(15)?,
+            "name": row.get::<_, Option<String>>(16)?,
+            "kind": row.get::<_, Option<String>>(17)?,
+            "status": row.get::<_, Option<String>>(18)?,
+            "statusBasis": row.get::<_, Option<String>>(19)?,
+            "detail": tool_detail,
+            "failure": {
+                "kind": row.get::<_, Option<String>>(21)?,
+                "summary": row.get::<_, Option<String>>(22)?,
+                "diagnostic": text_preview(row.get::<_, Option<String>>(23)?),
+            },
+            "timing": {
+                "startedAt": row.get::<_, Option<i64>>(24)?,
+                "completedAt": row.get::<_, Option<i64>>(25)?,
+                "durationMs": row.get::<_, Option<i64>>(26)?,
+            },
         },
-        "branchToolId": row.get::<_, Option<String>>(17)?,
+        "branchToolId": row.get::<_, Option<String>>(27)?,
         "usage": {
-            "input": row.get::<_, Option<i64>>(18)?,
-            "output": row.get::<_, Option<i64>>(19)?,
-            "cacheRead": row.get::<_, Option<i64>>(20)?,
-            "cacheWrite": row.get::<_, Option<i64>>(21)?,
-            "thinking": row.get::<_, Option<i64>>(22)?,
+            "input": row.get::<_, Option<i64>>(28)?,
+            "output": row.get::<_, Option<i64>>(29)?,
+            "cacheRead": row.get::<_, Option<i64>>(30)?,
+            "cacheWrite": row.get::<_, Option<i64>>(31)?,
+            "thinking": row.get::<_, Option<i64>>(32)?,
         },
-        "agentVersion": row.get::<_, Option<String>>(23)?,
-        "srcCursor": row.get::<_, Option<i64>>(24)?,
-        "srcOffset": row.get::<_, Option<i64>>(25)?,
+        "agentVersion": row.get::<_, Option<String>>(33)?,
+        "srcCursor": row.get::<_, Option<i64>>(34)?,
+        "srcOffset": row.get::<_, Option<i64>>(35)?,
     }))
 }
 
@@ -286,9 +303,11 @@ fn sample_message(
     timeline_id: Option<&str>,
 ) -> Result<Option<Value>, String> {
     const COLUMNS: &str = "timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
-        model, effort, content, tool_id, tool_name, tool_input, tool_result, tool_payload,
-        tool_is_error, branch_tool_id, in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
-        think_tokens, agent_version, src_cursor, src_offset";
+        model, effort, content, tool_correlation_key, tool_correlation_kind, tool_native_id,
+        tool_namespace, tool_provider, tool_name, tool_kind, tool_status, tool_status_basis,
+        tool_detail, tool_error_kind, tool_error_summary, tool_diagnostic, tool_started_at,
+        tool_completed_at, tool_duration_ms, branch_tool_id, in_tokens, out_tokens,
+        cache_r_tokens, cache_w_tokens, think_tokens, agent_version, src_cursor, src_offset";
     let exact = match timeline_id {
         Some(timeline_id) => connection
             .query_row(

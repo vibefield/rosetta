@@ -3,9 +3,14 @@
 
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole,
-    SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot, ToolCall,
+    SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot,
 };
-use rosetta_core::{ImageAsset, IngestOp};
+use rosetta_core::timeline::{ReadTarget, ResourceRef};
+use rosetta_core::{
+    CanonicalText, CorrelationDerivation, EvidenceOrder, ImageAsset, IngestOp, NativeToolRef,
+    SourceIdentity, StatusBasis, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus,
+    ToolStatusFact, ToolUpdatePatch,
+};
 use rosetta_store::{
     Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, assets, queries,
 };
@@ -72,6 +77,81 @@ fn message(timeline_id: &str, ordinal: i64, kind: MessageKind) -> MessageRow {
     }
 }
 
+fn pending_tool(key: &str, name: &str, action: ToolAction) -> ToolInteraction {
+    ToolInteraction {
+        correlation: ToolCorrelation {
+            key: key.into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some(key.into()),
+            namespace: None,
+            name: name.into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Pending,
+            basis: StatusBasis::RequestObserved,
+        },
+        action,
+        failure: None,
+        timing: None,
+    }
+}
+
+fn shell_tool(key: &str, command: &str) -> ToolInteraction {
+    pending_tool(
+        key,
+        "Bash",
+        ToolAction::Shell {
+            command: CanonicalText::inline(command).unwrap(),
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        },
+    )
+}
+
+fn read_tool(key: &str, path: &str) -> ToolInteraction {
+    pending_tool(
+        key,
+        "Read",
+        ToolAction::FileRead {
+            targets: vec![ReadTarget {
+                resource: ResourceRef::File {
+                    path: path.into(),
+                    resolved: false,
+                },
+                range: None,
+                media_kind: None,
+            }],
+            outcome: None,
+        },
+    )
+}
+
+fn status_update(key: &str, status: ToolStatus, record_offset: u64) -> IngestOp {
+    IngestOp::ToolUpdate {
+        session_id: "s1".into(),
+        correlation_key: key.into(),
+        evidence: EvidenceOrder {
+            source_identity: SourceIdentity("test:roundtrip".into()),
+            generation: 0,
+            record_offset,
+            mutation_index: 0,
+        },
+        patch: ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: status,
+                basis: StatusBasis::NativeTerminalRecord,
+            }),
+            ..Default::default()
+        },
+        at: Some(3_700_000),
+    }
+}
+
 fn base_batch() -> Batch {
     Batch {
         ops: vec![
@@ -85,21 +165,14 @@ fn base_batch() -> Batch {
 }
 
 #[test]
-fn image_asset_and_payload_url_commit_as_one_valid_projection_batch() {
+fn image_asset_and_typed_tool_update_commit_without_embedding_bytes() {
     let directory = tempfile::tempdir().unwrap();
     let projection = directory.path().join("rosetta.sqlite");
     let mut store = Store::open(&projection).unwrap();
     store.apply(&base_batch()).unwrap();
 
     let mut call = message("image-call", 0, MessageKind::ToolUse);
-    call.tool = Some(ToolCall {
-        tool_id: Some("toolu_image".into()),
-        name: "Read".into(),
-        input: serde_json::json!({"file_path": "/fixture/image.png"}),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    call.tool = Some(read_tool("toolu_image", "/fixture/image.png"));
     store
         .apply(&Batch {
             ops: vec![IngestOp::Message(Box::new(call))],
@@ -108,21 +181,13 @@ fn image_asset_and_payload_url_commit_as_one_valid_projection_batch() {
         .unwrap();
 
     let asset = ImageAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
-    let url = asset.url().unwrap();
     let stats = store
         .apply(&Batch {
             ops: vec![
                 IngestOp::ImageAsset {
                     asset: asset.clone(),
                 },
-                IngestOp::ToolResult {
-                    session_id: "s1".into(),
-                    tool_id: "toolu_image".into(),
-                    result: None,
-                    payload: Some(serde_json::json!({"file": {"url": url}})),
-                    is_error: Some(false),
-                    at: None,
-                },
+                status_update("toolu_image", ToolStatus::Succeeded, 1),
             ],
             ..Batch::default()
         })
@@ -132,8 +197,8 @@ fn image_asset_and_payload_url_commit_as_one_valid_projection_batch() {
     assert_eq!(stats.image_files_written, 1);
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(
-        page[0].tool.as_ref().unwrap().payload.as_ref().unwrap()["file"]["url"],
-        url
+        page[0].tool.as_ref().unwrap().status.value,
+        ToolStatus::Succeeded
     );
     assert_eq!(
         std::fs::read(assets::image_root(&projection).join(asset.file_name().unwrap())).unwrap(),
@@ -313,19 +378,12 @@ fn search_breaks_equal_rank_ties_by_timeline_identity_before_limit() {
 }
 
 #[test]
-fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
+fn typed_tool_update_merges_and_search_excludes_native_output() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
 
     let mut call = message("m-tool", 0, MessageKind::ToolUse);
-    call.tool = Some(ToolCall {
-        tool_id: Some("toolu_1".into()),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "cargo test"}),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    call.tool = Some(shell_tool("toolu_1", "cargo test"));
     let stats = store
         .apply(&Batch {
             ops: vec![IngestOp::Message(Box::new(call))],
@@ -342,14 +400,7 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
 
     let stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::ToolResult {
-                session_id: "s1".into(),
-                tool_id: "toolu_1".into(),
-                result: Some("everything is quetzalcoatl green".into()),
-                payload: Some(serde_json::json!({"exit": 0})),
-                is_error: Some(false),
-                at: Some(3_700_000),
-            }],
+            ops: vec![status_update("toolu_1", ToolStatus::Succeeded, 1)],
             checkpoints: vec![],
             source: None,
         })
@@ -360,51 +411,37 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
 
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     let tool = page[0].tool.as_ref().unwrap();
-    assert_eq!(
-        tool.result.as_deref(),
-        Some("everything is quetzalcoatl green")
-    );
-    assert_eq!(tool.is_error, Some(false));
+    assert_eq!(tool.status.value, ToolStatus::Succeeded);
 
-    // The merged result is searchable, and so is the input.
+    // Native result text never crossed the typed op boundary. The reviewed
+    // command remains searchable through the intent lane.
     let hits = queries::search(store.conn(), "quetzalcoatl", 5).unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].timeline_id, "m-tool");
+    assert!(hits.is_empty());
     assert_eq!(queries::search(store.conn(), "cargo", 5).unwrap().len(), 1);
 
     // A result with no matching call is retained until the call arrives.
     let stats = store
         .apply(&Batch {
-            ops: vec![IngestOp::ToolResult {
-                session_id: "s1".into(),
-                tool_id: "toolu_missing".into(),
-                result: Some("orphan".into()),
-                payload: None,
-                is_error: None,
-                at: None,
-            }],
+            ops: vec![status_update("toolu_missing", ToolStatus::Succeeded, 2)],
             checkpoints: vec![],
             source: None,
         })
         .unwrap();
     assert_eq!(stats.tool_results_unmatched, 1);
     assert_eq!(stats.profile.tool_result_attempts, 1);
-    assert_eq!(stats.profile.pending_queues, 1);
+    assert_eq!(stats.profile.pending_queues, 0);
     let pending: i64 = store
         .conn()
-        .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tool_update_fact WHERE correlation_key = 'toolu_missing'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(pending, 1);
 
     let mut late_call = message("m-tool-late", 1, MessageKind::ToolUse);
-    late_call.tool = Some(ToolCall {
-        tool_id: Some("toolu_missing".into()),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "true"}),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    late_call.tool = Some(shell_tool("toolu_missing", "true"));
     let stats = store
         .apply(&Batch {
             ops: vec![IngestOp::Message(Box::new(late_call))],
@@ -415,10 +452,10 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
     assert_eq!(stats.tool_results_merged, 1);
     assert_eq!(stats.profile.message_attempts, 1);
     assert_eq!(stats.profile.pending_gate_checks, 1);
-    assert_eq!(stats.profile.pending_lookup_skips, 0);
-    assert_eq!(stats.profile.pending_lookups, 1);
-    assert_eq!(stats.profile.pending_rows, 1);
-    assert_eq!(stats.profile.tool_result_attempts, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 1);
+    assert_eq!(stats.profile.pending_lookups, 0);
+    assert_eq!(stats.profile.pending_rows, 0);
+    assert_eq!(stats.profile.tool_result_attempts, 0);
     assert_eq!(
         store
             .conn()
@@ -433,8 +470,160 @@ fn tool_result_merges_into_its_call_row_and_fts_sees_it() {
         .find(|row| row.timeline_id == "m-tool-late")
         .unwrap();
     assert_eq!(
-        late.tool.as_ref().unwrap().result.as_deref(),
-        Some("orphan")
+        late.tool.as_ref().unwrap().status.value,
+        ToolStatus::Succeeded
+    );
+}
+
+#[test]
+fn replacing_a_sibling_source_subtracts_its_tool_fact() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    for path in ["p/opener.jsonl", "p/result.jsonl"] {
+        store
+            .apply(&Batch {
+                checkpoints: vec![CheckpointUpdate {
+                    runtime_id: "rt1".into(),
+                    stream: "transcript".into(),
+                    path: path.into(),
+                    session_id: "s1".into(),
+                    expected: None,
+                    next: "initial".into(),
+                    updated_at: Some(1),
+                }],
+                ..Batch::default()
+            })
+            .unwrap();
+    }
+    let opener_cursor = queries::cursor_state(store.conn(), "rt1", "p/opener.jsonl")
+        .unwrap()
+        .unwrap();
+    let result_cursor = queries::cursor_state(store.conn(), "rt1", "p/result.jsonl")
+        .unwrap()
+        .unwrap();
+
+    let mut opener = message("cross-source-tool", 0, MessageKind::ToolUse);
+    opener.tool = Some(shell_tool("cross-source-key", "true"));
+    opener.src_cursor = Some(opener_cursor.id);
+    opener.src_offset = Some(0);
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(opener))],
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id: opener_cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let update = IngestOp::ToolUpdate {
+        session_id: "s1".into(),
+        correlation_key: "cross-source-key".into(),
+        evidence: EvidenceOrder {
+            source_identity: SourceIdentity("result-source".into()),
+            generation: 1,
+            record_offset: 0,
+            mutation_index: 0,
+        },
+        patch: ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: ToolStatus::Succeeded,
+                basis: StatusBasis::NativeTerminalRecord,
+            }),
+            ..Default::default()
+        },
+        at: Some(3_700_000),
+    };
+    store
+        .apply(&Batch {
+            ops: vec![update],
+            source: Some(SourceWrite {
+                cursor_id: result_cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id: result_cursor.id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 1,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0]
+            .tool
+            .as_ref()
+            .unwrap()
+            .status
+            .value,
+        ToolStatus::Succeeded
+    );
+
+    // An empty replacement generation means the terminal record vanished.
+    // The sibling-owned opener must return to its request-observed state.
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id: result_cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id: result_cursor.id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    let tool = queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0]
+        .tool
+        .clone()
+        .unwrap();
+    assert_eq!(tool.status.value, ToolStatus::Pending);
+    assert_eq!(tool.status.basis, StatusBasis::RequestObserved);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
     );
 }
 
@@ -466,30 +655,16 @@ fn empty_pending_table_is_checked_once_for_the_whole_batch() {
 }
 
 #[test]
-fn queued_result_reopens_the_pending_gate_inside_the_same_batch() {
+fn queued_tool_update_folds_from_the_typed_fact_table_inside_the_same_batch() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     let mut call = message("same-batch-call", 0, MessageKind::ToolUse);
-    call.tool = Some(ToolCall {
-        tool_id: Some("same-batch-tool".into()),
-        name: "Read".into(),
-        input: serde_json::json!({"path": "fixture.txt"}),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    call.tool = Some(read_tool("same-batch-tool", "fixture.txt"));
 
     let stats = store
         .apply(&Batch {
             ops: vec![
-                IngestOp::ToolResult {
-                    session_id: "s1".into(),
-                    tool_id: "same-batch-tool".into(),
-                    result: Some("same transaction".into()),
-                    payload: None,
-                    is_error: Some(false),
-                    at: Some(3_700_000),
-                },
+                status_update("same-batch-tool", ToolStatus::Succeeded, 3),
                 IngestOp::Message(Box::new(call)),
             ],
             checkpoints: vec![],
@@ -499,23 +674,105 @@ fn queued_result_reopens_the_pending_gate_inside_the_same_batch() {
 
     assert_eq!(stats.tool_results_unmatched, 1);
     assert_eq!(stats.tool_results_merged, 1);
-    assert_eq!(stats.profile.pending_queues, 1);
-    assert_eq!(stats.profile.pending_gate_checks, 0);
-    assert_eq!(stats.profile.pending_lookups, 1);
-    assert_eq!(stats.profile.pending_rows, 1);
+    assert_eq!(stats.profile.pending_queues, 0);
+    assert_eq!(stats.profile.pending_gate_checks, 1);
+    assert_eq!(stats.profile.pending_lookup_skips, 1);
+    assert_eq!(stats.profile.pending_lookups, 0);
+    assert_eq!(stats.profile.pending_rows, 0);
     assert_eq!(
         store
             .conn()
-            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| {
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| {
                 row.get::<_, i64>(0)
             })
             .unwrap(),
-        0
+        1
     );
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
     assert_eq!(
-        page[0].tool.as_ref().unwrap().result.as_deref(),
-        Some("same transaction")
+        page[0].tool.as_ref().unwrap().status.value,
+        ToolStatus::Succeeded
+    );
+}
+
+#[test]
+fn every_pre_opener_tool_fact_is_retained_and_folded() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let native_id = IngestOp::ToolUpdate {
+        session_id: "s1".into(),
+        correlation_key: "multi-fact-tool".into(),
+        evidence: EvidenceOrder {
+            source_identity: SourceIdentity("identity-source".into()),
+            generation: 1,
+            record_offset: 1,
+            mutation_index: 0,
+        },
+        patch: ToolUpdatePatch {
+            native_id: Some("native-enriched".into()),
+            ..Default::default()
+        },
+        at: Some(3_600_001),
+    };
+    let mut terminal = status_update("multi-fact-tool", ToolStatus::Succeeded, 2);
+    if let IngestOp::ToolUpdate { evidence, .. } = &mut terminal {
+        evidence.source_identity = SourceIdentity("status-source".into());
+        evidence.generation = 1;
+    }
+    let mut opener = message("multi-fact-call", 0, MessageKind::ToolUse);
+    opener.tool = Some(read_tool("multi-fact-tool", "fixture.txt"));
+
+    store
+        .apply(&Batch {
+            ops: vec![native_id, terminal, IngestOp::Message(Box::new(opener))],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let tool = queries::timeline_page(store.conn(), "s1", None, 10).unwrap()[0]
+        .tool
+        .clone()
+        .unwrap();
+    assert_eq!(tool.native.id.as_deref(), Some("native-enriched"));
+    assert_eq!(tool.status.value, ToolStatus::Succeeded);
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn conflicting_payloads_at_one_evidence_position_fail_closed() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let succeeded = status_update("collision", ToolStatus::Succeeded, 7);
+    store
+        .apply(&Batch {
+            ops: vec![succeeded],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let conflicting = status_update("collision", ToolStatus::Failed, 7);
+    let error = store
+        .apply(&Batch {
+            ops: vec![conflicting],
+            ..Batch::default()
+        })
+        .unwrap_err();
+    assert!(matches!(error, StoreError::ProjectionInvalid { .. }));
+    assert!(error.to_string().contains("conflicting tool facts"));
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
     );
 }
 
@@ -525,14 +782,7 @@ fn unrelated_pending_target_does_not_force_message_lookups() {
     store.apply(&base_batch()).unwrap();
     store
         .apply(&Batch {
-            ops: vec![IngestOp::ToolResult {
-                session_id: "s1".into(),
-                tool_id: "still-missing".into(),
-                result: Some("orphan".into()),
-                payload: None,
-                is_error: None,
-                at: None,
-            }],
+            ops: vec![status_update("still-missing", ToolStatus::Succeeded, 4)],
             checkpoints: vec![],
             source: None,
         })
@@ -561,7 +811,7 @@ fn unrelated_pending_target_does_not_force_message_lookups() {
     assert_eq!(
         store
             .conn()
-            .query_row("SELECT COUNT(*) FROM pending_merge", [], |row| row
+            .query_row("SELECT COUNT(*) FROM tool_update_fact", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
         1
@@ -1005,6 +1255,7 @@ fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
     store.apply(&base_batch()).unwrap();
 
     let mut row = message("m-move", 0, MessageKind::ToolUse);
+    row.tool = Some(shell_tool("toolu_move", "true"));
     row.usage = Some(TokenSnapshot {
         input: Some(40),
         output: Some(5),
@@ -1021,6 +1272,8 @@ fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
     row.ts = Some(2 * 3_600_000);
     row.model = Some("claude-sonnet-5".into());
     row.kind = MessageKind::Agent;
+    row.content = Some("replacement response".into());
+    row.tool = None;
     row.usage = None;
     store
         .apply(&Batch {
@@ -1350,27 +1603,13 @@ fn activation_sweeps_every_artifact_kind_and_leaves_the_journal_empty() {
     m1.src_cursor = Some(cursor.id);
     m1.src_offset = Some(0);
     let mut m2 = message("g1-tool", 1, MessageKind::ToolUse);
-    m2.tool = Some(ToolCall {
-        tool_id: Some("toolu_g1".into()),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "true"}),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    m2.tool = Some(shell_tool("toolu_g1", "true"));
     m2.src_cursor = Some(cursor.id);
     m2.src_offset = Some(100);
     let gen1: Vec<IngestOp> = vec![
         IngestOp::Message(Box::new(m1)),
         IngestOp::Message(Box::new(m2)),
-        IngestOp::ToolResult {
-            session_id: "s1".into(),
-            tool_id: "toolu_g1".into(),
-            result: Some("gen-one result".into()),
-            payload: None,
-            is_error: Some(false),
-            at: Some(3_700_000),
-        },
+        status_update("toolu_g1", ToolStatus::Succeeded, 101),
         IngestOp::WorkspaceObs(WorkspaceObsRow {
             session_id: "s1".into(),
             at: 3_600_000,

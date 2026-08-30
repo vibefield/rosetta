@@ -300,7 +300,7 @@ pub struct AttachmentRef {
     pub kind: AttachmentKind,
     pub name: Option<String>,
     pub media_type: Option<String>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub byte_len: Option<u64>,
     pub source: ResourceRef,
     pub dimensions: Option<Dimensions>,
@@ -342,9 +342,9 @@ pub struct ResponseGroup {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Provenance {
     pub agent_version: Option<String>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub src_cursor: Option<i64>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub src_offset: Option<i64>,
 }
 
@@ -384,7 +384,7 @@ pub struct ToolFailure {
 pub struct ToolTiming {
     pub started_at: Option<Ms>,
     pub completed_at: Option<Ms>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub duration_ms: Option<u64>,
 }
 
@@ -397,7 +397,7 @@ pub enum Notice {
     },
     Truncation {
         scope: TruncationScope,
-        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         omitted_count: Option<u64>,
     },
     ModelChanged {
@@ -436,7 +436,7 @@ pub struct SourceRange {
     pub unit: RangeUnit,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub start: u64,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub count: Option<u64>,
 }
 
@@ -484,9 +484,9 @@ pub struct SearchOutcome {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SourceLocation {
     pub resource: ResourceRef,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub line: Option<u64>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub column: Option<u64>,
     pub summary: Option<String>,
 }
@@ -506,9 +506,9 @@ pub struct FileDelta {
     pub path: ResourceRef,
     pub destination: Option<ResourceRef>,
     pub diff: Option<CanonicalText>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub lines_added: Option<u64>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub lines_removed: Option<u64>,
 }
 
@@ -597,7 +597,7 @@ pub struct MediaMetadata {
     pub media_type: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub duration_ms: Option<u64>,
 }
 
@@ -712,7 +712,7 @@ pub enum ToolAction {
     Shell {
         command: CanonicalText,
         cwd: Option<ResourceRef>,
-        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         timeout_ms: Option<u64>,
         background: bool,
         outcome: Option<ShellOutcome>,
@@ -733,7 +733,7 @@ pub enum ToolAction {
         runtime: Option<String>,
         trace: ChildTrace,
         executed_children: Vec<String>,
-        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         executed_child_count: Option<u64>,
     },
     WebSearch {
@@ -778,7 +778,7 @@ pub enum ToolAction {
         plan_id: Option<String>,
         title: Option<String>,
         summary: Option<CanonicalText>,
-        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         step_count: Option<u64>,
     },
     Collaborate {
@@ -811,7 +811,7 @@ pub enum ToolAction {
         operation: ScheduleOp,
         schedule_id: Option<String>,
         due_at: Option<Ms>,
-        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         delay_ms: Option<u64>,
         reason: Option<String>,
         objective: Option<CanonicalText>,
@@ -889,6 +889,41 @@ wire_enum!(ToolActionKind {
     External,
     Unknown,
 });
+
+impl ToolActionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FileRead => "file_read",
+            Self::FileList => "file_list",
+            Self::FileSearch => "file_search",
+            Self::CodeLookup => "code_lookup",
+            Self::FileChange => "file_change",
+            Self::Shell => "shell",
+            Self::CodeExecute => "code_execute",
+            Self::Process => "process",
+            Self::Orchestration => "orchestration",
+            Self::WebSearch => "web_search",
+            Self::WebNavigate => "web_navigate",
+            Self::WebFetch => "web_fetch",
+            Self::Delegate => "delegate",
+            Self::Task => "task",
+            Self::Plan => "plan",
+            Self::Collaborate => "collaborate",
+            Self::Question => "question",
+            Self::Skill => "skill",
+            Self::Workflow => "workflow",
+            Self::Schedule => "schedule",
+            Self::Artifact => "artifact",
+            Self::ToolDiscovery => "tool_discovery",
+            Self::Mode => "mode",
+            Self::Finding => "finding",
+            Self::Notification => "notification",
+            Self::StructuredOutput => "structured_output",
+            Self::External => "external",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 impl ToolAction {
     pub fn kind(&self) -> ToolActionKind {
@@ -1002,6 +1037,160 @@ impl ToolInteraction {
             }
         }
         Ok(())
+    }
+
+    /// Merge one closed lifecycle patch using deterministic evidence order.
+    /// Lower-authority facts may fill an absent slot but can never overwrite a
+    /// stronger fact; byte-identical replay of the same evidence is a no-op.
+    pub fn apply_patch(
+        &mut self,
+        state: &mut ToolMergeState,
+        patch: &ToolUpdatePatch,
+        evidence: &EvidenceOrder,
+    ) -> Result<bool, CanonicalError> {
+        let mut changed = false;
+
+        if let Some(native_id) = patch.native_id.as_ref().filter(|id| !id.is_empty()) {
+            let stamp = EvidenceStamp {
+                rank: 100,
+                order: evidence.clone(),
+            };
+            if stamp_wins(state.native_id.as_ref(), &stamp) {
+                self.native.id = Some(native_id.clone());
+                state.native_id = Some(stamp);
+                changed = true;
+            }
+        }
+
+        if let Some(request) = &patch.request {
+            checked_action_family(&self.action, &request.action)?;
+            let stamp = EvidenceStamp {
+                rank: 100,
+                order: evidence.clone(),
+            };
+            if stamp_wins(state.request.as_ref(), &stamp) {
+                self.action = request.action.clone();
+                state.request = Some(stamp);
+                changed = true;
+            }
+        }
+
+        if let Some(outcome) = &patch.outcome {
+            checked_action_family(&self.action, &outcome.action)?;
+            let stamp = EvidenceStamp {
+                rank: 110,
+                order: evidence.clone(),
+            };
+            if stamp_wins(state.outcome.as_ref(), &stamp) {
+                // Outcome projectors currently produce the complete closed
+                // action variant. There is still no native-object escape
+                // hatch, and family changes are rejected above.
+                self.action = outcome.action.clone();
+                state.outcome = Some(stamp);
+                changed = true;
+            }
+        }
+
+        if let Some(status) = patch.status {
+            let stamp = EvidenceStamp {
+                rank: status_rank(status.basis),
+                order: evidence.clone(),
+            };
+            if stamp_wins(state.status.as_ref(), &stamp) {
+                self.status = status;
+                state.status = Some(stamp);
+                changed = true;
+            }
+        }
+
+        if let Some(failure) = &patch.failure {
+            let stamp = EvidenceStamp {
+                rank: patch.status.map_or(100, |status| status_rank(status.basis)),
+                order: evidence.clone(),
+            };
+            if stamp_wins(state.failure.as_ref(), &stamp) {
+                self.failure = Some(failure.clone());
+                state.failure = Some(stamp);
+                changed = true;
+            }
+        }
+
+        if let Some(timing) = patch.timing {
+            let stamp = EvidenceStamp {
+                rank: patch.status.map_or(100, |status| status_rank(status.basis)),
+                order: evidence.clone(),
+            };
+            if stamp_wins(state.timing.as_ref(), &stamp) {
+                self.timing = Some(timing);
+                state.timing = Some(stamp);
+                changed = true;
+            }
+        }
+
+        self.validate()?;
+        Ok(changed)
+    }
+
+    /// Exhaustive semantic extraction for a tool row. Known tools index the
+    /// canonical family; only an unknown action exposes its bounded native
+    /// namespace/name as the audit label promised by the public contract.
+    pub fn search_lanes(&self) -> SearchLanes {
+        let mut lanes = SearchLanes::default();
+        match &self.action {
+            // Codex's opaque outer `exec` envelope proves only that a batch
+            // ran.  With no authoritative child trace it has no user-facing
+            // target, intent, change, or useful tool label to search.
+            ToolAction::Orchestration {
+                trace: ChildTrace::Unavailable,
+                executed_children,
+                executed_child_count,
+                ..
+            } if executed_children.is_empty()
+                && executed_child_count.is_none_or(|count| count == 0) => {}
+            ToolAction::Unknown {} => {
+                let label = self.native.namespace.as_deref().map_or_else(
+                    || self.native.name.clone(),
+                    |namespace| format!("{namespace}:{}", self.native.name),
+                );
+                SearchLanes::push(&mut lanes.tool, &label);
+            }
+            _ => {
+                SearchLanes::push(&mut lanes.tool, self.action.kind().as_str());
+                self.action.extract_search(&mut lanes);
+            }
+        }
+        lanes
+    }
+}
+
+fn checked_action_family(
+    current: &ToolAction,
+    incoming: &ToolAction,
+) -> Result<(), CanonicalError> {
+    if current.kind() != ToolActionKind::Unknown && current.kind() != incoming.kind() {
+        return Err(CanonicalError::Invalid(format!(
+            "tool action family changed from {} to {}",
+            current.kind().as_str(),
+            incoming.kind().as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn stamp_wins(current: Option<&EvidenceStamp>, incoming: &EvidenceStamp) -> bool {
+    current.is_none_or(|current| {
+        incoming.rank > current.rank
+            || (incoming.rank == current.rank && incoming.order > current.order)
+    })
+}
+
+fn status_rank(basis: StatusBasis) -> u16 {
+    match basis {
+        StatusBasis::RequestObserved => 10,
+        StatusBasis::SourceFinalization => 20,
+        StatusBasis::NativeTerminalRecord => 100,
+        StatusBasis::NativeState => 110,
+        StatusBasis::GroundTruthProtocol => 120,
     }
 }
 
@@ -1236,7 +1425,11 @@ impl TimelineEntry {
             }
             TimelineBody::Notice { .. } => {}
             TimelineBody::ToolUse { tool } => {
-                tool.action.extract_search(&mut lanes, &tool.native.name)
+                let tool_lanes = tool.search_lanes();
+                SearchLanes::push(&mut lanes.target, &tool_lanes.target);
+                SearchLanes::push(&mut lanes.intent, &tool_lanes.intent);
+                SearchLanes::push(&mut lanes.change, &tool_lanes.change);
+                SearchLanes::push(&mut lanes.tool, &tool_lanes.tool);
             }
         }
         lanes
@@ -1244,8 +1437,7 @@ impl TimelineEntry {
 }
 
 impl ToolAction {
-    fn extract_search(&self, lanes: &mut SearchLanes, native_name: &str) {
-        SearchLanes::push(&mut lanes.tool, native_name);
+    fn extract_search(&self, lanes: &mut SearchLanes) {
         let resource = |lanes: &mut SearchLanes, value: &ResourceRef| {
             SearchLanes::push(&mut lanes.target, value.display_value())
         };
@@ -1717,6 +1909,15 @@ fn bounded(field: &'static str, value: &str, limit: usize) -> Result<(), Canonic
 mod tests {
     use super::*;
 
+    fn evidence(source: &str, offset: u64) -> EvidenceOrder {
+        EvidenceOrder {
+            source_identity: SourceIdentity(source.into()),
+            generation: 1,
+            record_offset: offset,
+            mutation_index: 0,
+        }
+    }
+
     fn base(body: TimelineBody) -> TimelineEntry {
         TimelineEntry {
             timeline_id: "m1".into(),
@@ -1779,6 +1980,85 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_merge_is_order_independent_and_replay_idempotent() {
+        let opener = ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "future_tool");
+        let weak = ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: ToolStatus::Unknown,
+                basis: StatusBasis::SourceFinalization,
+            }),
+            ..Default::default()
+        };
+        let terminal = ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: ToolStatus::Succeeded,
+                basis: StatusBasis::NativeTerminalRecord,
+            }),
+            ..Default::default()
+        };
+
+        let mut forward = opener.clone();
+        let mut forward_state = ToolMergeState::default();
+        assert!(
+            forward
+                .apply_patch(&mut forward_state, &weak, &evidence("b", 9))
+                .unwrap()
+        );
+        assert!(
+            forward
+                .apply_patch(&mut forward_state, &terminal, &evidence("a", 1))
+                .unwrap()
+        );
+        assert!(
+            !forward
+                .apply_patch(&mut forward_state, &terminal, &evidence("a", 1))
+                .unwrap()
+        );
+
+        let mut reverse = opener;
+        let mut reverse_state = ToolMergeState::default();
+        reverse
+            .apply_patch(&mut reverse_state, &terminal, &evidence("a", 1))
+            .unwrap();
+        assert!(
+            !reverse
+                .apply_patch(&mut reverse_state, &weak, &evidence("b", 9))
+                .unwrap()
+        );
+
+        assert_eq!(forward, reverse);
+        assert_eq!(forward_state, reverse_state);
+        assert_eq!(forward.status.value, ToolStatus::Succeeded);
+    }
+
+    #[test]
+    fn lifecycle_merge_rejects_known_action_family_changes() {
+        let mut tool = ToolInteraction {
+            action: ToolAction::Shell {
+                command: CanonicalText::inline("true").unwrap(),
+                cwd: None,
+                timeout_ms: None,
+                background: false,
+                outcome: None,
+            },
+            ..ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "bash")
+        };
+        let patch = ToolUpdatePatch {
+            request: Some(ToolRequestPatch {
+                action: ToolAction::FileRead {
+                    targets: Vec::new(),
+                    outcome: None,
+                },
+            }),
+            ..Default::default()
+        };
+        assert!(
+            tool.apply_patch(&mut ToolMergeState::default(), &patch, &evidence("a", 1))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn search_extracts_only_declared_fields() {
         let row = base(TimelineBody::ToolUse {
             tool: ToolInteraction {
@@ -1817,8 +2097,39 @@ mod tests {
         let lanes = row.search_lanes();
         assert_eq!(lanes.intent, "git status");
         assert_eq!(lanes.target, "/repo");
-        assert_eq!(lanes.tool, "bash");
+        assert_eq!(lanes.tool, "shell");
         assert!(lanes.change.is_empty());
+    }
+
+    #[test]
+    fn opaque_orchestration_is_not_searchable() {
+        let row = base(TimelineBody::ToolUse {
+            tool: ToolInteraction {
+                correlation: ToolCorrelation {
+                    key: "opaque".into(),
+                    derivation: CorrelationDerivation::Synthetic,
+                },
+                native: NativeToolRef {
+                    id: None,
+                    namespace: None,
+                    name: "exec".into(),
+                    provider: None,
+                },
+                status: ToolStatusFact {
+                    value: ToolStatus::Succeeded,
+                    basis: StatusBasis::GroundTruthProtocol,
+                },
+                action: ToolAction::Orchestration {
+                    runtime: Some("node".into()),
+                    trace: ChildTrace::Unavailable,
+                    executed_children: Vec::new(),
+                    executed_child_count: None,
+                },
+                failure: None,
+                timing: None,
+            },
+        });
+        assert_eq!(row.search_lanes(), SearchLanes::default());
     }
 
     #[test]

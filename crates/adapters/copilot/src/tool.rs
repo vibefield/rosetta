@@ -18,6 +18,7 @@ const fn registration(name: &'static str, action_kind: ToolActionKind) -> Projec
     ProjectorRegistration {
         agent: AGENT,
         writer_versions: VersionRange::exact(PINNED_WRITER_VERSION),
+        accepts_unversioned: false,
         native: NativeToolSelector {
             namespace: None,
             name,
@@ -45,13 +46,7 @@ pub fn project_request(
     native_id: Option<&str>,
     namespace: Option<&str>,
 ) -> Result<ToolInteraction, ProjectionError> {
-    let registration = lookup_registration(
-        REGISTRATIONS,
-        AGENT,
-        writer_version.or(Some(PINNED_WRITER_VERSION)),
-        namespace,
-        name,
-    )?;
+    let registration = lookup_registration(REGISTRATIONS, AGENT, writer_version, namespace, name)?;
     let action = match registration.action_kind {
         ToolActionKind::FileRead => {
             let path = first_string(input, &["path", "file_path"])
@@ -130,7 +125,7 @@ mod tests {
     fn registry_and_fixture_shell_are_typed() {
         validate_registry(REGISTRATIONS).unwrap();
         let tool = project_request(
-            None,
+            Some(PINNED_WRITER_VERSION),
             "bash",
             &json!({"command":"echo rosetta-mock"}),
             None,
@@ -146,7 +141,7 @@ mod tests {
     fn unregistered_mcp_tool_does_not_inherit_a_builtin_name() {
         assert!(
             project_request(
-                None,
+                Some(PINNED_WRITER_VERSION),
                 "bash",
                 &json!({"command":"unsafe"}),
                 None,

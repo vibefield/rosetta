@@ -8,9 +8,9 @@
 
 use std::any::Any;
 
-use rosetta_core::IngestOp;
 use rosetta_core::fold::CumulativeUsage;
 use rosetta_core::rows::{Ms, SessionRole, TitleKind};
+use rosetta_core::{EvidenceOrder, IngestOp, SourceIdentity};
 
 use crate::GroundTruthDoc;
 
@@ -139,6 +139,9 @@ pub struct NormalizeCtx {
     /// ingested, stamped by the pipeline before each call.
     pub src_cursor: Option<i64>,
     pub src_offset: Option<i64>,
+    /// Stable raw-ledger identity used by deterministic typed merges.
+    pub source_identity: Option<String>,
+    pub source_generation: u64,
     /// Adapter-private state (e.g. pending tool names by id), created by
     /// [`AgentAdapter::init_state`] and downcast by the adapter.
     pub state: Option<Box<dyn Any + Send>>,
@@ -154,6 +157,8 @@ impl NormalizeCtx {
             cumulative: CumulativeUsage::new(),
             src_cursor: None,
             src_offset: None,
+            source_identity: None,
+            source_generation: 0,
             state: None,
         }
     }
@@ -162,6 +167,22 @@ impl NormalizeCtx {
         let ordinal = self.next_ordinal;
         self.next_ordinal += 1;
         ordinal
+    }
+
+    pub fn evidence(&self, mutation_index: u32) -> EvidenceOrder {
+        EvidenceOrder {
+            source_identity: SourceIdentity(
+                self.source_identity
+                    .clone()
+                    .unwrap_or_else(|| format!("direct:{}/{}", self.runtime_id, self.session_id)),
+            ),
+            generation: self.source_generation,
+            record_offset: self
+                .src_offset
+                .and_then(|offset| u64::try_from(offset).ok())
+                .unwrap_or(0),
+            mutation_index,
+        }
     }
 }
 

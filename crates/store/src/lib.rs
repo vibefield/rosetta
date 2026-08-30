@@ -10,6 +10,7 @@ pub mod hot;
 pub mod queries;
 pub mod schema;
 mod search_sync;
+mod tool_codec;
 
 use std::fmt;
 use std::path::Path;

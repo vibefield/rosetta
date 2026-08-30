@@ -244,6 +244,7 @@ fn project(
                     ops.push(IngestOp::ToolUpdate {
                         session_id: ctx.session_id.clone(),
                         correlation_key: tool.call_id.clone(),
+                        evidence: ctx.evidence(1),
                         patch: terminal_update(
                             Some(false),
                             true,
@@ -265,6 +266,7 @@ fn project(
                     ops.push(IngestOp::ToolUpdate {
                         session_id: ctx.session_id.clone(),
                         correlation_key: tool.call_id.clone(),
+                        evidence: ctx.evidence(1),
                         patch: terminal_update(
                             Some(true),
                             true,

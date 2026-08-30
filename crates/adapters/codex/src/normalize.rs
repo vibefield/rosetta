@@ -419,6 +419,7 @@ fn response_item(
             ops.push(IngestOp::ToolUpdate {
                 session_id: ctx.session_id.clone(),
                 correlation_key: tool_id,
+                evidence: ctx.evidence(0),
                 // The record declares no status field — success stays UNKNOWN
                 // rather than being sniffed out of its text.
                 patch: terminal_update(
@@ -483,6 +484,7 @@ fn response_item(
             ops.push(IngestOp::ToolUpdate {
                 session_id: ctx.session_id.clone(),
                 correlation_key: tool_id,
+                evidence: ctx.evidence(0),
                 patch: terminal_update(
                     status_error(item.status.as_deref()),
                     false,

@@ -8,12 +8,15 @@ use std::time::Instant;
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use rosetta_core::IngestOp;
 use rosetta_core::fold::{HOUR_MS, hour_bucket};
 use rosetta_core::rows::{MessageRow, Ms, TokenSnapshot};
+use rosetta_core::{
+    EvidenceOrder, IngestOp, SourceIdentity, ToolInteraction, ToolMergeState, ToolUpdatePatch,
+};
 
 use crate::StoreError;
 use crate::hot::{Effects, Mutation};
+use crate::tool_codec;
 
 use super::metadata::refresh_session_title;
 use super::{ApplyStats, apply_op, elapsed_nanos};
@@ -22,19 +25,12 @@ use super::{ApplyStats, apply_op, elapsed_nanos};
 /// both off and constructs them once before publishing the projection.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Maintenance {
-    pub fts: bool,
     pub buckets: bool,
 }
 
-pub(crate) const LIVE_MAINTENANCE: Maintenance = Maintenance {
-    fts: false,
-    buckets: true,
-};
+pub(crate) const LIVE_MAINTENANCE: Maintenance = Maintenance { buckets: true };
 
-pub(crate) const BULK_MAINTENANCE: Maintenance = Maintenance {
-    fts: false,
-    buckets: false,
-};
+pub(crate) const BULK_MAINTENANCE: Maintenance = Maintenance { buckets: false };
 
 #[derive(Debug, Default)]
 pub(super) struct PendingGate {
@@ -45,26 +41,17 @@ pub(super) struct PendingGate {
 struct PendingSession {
     loaded: bool,
     usage: BTreeSet<String>,
-    tool_results: BTreeSet<String>,
 }
 
 impl PendingSession {
     fn matches(&self, row: &MessageRow) -> bool {
         self.usage.contains(&row.timeline_id)
-            || row
-                .tool
-                .as_ref()
-                .and_then(|tool| tool.tool_id.as_deref())
-                .is_some_and(|tool_id| self.tool_results.contains(tool_id))
     }
 
     fn insert(&mut self, kind: &str, target: &str) {
         match kind {
             "usage" => {
                 self.usage.insert(target.to_string());
-            }
-            "tool_result" => {
-                self.tool_results.insert(target.to_string());
             }
             _ => {}
         }
@@ -74,9 +61,6 @@ impl PendingSession {
         match kind {
             "usage" => {
                 self.usage.remove(target);
-            }
-            "tool_result" => {
-                self.tool_results.remove(target);
             }
             _ => {}
         }
@@ -105,7 +89,7 @@ impl PendingGate {
             let mut stmt = tx.prepare_cached(
                 "SELECT kind, target
                  FROM pending_merge
-                 WHERE kind IN ('tool_result', 'usage') AND session_id = ?1",
+                 WHERE kind = 'usage' AND session_id = ?1",
             )?;
             Ok(stmt
                 .query_map([&row.session_id], |record| {
@@ -160,15 +144,15 @@ pub(super) fn mark_bucket(
     }
 }
 
-/// The columns of an existing message row that FTS resync, usage
-/// replacement, and hot-tier patch emission need.
+/// Existing canonical row state needed for replacement, usage, and typed
+/// lifecycle merge operations.
 pub(super) struct OldRow {
     pub(super) id: i64,
     pub(super) timeline_id: String,
     pub(super) session_id: String,
-    pub(super) content: Option<String>,
-    pub(super) tool_input: Option<String>,
-    pub(super) tool_result: Option<String>,
+    pub(super) tool: Option<ToolInteraction>,
+    pub(super) tool_open: Option<ToolInteraction>,
+    pub(super) tool_merge_state: Option<ToolMergeState>,
     pub(super) model: Option<String>,
     pub(super) ts: Option<Ms>,
 }
@@ -176,7 +160,12 @@ pub(super) struct OldRow {
 fn load_old_by_timeline(tx: &Transaction, timeline_id: &str) -> Result<Option<OldRow>, StoreError> {
     load_old(
         tx,
-        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
+        "SELECT id, timeline_id, session_id, model, ts,
+                tool_correlation_key, tool_correlation_kind, tool_native_id,
+                tool_namespace, tool_provider, tool_name, tool_kind, tool_status,
+                tool_status_basis, tool_detail, tool_merge_state, tool_error_kind,
+                tool_error_summary, tool_diagnostic, tool_started_at,
+                tool_completed_at, tool_duration_ms, tool_open
          FROM message WHERE timeline_id = ?1",
         params![timeline_id],
     )
@@ -185,13 +174,18 @@ fn load_old_by_timeline(tx: &Transaction, timeline_id: &str) -> Result<Option<Ol
 fn load_old_by_tool(
     tx: &Transaction,
     session_id: &str,
-    tool_id: &str,
+    correlation_key: &str,
 ) -> Result<Option<OldRow>, StoreError> {
     load_old(
         tx,
-        "SELECT id, timeline_id, session_id, content, tool_input, tool_result, model, ts
-         FROM message WHERE session_id = ?1 AND tool_id = ?2",
-        params![session_id, tool_id],
+        "SELECT id, timeline_id, session_id, model, ts,
+                tool_correlation_key, tool_correlation_kind, tool_native_id,
+                tool_namespace, tool_provider, tool_name, tool_kind, tool_status,
+                tool_status_basis, tool_detail, tool_merge_state, tool_error_kind,
+                tool_error_summary, tool_diagnostic, tool_started_at,
+                tool_completed_at, tool_duration_ms, tool_open
+         FROM message WHERE session_id = ?1 AND tool_correlation_key = ?2",
+        params![session_id, correlation_key],
     )
 }
 
@@ -203,47 +197,234 @@ fn load_old(
     let row = tx
         .prepare_cached(sql)?
         .query_row(params, |row| {
+            let (tool, tool_merge_state) = tool_codec::decode(row)?;
+            let tool_open = tool_codec::decode_open(row)?;
             Ok(OldRow {
                 id: row.get(0)?,
                 timeline_id: row.get(1)?,
                 session_id: row.get(2)?,
-                content: row.get(3)?,
-                tool_input: row.get(4)?,
-                tool_result: row.get(5)?,
-                model: row.get(6)?,
-                ts: row.get(7)?,
+                model: row.get(3)?,
+                ts: row.get(4)?,
+                tool,
+                tool_open,
+                tool_merge_state,
             })
         })
         .optional()?;
     Ok(row)
 }
 
-pub(super) fn fts_delete(tx: &Transaction, old: &OldRow) -> Result<(), StoreError> {
+fn sqlite_u64(value: u64, field: &str) -> Result<i64, StoreError> {
+    i64::try_from(value).map_err(|_| StoreError::ProjectionInvalid {
+        message: format!("tool evidence {field} exceeds SQLite's integer range"),
+    })
+}
+
+fn load_tool_facts(
+    tx: &Transaction,
+    session_id: &str,
+    correlation_key: &str,
+) -> Result<Vec<(EvidenceOrder, ToolUpdatePatch)>, StoreError> {
+    let mut statement = tx.prepare_cached(
+        "SELECT source_identity, generation, record_offset, mutation_index, patch
+         FROM tool_update_fact
+         WHERE session_id = ?1 AND correlation_key = ?2
+         ORDER BY source_identity, generation, record_offset, mutation_index",
+    )?;
+    let rows = statement.query_map(params![session_id, correlation_key], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut facts = Vec::new();
+    for row in rows {
+        let (source_identity, generation, record_offset, mutation_index, patch) = row?;
+        facts.push((
+            EvidenceOrder {
+                source_identity: SourceIdentity(source_identity),
+                generation: u64::try_from(generation).map_err(|_| {
+                    StoreError::ProjectionInvalid {
+                        message: "negative tool evidence generation".into(),
+                    }
+                })?,
+                record_offset: u64::try_from(record_offset).map_err(|_| {
+                    StoreError::ProjectionInvalid {
+                        message: "negative tool evidence record offset".into(),
+                    }
+                })?,
+                mutation_index: u32::try_from(mutation_index).map_err(|_| {
+                    StoreError::ProjectionInvalid {
+                        message: "invalid tool evidence mutation index".into(),
+                    }
+                })?,
+            },
+            serde_json::from_str(&patch)?,
+        ));
+    }
+    Ok(facts)
+}
+
+fn fold_tool_facts(
+    tx: &Transaction,
+    session_id: &str,
+    mut tool: ToolInteraction,
+) -> Result<(ToolInteraction, ToolMergeState, usize), StoreError> {
+    tool.validate()
+        .map_err(|error| StoreError::ProjectionInvalid {
+            message: format!("invalid tool opener: {error}"),
+        })?;
+    let mut state = ToolMergeState::default();
+    let facts = load_tool_facts(tx, session_id, &tool.correlation.key)?;
+    let fact_count = facts.len();
+    for (evidence, patch) in facts {
+        tool.apply_patch(&mut state, &patch, &evidence)
+            .map_err(|error| StoreError::ProjectionInvalid {
+                message: format!("invalid persisted tool update: {error}"),
+            })?;
+    }
+    Ok((tool, state, fact_count))
+}
+
+fn persist_tool_fact(
+    tx: &Transaction,
+    session_id: &str,
+    correlation_key: &str,
+    evidence: &EvidenceOrder,
+    patch: &ToolUpdatePatch,
+    at: Option<Ms>,
+    src_cursor: Option<i64>,
+) -> Result<(), StoreError> {
+    let generation = sqlite_u64(evidence.generation, "generation")?;
+    let record_offset = sqlite_u64(evidence.record_offset, "record offset")?;
+    let mutation_index = i64::from(evidence.mutation_index);
+    let patch = serde_json::to_string(patch)?;
+    let inserted = tx
+        .prepare_cached(
+            "INSERT INTO tool_update_fact
+               (session_id, correlation_key, source_identity, generation,
+                record_offset, mutation_index, patch, at, src_cursor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT DO NOTHING",
+        )?
+        .execute(params![
+            session_id,
+            correlation_key,
+            evidence.source_identity.0,
+            generation,
+            record_offset,
+            mutation_index,
+            patch,
+            at,
+            src_cursor,
+        ])?;
+    if inserted == 0 {
+        let existing: (String, Option<Ms>, Option<i64>) = tx
+            .prepare_cached(
+                "SELECT patch, at, src_cursor FROM tool_update_fact
+             WHERE session_id = ?1 AND correlation_key = ?2 AND source_identity = ?3
+               AND generation = ?4 AND record_offset = ?5 AND mutation_index = ?6",
+            )?
+            .query_row(
+                params![
+                    session_id,
+                    correlation_key,
+                    evidence.source_identity.0,
+                    generation,
+                    record_offset,
+                    mutation_index,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if existing != (patch, at, src_cursor) {
+            return Err(StoreError::ProjectionInvalid {
+                message: format!(
+                    "conflicting tool facts share evidence order for {session_id}/{correlation_key}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn update_encoded_tool(
+    tx: &Transaction,
+    id: i64,
+    tool: &ToolInteraction,
+    merge_state: &ToolMergeState,
+) -> Result<(), StoreError> {
+    let encoded = tool_codec::encode(Some(tool), Some(merge_state))?;
     tx.prepare_cached(
-        "INSERT INTO message_fts (message_fts, rowid, content, tool_input, tool_result)
-         VALUES ('delete', ?1, ?2, ?3, ?4)",
+        "UPDATE message SET
+           tool_correlation_key = ?2, tool_correlation_kind = ?3,
+           tool_native_id = ?4, tool_namespace = ?5, tool_provider = ?6,
+           tool_name = ?7, tool_kind = ?8, tool_status = ?9,
+           tool_status_basis = ?10, tool_detail = ?11, tool_merge_state = ?12,
+           tool_error_kind = ?13, tool_error_summary = ?14, tool_diagnostic = ?15,
+           tool_started_at = ?16, tool_completed_at = ?17, tool_duration_ms = ?18
+         WHERE id = ?1",
     )?
     .execute(params![
-        old.id,
-        old.content,
-        old.tool_input,
-        old.tool_result
+        id,
+        encoded.correlation_key,
+        encoded.correlation_kind,
+        encoded.native_id,
+        encoded.namespace,
+        encoded.provider,
+        encoded.name,
+        encoded.kind,
+        encoded.status,
+        encoded.status_basis,
+        encoded.detail,
+        encoded.merge_state,
+        encoded.error_kind,
+        encoded.error_summary,
+        encoded.diagnostic,
+        encoded.started_at,
+        encoded.completed_at,
+        encoded.duration_ms,
     ])?;
     Ok(())
 }
 
-fn fts_insert(
-    tx: &Transaction,
-    rowid: i64,
-    content: Option<&str>,
-    tool_input: Option<&str>,
-    tool_result: Option<&str>,
-) -> Result<(), StoreError> {
-    tx.prepare_cached(
-        "INSERT INTO message_fts (rowid, content, tool_input, tool_result)
-         VALUES (?1, ?2, ?3, ?4)",
-    )?
-    .execute(params![rowid, content, tool_input, tool_result])?;
+/// Remove one source generation's active typed facts and repair any opener
+/// owned by a different source. Rows owned by the swept source are about to be
+/// deleted and will fold surviving sibling facts when their replacement opens.
+pub(super) fn remove_source_tool_facts(tx: &Transaction, cursor_id: i64) -> Result<(), StoreError> {
+    let mut statement = tx.prepare_cached(
+        "SELECT DISTINCT f.session_id, f.correlation_key
+         FROM tool_update_fact f
+         JOIN message m
+           ON m.session_id = f.session_id
+          AND m.tool_correlation_key = f.correlation_key
+         WHERE f.src_cursor = ?1
+           AND (m.src_cursor IS NULL OR m.src_cursor != ?1)
+         ORDER BY f.session_id, f.correlation_key",
+    )?;
+    let targets = statement
+        .query_map(params![cursor_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    tx.prepare_cached("DELETE FROM tool_update_fact WHERE src_cursor = ?1")?
+        .execute(params![cursor_id])?;
+    for (session_id, correlation_key) in targets {
+        let Some(old) = load_old_by_tool(tx, &session_id, &correlation_key)? else {
+            continue;
+        };
+        let opener = old.tool_open.ok_or_else(|| StoreError::ProjectionInvalid {
+            message: format!(
+                "tool row {} is missing its closed opener during source reconciliation",
+                old.timeline_id
+            ),
+        })?;
+        let (tool, merge_state, _) = fold_tool_facts(tx, &session_id, opener)?;
+        update_encoded_tool(tx, old.id, &tool, &merge_state)?;
+    }
     Ok(())
 }
 
@@ -388,28 +569,34 @@ pub(super) fn apply_message(
         row.model.as_deref(),
     );
     let new_usage = row.usage.unwrap_or_default();
-    let tool_input = row.tool.as_ref().map(|tool| tool.input.to_string());
-    let tool_payload = row
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.payload.as_ref().map(|p| p.to_string()));
+    let (tool, tool_merge_state, folded_tool_facts) =
+        resolved_open_tool(tx, &row.session_id, row.tool.as_ref(), old.as_ref())?;
+    stats.tool_results_merged = stats
+        .tool_results_merged
+        .saturating_add(u64::try_from(folded_tool_facts).unwrap_or(u64::MAX));
+    let tool_open = row.tool.as_ref().map(serde_json::to_string).transpose()?;
+    let encoded = tool_codec::encode(tool.as_ref(), tool_merge_state.as_ref())?;
+    let mut emitted = row.clone();
+    emitted.tool = tool;
 
     let started = Instant::now();
     let written = (|| -> Result<(), StoreError> {
         match old {
-            Some(old) => {
-                if maintenance.fts {
-                    fts_delete(tx, &old)?;
-                }
+            Some(_) => {
                 tx.prepare_cached(
                     "UPDATE message SET
                        session_id = ?2, ordinal = ?3, type = ?4, subtype = ?5, uuid = ?6,
                        parent_uuid = ?7, ts = ?8, model = ?9, effort = ?10, content = ?11,
-                       tool_id = ?12, tool_name = ?13, tool_input = ?14, tool_result = ?15,
-                       tool_payload = ?16, tool_is_error = ?17, branch_tool_id = ?18,
-                       in_tokens = ?19, out_tokens = ?20, cache_r_tokens = ?21,
-                       cache_w_tokens = ?22, think_tokens = ?23, agent_version = ?24,
-                       src_cursor = ?25, src_offset = ?26
+                       tool_correlation_key = ?12, tool_correlation_kind = ?13,
+                       tool_native_id = ?14, tool_namespace = ?15, tool_provider = ?16,
+                       tool_name = ?17, tool_kind = ?18, tool_status = ?19,
+                       tool_status_basis = ?20, tool_detail = ?21, tool_merge_state = ?22,
+                       tool_error_kind = ?23, tool_error_summary = ?24, tool_diagnostic = ?25,
+                       tool_started_at = ?26, tool_completed_at = ?27, tool_duration_ms = ?28,
+                       branch_tool_id = ?29, in_tokens = ?30, out_tokens = ?31,
+                       cache_r_tokens = ?32, cache_w_tokens = ?33, think_tokens = ?34,
+                       agent_version = ?35, src_cursor = ?36, src_offset = ?37,
+                       tool_open = ?38
                      WHERE timeline_id = ?1",
                 )?
                 .execute(params![
@@ -424,12 +611,23 @@ pub(super) fn apply_message(
                     row.model,
                     row.effort,
                     row.content,
-                    row.tool.as_ref().and_then(|t| t.tool_id.as_deref()),
-                    row.tool.as_ref().map(|t| t.name.as_str()),
-                    tool_input,
-                    row.tool.as_ref().and_then(|t| t.result.as_deref()),
-                    tool_payload,
-                    row.tool.as_ref().and_then(|t| t.is_error),
+                    encoded.correlation_key,
+                    encoded.correlation_kind,
+                    encoded.native_id,
+                    encoded.namespace,
+                    encoded.provider,
+                    encoded.name,
+                    encoded.kind,
+                    encoded.status,
+                    encoded.status_basis,
+                    encoded.detail,
+                    encoded.merge_state,
+                    encoded.error_kind,
+                    encoded.error_summary,
+                    encoded.diagnostic,
+                    encoded.started_at,
+                    encoded.completed_at,
+                    encoded.duration_ms,
                     row.branch_tool_id,
                     new_usage.input,
                     new_usage.output,
@@ -439,28 +637,24 @@ pub(super) fn apply_message(
                     row.agent_version,
                     row.src_cursor,
                     row.src_offset,
+                    tool_open,
                 ])?;
-                if maintenance.fts {
-                    fts_insert(
-                        tx,
-                        old.id,
-                        row.content.as_deref(),
-                        tool_input.as_deref(),
-                        row.tool.as_ref().and_then(|t| t.result.as_deref()),
-                    )?;
-                }
                 stats.messages_updated += 1;
             }
             None => {
                 tx.prepare_cached(
                     "INSERT INTO message
                        (timeline_id, session_id, ordinal, type, subtype, uuid, parent_uuid, ts,
-                        model, effort, content, tool_id, tool_name, tool_input, tool_result,
-                        tool_payload, tool_is_error, branch_tool_id, in_tokens, out_tokens,
-                        cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
-                        src_cursor, src_offset)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                             ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                        model, effort, content, tool_correlation_key, tool_correlation_kind,
+                        tool_native_id, tool_namespace, tool_provider, tool_name, tool_kind,
+                        tool_status, tool_status_basis, tool_detail, tool_merge_state,
+                        tool_error_kind, tool_error_summary, tool_diagnostic, tool_started_at,
+                        tool_completed_at, tool_duration_ms, branch_tool_id, in_tokens, out_tokens,
+                        cache_r_tokens, cache_w_tokens, think_tokens, agent_version, src_cursor,
+                        src_offset, tool_open)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
+                             ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
                 )?
                 .execute(params![
                     row.timeline_id,
@@ -474,12 +668,23 @@ pub(super) fn apply_message(
                     row.model,
                     row.effort,
                     row.content,
-                    row.tool.as_ref().and_then(|t| t.tool_id.as_deref()),
-                    row.tool.as_ref().map(|t| t.name.as_str()),
-                    tool_input,
-                    row.tool.as_ref().and_then(|t| t.result.as_deref()),
-                    tool_payload,
-                    row.tool.as_ref().and_then(|t| t.is_error),
+                    encoded.correlation_key,
+                    encoded.correlation_kind,
+                    encoded.native_id,
+                    encoded.namespace,
+                    encoded.provider,
+                    encoded.name,
+                    encoded.kind,
+                    encoded.status,
+                    encoded.status_basis,
+                    encoded.detail,
+                    encoded.merge_state,
+                    encoded.error_kind,
+                    encoded.error_summary,
+                    encoded.diagnostic,
+                    encoded.started_at,
+                    encoded.completed_at,
+                    encoded.duration_ms,
                     row.branch_tool_id,
                     new_usage.input,
                     new_usage.output,
@@ -489,17 +694,8 @@ pub(super) fn apply_message(
                     row.agent_version,
                     row.src_cursor,
                     row.src_offset,
+                    tool_open,
                 ])?;
-                let rowid = tx.last_insert_rowid();
-                if maintenance.fts {
-                    fts_insert(
-                        tx,
-                        rowid,
-                        row.content.as_deref(),
-                        tool_input.as_deref(),
-                        row.tool.as_ref().and_then(|t| t.result.as_deref()),
-                    )?;
-                }
                 stats.messages_inserted += 1;
             }
         }
@@ -515,12 +711,12 @@ pub(super) fn apply_message(
     }
     touch_session(tx, &row.session_id, row.ts, stats)?;
     if let Some(fx) = effects.as_deref_mut() {
-        fx.push(Mutation::Message(Box::new(row.clone())));
+        fx.push(Mutation::Message(Box::new(emitted.clone())));
     }
-    if pending_gate.should_lookup(tx, row, stats)? {
+    if pending_gate.should_lookup(tx, &emitted, stats)? {
         apply_pending_for_message(
             tx,
-            row,
+            &emitted,
             stats,
             maintenance,
             dirty_buckets,
@@ -533,67 +729,86 @@ pub(super) fn apply_message(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn apply_tool_result(
+fn resolved_open_tool(
     tx: &Transaction,
     session_id: &str,
-    tool_id: &str,
-    result: Option<&str>,
-    payload: Option<&serde_json::Value>,
-    is_error: Option<bool>,
+    incoming: Option<&ToolInteraction>,
+    old: Option<&OldRow>,
+) -> Result<(Option<ToolInteraction>, Option<ToolMergeState>, usize), StoreError> {
+    let Some(incoming) = incoming else {
+        return Ok((None, None, 0));
+    };
+    if let Some(old) = old
+        && let Some(previous) = old.tool_open.as_ref()
+        && previous.correlation.key != incoming.correlation.key
+    {
+        return Err(StoreError::ProjectionInvalid {
+            message: format!(
+                "timeline row changed tool correlation from {:?} to {:?}",
+                previous.correlation.key, incoming.correlation.key
+            ),
+        });
+    }
+    let (tool, state, fact_count) = fold_tool_facts(tx, session_id, incoming.clone())?;
+    Ok((Some(tool), Some(state), fact_count))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_tool_update(
+    tx: &Transaction,
+    session_id: &str,
+    correlation_key: &str,
+    evidence: &EvidenceOrder,
+    patch: &ToolUpdatePatch,
     at: Option<Ms>,
+    src_cursor: Option<i64>,
     stats: &mut ApplyStats,
-    maintenance: Maintenance,
     effects: Option<&mut Effects>,
 ) -> Result<bool, StoreError> {
     stats.profile.tool_result_attempts += 1;
+    persist_tool_fact(
+        tx,
+        session_id,
+        correlation_key,
+        evidence,
+        patch,
+        at,
+        src_cursor,
+    )?;
     let started = Instant::now();
-    let loaded = load_old_by_tool(tx, session_id, tool_id);
+    let loaded = load_old_by_tool(tx, session_id, correlation_key);
     stats.profile.tool_result_lookup_nanos += elapsed_nanos(started);
     let Some(old) = loaded? else {
         stats.tool_results_unmatched += 1;
         return Ok(false);
     };
+    let opener = old
+        .tool_open
+        .clone()
+        .ok_or_else(|| StoreError::ProjectionInvalid {
+            message: format!(
+                "correlation key {correlation_key:?} resolved to non-tool row {}",
+                old.timeline_id
+            ),
+        })?;
+    let (tool, merge_state, _) = fold_tool_facts(tx, session_id, opener)?;
+    let changed =
+        old.tool.as_ref() != Some(&tool) || old.tool_merge_state.as_ref() != Some(&merge_state);
     let started = Instant::now();
-    let written = (|| -> Result<(), StoreError> {
-        if maintenance.fts {
-            fts_delete(tx, &old)?;
+    if changed {
+        update_encoded_tool(tx, old.id, &tool, &merge_state)?;
+        if let Some(fx) = effects {
+            fx.push(Mutation::ToolUpdated {
+                session_id: session_id.to_string(),
+                timeline_id: old.timeline_id.clone(),
+                tool,
+                at,
+            });
         }
-        tx.prepare_cached(
-            "UPDATE message SET tool_result = ?2, tool_payload = ?3, tool_is_error = ?4
-             WHERE id = ?1",
-        )?
-        .execute(params![
-            old.id,
-            result,
-            payload.map(|p| p.to_string()),
-            is_error
-        ])?;
-        if maintenance.fts {
-            fts_insert(
-                tx,
-                old.id,
-                old.content.as_deref(),
-                old.tool_input.as_deref(),
-                result,
-            )?;
-        }
-        Ok(())
-    })();
+    }
     stats.profile.tool_result_write_nanos += elapsed_nanos(started);
-    written?;
     touch_session(tx, session_id, at, stats)?;
     stats.tool_results_merged += 1;
-    if let Some(fx) = effects {
-        fx.push(Mutation::ToolResult {
-            session_id: session_id.to_string(),
-            timeline_id: old.timeline_id,
-            result: result.map(str::to_owned),
-            payload: payload.cloned(),
-            is_error,
-            at,
-        });
-    }
     Ok(true)
 }
 
@@ -669,11 +884,6 @@ pub(super) fn apply_usage(
 
 fn pending_key(op: &IngestOp) -> Option<(&'static str, &str, &str)> {
     match op {
-        IngestOp::ToolResult {
-            session_id,
-            tool_id,
-            ..
-        } => Some(("tool_result", session_id, tool_id)),
         IngestOp::Usage {
             session_id,
             response,
@@ -731,7 +941,6 @@ fn apply_pending_for_message(
     pending_gate: &mut PendingGate,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
-    let tool_id = row.tool.as_ref().and_then(|tool| tool.tool_id.as_deref());
     stats.profile.pending_lookups += 1;
     let started = Instant::now();
     let loaded = (|| -> Result<Vec<_>, StoreError> {
@@ -739,22 +948,18 @@ fn apply_pending_for_message(
             "SELECT kind, target, op_json, src_cursor
              FROM pending_merge
              WHERE session_id = ?1
-               AND ((kind = 'usage' AND target = ?2)
-                 OR (kind = 'tool_result' AND target = ?3))
+               AND kind = 'usage' AND target = ?2
              ORDER BY kind, target",
         )?;
         let pending = stmt
-            .query_map(
-                params![row.session_id, row.timeline_id, tool_id],
-                |record| {
-                    Ok((
-                        record.get::<_, String>(0)?,
-                        record.get::<_, String>(1)?,
-                        record.get::<_, String>(2)?,
-                        record.get::<_, Option<i64>>(3)?,
-                    ))
-                },
-            )?
+            .query_map(params![row.session_id, row.timeline_id], |record| {
+                Ok((
+                    record.get::<_, String>(0)?,
+                    record.get::<_, String>(1)?,
+                    record.get::<_, String>(2)?,
+                    record.get::<_, Option<i64>>(3)?,
+                ))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(pending)
     })();

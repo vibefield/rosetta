@@ -7,10 +7,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use rosetta_core::rows::{
     MessageKind, MessageRow, Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
-    TokenSnapshot, ToolCall,
+    TokenSnapshot,
 };
 
-use crate::StoreError;
+use crate::{StoreError, tool_codec};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -113,9 +113,11 @@ pub struct SearchDocument {
     pub ts: Option<Ms>,
     pub kind: String,
     pub is_error: Option<bool>,
-    pub content: Option<String>,
-    pub tool_input: Option<String>,
-    pub tool_result: Option<String>,
+    pub prose: String,
+    pub target: String,
+    pub intent: String,
+    pub change: String,
+    pub tool: String,
 }
 
 pub fn projection_state(conn: &Connection) -> Result<ProjectionState, StoreError> {
@@ -180,9 +182,8 @@ fn visit_search_documents_where(
     mut visit: impl FnMut(SearchDocument) -> Result<(), StoreError>,
 ) -> Result<(), StoreError> {
     let sql = format!(
-        "SELECT m.id, m.timeline_id, m.session_id, s.runtime_id, r.kind,
-                s.project_id, m.ts, m.type, m.tool_is_error,
-                m.content, m.tool_input, m.tool_result
+        "SELECT m.*, s.runtime_id AS search_runtime_id, r.kind AS search_agent,
+                s.project_id AS search_project_id
          FROM message m
          JOIN session s ON s.id = m.session_id
          JOIN agent_runtime r ON r.id = s.runtime_id
@@ -195,19 +196,44 @@ fn visit_search_documents_where(
         None => statement.query([])?,
     };
     while let Some(row) = rows.next()? {
+        let (tool, _) = tool_codec::decode(row)?;
+        let mut lanes = tool
+            .as_ref()
+            .map_or_else(rosetta_core::SearchLanes::default, |tool| {
+                tool.search_lanes()
+            });
+        if let Some(content) = row.get::<_, Option<String>>("content")? {
+            if !lanes.prose.is_empty() {
+                lanes.prose.push('\n');
+            }
+            lanes.prose.push_str(&content);
+        }
+        let status = tool.as_ref().map(|tool| tool.status.value);
         visit(SearchDocument {
-            id: row.get(0)?,
-            timeline_id: row.get(1)?,
-            session_id: row.get(2)?,
-            runtime_id: row.get(3)?,
-            agent: row.get(4)?,
-            project_id: row.get(5)?,
-            ts: row.get(6)?,
-            kind: row.get(7)?,
-            is_error: row.get(8)?,
-            content: row.get(9)?,
-            tool_input: row.get(10)?,
-            tool_result: row.get(11)?,
+            id: row.get("id")?,
+            timeline_id: row.get("timeline_id")?,
+            session_id: row.get("session_id")?,
+            runtime_id: row.get("search_runtime_id")?,
+            agent: row.get("search_agent")?,
+            project_id: row.get("search_project_id")?,
+            ts: row.get("ts")?,
+            kind: row.get("type")?,
+            is_error: status.and_then(|status| match status {
+                rosetta_core::ToolStatus::Succeeded => Some(false),
+                rosetta_core::ToolStatus::Failed
+                | rosetta_core::ToolStatus::Denied
+                | rosetta_core::ToolStatus::Cancelled
+                | rosetta_core::ToolStatus::TimedOut
+                | rosetta_core::ToolStatus::Interrupted => Some(true),
+                rosetta_core::ToolStatus::Pending
+                | rosetta_core::ToolStatus::Running
+                | rosetta_core::ToolStatus::Unknown => None,
+            }),
+            prose: lanes.prose,
+            target: lanes.target,
+            intent: lanes.intent,
+            change: lanes.change,
+            tool: lanes.tool,
         })?;
     }
     Ok(())
@@ -269,25 +295,7 @@ fn parse_state(text: &str) -> StreamState {
 
 fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
     let kind: String = row.get("type")?;
-    let tool_name: Option<String> = row.get("tool_name")?;
-    let tool = match tool_name {
-        Some(name) => {
-            let input: Option<String> = row.get("tool_input")?;
-            Some(ToolCall {
-                tool_id: row.get("tool_id")?,
-                name,
-                input: input
-                    .and_then(|text| serde_json::from_str(&text).ok())
-                    .unwrap_or(serde_json::Value::Null),
-                result: row.get("tool_result")?,
-                payload: row
-                    .get::<_, Option<String>>("tool_payload")?
-                    .and_then(|text| serde_json::from_str(&text).ok()),
-                is_error: row.get("tool_is_error")?,
-            })
-        }
-        None => None,
-    };
+    let (tool, _) = tool_codec::decode(row)?;
     let usage = TokenSnapshot {
         input: row.get("in_tokens")?,
         output: row.get("out_tokens")?,
@@ -803,11 +811,9 @@ fn search_canonical_compat(
     limit: i64,
     filter: &SearchFilter,
 ) -> Result<Vec<SearchHit>, StoreError> {
-    use rusqlite::types::Value;
-
     fn clean_term(term: &str) -> String {
         let term = term.trim().trim_matches('"');
-        term.replace("\"\"", "\"")
+        term.replace("\"\"", "\"").to_lowercase()
     }
 
     let (separator, disjunction) = if query.contains(" OR ") {
@@ -826,96 +832,72 @@ fn search_canonical_compat(
         return Ok(Vec::new());
     }
 
-    let mut sql = String::from(
-        "SELECT m.timeline_id, m.session_id,
-                COALESCE(m.content, m.tool_input, m.tool_result, ''), 0.0
-         FROM message m
-         JOIN session s ON s.id = m.session_id",
-    );
-    if filter.agent.is_some() {
-        sql.push_str(" JOIN agent_runtime r ON r.id = s.runtime_id");
-    }
-    sql.push_str(" WHERE (");
-    let mut binds = Vec::new();
-    for (index, term) in terms.into_iter().enumerate() {
-        if index > 0 {
-            sql.push_str(if disjunction { " OR " } else { " AND " });
-        }
-        binds.push(Value::from(format!("%{}%", term.to_lowercase())));
-        sql.push_str(&format!(
-            "lower(COALESCE(m.content, '') || ' ' ||
-                   COALESCE(m.tool_input, '') || ' ' ||
-                   COALESCE(m.tool_result, '')) LIKE ?{}",
-            binds.len()
-        ));
-    }
-    sql.push(')');
-    let clause = |sql: &mut String, predicate: &str, value: Value, binds: &mut Vec<Value>| {
-        binds.push(value);
-        sql.push_str(&format!(" AND {predicate} ?{}", binds.len()));
-    };
-    if let Some(session) = &filter.session {
-        clause(
-            &mut sql,
-            "m.session_id =",
-            Value::from(session.clone()),
-            &mut binds,
-        );
-    }
-    if let Some(runtime) = &filter.runtime {
-        clause(
-            &mut sql,
-            "s.runtime_id =",
-            Value::from(runtime.clone()),
-            &mut binds,
-        );
-    }
-    if let Some(agent) = &filter.agent {
-        clause(&mut sql, "r.kind =", Value::from(agent.clone()), &mut binds);
-    }
-    if let Some(project) = &filter.project {
-        clause(
-            &mut sql,
-            "s.project_id =",
-            Value::from(project.clone()),
-            &mut binds,
-        );
-    }
-    if let Some(kind) = &filter.kind {
-        clause(&mut sql, "m.type =", Value::from(kind.clone()), &mut binds);
-    }
-    if let Some(is_error) = filter.is_error {
-        clause(
-            &mut sql,
-            "m.tool_is_error =",
-            Value::from(i64::from(is_error)),
-            &mut binds,
-        );
-    }
-    if let Some(after) = filter.after_ts {
-        clause(&mut sql, "m.ts >=", Value::from(after), &mut binds);
-    }
-    if let Some(before) = filter.before_ts {
-        clause(&mut sql, "m.ts <=", Value::from(before), &mut binds);
-    }
-    binds.push(Value::from(limit));
-    sql.push_str(&format!(
-        " ORDER BY m.timeline_id COLLATE BINARY LIMIT ?{}",
-        binds.len()
-    ));
-    let mut statement = conn.prepare(&sql)?;
-    let rows = statement.query_map(rusqlite::params_from_iter(binds), |row| {
-        Ok(SearchHit {
-            timeline_id: row.get(0)?,
-            session_id: row.get(1)?,
-            snippet: row.get(2)?,
-            score: row.get(3)?,
-        })
-    })?;
     let mut hits = Vec::new();
-    for row in rows {
-        hits.push(row?);
-    }
+    visit_search_documents(conn, |document| {
+        if filter
+            .session
+            .as_ref()
+            .is_some_and(|value| value != &document.session_id)
+            || filter
+                .runtime
+                .as_ref()
+                .is_some_and(|value| value != &document.runtime_id)
+            || filter
+                .agent
+                .as_ref()
+                .is_some_and(|value| value != &document.agent)
+            || filter
+                .project
+                .as_ref()
+                .is_some_and(|value| document.project_id.as_ref() != Some(value))
+            || filter
+                .kind
+                .as_ref()
+                .is_some_and(|value| value != &document.kind)
+            || filter
+                .is_error
+                .is_some_and(|value| document.is_error != Some(value))
+            || filter
+                .after_ts
+                .is_some_and(|value| document.ts.is_none_or(|ts| ts < value))
+            || filter
+                .before_ts
+                .is_some_and(|value| document.ts.is_none_or(|ts| ts > value))
+        {
+            return Ok(());
+        }
+        let lanes = [
+            document.prose.as_str(),
+            document.target.as_str(),
+            document.intent.as_str(),
+            document.change.as_str(),
+            document.tool.as_str(),
+        ];
+        let haystack = lanes.join("\n").to_lowercase();
+        let matches = if disjunction {
+            terms.iter().any(|term| haystack.contains(term))
+        } else {
+            terms.iter().all(|term| haystack.contains(term))
+        };
+        if matches {
+            let snippet = lanes
+                .into_iter()
+                .find(|lane| !lane.is_empty())
+                .unwrap_or_default()
+                .chars()
+                .take(512)
+                .collect();
+            hits.push(SearchHit {
+                timeline_id: document.timeline_id,
+                session_id: document.session_id,
+                snippet,
+                score: 0.0,
+            });
+        }
+        Ok(())
+    })?;
+    hits.sort_by(|left, right| left.timeline_id.cmp(&right.timeline_id));
+    hits.truncate(usize::try_from(limit.max(0)).unwrap_or(usize::MAX));
     Ok(hits)
 }
 

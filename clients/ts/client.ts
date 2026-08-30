@@ -400,15 +400,10 @@ export class SessionSubscription extends BaseSubscription {
         this.rows.set(row.timeline_id, row);
         break;
       }
-      case "tool_result": {
+      case "tool_updated": {
         const row = this.rows.get(mutation.timeline_id);
         if (row?.tool) {
-          row.tool = {
-            ...row.tool,
-            result: mutation.result,
-            payload: mutation.payload,
-            is_error: mutation.is_error,
-          };
+          row.tool = mutation.tool;
         }
         break;
       }

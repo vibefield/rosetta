@@ -4,10 +4,14 @@
 //! timeline_id, activation collapses to a single sweep marker (temporary
 //! ordinals never leak), and the mirror diffs are precise.
 
-use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
-    TokenSnapshot, ToolCall,
+    TokenSnapshot,
+};
+use rosetta_core::{
+    CanonicalText, CorrelationDerivation, EvidenceOrder, IngestOp, NativeToolRef, SourceIdentity,
+    StatusBasis, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    ToolUpdatePatch,
 };
 use rosetta_store::hot::{Effects, MetaMirror, Mutation};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
@@ -78,6 +82,55 @@ fn message(timeline_id: &str, ordinal: i64) -> MessageRow {
     }
 }
 
+fn shell_tool(key: &str, command: &str) -> ToolInteraction {
+    ToolInteraction {
+        correlation: ToolCorrelation {
+            key: key.into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some(key.into()),
+            namespace: None,
+            name: "Bash".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Pending,
+            basis: StatusBasis::RequestObserved,
+        },
+        action: ToolAction::Shell {
+            command: CanonicalText::inline(command).unwrap(),
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        },
+        failure: None,
+        timing: None,
+    }
+}
+
+fn succeeded_update(key: &str) -> IngestOp {
+    IngestOp::ToolUpdate {
+        session_id: "s1".into(),
+        correlation_key: key.into(),
+        evidence: EvidenceOrder {
+            source_identity: SourceIdentity("test:hot".into()),
+            generation: 0,
+            record_offset: 1,
+            mutation_index: 0,
+        },
+        patch: ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: ToolStatus::Succeeded,
+                basis: StatusBasis::NativeTerminalRecord,
+            }),
+            ..Default::default()
+        },
+        at: Some(3_700_000),
+    }
+}
+
 fn cursor_id(store: &mut Store) -> i64 {
     store
         .apply(&Batch {
@@ -138,27 +191,14 @@ fn append_mode_emits_rows_with_apply_time_ordinals_and_merge_patches() {
     // mutation log must carry those, not the adapter's claims.
     let mut call = message("m-tool", 0);
     call.kind = MessageKind::ToolUse;
-    call.tool = Some(ToolCall {
-        tool_id: Some("toolu_1".into()),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "true"}),
-        result: None,
-        payload: None,
-        is_error: None,
-    });
+    call.content = None;
+    call.tool = Some(shell_tool("toolu_1", "true"));
     store
         .apply(&Batch {
             ops: vec![
                 IngestOp::Message(Box::new(message("m-user", 0))),
                 IngestOp::Message(Box::new(call)),
-                IngestOp::ToolResult {
-                    session_id: "s1".into(),
-                    tool_id: "toolu_1".into(),
-                    result: Some("ok".into()),
-                    payload: None,
-                    is_error: Some(false),
-                    at: Some(3_700_000),
-                },
+                succeeded_update("toolu_1"),
                 IngestOp::Usage {
                     session_id: "s1".into(),
                     response: "m-user".into(),
@@ -195,15 +235,13 @@ fn append_mode_emits_rows_with_apply_time_ordinals_and_merge_patches() {
         other => panic!("expected message mutation, got {other:?}"),
     }
     match &effects.mutations[2] {
-        Mutation::ToolResult {
-            timeline_id,
-            result,
-            ..
+        Mutation::ToolUpdated {
+            timeline_id, tool, ..
         } => {
             assert_eq!(timeline_id, "m-tool", "patch keyed by the CALL row");
-            assert_eq!(result.as_deref(), Some("ok"));
+            assert_eq!(tool.status.value, ToolStatus::Succeeded);
         }
-        other => panic!("expected tool-result patch, got {other:?}"),
+        other => panic!("expected typed tool patch, got {other:?}"),
     }
     match &effects.mutations[3] {
         Mutation::Usage {

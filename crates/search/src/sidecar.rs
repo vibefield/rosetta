@@ -2,8 +2,8 @@
 //!
 //! Canonical SQLite keeps transactions, reconciliation, and repair keys. This
 //! sidecar contains only reloadable search documents and may be deleted at any
-//! time. Its three indexed columns and tokenizer intentionally match the old
-//! in-file external-content FTS table, preserving BM25 scores and snippets.
+//! time. Its five indexed columns are exhaustively extracted semantic lanes;
+//! serialized canonical/native JSON is never walked by the search layer.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness, SearchState};
 
-pub(crate) const SEARCH_SCHEMA_VERSION: i64 = 1;
+pub(crate) const SEARCH_SCHEMA_VERSION: i64 = 2;
 
 pub(crate) const SEARCH_DDL: &str = r#"
 CREATE TABLE search_state (
@@ -40,7 +40,7 @@ CREATE TABLE search_document (
 );
 
 CREATE VIRTUAL TABLE message_fts USING fts5(
-  content, tool_input, tool_result,
+  prose, target, intent, change, tool,
   tokenize='unicode61 remove_diacritics 2'
 );
 "#;

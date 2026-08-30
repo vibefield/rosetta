@@ -8,7 +8,7 @@ use crate::rows::{
     DriftFact, FileEditRow, GitCommitRow, MessageRow, Ms, PlanRow, ProjectRow, RuntimeRow,
     SessionRow, SessionTitleRow, SessionUsageRow, TaskRow, TokenSnapshot, WorkspaceObsRow,
 };
-use crate::timeline::ToolUpdatePatch;
+use crate::timeline::{EvidenceOrder, ToolUpdatePatch};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -34,6 +34,7 @@ pub enum IngestOp {
     ToolUpdate {
         session_id: String,
         correlation_key: String,
+        evidence: EvidenceOrder,
         patch: ToolUpdatePatch,
         at: Option<Ms>,
     },

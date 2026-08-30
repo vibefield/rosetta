@@ -1,11 +1,14 @@
 // View models: rosetta wire rows → what the room draws. Pure functions of
 // their inputs; every derived figure states its window at the callsite.
 import type {
+  CanonicalText,
   ContributionRow,
   HeatmapDay,
   MessageRow,
   ProjectRow,
+  ResourceRef,
   SessionRow,
+  ToolAction,
 } from "@rosetta/protocol";
 import type { AgentShare } from "./agents";
 import { projectTint } from "./tint";
@@ -224,34 +227,178 @@ function firstLine(text: string, max = 90): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
-function callTarget(row: MessageRow): string {
-  const input = row.tool?.input;
-  if (input && typeof input === "object" && !Array.isArray(input)) {
-    const record = input as Record<string, unknown>;
-    for (const key of ["command", "file_path", "path", "pattern", "query", "url", "prompt", "description"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim() !== "") return firstLine(value);
-    }
-    for (const value of Object.values(record)) {
-      if (typeof value === "string" && value.trim() !== "") return firstLine(value);
-    }
+function canonicalText(text: CanonicalText): string {
+  return text.type === "inline" ? text.text : text.preview;
+}
+
+function resourceLabel(resource: ResourceRef): string {
+  switch (resource.type) {
+    case "file":
+    case "directory":
+      return resource.path;
+    case "url":
+      return resource.url;
+    case "session":
+    case "task":
+    case "process":
+      return resource.id;
+    case "asset":
+      return resource.asset.url;
   }
-  return row.content ? firstLine(row.content) : "";
+}
+
+function actionTarget(action: ToolAction): string {
+  switch (action.type) {
+    case "file_read":
+      return action.targets.map((target) => resourceLabel(target.resource)).join(", ");
+    case "file_list":
+      return resourceLabel(action.directory);
+    case "file_search":
+      return action.query;
+    case "code_lookup":
+      return action.query;
+    case "file_change":
+      return action.changes.map((change) => resourceLabel(change.path)).join(", ");
+    case "shell":
+      return canonicalText(action.command);
+    case "code_execute":
+      return canonicalText(action.code);
+    case "process":
+      return action.input ? canonicalText(action.input) : action.process_id;
+    case "orchestration":
+      return action.executed_children.join(", ") || action.runtime || "";
+    case "web_search":
+      return action.query ?? action.allowed_domains.join(", ");
+    case "web_navigate":
+      return action.url ? resourceLabel(action.url) : (action.pattern ?? "");
+    case "web_fetch":
+      return resourceLabel(action.url);
+    case "delegate":
+      return canonicalText(action.objective);
+    case "task":
+      return action.subject ?? (action.description ? canonicalText(action.description) : action.task_id ?? "");
+    case "plan":
+      return action.title ?? (action.summary ? canonicalText(action.summary) : "");
+    case "collaborate":
+      return action.summary ?? (action.body ? canonicalText(action.body) : action.recipient ?? action.team ?? "");
+    case "question":
+      return action.questions[0] ? canonicalText(action.questions[0].prompt) : "";
+    case "skill":
+      return action.arguments ? canonicalText(action.arguments) : action.name;
+    case "workflow":
+      return action.objective
+        ? canonicalText(action.objective)
+        : action.arguments
+          ? canonicalText(action.arguments)
+          : action.name ?? (action.path ? resourceLabel(action.path) : "");
+    case "schedule":
+      return action.objective
+        ? canonicalText(action.objective)
+        : action.reason ?? action.schedule_id ?? "";
+    case "artifact":
+      return action.name
+        ?? (action.description ? canonicalText(action.description) : action.resources[0] ? resourceLabel(action.resources[0]) : "");
+    case "tool_discovery":
+      return action.query;
+    case "mode":
+      return action.workspace ? resourceLabel(action.workspace) : action.mode;
+    case "finding":
+      return action.findings[0]?.title ?? "";
+    case "notification":
+      return canonicalText(action.summary);
+    case "structured_output":
+      return action.document.type === "member"
+        ? action.document.title ?? action.document.preview
+        : action.document.title ?? (action.document.summary ? canonicalText(action.document.summary) : "");
+    case "external":
+      return action.subject
+        ?? (action.resources[0] ? resourceLabel(action.resources[0]) : action.operation);
+    case "unknown":
+      return "";
+  }
+}
+
+function actionOutcome(action: ToolAction): string {
+  switch (action.type) {
+    case "file_read":
+      return action.outcome?.truncated ? "truncated" : "";
+    case "file_list":
+      return action.outcome ? `${action.outcome.entry_count} entries` : "";
+    case "file_search":
+      return action.outcome ? `${action.outcome.match_count} matches` : "";
+    case "code_lookup":
+      return action.outcome ? `${action.outcome.total_count} locations` : "";
+    case "file_change": {
+      const added = action.changes.reduce((sum, change) => sum + (change.lines_added ?? 0), 0);
+      const removed = action.changes.reduce((sum, change) => sum + (change.lines_removed ?? 0), 0);
+      return added || removed ? `+${added} −${removed}` : "";
+    }
+    case "shell":
+    case "code_execute":
+      return action.outcome?.exit_code == null ? "" : `exit ${action.outcome.exit_code}`;
+    case "process":
+      return action.outcome?.state ?? "";
+    case "orchestration":
+      return action.executed_child_count == null ? "" : `${action.executed_child_count} children`;
+    case "web_search":
+      return action.outcome ? `${action.outcome.total_count} sources` : "";
+    case "web_navigate":
+    case "web_fetch":
+      return action.outcome?.http_status == null ? "" : `HTTP ${action.outcome.http_status}`;
+    case "delegate":
+      return action.child_session_id ? "delegated" : "";
+    case "task":
+      return action.status ?? "";
+    case "plan":
+      return action.step_count == null ? "" : `${action.step_count} steps`;
+    case "collaborate":
+      return action.outcome ? `${action.outcome.total_count} participants` : "";
+    case "question":
+      return action.answers.length ? `${action.answers.length} answered` : "";
+    case "artifact":
+      return action.resources.length ? `${action.resources.length} files` : "";
+    case "tool_discovery":
+      return `${action.total_count} tools`;
+    case "finding":
+      return `${action.total_count} findings`;
+    case "skill":
+    case "workflow":
+    case "schedule":
+    case "mode":
+    case "notification":
+    case "structured_output":
+    case "external":
+    case "unknown":
+      return "";
+  }
 }
 
 function callResult(row: MessageRow): { result: string; failed: boolean } {
-  const failed = row.tool?.is_error === true;
-  const text = row.tool?.result;
-  if (text && text.trim() !== "") return { result: firstLine(text, 44), failed };
-  return { result: failed ? "error" : "", failed };
+  const tool = row.tool;
+  if (!tool) return { result: "", failed: false };
+  const failed = ["failed", "denied", "cancelled", "timed_out", "interrupted"].includes(
+    tool.status.value,
+  );
+  const failure = tool.failure?.summary ?? tool.failure?.diagnostic;
+  if (failure) return { result: firstLine(failure, 44), failed };
+  const outcome = actionOutcome(tool.action);
+  if (outcome) return { result: firstLine(outcome, 44), failed };
+  return {
+    result: tool.status.value === "succeeded" ? "" : tool.status.value.replaceAll("_", " "),
+    failed,
+  };
 }
 
 export function toWorkCall(row: MessageRow): WorkCall {
   const { result, failed } = callResult(row);
   return {
     row,
-    verb: (row.tool?.name ?? row.subtype ?? "tool").toLowerCase(),
-    target: callTarget(row),
+    verb: row.tool
+      ? row.tool.action.type === "unknown"
+        ? row.tool.native.name.toLowerCase()
+        : row.tool.action.type.replaceAll("_", " ")
+      : "tool",
+    target: row.tool ? firstLine(actionTarget(row.tool.action)) : "",
     result,
     failed,
   };

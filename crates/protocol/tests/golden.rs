@@ -5,6 +5,10 @@
 //! accidental break, or bump `PROTOCOL_VERSION` deliberately and refresh
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
+use rosetta_core::timeline::{
+    CanonicalText, CorrelationDerivation, NativeToolRef, ShellOutcome, StatusBasis, ToolAction,
+    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+};
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, ContributionResponse, ContributionRow,
     DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest, EnableResponse, ErrorCode,
@@ -13,7 +17,7 @@ use rosetta_protocol::{
     RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness,
     SearchRequest, SearchResponse, SearchState, ServerFrame, SessionResponse, SessionRole,
     SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState, TimelinePage, TokenSnapshot,
-    ToolCall, UsageResponse,
+    UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -70,14 +74,35 @@ fn message_row() -> MessageRow {
         ts: Some(3_600_000),
         model: Some("claude-opus-5".into()),
         effort: Some("high".into()),
-        content: Some("body".into()),
-        tool: Some(ToolCall {
-            tool_id: Some("toolu_1".into()),
-            name: "Bash".into(),
-            input: serde_json::json!({"command": "true"}),
-            result: Some("ok".into()),
-            payload: Some(serde_json::json!({"exit": 0})),
-            is_error: Some(false),
+        content: None,
+        tool: Some(ToolInteraction {
+            correlation: ToolCorrelation {
+                key: "toolu_1".into(),
+                derivation: CorrelationDerivation::NativeId,
+            },
+            native: NativeToolRef {
+                id: Some("toolu_1".into()),
+                namespace: None,
+                name: "Bash".into(),
+                provider: None,
+            },
+            status: ToolStatusFact {
+                value: ToolStatus::Succeeded,
+                basis: StatusBasis::NativeTerminalRecord,
+            },
+            action: ToolAction::Shell {
+                command: CanonicalText::inline("true").unwrap(),
+                cwd: None,
+                timeout_ms: None,
+                background: false,
+                outcome: Some(ShellOutcome {
+                    exit_code: Some(0),
+                    signal: None,
+                    process_id: None,
+                }),
+            },
+            failure: None,
+            timing: None,
         }),
         branch_tool_id: Some("toolu_0".into()),
         usage: Some(TokenSnapshot {
@@ -150,12 +175,10 @@ fn exemplars() -> serde_json::Value {
     };
     let mutations = vec![
         Mutation::Message(Box::new(message_row())),
-        Mutation::ToolResult {
+        Mutation::ToolUpdated {
             session_id: "s1".into(),
             timeline_id: "t1".into(),
-            result: Some("ok".into()),
-            payload: Some(serde_json::json!({"exit": 0})),
-            is_error: Some(false),
+            tool: message_row().tool.unwrap(),
             at: Some(3_700_000),
         },
         Mutation::Usage {

@@ -265,6 +265,8 @@ pub(crate) fn apply_snapshot_records(
     ctx.agent_version = file.agent_version.clone();
     ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
     ctx.src_cursor = Some(cursor.id);
+    ctx.source_identity = Some(file.relative_path.clone());
+    ctx.source_generation = generation;
 
     let mut generation_clean = true;
     let mut next_sequence = 0_u64;

@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::StoreError;
 
 /// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -179,12 +179,33 @@ CREATE TABLE IF NOT EXISTS message (
   model          TEXT,
   effort         TEXT,
   content        TEXT,
-  tool_id        TEXT,
+  tool_correlation_key TEXT,
+  tool_correlation_kind TEXT CHECK (tool_correlation_kind IS NULL OR tool_correlation_kind IN
+                    ('native_id','parent_linked','positional','synthetic')),
+  tool_native_id TEXT,
+  tool_namespace TEXT,
+  tool_provider  TEXT,
   tool_name      TEXT,
-  tool_input     TEXT,
-  tool_result    TEXT,
-  tool_payload   TEXT,
-  tool_is_error  INTEGER,
+  tool_kind      TEXT,
+  tool_status    TEXT CHECK (tool_status IS NULL OR tool_status IN
+                    ('pending','running','succeeded','failed','denied','cancelled',
+                     'timed_out','interrupted','unknown')),
+  tool_status_basis TEXT CHECK (tool_status_basis IS NULL OR tool_status_basis IN
+                    ('request_observed','native_state','native_terminal_record',
+                     'ground_truth_protocol','source_finalization')),
+  tool_detail    TEXT CHECK (tool_detail IS NULL OR json_valid(tool_detail)),
+  -- Private closed opener used to replay active typed facts when a sibling
+  -- source generation is replaced. Never exposed by queries or search.
+  tool_open      TEXT CHECK (tool_open IS NULL OR json_valid(tool_open)),
+  tool_merge_state TEXT CHECK (tool_merge_state IS NULL OR json_valid(tool_merge_state)),
+  tool_error_kind TEXT CHECK (tool_error_kind IS NULL OR tool_error_kind IN
+                    ('permission','not_found','invalid_input','exit_nonzero',
+                     'timeout','cancelled','provider','unknown')),
+  tool_error_summary TEXT,
+  tool_diagnostic TEXT,
+  tool_started_at INTEGER,
+  tool_completed_at INTEGER,
+  tool_duration_ms INTEGER CHECK (tool_duration_ms IS NULL OR tool_duration_ms >= 0),
   branch_tool_id TEXT,
   in_tokens      INTEGER,
   out_tokens     INTEGER,
@@ -193,10 +214,54 @@ CREATE TABLE IF NOT EXISTS message (
   think_tokens   INTEGER,
   agent_version  TEXT,
   src_cursor     INTEGER REFERENCES ingest_cursor(id),
-  src_offset     INTEGER,
-  UNIQUE (session_id, ordinal)
+  src_offset     INTEGER CHECK (src_offset IS NULL OR src_offset >= 0),
+  UNIQUE (session_id, ordinal),
+  CHECK ((type = 'tool_use' AND content IS NULL
+          AND tool_correlation_key IS NOT NULL AND tool_correlation_kind IS NOT NULL
+          AND tool_name IS NOT NULL AND tool_kind IS NOT NULL
+          AND tool_status IS NOT NULL AND tool_status_basis IS NOT NULL
+          AND tool_detail IS NOT NULL AND tool_open IS NOT NULL
+          AND tool_merge_state IS NOT NULL
+          AND json_extract(tool_detail, '$.type') = tool_kind)
+      OR (type != 'tool_use' AND tool_correlation_key IS NULL
+          AND tool_correlation_kind IS NULL AND tool_native_id IS NULL
+          AND tool_namespace IS NULL AND tool_provider IS NULL AND tool_name IS NULL
+          AND tool_kind IS NULL AND tool_status IS NULL AND tool_status_basis IS NULL
+          AND tool_detail IS NULL AND tool_open IS NULL AND tool_merge_state IS NULL
+          AND tool_error_kind IS NULL AND tool_error_summary IS NULL
+          AND tool_diagnostic IS NULL AND tool_started_at IS NULL
+          AND tool_completed_at IS NULL AND tool_duration_ms IS NULL)),
+  CHECK (tool_status_basis != 'source_finalization' OR tool_status = 'unknown'),
+  CHECK (tool_error_summary IS NULL OR tool_error_kind IS NOT NULL),
+  CHECK (tool_diagnostic IS NULL OR tool_error_kind IS NOT NULL),
+  CHECK (tool_completed_at IS NULL OR tool_started_at IS NULL
+      OR tool_completed_at >= tool_started_at)
 );
-CREATE INDEX IF NOT EXISTS message_tool ON message(session_id, tool_id) WHERE tool_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS message_tool_correlation
+  ON message(session_id, tool_correlation_key) WHERE type = 'tool_use';
+
+-- Active, reduced lifecycle evidence. This is not a native-op journal: each
+-- row contains only the closed ToolUpdatePatch and exists solely so source
+-- generation replacement can subtract a sibling-owned fact and deterministically
+-- rebuild the correlated tool row from `tool_open` plus the remaining facts.
+CREATE TABLE IF NOT EXISTS tool_update_fact (
+  session_id       TEXT NOT NULL REFERENCES session(id),
+  correlation_key  TEXT NOT NULL,
+  source_identity  TEXT NOT NULL,
+  generation       INTEGER NOT NULL CHECK (generation >= 0),
+  record_offset    INTEGER NOT NULL CHECK (record_offset >= 0),
+  mutation_index   INTEGER NOT NULL CHECK (mutation_index >= 0),
+  patch             TEXT NOT NULL CHECK (json_valid(patch)),
+  at                INTEGER,
+  src_cursor        INTEGER REFERENCES ingest_cursor(id),
+  PRIMARY KEY (
+    session_id, correlation_key, source_identity,
+    generation, record_offset, mutation_index
+  )
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS tool_update_fact_target
+  ON tool_update_fact(session_id, correlation_key);
+CREATE INDEX IF NOT EXISTS tool_update_fact_src ON tool_update_fact(src_cursor);
 -- Generation activation and rewrite reconciliation are provenance lookups.
 -- Without this index, activating each source scans the entire growing table.
 CREATE INDEX IF NOT EXISTS message_src ON message(src_cursor);

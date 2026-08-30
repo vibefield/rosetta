@@ -311,6 +311,7 @@ fn tool_result(
     emit.ops.push(IngestOp::ToolUpdate {
         session_id: emit.session_id.clone(),
         correlation_key: tool_id,
+        evidence: emit.ctx.evidence(0),
         patch: terminal_update(
             is_error,
             true,

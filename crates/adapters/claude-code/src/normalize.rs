@@ -204,8 +204,8 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
         emit.push_row(row);
     }
 
-    for result in results {
-        emit.tool_result(&result, ts);
+    for (index, result) in results.into_iter().enumerate() {
+        emit.tool_result(&result, u32::try_from(index).unwrap_or(u32::MAX), ts);
     }
 }
 
@@ -496,7 +496,7 @@ impl<'a> Emit<'a> {
         self.ops.push(IngestOp::Message(Box::new(row)));
     }
 
-    fn tool_result(&mut self, result: &ToolResultBlock<'_>, at: Option<Ms>) {
+    fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
         let diagnostic = result
             .is_error
             .is_some_and(|is_error| is_error)
@@ -505,6 +505,7 @@ impl<'a> Emit<'a> {
         self.ops.push(IngestOp::ToolUpdate {
             session_id: self.session_id.clone(),
             correlation_key: result.tool_use_id.to_owned(),
+            evidence: self.ctx.evidence(mutation_index),
             patch: terminal_update(
                 result.is_error,
                 true,

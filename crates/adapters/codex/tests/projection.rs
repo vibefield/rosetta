@@ -7,6 +7,7 @@
 //! the ground truth stays the only source for what codex actually writes.
 
 use rosetta_adapter_codex::CodexAdapter;
+use rosetta_adapter_codex::tool::CURRENT_WRITER_VERSION;
 use rosetta_adapter_support::adapter::{AgentAdapter, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, TokenSnapshot};
 use rosetta_core::timeline::{ResourceRef, ToolAction, ToolStatus};
@@ -19,6 +20,7 @@ fn context() -> NormalizeCtx {
     let runtime_id = ids::runtime_id("codex", "~/.codex");
     let session_id = ids::session_id(&runtime_id, "01a036c5-0000-0000-0000-000000000000");
     let mut ctx = NormalizeCtx::new(runtime_id, session_id);
+    ctx.agent_version = Some(CURRENT_WRITER_VERSION.to_owned());
     ctx.state = CodexAdapter.init_state();
     ctx
 }

@@ -351,6 +351,7 @@ fn ingest_file(
         None => adapter.restore_state(None).map_err(PipelineError::Config)?,
     };
     ctx.src_cursor = Some(cursor_id);
+    ctx.source_identity = Some(file.relative_path.clone());
     let mut source_generation = highest_generation
         .checked_add(1)
         .ok_or_else(|| PipelineError::Config("source generation overflowed".to_string()))?;
@@ -420,6 +421,7 @@ fn ingest_file(
                     report.records += 1;
                     instrument.add(Metric::RecordsFramed, 1);
                     ctx.src_offset = Some(record.start_offset as i64);
+                    ctx.source_generation = source_generation;
                     let outcome = instrument.time(Metric::NormalizeNanos, || {
                         adapter.ingest_line(&mut ctx, &file.stream_id, &record.payload)
                     });

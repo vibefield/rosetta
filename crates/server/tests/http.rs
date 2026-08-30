@@ -12,9 +12,12 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use rosetta_core::rows::{
-    MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, ToolCall,
+    MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
-use rosetta_core::{ImageAsset, IngestOp};
+use rosetta_core::{
+    CanonicalText, CorrelationDerivation, ImageAsset, IngestOp, NativeToolRef, StatusBasis,
+    ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+};
 use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
@@ -456,13 +459,31 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     let mut h = harness();
     let mut tool_row = message("m-tool", MessageKind::ToolUse, "ionosphere via tool");
     tool_row.ts = Some(7_200_000);
-    tool_row.tool = Some(ToolCall {
-        tool_id: Some("tool-1".into()),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "false"}),
-        result: Some("failed".into()),
-        payload: None,
-        is_error: Some(true),
+    tool_row.content = None;
+    tool_row.tool = Some(ToolInteraction {
+        correlation: ToolCorrelation {
+            key: "tool-1".into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some("tool-1".into()),
+            namespace: None,
+            name: "Bash".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Failed,
+            basis: StatusBasis::NativeTerminalRecord,
+        },
+        action: ToolAction::Shell {
+            command: CanonicalText::inline("false # ionosphere").unwrap(),
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        },
+        failure: None,
+        timing: None,
     });
     h.append(vec![
         message("m-user", MessageKind::User, "ionosphere question"),

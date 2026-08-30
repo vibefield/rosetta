@@ -70,6 +70,10 @@ pub enum SearchPolicy {
 pub struct ProjectorRegistration {
     pub agent: &'static str,
     pub writer_versions: VersionRange,
+    /// The native source format does not persist a writer version. This is an
+    /// explicit evidence claim, never a fallback for an observed future
+    /// version: `Some(version)` must still fall inside `writer_versions`.
+    pub accepts_unversioned: bool,
     pub native: NativeToolSelector,
     pub action_kind: ToolActionKind,
     pub status_policy: StatusPolicy,
@@ -81,12 +85,14 @@ impl ProjectorRegistration {
     pub fn matches(
         &self,
         agent: &str,
-        writer_version: &str,
+        writer_version: Option<&str>,
         namespace: Option<&str>,
         name: &str,
     ) -> bool {
         self.agent == agent
-            && self.writer_versions.contains(writer_version)
+            && writer_version.map_or(self.accepts_unversioned, |version| {
+                self.writer_versions.contains(version)
+            })
             && self.native.namespace == namespace
             && self.native.name == name
     }
@@ -99,18 +105,21 @@ pub fn lookup_registration<'a>(
     namespace: Option<&str>,
     name: &str,
 ) -> Result<&'a ProjectorRegistration, ProjectionError> {
+    let registration = registrations
+        .iter()
+        .find(|registration| registration.matches(agent, writer_version, namespace, name));
+    if let Some(registration) = registration {
+        return Ok(registration);
+    }
     let Some(writer_version) = writer_version else {
         return Err(ProjectionError::MissingWriterVersion);
     };
-    registrations
-        .iter()
-        .find(|registration| registration.matches(agent, writer_version, namespace, name))
-        .ok_or_else(|| ProjectionError::Unregistered {
-            agent: agent.to_owned(),
-            writer_version: writer_version.to_owned(),
-            namespace: namespace.map(str::to_owned),
-            name: name.to_owned(),
-        })
+    Err(ProjectionError::Unregistered {
+        agent: agent.to_owned(),
+        writer_version: writer_version.to_owned(),
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+    })
 }
 
 pub fn validate_registry(registrations: &[ProjectorRegistration]) -> Result<(), ProjectionError> {
@@ -134,7 +143,8 @@ pub fn validate_registry(registrations: &[ProjectorRegistration]) -> Result<(), 
         for right in &registrations[index + 1..] {
             if left.agent == right.agent
                 && left.native == right.native
-                && ranges_overlap(left.writer_versions, right.writer_versions)
+                && (ranges_overlap(left.writer_versions, right.writer_versions)
+                    || (left.accepts_unversioned && right.accepts_unversioned))
             {
                 return Err(ProjectionError::InvalidRegistration(format!(
                     "overlapping registrations for {}:{:?}:{}",
@@ -496,6 +506,7 @@ mod tests {
                 min_inclusive: "1.2.0",
                 max_inclusive: "1.3.4",
             },
+            accepts_unversioned: false,
             native: NativeToolSelector {
                 namespace: None,
                 name: "read",
@@ -508,6 +519,7 @@ mod tests {
         ProjectorRegistration {
             agent: "fixture",
             writer_versions: VersionRange::exact("1.3.4"),
+            accepts_unversioned: false,
             native: NativeToolSelector {
                 namespace: Some("mcp"),
                 name: "read",
@@ -551,6 +563,20 @@ mod tests {
         assert!(matches!(
             lookup_registration(REGISTRY, "fixture", Some("1.3.5"), None, "read"),
             Err(ProjectionError::Unregistered { .. })
+        ));
+    }
+
+    #[test]
+    fn unversioned_acceptance_is_explicit_and_never_accepts_a_future_version() {
+        let registration = ProjectorRegistration {
+            accepts_unversioned: true,
+            ..REGISTRY[0]
+        };
+        assert!(registration.matches("fixture", None, None, "read"));
+        assert!(!registration.matches("fixture", Some("1.3.5"), None, "read"));
+        assert!(matches!(
+            lookup_registration(REGISTRY, "fixture", None, None, "read"),
+            Err(ProjectionError::MissingWriterVersion)
         ));
     }
 

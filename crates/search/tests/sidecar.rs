@@ -4,7 +4,11 @@ use std::time::{Duration, Instant};
 use rosetta_core::rows::{
     MessageKind, MessageRow, RuntimeRow, SessionRole, SessionRow, StreamState, WorkspaceObsRow,
 };
-use rosetta_core::{IngestOp, ids};
+use rosetta_core::{
+    CanonicalText, CorrelationDerivation, EvidenceOrder, FailureKind, IngestOp, NativeToolRef,
+    SourceIdentity, StatusBasis, ToolAction, ToolCorrelation, ToolFailure, ToolInteraction,
+    ToolStatus, ToolStatusFact, ToolUpdatePatch, ids,
+};
 use rosetta_search::{
     Fts5SearchWorker, Fts5SidecarSearch, SearchAck, SearchBackend, SearchQuery, SearchReadiness,
     TextQuery, synchronize_fts5_once,
@@ -64,6 +68,38 @@ fn message(id: &str, session_id: &str, ordinal: i64, text: &str) -> MessageRow {
         src_cursor: None,
         src_offset: None,
     }
+}
+
+fn tool_message() -> MessageRow {
+    let mut row = message("tool-semantic", "s1", 3, "");
+    row.kind = MessageKind::ToolUse;
+    row.content = None;
+    row.tool = Some(ToolInteraction {
+        correlation: ToolCorrelation {
+            key: "tool-semantic".into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some("tool-semantic".into()),
+            namespace: None,
+            name: "NativeNameSentinel".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Pending,
+            basis: StatusBasis::RequestObserved,
+        },
+        action: ToolAction::Shell {
+            command: CanonicalText::inline("semanticcommandsentinel").unwrap(),
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        },
+        failure: None,
+        timing: None,
+    });
+    row
 }
 
 fn query(text: &str) -> SearchQuery {
@@ -173,6 +209,71 @@ fn sidecar_preserves_legacy_fts_ranking_and_snippets() {
     )
     .unwrap();
     assert_eq!(candidate.hits, reference);
+}
+
+#[test]
+fn sidecar_indexes_only_explicit_typed_tool_lanes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, mut store) = canonical(&dir);
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(tool_message())),
+                IngestOp::ToolUpdate {
+                    session_id: "s1".into(),
+                    correlation_key: "tool-semantic".into(),
+                    evidence: EvidenceOrder {
+                        source_identity: SourceIdentity("search-test".into()),
+                        generation: 0,
+                        record_offset: 1,
+                        mutation_index: 0,
+                    },
+                    patch: ToolUpdatePatch {
+                        status: Some(ToolStatusFact {
+                            value: ToolStatus::Failed,
+                            basis: StatusBasis::NativeTerminalRecord,
+                        }),
+                        failure: Some(ToolFailure {
+                            kind: FailureKind::Unknown,
+                            summary: Some("discardeddiagnosticsentinel".into()),
+                            diagnostic: None,
+                        }),
+                        ..Default::default()
+                    },
+                    at: None,
+                },
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+    let search = Fts5SidecarSearch::new(&path);
+    synchronize_fts5_once(&search, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        search
+            .search(query("semanticcommandsentinel"))
+            .unwrap()
+            .hits
+            .len(),
+        1
+    );
+    assert_eq!(search.search(query("shell")).unwrap().hits.len(), 1);
+    assert!(
+        search
+            .search(query("nativenamesentinel"))
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+    assert!(
+        search
+            .search(query("discardeddiagnosticsentinel"))
+            .unwrap()
+            .hits
+            .is_empty()
+    );
 }
 
 #[test]

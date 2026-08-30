@@ -651,6 +651,7 @@ fn tool_result(
     ops.push(IngestOp::ToolUpdate {
         session_id: ctx.session_id.clone(),
         correlation_key: tool_id.to_owned(),
+        evidence: ctx.evidence(0),
         patch: terminal_update(
             result.is_error,
             true,

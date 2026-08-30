@@ -66,9 +66,11 @@ fn insert_document(
     ])?;
     fts.execute(params![
         document.id,
-        document.content,
-        document.tool_input,
-        document.tool_result,
+        document.prose,
+        document.target,
+        document.intent,
+        document.change,
+        document.tool,
     ])?;
     Ok(())
 }
@@ -99,8 +101,8 @@ fn finish_private_generation(
         .map_err(|error| backend(format!("preparing search metadata insert: {error}")))?;
     let mut fts = tx
         .prepare(
-            "INSERT INTO message_fts(rowid, content, tool_input, tool_result)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO message_fts(rowid, prose, target, intent, change, tool)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .map_err(|error| backend(format!("preparing search text insert: {error}")))?;
     let mut documents = 0_u64;
@@ -263,8 +265,8 @@ fn repair_generation(
         .map_err(|error| backend(format!("preparing repaired search metadata: {error}")))?;
     let mut fts = tx
         .prepare(
-            "INSERT INTO message_fts(rowid, content, tool_input, tool_result)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO message_fts(rowid, prose, target, intent, change, tool)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .map_err(|error| backend(format!("preparing repaired search text: {error}")))?;
     for repair in &repairs {

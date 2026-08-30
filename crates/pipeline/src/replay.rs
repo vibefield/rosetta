@@ -535,6 +535,8 @@ fn open_file(
     ctx.agent_version = source.agent_version.clone();
     ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
     ctx.src_cursor = Some(cursor.id);
+    ctx.source_identity = Some(source.relative_path.clone());
+    ctx.source_generation = generation;
 
     report.files += 1;
     Ok(FileReplay {

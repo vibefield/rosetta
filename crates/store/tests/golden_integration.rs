@@ -62,7 +62,7 @@ fn scaffolding(ops: &[IngestOp], runtime_id: &str, kind: &str) -> Vec<IngestOp> 
         .iter()
         .filter_map(|op| match op {
             IngestOp::Message(row) => Some(row.session_id.clone()),
-            IngestOp::ToolResult { session_id, .. } | IngestOp::Usage { session_id, .. } => {
+            IngestOp::ToolUpdate { session_id, .. } | IngestOp::Usage { session_id, .. } => {
                 Some(session_id.clone())
             }
             IngestOp::WorkspaceObs(row) => Some(row.session_id.clone()),

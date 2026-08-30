@@ -19,7 +19,7 @@ pub use rows::{
 };
 pub use timeline::{
     CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, EvidenceStamp,
-    GroupDerivation, GroupKind, NativeToolRef, Provenance, ResponseGroup, SearchLanes,
+    FailureKind, GroupDerivation, GroupKind, NativeToolRef, Provenance, ResponseGroup, SearchLanes,
     SourceIdentity, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
     ToolActionKind, ToolCorrelation, ToolFailure, ToolInteraction, ToolMergeState, ToolMutation,
     ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
