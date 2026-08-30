@@ -42,8 +42,8 @@ if (!singleInstance) {
 }
 
 // ── The app-owned daemon ─────────────────────────────────────────────────
-// The archive db, its ledger, and the search sidecar all live beside each
-// other under userData/archive — the app's own, disposable, rebuildable.
+// The archive db, its precious ledger, content-addressed image members, and
+// disposable search sidecar all live beside each other under userData/archive.
 // NOT `cache/`: on a case-insensitive filesystem that is Chromium's own
 // `Cache/` folder, and the archive must never sit where browser-cache
 // clearing can reach it. `AH_DB` repoints the file (e.g. onto an external

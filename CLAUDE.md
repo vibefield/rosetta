@@ -32,7 +32,8 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
    parsers as prior art. Raw local data itself is never committed and never
    load-bearing in CI.
 4. **Two data representations only:** append-only raw ledger + one canonical
-   projection. The DB is disposable — rebuilt from the ledger, never migrated.
+   projection (SQLite plus content-addressed binary members). The projection is
+   disposable — rebuilt from the ledger, never migrated.
 5. **Parsers exist once, in Rust.** Consumers get generated types (ts-rs from
    `protocol`). Never hand-write a second parser in another language.
 6. **One ground-truth file per agent.** An agent's ground truth is solely and
@@ -58,6 +59,9 @@ Projection schema 7 keeps canonical transactions, reconciliation, rollups, and j
 SQLite while production FTS5 lives in a disposable detached sidecar. The asynchronous
 worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
 revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
+Verified inline image bytes are decoded once into immutable `<projection>.images/` members;
+SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the raw ledger
+remains lossless.
 Canonical and search readiness are independently surfaced. The store hot tier,
 subscription hub, localhost HTTP/WebSocket transport, backend-neutral protocol, and
 generated TypeScript bindings are implemented. A feature-gated Tantivy prototype remains

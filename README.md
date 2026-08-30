@@ -20,6 +20,8 @@ runtime adapters, and CLI registration. The generic pipeline ingests adapter-sel
 JSONL transcripts, rewrite-in-place metadata documents, and SQLite session databases;
 it reconciles virtual membership and whole-source deletion, generation-stages rewrites, tails live
 changes with polling/audit recovery, and writes the canonical SQLite projection.
+Verified inline images are content-addressed in a sibling `<projection>.images/` directory;
+SQLite stores only stable service URLs while the raw ledger preserves the native bytes.
 Existing/live `ingest`, `watch`, and `serve` append source records to a checksummed raw
 ledger durably before visible projection commits. A fresh `serve` projection is public and
 resumable from its first commit: all enrolled runtimes are skimmed before streaming, the

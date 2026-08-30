@@ -208,7 +208,8 @@
       response, deterministic metadata evidence ties, generation-scoped <code>source_op</code>
       replacement staging, and canonical/search epoch-revision state. Fresh serve commits to a public,
       resumable WAL projection; finite ingest and whole-ledger rebuild validate privately before atomic
-      installation. FTS5 is a detached disposable generation built asynchronously after canonical
+      installation. Verified inline images are decoded into content-addressed projection members;
+      message rows retain stable service URLs and the raw ledger remains lossless. FTS5 is a detached disposable generation built asynchronously after canonical
       validation, then repaired from a coalesced session set. Ordinary schema mismatches fail closed.
       The in-process hot tier, subscription hub, HTTP/WebSocket transport, and generated clients exist.
       The full adapter/visibility audit is in <a href="ADAPTER_AUDIT.md">ADAPTER_AUDIT.md</a>.</div>
@@ -916,7 +917,7 @@ CREATE TABLE <b>message</b> (
   tool_name      TEXT,
   tool_input     TEXT,                      <span class="c">-- JSON</span>
   tool_result    TEXT,                      <span class="c">-- result text; NULL until it lands</span>
-  tool_payload   TEXT,                      <span class="c">-- JSON, opaque (spaghetti scar)</span>
+  tool_payload   TEXT,                      <span class="c">-- JSON; verified binary members become stable asset URLs</span>
   tool_is_error  INTEGER,
   branch_tool_id TEXT,                      <span class="c">-- anchors a spawned subagent thread</span>
   in_tokens      INTEGER,                   <span class="c">-- per-turn deltas (cumulative sources normalized first)</span>

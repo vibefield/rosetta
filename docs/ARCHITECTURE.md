@@ -25,6 +25,9 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > revision, acknowledgement, corruption, and crash tests prevent cross-generation results.
 > Canonical lists/timelines remain available while search is building. Tantivy 0.26.1 remains an
 > optional benchmark-only alternative; SQLite remains the canonical transactional store.
+> Verified inline images are immutable, content-addressed members of that canonical projection.
+> SQLite carries relocatable service URLs, not Base64; the lossless ledger remains the replay
+> source.
 >
 > Fresh `serve` is progressive: the listener and empty public projection exist first, consent
 > precedes all reads, every runtime is skimmed before streaming, the first streamable canonical-list
@@ -403,16 +406,22 @@ ingestion.
   batched transactions. One live ingest transaction applies canonical facts, rollup
   corrections, checkpoint/reconciliation state, and coalesced search repair keys.
   Canonical rows, rollups, joins, and source-generation correctness remain atomic here.
+- **Content-addressed image members** are part of the one canonical projection, not a third
+  representation. An adapter may recognize and decode a verified native inline image, but only
+  the store writes it to `<projection>.images/<blake3>.<ext>`. Live ingestion makes the immutable
+  file durable before committing its `/api/assets/<blake3>.<ext>` URL. Private builds sync all new
+  members before database publication; monotonic content-addressed additions let the final
+  SQLite file remain the only atomic swap. The raw ledger keeps the original inline form.
 - **Detached SQLite FTS5 sidecar today**, behind the backend-neutral search/readiness
   seam. A worker builds private immutable generations, atomically selects one with
   `CURRENT`, repairs complete sessions by epoch/revision, and acknowledges only after the
   search commit. Search loss or corruption never blocks canonical reads and triggers a
   rebuild. The disposable Tantivy prototype clears latency/build/filter/determinism gates
   but not relevance, product-mix, or storage acceptance, so it is not production.
-- **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite
-  projection; `--ledger` can relocate the segment root. An adopted search backend owns an
-  disposable `<projection>.search/`. Ledger is precious; DB and search indexes
-  are rebuildable projections.
+- **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite file +
+  optional canonical `<projection>.images/` members; `--ledger` can relocate the segment root.
+  An adopted search backend owns a disposable `<projection>.search/`. Ledger is precious; the
+  canonical projection and search index are rebuildable.
 - Keep the schema compact rather than chasing a numeric table target. Entities, rollups,
   drift, cursors, generation staging, and the proposed search revision/repair set each
   need a named consumer; a new table without one is not justified.
@@ -522,6 +531,19 @@ This makes the optimization boundary explicit:
   bytes, and 100-cycle ranked-search results matched. The measured cost is about 5 MiB peak
   RSS across six open runtime writers; the 7.41 s whole-wall delta is not attributed because
   FTS alone varied by 6.406 s.
+- Inline-image recognition is adapter-specific; content-addressing, durability, and serving
+  are shared projection facilities. The retained `image-assets-2026-08-29` pair used the same
+  checksummed, permission-read-only 88,498,056-byte Claude transcript on one macOS/aarch64
+  machine. Its 56 image records decoded to 54 unique original PNG/JPEG files (15,489,826 bytes).
+  SQLite fell from 43,712,512 to 22,622,208 bytes (-48.2%); SQLite plus image members was
+  38,112,034 bytes (-12.8%), because decoded binaries avoid Base64 expansion. `tool_payload`
+  fell from 29,220,858 to 8,184,806 bytes (-72.0%). Canonical application moved from 1.074 s
+  to 1.017 s (-5.3%) even after 40.3 ms of image materialization; tool-result writes moved
+  from 45.7 ms to 19.0 ms. The raw ledger remained 89,294,939 bytes and therefore lossless.
+  Every decoded byte and every non-image payload field matched. A frozen 100-cycle product-query
+  campaign retained exact hit counts and ranked-result digests; p95 moved about +1.1% in both
+  search lanes, which is treated as run noise because detached FTS does not read `tool_payload`.
+  This is one payload-heavy file, not evidence for whole-roster wall-time extrapolation.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
 now attribute replay cost by adapter and canonical statement family. The target-aware gate
@@ -662,5 +684,6 @@ layer's design is frozen.
 | FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
+| Image-member retention | keep immutable content-addressed members (no GC yet) | `.images/` growth justifies a ledger-derived mark/sweep under the projection lock |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
