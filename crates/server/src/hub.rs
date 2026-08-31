@@ -214,6 +214,13 @@ impl Hub {
     ///
     /// Same calling discipline as [`Hub::absorb`]: the writer that committed
     /// the batch calls this, so the mirror advances in commit order.
+    ///
+    /// A failed read leaves the mirror untouched — [`MetaMirror`] reads a
+    /// whole pass before absorbing any of it — but the error still consumes
+    /// this drain. A caller that means to survive one must keep the keys and
+    /// retry them, or fold them into its next drain; keys dropped on the
+    /// error are rows nothing re-reads until the next whole-surface
+    /// [`Hub::rewarm`].
     pub fn absorb_meta(
         &self,
         conn: &Connection,

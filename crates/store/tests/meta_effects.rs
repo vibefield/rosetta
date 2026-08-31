@@ -4,12 +4,17 @@
 //! metadata even though their row mutation log is suppressed, staging that
 //! projects nothing reports nothing, a rolled-back batch reports nothing, and
 //! a drain takes everything accumulated and clears.
+//!
+//! Then what the mirror makes of those keys: one refresh absorbs, drops, and
+//! stays silent in a single pass, and a read that fails partway leaves the
+//! mirror where the caller's retry needs it — a drain is consumed once, so
+//! diffs lost to a half-applied refresh are lost to subscribers for good.
 
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
-use rosetta_store::hot::MetaEffects;
+use rosetta_store::hot::{Effects, MetaEffects, MetaMirror, Mutation};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
 
 fn session(id: &str) -> SessionRow {
@@ -125,6 +130,33 @@ fn source(cursor: i64, generation: u64, first_sequence: u64, mode: SourceMode) -
 
 fn ids(keys: &std::collections::BTreeSet<String>) -> Vec<&str> {
     keys.iter().map(String::as_str).collect()
+}
+
+fn keys(runtimes: &[&str], projects: &[&str], sessions: &[&str]) -> MetaEffects {
+    let owned = |ids: &[&str]| ids.iter().map(|id| (*id).to_string()).collect();
+    MetaEffects {
+        runtimes: owned(runtimes),
+        projects: owned(projects),
+        sessions: owned(sessions),
+    }
+}
+
+/// The mirror's whole resident surface in a stable order — the thing a
+/// refresh and a whole-surface warm must agree on.
+fn resident(mirror: &MetaMirror) -> (Vec<RuntimeRow>, Vec<ProjectRow>, Vec<SessionRow>) {
+    let mut runtimes: Vec<_> = mirror.runtimes().cloned().collect();
+    runtimes.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut projects: Vec<_> = mirror.projects().cloned().collect();
+    projects.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut sessions: Vec<_> = mirror.sessions().cloned().collect();
+    sessions.sort_by(|left, right| left.id.cmp(&right.id));
+    (runtimes, projects, sessions)
+}
+
+fn warmed(store: &Store) -> MetaMirror {
+    let mut mirror = MetaMirror::default();
+    mirror.warm(store.conn()).unwrap();
+    mirror
 }
 
 #[test]
@@ -304,4 +336,153 @@ fn a_rolled_back_batch_contributes_nothing() {
         store.drain_meta_effects().is_empty(),
         "effects merge on commit only"
     );
+}
+
+/// One refresh mixing every outcome a fetch can produce: a row that changed,
+/// rows that did not, a row the projection no longer holds, and a name it
+/// never held. The absent names sort last, so the rows that do resolve are
+/// read before the absences are reached — and the pass still leaves exactly
+/// the surface a whole-projection warm would have built.
+#[test]
+fn one_refresh_absorbs_drops_and_stays_silent_across_a_mixed_batch() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&meta_batch()).unwrap();
+
+    let mut mirror = MetaMirror::default();
+    let all = keys(&["rt1"], &["p1"], &["s1", "s2"]);
+    assert_eq!(
+        mirror.refresh_meta(store.conn(), &all).unwrap().len(),
+        4,
+        "a cold mirror absorbs every named row"
+    );
+
+    let mut retitled = session("s1");
+    retitled.title = Some("Named".into());
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionMeta(retitled)],
+            ..Batch::default()
+        })
+        .unwrap();
+    // No store path deletes identity rows today; this stands in for a
+    // projection swapped underneath a live mirror.
+    store
+        .conn()
+        .execute("DELETE FROM session WHERE id = 's2'", [])
+        .unwrap();
+
+    let mixed = keys(&["rt1"], &["p1"], &["s1", "s2", "s3-never-held"]);
+    match mirror
+        .refresh_meta(store.conn(), &mixed)
+        .unwrap()
+        .as_slice()
+    {
+        [Mutation::Session(row)] => {
+            assert_eq!(row.id, "s1");
+            assert_eq!(row.title.as_deref(), Some("Named"));
+        }
+        other => panic!("expected exactly the changed session, got {other:?}"),
+    }
+    assert_eq!(
+        resident(&mirror),
+        resident(&warmed(&store)),
+        "the dropped row left and the unchanged ones stayed put"
+    );
+    assert!(
+        mirror
+            .refresh_meta(store.conn(), &mixed)
+            .unwrap()
+            .is_empty(),
+        "nothing resident is stale"
+    );
+}
+
+/// A read that fails partway through: `started_at` holds text the row mapper
+/// cannot decode — the stand-in for any transient read failure — and s2 is
+/// reached only after the runtime, the project, and s1 have already been read
+/// successfully. Absorbing while reading would make those three resident and
+/// then discard their diffs with the error, and the drain that named them is
+/// spent: the retry would find them unchanged and publish nothing, so no
+/// subscriber would ever hear about them. The fetch must therefore mutate
+/// nothing until it has all of the rows.
+#[test]
+fn a_failed_fetch_leaves_the_mirror_untouched_and_the_retry_converges() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&meta_batch()).unwrap();
+    store
+        .conn()
+        .execute(
+            "UPDATE session SET started_at = 'undecodable' WHERE id = 's2'",
+            [],
+        )
+        .unwrap();
+
+    let mut mirror = MetaMirror::default();
+    let drained = keys(&["rt1"], &["p1"], &["s1", "s2"]);
+    assert!(
+        mirror.refresh_meta(store.conn(), &drained).is_err(),
+        "the undecodable row fails the fetch"
+    );
+    assert_eq!(
+        resident(&mirror),
+        resident(&MetaMirror::default()),
+        "rows read before the failure never reached the mirror"
+    );
+
+    store
+        .conn()
+        .execute("UPDATE session SET started_at = 10000 WHERE id = 's2'", [])
+        .unwrap();
+    assert_eq!(
+        mirror.refresh_meta(store.conn(), &drained).unwrap().len(),
+        4,
+        "retrying the same effects still carries every diff"
+    );
+    assert_eq!(resident(&mirror), resident(&warmed(&store)));
+}
+
+/// The same property at the mirror's other two entry points, which are the
+/// ones already carrying live traffic: the timed whole-surface rewarm and the
+/// row-granularity refresh behind `Hub::absorb`. Neither may leave a row
+/// resident that its failed pass could not publish.
+#[test]
+fn a_failed_warm_or_refresh_absorbs_nothing_either() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&meta_batch()).unwrap();
+    store
+        .conn()
+        .execute(
+            "UPDATE session SET started_at = 'undecodable' WHERE id = 's2'",
+            [],
+        )
+        .unwrap();
+
+    let effects = Effects {
+        touched_runtimes: ["rt1".to_string()].into_iter().collect(),
+        touched_projects: ["p1".to_string()].into_iter().collect(),
+        touched_sessions: ["s1".to_string(), "s2".to_string()].into_iter().collect(),
+        ..Effects::default()
+    };
+    let mut warming = MetaMirror::default();
+    let mut refreshing = MetaMirror::default();
+    assert!(warming.warm(store.conn()).is_err());
+    assert!(refreshing.refresh(store.conn(), &effects).is_err());
+    assert_eq!(
+        resident(&warming),
+        resident(&MetaMirror::default()),
+        "the runtimes and projects a warm reads first never landed"
+    );
+    assert_eq!(
+        resident(&refreshing),
+        resident(&MetaMirror::default()),
+        "nor the rows a refresh read before the undecodable one"
+    );
+
+    store
+        .conn()
+        .execute("UPDATE session SET started_at = 10000 WHERE id = 's2'", [])
+        .unwrap();
+    assert_eq!(warming.warm(store.conn()).unwrap().len(), 4);
+    assert_eq!(refreshing.refresh(store.conn(), &effects).unwrap().len(), 4);
+    assert_eq!(resident(&warming), resident(&refreshing));
 }

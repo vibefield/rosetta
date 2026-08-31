@@ -21,10 +21,12 @@
 //!   enough to stay on everywhere, including the cold generations a fresh
 //!   `serve` projects before its final canonical gate.
 //!
-//! The daemon drains either and feeds it to the hub. Everything here is
-//! rebuilt from the projection on restart, the way the projection rebuilds
-//! from the ledger — nothing is durable, and no clock is read internally
-//! (callers pass `now` so tests stay deterministic).
+//! Row [`Effects`] are what the daemon drains and feeds to the hub today;
+//! [`MetaEffects`] is the capability the cold-start wiring will drain, in
+//! place of the whole-surface rewarm `serve` still runs on a timer.
+//! Everything here is rebuilt from the projection on restart, the way the
+//! projection rebuilds from the ledger — nothing is durable, and no clock is
+//! read internally (callers pass `now` so tests stay deterministic).
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -491,6 +493,14 @@ impl TailRings {
 /// The fully-resident metadata surface (10k sessions ≈ a few MB — no LRU,
 /// no eviction). Refreshed strictly after commit; row diffs become precise
 /// events so list subscribers never see a no-op update.
+///
+/// Every resident row has been published. Each entry point therefore reads
+/// its whole pass before absorbing any of it: absorbing while reading would
+/// let a read that fails partway leave rows resident whose diffs the error
+/// discarded, and because the mirror publishes only what CHANGED, no later
+/// pass would ever mention them again — a permanent, silent disagreement
+/// between the mirror and its subscribers. Failing before the first mutation
+/// keeps the failed pass repeatable instead.
 #[derive(Debug, Default)]
 pub struct MetaMirror {
     sessions: HashMap<String, SessionRow>,
@@ -503,21 +513,27 @@ impl MetaMirror {
     /// the effects-overflow path ("the hot tier rebuilds from the projection
     /// the way the projection rebuilds from the ledger").
     pub fn warm(&mut self, conn: &Connection) -> Result<Vec<Mutation>, StoreError> {
+        let runtimes = queries::all_runtimes(conn)?;
+        let projects = queries::all_projects(conn)?;
+        let sessions = queries::all_sessions(conn)?;
+
         let mut events = Vec::new();
-        for row in queries::all_runtimes(conn)? {
+        for row in runtimes {
             self.absorb_runtime(row, &mut events);
         }
-        for row in queries::all_projects(conn)? {
+        for row in projects {
             self.absorb_project(row, &mut events);
         }
-        for row in queries::all_sessions(conn)? {
+        for row in sessions {
             self.absorb_session(row, &mut events);
         }
         Ok(events)
     }
 
     /// Reload exactly the rows a drained [`Effects`] touched; unchanged rows
-    /// emit nothing. An overflowed drain falls back to [`Self::warm`].
+    /// emit nothing. An overflowed drain falls back to [`Self::warm`]. A named
+    /// row the projection does not hold leaves the resident copy alone, unlike
+    /// [`Self::refresh_meta`], which reads that absence as a removal.
     pub fn refresh(
         &mut self,
         conn: &Connection,
@@ -526,19 +542,23 @@ impl MetaMirror {
         if effects.overflowed {
             return self.warm(conn);
         }
+        let runtimes = fetch_named(conn, &effects.touched_runtimes, queries::runtime)?;
+        let projects = fetch_named(conn, &effects.touched_projects, queries::project)?;
+        let sessions = fetch_named(conn, &effects.touched_sessions, queries::session)?;
+
         let mut events = Vec::new();
-        for id in &effects.touched_runtimes {
-            if let Some(row) = queries::runtime(conn, id)? {
+        for (_, row) in runtimes {
+            if let Some(row) = row {
                 self.absorb_runtime(row, &mut events);
             }
         }
-        for id in &effects.touched_projects {
-            if let Some(row) = queries::project(conn, id)? {
+        for (_, row) in projects {
+            if let Some(row) = row {
                 self.absorb_project(row, &mut events);
             }
         }
-        for id in &effects.touched_sessions {
-            if let Some(row) = queries::session(conn, id)? {
+        for (_, row) in sessions {
+            if let Some(row) = row {
                 self.absorb_session(row, &mut events);
             }
         }
@@ -552,30 +572,40 @@ impl MetaMirror {
     /// same order. A dropped row leaves silently — the metadata surface has
     /// no removal event, and the mirror ends up holding what a mirror warmed
     /// from scratch would hold.
+    ///
+    /// Read-then-absorb, per the type's invariant, which matters most here:
+    /// a drain is spent once, so an error must leave the mirror exactly where
+    /// a retry with the same [`MetaEffects`] lands the same events. The rows
+    /// the read phase holds are a subset of a surface the mirror already
+    /// keeps whole, so they cost nothing it was not already paying.
     pub fn refresh_meta(
         &mut self,
         conn: &Connection,
         effects: &MetaEffects,
     ) -> Result<Vec<Mutation>, StoreError> {
+        let runtimes = fetch_named(conn, &effects.runtimes, queries::runtime)?;
+        let projects = fetch_named(conn, &effects.projects, queries::project)?;
+        let sessions = fetch_named(conn, &effects.sessions, queries::session)?;
+
         let mut events = Vec::new();
-        for id in &effects.runtimes {
-            match queries::runtime(conn, id)? {
+        for (id, row) in runtimes {
+            match row {
                 Some(row) => self.absorb_runtime(row, &mut events),
                 None => {
                     self.runtimes.remove(id);
                 }
             }
         }
-        for id in &effects.projects {
-            match queries::project(conn, id)? {
+        for (id, row) in projects {
+            match row {
                 Some(row) => self.absorb_project(row, &mut events),
                 None => {
                     self.projects.remove(id);
                 }
             }
         }
-        for id in &effects.sessions {
-            match queries::session(conn, id)? {
+        for (id, row) in sessions {
+            match row {
                 Some(row) => self.absorb_session(row, &mut events),
                 None => {
                     self.sessions.remove(id);
@@ -621,6 +651,20 @@ impl MetaMirror {
     pub fn runtimes(&self) -> impl Iterator<Item = &RuntimeRow> {
         self.runtimes.values()
     }
+}
+
+/// The read phase both targeted refreshes share: fetch every named row,
+/// keeping each id paired with what the projection answered, and stop at the
+/// first read that fails — having mutated nothing. What an absence means is
+/// the caller's to decide.
+fn fetch_named<'a, T>(
+    conn: &Connection,
+    ids: &'a BTreeSet<String>,
+    read: impl Fn(&Connection, &str) -> Result<Option<T>, StoreError>,
+) -> Result<Vec<(&'a str, Option<T>)>, StoreError> {
+    ids.iter()
+        .map(|id| Ok((id.as_str(), read(conn, id)?)))
+        .collect()
 }
 
 #[cfg(test)]
