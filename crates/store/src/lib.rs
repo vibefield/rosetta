@@ -13,6 +13,7 @@ pub mod schema;
 mod search_sync;
 mod tool_codec;
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
@@ -21,7 +22,9 @@ use rosetta_core::rows::StreamState;
 use rusqlite::Connection;
 
 pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
-pub use hot::{Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, Stamp, TailRings};
+pub use hot::{
+    Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, RowScope, Stamp, TailRings,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BulkLoadStats {
@@ -346,7 +349,7 @@ impl Store {
         if let Some(delta) = bulk_delta.as_ref() {
             self.bulk_reconciliation.validate(delta)?;
         }
-        let mut fresh = self.effects.is_some().then(Effects::default);
+        let mut fresh = self.effects.as_ref().map(Effects::scoped_like);
         let mut fresh_meta = self.meta_effects.is_some().then(MetaEffects::default);
         let tx = self.conn.transaction()?;
         let search_before = if self.mode == StoreMode::Live {
@@ -532,7 +535,7 @@ impl Store {
         )?;
         if changed != 0 {
             if let Some(effects) = self.effects.as_mut() {
-                effects.touched_sessions.insert(session_id.to_owned());
+                effects.touch_session(session_id);
             }
             if let Some(meta) = self.meta_effects.as_mut() {
                 meta.note_session(session_id);
@@ -554,24 +557,41 @@ impl Store {
         Ok(accepted)
     }
 
-    /// Start collecting hot-tier effects. The daemon enables this before its
-    /// live loop and drains between ticks; leaving it enabled without
-    /// draining trips the overflow flag rather than growing without bound.
+    /// Start collecting hot-tier effects for every session. The daemon
+    /// enables this before its live loop and drains between ticks; leaving
+    /// it enabled without draining trips the overflow flag rather than
+    /// growing without bound. Widens a narrower armed scope in place.
     pub fn observe_effects(&mut self) {
-        if self.effects.is_none() {
-            self.effects = Some(Effects::default());
-        }
+        let effects = self.effects.get_or_insert_with(Effects::default);
+        effects.scope = RowScope::All;
+    }
+
+    /// Start collecting hot-tier effects for the named sessions only — the
+    /// cold paths' arming, refreshed from the hub's open session
+    /// subscriptions between passes. Unwatched sessions collect nothing, so
+    /// a backfill pass costs RAM only for transcripts a reader actually has
+    /// open; their metadata keeps flowing through the always-on
+    /// [`Store::observe_meta_effects`] channel. Re-arming replaces the scope
+    /// for batches that follow; already-collected, undrained effects are
+    /// kept.
+    pub fn observe_effects_watched(&mut self, watched: BTreeSet<String>) {
+        let effects = self.effects.get_or_insert_with(Effects::default);
+        effects.scope = RowScope::Watched(watched);
     }
 
     /// Take everything observed since the last drain (empty when observation
     /// is disabled). Call strictly after the batches in question committed —
     /// which is guaranteed here, because [`Store::apply`] merges effects only
-    /// on commit.
+    /// on commit. The armed scope survives the drain.
     pub fn drain_effects(&mut self) -> Effects {
-        self.effects
-            .as_mut()
-            .map(std::mem::take)
-            .unwrap_or_default()
+        match self.effects.as_mut() {
+            Some(armed) => {
+                let taken = std::mem::take(armed);
+                armed.scope = taken.scope.clone();
+                taken
+            }
+            None => Effects::default(),
+        }
     }
 
     /// Start collecting metadata-tier effects. Independent of

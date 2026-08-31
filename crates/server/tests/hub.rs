@@ -349,3 +349,33 @@ fn idle_rings_evict_but_watched_rings_survive() {
         other => panic!("expected the evicted ring to expire, got {other:?}"),
     }
 }
+
+#[test]
+fn watched_sessions_names_exactly_the_open_session_subscriptions() {
+    let h = harness(HubConfig::default());
+    assert!(
+        h.hub.watched_sessions().is_empty(),
+        "nothing is watched before anyone subscribes"
+    );
+
+    let (open, _stamp) = h.hub.subscribe_session("s1", 0);
+    let (closed, _stamp) = h.hub.subscribe_session("s2", 0);
+    let _meta = h.hub.subscribe_meta();
+    let watched = h.hub.watched_sessions();
+    assert_eq!(
+        watched.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["s1", "s2"],
+        "session topics are watched; the meta topic is not a session"
+    );
+
+    // A dropped subscriber leaves the watch set: the cold loop must stop
+    // paying for a transcript nobody holds open anymore.
+    drop(closed);
+    let watched = h.hub.watched_sessions();
+    assert_eq!(
+        watched.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["s1"],
+        "a closed subscription no longer arms its session"
+    );
+    drop(open);
+}

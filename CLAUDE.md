@@ -74,15 +74,21 @@ a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, runtime round-
 the cold lanes); watcher hints feed the live lane during the backfill and mid-cold
 admissions re-run bounded meta, so a running session stays current before the cold phase
 ends. Metadata effects (identity keys, on for every path) replace the 500 ms mirror
-rewarm poll: the writer drains them into `Hub::absorb_meta` between passes.
+rewarm poll: the writer drains them into `Hub::absorb_meta` between passes. Row effects
+run scoped during cold — armed per pass with the sessions readers hold open — so an open
+transcript streams in mid-backfill: appends push precise rows, and a seal, retry sweep,
+abandon, or renumber pushes one `SessionSwept` resync marker; unwatched sessions pay no
+mutation log, and the live handoff widens the scope to every session.
 Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,
 default 256 KiB / 24-record floor, batches soft-capped to the slice) that early-ACTIVATES
 and seals a clean prefix so every session opens readable fast; paused remainders requeue
 as append growth, app boosts run unbudgeted with preemption bounded by one slice, and a
 session badges Indexed only once no task for it remains queued. Snapshot-driver sources
 always stream whole (revision = whole-content hash); a source that turns unclean mid-pass
-falls back to whole-file handling, and the sliced-vs-unsliced dirty-file content rule is
-an explicitly pinned open decision. `milestone:` stdout lines feed the sweep harness.
+falls back to whole-file handling. Dirty sources converge on live-growth semantics on
+every cold path: a dirty FIRST generation activates its parseable rows with the session
+held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
+replacements still abandon. `milestone:` stdout lines feed the sweep harness.
 Interrupted progress is durable and resumable. Finite `ingest` and explicit `rebuild`
 remain private, validated, atomic publication paths and never slice.
 

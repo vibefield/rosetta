@@ -17,7 +17,7 @@
 //! never an external cache server. The async axum layer arrives on top of
 //! it; nothing here blocks except subscribers waiting for items.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -254,6 +254,25 @@ impl Hub {
     pub fn subscribe_meta(&self) -> Subscription {
         let mut state = self.state.lock().expect("hub state poisoned");
         register(&mut state, Topic::Meta)
+    }
+
+    /// The sessions readers currently hold open — every live session-topic
+    /// subscription's target. The cold loop re-arms the store's row-effects
+    /// scope from this between passes, so only transcripts someone is
+    /// actually watching pay for a mutation log during the backfill.
+    pub fn watched_sessions(&self) -> BTreeSet<String> {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        state
+            .subs
+            .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
+        state
+            .subs
+            .values()
+            .filter_map(|entry| match &entry.topic {
+                Topic::Session(session_id) => Some(session_id.clone()),
+                Topic::Meta => None,
+            })
+            .collect()
     }
 
     /// Clear a subscriber's resync barrier. Session topics get a fresh stamp

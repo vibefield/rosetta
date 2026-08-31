@@ -67,7 +67,8 @@ pub enum Mutation {
         model: Option<String>,
         tokens: TokenSnapshot,
     },
-    /// The session's projection was atomically replaced (generation swap).
+    /// The session's projection was atomically replaced (generation swap),
+    /// sealed from a cold pass, or renumbered underneath its delivered rows.
     /// Every delta delivered before this is void: the ring restarts with a
     /// new epoch and subscribers take a replacement snapshot.
     SessionSwept {
@@ -143,6 +144,29 @@ impl Mutation {
 /// an undrained store grow without bound.
 pub const EFFECTS_MUTATION_CAP: usize = 65_536;
 
+/// Which sessions the row-level mutation log admits. `All` is the live
+/// loop's arming; `Watched` is the cold paths' — only sessions a reader
+/// holds open collect mutations, which is what makes row effects affordable
+/// during a backfill that projects millions of unwatched rows. The scope
+/// bounds session-scoped data only: mutations and session touches. Project
+/// and runtime touches stay unscoped — at most a handful per batch, and the
+/// mirror diff makes redundant reloads free.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum RowScope {
+    #[default]
+    All,
+    Watched(BTreeSet<String>),
+}
+
+impl RowScope {
+    pub fn admits(&self, session_id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Watched(watched) => watched.contains(session_id),
+        }
+    }
+}
+
 /// Row-level effects of committed batches, collected by the store while
 /// observation is enabled and drained by the daemon strictly after commit.
 #[derive(Debug, Default, PartialEq)]
@@ -157,9 +181,22 @@ pub struct Effects {
     /// The mutation list hit [`EFFECTS_MUTATION_CAP`] and truncated;
     /// consumers must invalidate rings and rewarm the mirror.
     pub overflowed: bool,
+    /// The admission filter this log was collected under. Enforced at the
+    /// push sites, never on drain: filtering after collection would let one
+    /// unwatched bulk pass trip the overflow cap for everyone.
+    pub scope: RowScope,
 }
 
 impl Effects {
+    /// A fresh, empty log collecting under the same scope — the per-batch
+    /// transient [`Store::apply`] merges back on commit.
+    pub(crate) fn scoped_like(&self) -> Effects {
+        Effects {
+            scope: self.scope.clone(),
+            ..Effects::default()
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.mutations.is_empty()
             && self.touched_sessions.is_empty()
@@ -169,6 +206,11 @@ impl Effects {
     }
 
     pub(crate) fn push(&mut self, mutation: Mutation) {
+        if let Some(session_id) = mutation.session_scope()
+            && !self.scope.admits(session_id)
+        {
+            return;
+        }
         if self.mutations.len() >= EFFECTS_MUTATION_CAP {
             self.overflowed = true;
         } else {
@@ -176,6 +218,17 @@ impl Effects {
         }
     }
 
+    /// Record that a session's identity row may have moved, if the scope
+    /// admits it — unwatched sessions ride [`MetaEffects`] instead.
+    pub(crate) fn touch_session(&mut self, session_id: &str) {
+        if self.scope.admits(session_id) {
+            note_id(&mut self.touched_sessions, session_id);
+        }
+    }
+
+    /// Fold a committed transient into the armed accumulator. The transient
+    /// was collected under `self`'s scope ([`Effects::scoped_like`]), so its
+    /// content needs no re-filtering and its scope copy is dropped.
     pub(crate) fn merge(&mut self, other: Effects) {
         self.touched_sessions.extend(other.touched_sessions);
         self.touched_projects.extend(other.touched_projects);

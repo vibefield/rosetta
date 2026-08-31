@@ -217,11 +217,12 @@ fn readiness_badge_changes_land_and_no_op_writes_do_not() {
 }
 
 /// A cold generation projects canonical rows with the row-level mutation log
-/// switched off — a full mutation for every cold row is waste nobody reads.
-/// The metadata half must still report, or the mirror cannot follow a
-/// backfill without re-reading the whole projection.
+/// scoped to watched sessions — and nothing is watched here, which is the
+/// backfill's common case: a full mutation for every cold row is waste
+/// nobody reads. The metadata half must still report, or the mirror cannot
+/// follow a backfill without re-reading the whole projection.
 fn assert_cold_reports_metadata_without_row_effects(mut store: Store) {
-    store.observe_effects();
+    store.observe_effects_watched(std::collections::BTreeSet::new());
     store.observe_meta_effects();
     store.apply(&meta_batch()).unwrap();
     let cold_meta = store.drain_meta_effects();

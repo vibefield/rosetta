@@ -44,7 +44,12 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > rewarm poll is gone: metadata effects (identity keys only, collected on every path including
 > cold generations) are drained by the writer thread between passes into `Hub::absorb_meta`,
 > fanning precise `/ws/meta` diffs with no polling, no second read connection pinning the cold
-> WAL, and no hub mutation off the writer thread. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
+> WAL, and no hub mutation off the writer thread. Row effects run SCOPED during cold: each pass
+> arms the store with `Hub::watched_sessions` (the open `/ws/session` subscriptions), so an open
+> transcript streams in mid-backfill — appends push precise rows; a cold seal, retry sweep,
+> abandon, or append renumber pushes one `SessionSwept` marker and the subscriber re-snapshots —
+> while unwatched sessions pay no mutation log at all (their metadata still flows), and the live
+> handoff widens the scope to every session. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
 > default 256 KiB with a 24-record floor; batches are soft-capped to the slice so a slice is
 > ~one transaction): a fresh source's clean prefix ACTIVATES and seals its ledger generation at
 > the boundary — indistinguishable from the file ending there and then growing — so every session
@@ -52,10 +57,12 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > unbudgeted and jump both lanes, preempted by at most one slice, and a session badges Indexed
 > only when its last queued task is gone. Two bounds are explicit: snapshot-driver sources
 > (SQLite/document) always stream whole because their revision identity is a whole-content hash,
-> and a source that turns unclean inside a pass falls back to whole-file handling — its readiness
-> stays Streaming, but unlike unsliced cold (which abandons a dirty file wholesale) an
-> already-activated clean prefix remains readable; converging that content rule is an open product
-> decision pinned by a dedicated test. A final per-runtime audit pass, `milestone:` stdout lines
+> and a source that turns unclean inside a pass falls back to whole-file handling. Dirty content
+> follows live-growth semantics on every cold path (decided 2026-08-31): a dirty FIRST generation
+> activates its parseable rows and the session holds Streaming, never Indexed — identical sliced,
+> unsliced, or rebuilt, with rebuild electing latest seals for only-dirty paths — while a dirty
+> REPLACEMENT still abandons to protect the active clean generation, and oversized or
+> raw-incomplete sources still abandon. A final per-runtime audit pass, `milestone:` stdout lines
 > for the budget-sweep harness (search-ready is claimed only when the detached build actually
 > reached Ready), and the graceful-stop boundary close the cold phase. Interrupted commits resume
 > in place. Finite `ingest` and `rebuild` stay private, validated, atomically installed, and never

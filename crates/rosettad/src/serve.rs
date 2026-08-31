@@ -14,9 +14,11 @@
 //! thread drains them into the mirror between passes, fanning precise
 //! `/ws/meta` diffs with no polling cadence. The cold scheduler pops one
 //! budgeted pass at a time so the boost ledger and the live lane's watcher
-//! hints can jump ahead of the rotation. Row-effects observation still
-//! starts only after the progressive projection passes its final canonical
-//! gate, so the cold load never pays a per-row mutation log.
+//! hints can jump ahead of the rotation. Row-effects observation runs
+//! scoped during the backfill — armed per pass with the sessions readers
+//! hold open, so an open transcript streams in while everything unwatched
+//! still pays no per-row mutation log — and widens to every session at the
+//! live handoff.
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -156,18 +158,29 @@ fn counter_source(
     })
 }
 
-/// Fold one per-file stream report into the runtime's aggregate — the
-/// fields the failure verdict and the operator's summary read.
-/// Drain the metadata-effects seam into the mirror, strictly after commit —
-/// the writer thread's replacement for the old 500 ms whole-surface rewarm
-/// poll. Returns the precise diffs fanned to /ws/meta subscribers.
-fn absorb_meta_effects(store: &mut Store, hub: &Hub) -> Result<usize, String> {
-    let effects = store.drain_meta_effects();
-    if effects.is_empty() {
-        return Ok(0);
+/// Drain both effects seams into the hub, strictly after commit. Row
+/// effects first — session mutations into the rings, their touched rows
+/// into the mirror — then the metadata identity keys, the writer thread's
+/// replacement for the old 500 ms whole-surface rewarm poll. On cold paths
+/// the row seam carries only watched sessions (the scope armed from
+/// [`Hub::watched_sessions`] between passes); on the live path it carries
+/// everything. Returns items fanned out to subscribers.
+fn absorb_effects(store: &mut Store, hub: &Hub) -> Result<usize, String> {
+    let mut fanned = 0_usize;
+    let rows = store.drain_effects();
+    if !rows.is_empty() {
+        let report = hub
+            .absorb(store.conn(), rows, now_ms())
+            .map_err(|error| format!("absorbing row effects: {error}"))?;
+        fanned += usize::try_from(report.session_mutations + report.meta_events).unwrap_or(0);
     }
-    hub.absorb_meta(store.conn(), effects)
-        .map_err(|error| format!("absorbing metadata effects: {error}"))
+    let effects = store.drain_meta_effects();
+    if !effects.is_empty() {
+        fanned += hub
+            .absorb_meta(store.conn(), effects)
+            .map_err(|error| format!("absorbing metadata effects: {error}"))?;
+    }
+    Ok(fanned)
 }
 
 fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
@@ -415,7 +428,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             meta.files_skimmed as u64,
         );
         // Every skim's lists fan out the moment its batch commits.
-        absorb_meta_effects(&mut store, &hub)?;
+        absorb_effects(&mut store, &hub)?;
         let roster = files.clone();
         backfills.push(BackfillRuntime {
             adapter: *adapter,
@@ -449,7 +462,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
 
         // Nothing else will write in this mode: one precise drain of the
         // committed skims is the authoritative mirror state the app audits.
-        let published = absorb_meta_effects(&mut store, &hub)?;
+        let published = absorb_effects(&mut store, &hub)?;
         println!(
             "metadata ready — {published} mirror diffs published; complete-record streaming is paused (ctrl-c to stop)"
         );
@@ -595,6 +608,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         let Some((lane, index, file)) = schedule.pop() else {
             break;
         };
+        // Arm the row-effects scope from the hub's open session
+        // subscriptions: the pass about to run collects a mutation log only
+        // for transcripts a reader is actually watching, so its seal (or its
+        // appended rows) push to them instead of waiting for the live phase.
+        // A subscriber arriving mid-pass is one slice from the next re-arm.
+        store.observe_effects_watched(hub.watched_sessions());
         let entry = &mut backfills[index];
         health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
         entry.stream_meter.begin();
@@ -637,7 +656,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
         search_worker.wake();
         acknowledge_search(&mut store, &search_worker)?;
-        absorb_meta_effects(&mut store, &hub)?;
+        absorb_effects(&mut store, &hub)?;
     }
 
     // Preserve the audit lane exactly once per runtime, after every ordinary
@@ -645,6 +664,11 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // rotating_audit_paths selects from the slice it receives.
     if !stop.load(Ordering::SeqCst) {
         for entry in &mut backfills {
+            // Audit replays are cold passes too: keep the row-effects scope
+            // current so a watched session's forced replay redelivers to its
+            // subscribers (idempotent by deterministic ids) instead of going
+            // dark.
+            store.observe_effects_watched(hub.watched_sessions());
             health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
             entry.stream_meter.begin();
             let report = rosetta_pipeline::stream_backfill_into(
@@ -660,7 +684,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
             entry.stream_meter.finish();
             entry.stream.merge_from(&report);
-            absorb_meta_effects(&mut store, &hub)?;
+            absorb_effects(&mut store, &hub)?;
             let stream_totals = entry.stream_meter.snapshot();
             health.ingest_done(
                 entry.adapter.kind(),
@@ -733,8 +757,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             _ => {}
         }
 
-        // Backfill over: drain the finalize gate's metadata effects and hand
-        // the already-precise mirror to the row-effects drain.
+        // Backfill over: absorb the finalize gate's closing effects while
+        // the scope is still the cold one, then widen row observation to
+        // every session for the live loop.
         for mut entry in backfills {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -752,9 +777,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             );
             runners.push((entry.adapter.kind(), runner, 0_u64));
         }
+        let published = absorb_effects(&mut store, &hub)?;
         store.observe_effects();
-        let published = absorb_meta_effects(&mut store, &hub)?;
-        store.drain_effects();
         health.ingest_live();
         println!("live — {published} closing mirror diffs published");
 
@@ -788,14 +812,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
             search_worker.wake();
             acknowledge_search(&mut store, &search_worker)?;
-            absorbed += absorb_meta_effects(&mut store, &hub)? as u64;
-            let effects = store.drain_effects();
-            if !effects.is_empty() {
-                let report = hub
-                    .absorb(store.conn(), effects, now_ms())
-                    .map_err(|error| error.to_string())?;
-                absorbed += report.session_mutations + report.meta_events;
-            }
+            absorbed += absorb_effects(&mut store, &hub)? as u64;
         }
     } else {
         println!(

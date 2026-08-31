@@ -994,11 +994,13 @@ fn activate_cursor(
     // A swap is one mutation-log entry: the sweep marker. Subscribers take a
     // replacement snapshot, which sees the renumbered rows — the mirror still
     // learns precisely which rows to reload from the touch notes.
-    if let Some(fx) = effects {
+    if let Some(fx) = effects
+        && fx.scope.admits(&source.session_id)
+    {
         for op in staged {
             note_touch(fx, op);
         }
-        fx.touched_sessions.insert(source.session_id.clone());
+        fx.touch_session(&source.session_id);
         fx.push(Mutation::SessionSwept {
             session_id: source.session_id.clone(),
         });
@@ -1075,9 +1077,7 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
         MetaTouch::Project(id) => {
             fx.touched_projects.insert(id.to_owned());
         }
-        MetaTouch::Session(id) => {
-            fx.touched_sessions.insert(id.to_owned());
-        }
+        MetaTouch::Session(id) => fx.touch_session(id),
         MetaTouch::None => {}
     }
 }
@@ -1145,8 +1145,11 @@ fn apply_op(
 }
 
 /// What this apply is observed at, per granularity. Row-level effects are
-/// worth their mutation log only for sessions a reader is watching, and the
-/// cold paths below suppress them on purpose; metadata effects are ids only,
+/// worth their mutation log only for sessions a reader is watching — the
+/// armed [`Effects::scope`] enforces exactly that, so the cold paths below
+/// collect for watched sessions and stay silent for the rest. Where a cold
+/// path projects provisional ordinals, per-row mutations stay suppressed and
+/// the seal emits one sweep marker instead. Metadata effects are ids only,
 /// so they stay on for every path that projects an identity row.
 pub(crate) struct Observation<'a> {
     pub rows: Option<&'a mut Effects>,
@@ -1305,7 +1308,9 @@ pub(crate) fn apply_batch(
                     SourceMode::Stage | SourceMode::Activate => {
                         // A retry may supersede an incomplete generation before
                         // it activated. Its direct private contribution is safe
-                        // to sweep because no clean generation exists yet.
+                        // to sweep because no clean generation exists yet. A
+                        // watched subscriber re-snapshots past the sweep rather
+                        // than holding rows the retry just removed.
                         if starts_new_generation && cursor_has_projection(tx, source.cursor_id)? {
                             remove_cursor_projection(
                                 tx,
@@ -1314,9 +1319,17 @@ pub(crate) fn apply_batch(
                                 &mut dirty_buckets,
                             )?;
                             stats.source_sweeps += 1;
+                            if progressive_public && let Some(fx) = effects.as_deref_mut() {
+                                fx.push(Mutation::SessionSwept {
+                                    session_id: source.session_id.clone(),
+                                });
+                            }
                         }
-                        // Effects are intentionally suppressed: this database
-                        // is not observable until it has been finalized.
+                        // Per-row effects stay suppressed: rows land with
+                        // provisional ordinals until the renumber at the seal,
+                        // and none of that may leak into the mutation log. The
+                        // seal below emits the one sweep marker a watched
+                        // subscriber needs to take a replacement snapshot.
                         project_source_ops(
                             tx,
                             source,
@@ -1345,7 +1358,20 @@ pub(crate) fn apply_batch(
                                 profile_renumber_session(tx, &source.session_id, &mut stats)?;
                             }
                             // A private build keeps collision-free provisional
-                            // ordinals until one set-based bulk-finalize pass.
+                            // ordinals until one set-based bulk-finalize pass —
+                            // and, readerless, emits no markers either.
+                            if progressive_public
+                                && let Some(fx) = effects.as_deref_mut()
+                                && fx.scope.admits(&source.session_id)
+                            {
+                                for op in &batch.ops {
+                                    note_touch(fx, op);
+                                }
+                                fx.touch_session(&source.session_id);
+                                fx.push(Mutation::SessionSwept {
+                                    session_id: source.session_id.clone(),
+                                });
+                            }
                         }
                     }
                     SourceMode::Abandon => {
@@ -1367,6 +1393,11 @@ pub(crate) fn apply_batch(
                                 &mut dirty_buckets,
                             )?;
                             stats.source_sweeps += 1;
+                            if progressive_public && let Some(fx) = effects.as_deref_mut() {
+                                fx.push(Mutation::SessionSwept {
+                                    session_id: source.session_id.clone(),
+                                });
+                            }
                         }
                     }
                     SourceMode::Append => unreachable!("append excluded from cold generation"),
@@ -1400,12 +1431,21 @@ pub(crate) fn apply_batch(
                         // ordinals into a session a sibling's activation may
                         // have renumbered. Re-rank before a reader can see the
                         // collision; a private bulk rebuild defers to its one
-                        // finalize pass instead.
+                        // finalize pass instead. The renumber reorders rows
+                        // whose mutations already left this batch, so it also
+                        // emits the sweep marker: deltas holding pre-renumber
+                        // ordinals are void, subscribers take a replacement
+                        // snapshot.
                         if !defer_bulk_reconciliation
                             && stats.messages_inserted + stats.messages_updated > messages_before
                             && append_needs_renumber(tx, source)?
                         {
                             profile_renumber_session(tx, &source.session_id, &mut stats)?;
+                            if let Some(fx) = effects.as_deref_mut() {
+                                fx.push(Mutation::SessionSwept {
+                                    session_id: source.session_id.clone(),
+                                });
+                            }
                         }
                         stats.canonical_apply_nanos += elapsed_nanos(started);
                     }
