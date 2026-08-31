@@ -33,6 +33,11 @@ pub struct StreamReport {
     pub files_missing: usize,
     pub batches: u64,
     pub records: u64,
+    /// Framed payload bytes across those records — the progress-meter unit.
+    /// Physical reads (anchor verification, snapshot copies, audit chain
+    /// re-reads) amplify `BytesRead` past any census figure; payload never
+    /// exceeds the source's raw size, so meters against census bytes hold.
+    pub payload_bytes: u64,
     pub oversized: u64,
     pub parsed: u64,
     pub unknown: u64,
@@ -61,6 +66,7 @@ impl StreamReport {
         self.files_missing += part.files_missing;
         self.batches += part.batches;
         self.records += part.records;
+        self.payload_bytes += part.payload_bytes;
         self.oversized += part.oversized;
         self.parsed += part.parsed;
         self.unknown += part.unknown;
@@ -604,6 +610,7 @@ fn ingest_file(
             match item {
                 TailItem::Record(record) => {
                     report.records += 1;
+                    report.payload_bytes += record.payload.len() as u64;
                     budget_records += 1;
                     // The budget counts FRAMED PAYLOAD, mirroring the soft
                     // batch cap — physical amplification (anchor and

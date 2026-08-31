@@ -319,6 +319,7 @@ pub(crate) fn apply_snapshot_records(
     let mut conflicted = false;
     for (index, record) in records.iter().enumerate() {
         report.records += 1;
+        report.payload_bytes += record.len() as u64;
         instrument.add(Metric::RecordsFramed, 1);
         ctx.src_offset = Some(index as i64);
         let outcome = instrument.time(Metric::NormalizeNanos, || {

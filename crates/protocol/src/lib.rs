@@ -113,8 +113,10 @@ pub struct ProjectBackfill {
     pub sessions_done: u64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub bytes_total: u64,
-    /// Bytes read by passes attributed to this project's sessions. May run
-    /// past `bytes_total` when sources grow mid-backfill; meters clamp.
+    /// Framed payload bytes ingested for this project's sessions — never
+    /// physical read amplification, so the meter tracks `bytes_total`
+    /// honestly. May still run past it when sources grow mid-backfill;
+    /// meters clamp.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub bytes_streamed: u64,
 }

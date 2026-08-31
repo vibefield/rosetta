@@ -251,10 +251,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     }
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
         if discovery.installed && consented.contains(adapter.kind()) {
+            // Meter denominators are the STREAMABLE census — the files the
+            // skim and stream phases will actually read. The full footprint
+            // (inventory streams included) belongs to the roll call, not to
+            // a progress meter that could then never reach 100%.
             health.ingest_register(
                 adapter.kind(),
-                discovery.file_count as u64,
-                discovery.total_bytes,
+                discovery.streamable_count as u64,
+                discovery.streamable_bytes,
             );
         }
     }

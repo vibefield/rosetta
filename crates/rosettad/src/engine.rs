@@ -81,8 +81,10 @@ impl StreamMeter {
         state.active = true;
     }
 
-    /// Close the pass and return the bytes it read — the board's per-pass
-    /// attribution rides the same delta the meters already take.
+    /// Close the pass and return the physical bytes it read. The runtime
+    /// meters ride this; the board's per-project meter deliberately does
+    /// not — it uses the pass report's framed payload bytes instead, which
+    /// never exceed the census figure the way physical reads do.
     pub fn finish(&self) -> u64 {
         let current = self.instrument.snapshot();
         let mut state = self.state.lock().expect("stream meter poisoned");
@@ -295,24 +297,25 @@ impl ColdEngine {
                 entry.ledger.as_mut(),
             )
             .map_err(|error| error.to_string())?;
-            let pass_bytes = entry.stream_meter.finish();
+            entry.stream_meter.finish();
             let paused = report.files_paused > 0;
-            entry.stream.merge_from(&report);
             if paused {
                 if lane == ColdLane::Starter {
                     self.starter_paused += 1;
                 }
                 self.schedule.requeue(index, file.clone());
             }
-            // Fold the outcome onto the board: bytes to the session's
-            // settled project (an unplanned session lands honestly in the
-            // unassigned bucket), and completion when the pass that just ran
-            // left nothing queued for the session.
+            // Fold the outcome onto the board: FRAMED PAYLOAD bytes to the
+            // session's settled project (an unplanned session lands honestly
+            // in the unassigned bucket) — physical reads amplify past any
+            // census figure, payload never does — and completion when the
+            // pass that just ran left nothing queued for the session.
             let project = self
                 .plan
                 .project_of(index, &file.session_id)
                 .and_then(|row| row.project_id.clone());
-            self.board.advance(project.as_deref(), pass_bytes);
+            self.board.advance(project.as_deref(), report.payload_bytes);
+            entry.stream.merge_from(&report);
             // A sibling's pass may have badged this session Indexed while
             // other tasks for it are still queued (its own paused remainder
             // included). Readiness is the scheduler's to grant during cold:

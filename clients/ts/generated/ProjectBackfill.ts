@@ -13,7 +13,9 @@ export type ProjectBackfill = {
  */
 project_id: string | null, sessions_total: number, sessions_done: number, bytes_total: number, 
 /**
- * Bytes read by passes attributed to this project's sessions. May run
- * past `bytes_total` when sources grow mid-backfill; meters clamp.
+ * Framed payload bytes ingested for this project's sessions — never
+ * physical read amplification, so the meter tracks `bytes_total`
+ * honestly. May still run past it when sources grow mid-backfill;
+ * meters clamp.
  */
 bytes_streamed: number, };

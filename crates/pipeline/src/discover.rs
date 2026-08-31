@@ -23,6 +23,13 @@ pub struct Discovery {
     pub installed: bool,
     pub file_count: usize,
     pub total_bytes: u64,
+    /// The subset of the census the backfill will actually read: files whose
+    /// matching stream has a driver. Inventory-only streams (todos, plans,
+    /// config) count toward the roll call's footprint above, but never
+    /// toward a progress denominator — a meter that includes them can never
+    /// reach what the skim and stream phases actually finish.
+    pub streamable_count: usize,
+    pub streamable_bytes: u64,
     pub newest_modified_ms: i64,
     pub walk_truncated: bool,
 }
@@ -63,11 +70,20 @@ pub fn discover(
         // stream claims; an empty shell directory is not an install.
         let mut file_count = 0;
         let mut total_bytes = 0;
+        let mut streamable_count = 0;
+        let mut streamable_bytes = 0;
         let mut newest_modified_ms = 0;
         for file in &report.files {
             file_count += 1;
             total_bytes += file.size;
             newest_modified_ms = newest_modified_ms.max(file.modified_ms);
+            let driven = layout
+                .matching_stream(&file.relative_path)
+                .is_some_and(|stream| adapter.stream_driver(&stream.id).is_some());
+            if driven {
+                streamable_count += 1;
+                streamable_bytes += file.size;
+            }
         }
 
         out.push(Discovery {
@@ -86,6 +102,8 @@ pub fn discover(
             installed: file_count > 0,
             file_count,
             total_bytes,
+            streamable_count,
+            streamable_bytes,
             newest_modified_ms,
             walk_truncated: report.truncated,
         });
