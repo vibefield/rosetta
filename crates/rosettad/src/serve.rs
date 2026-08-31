@@ -22,17 +22,14 @@
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rosetta_adapter_support::AgentAdapter;
-use rosetta_capture::{Ledger, NotifyEvents, SourceEvent, SourceEvents};
-use rosetta_core::rows::{RuntimeRow, StreamState};
+use rosetta_capture::NotifyEvents;
 use rosetta_pipeline::{
-    ColdLane, ColdSchedule, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner,
-    MetaReport, Metric, SessionFile, SliceBudget, StreamReport,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, SessionFile,
+    SliceBudget, StreamReport,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
@@ -41,104 +38,15 @@ use rosetta_server::{
 };
 use rosetta_store::{Store, queries};
 
+use crate::engine::{
+    BackfillRuntime, ColdCx, ColdEngine, StreamMeter, absorb_effects, acknowledge_search, now_ms,
+};
 use crate::{
-    ledger_root, open_ledger, open_progressive_backfill, parse_flags, projection_lock,
-    record_backfill_failures, selected,
+    ledger_root, open_ledger, open_progressive_backfill, parse_flags, projection_lock, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
 const CONSENT_POLL: Duration = Duration::from_millis(200);
-/// Watcher hints drained per runtime per cold-loop iteration — a bounded
-/// burst so a chatty agent cannot stall the pop.
-const COLD_HINT_BURST: usize = 32;
-
-struct BackfillRuntime {
-    adapter: &'static dyn AgentAdapter,
-    runtime: RuntimeRow,
-    root: PathBuf,
-    discovery_truncated: bool,
-    events: NotifyEvents,
-    ledger: Option<Ledger>,
-    meta: MetaReport,
-    roster: Vec<SessionFile>,
-    stream: StreamReport,
-    stream_meter: StreamMeter,
-}
-
-#[derive(Clone)]
-struct StreamMeter {
-    instrument: Arc<Instrument>,
-    state: Arc<Mutex<StreamMeterState>>,
-}
-
-struct StreamMeterState {
-    baseline: InstrumentSnapshot,
-    completed: IngestCounters,
-    active: bool,
-}
-
-impl StreamMeter {
-    fn new(instrument: &Arc<Instrument>) -> Self {
-        Self {
-            instrument: instrument.clone(),
-            state: Arc::new(Mutex::new(StreamMeterState {
-                baseline: instrument.snapshot(),
-                completed: IngestCounters::default(),
-                active: false,
-            })),
-        }
-    }
-
-    fn source(&self) -> IngestCounterSource {
-        let meter = self.clone();
-        Arc::new(move || meter.snapshot())
-    }
-
-    fn begin(&self) {
-        let mut state = self.state.lock().expect("stream meter poisoned");
-        state.baseline = self.instrument.snapshot();
-        state.active = true;
-    }
-
-    fn finish(&self) {
-        let current = self.instrument.snapshot();
-        let mut state = self.state.lock().expect("stream meter poisoned");
-        let delta = current.delta_since(&state.baseline);
-        state.completed.bytes_read = state
-            .completed
-            .bytes_read
-            .saturating_add(delta.get(Metric::BytesRead));
-        state.completed.records = state
-            .completed
-            .records
-            .saturating_add(delta.get(Metric::RecordsFramed));
-        state.baseline = current;
-        state.active = false;
-    }
-
-    fn snapshot(&self) -> IngestCounters {
-        let state = self.state.lock().expect("stream meter poisoned");
-        let mut counters = state.completed;
-        if state.active {
-            let delta = self.instrument.snapshot().delta_since(&state.baseline);
-            counters.bytes_read = counters
-                .bytes_read
-                .saturating_add(delta.get(Metric::BytesRead));
-            counters.records = counters
-                .records
-                .saturating_add(delta.get(Metric::RecordsFramed));
-        }
-        counters
-    }
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as i64)
-        .unwrap_or(0)
-}
 
 /// A live meter over the pipeline's always-on atomic counters: the status
 /// endpoint reads deltas since `baseline` while the writer thread is blocked
@@ -156,40 +64,6 @@ fn counter_source(
             records: delta.get(Metric::RecordsFramed),
         }
     })
-}
-
-/// Drain both effects seams into the hub, strictly after commit. Row
-/// effects first — session mutations into the rings, their touched rows
-/// into the mirror — then the metadata identity keys, the writer thread's
-/// replacement for the old 500 ms whole-surface rewarm poll. On cold paths
-/// the row seam carries only watched sessions (the scope armed from
-/// [`Hub::watched_sessions`] between passes); on the live path it carries
-/// everything. Returns items fanned out to subscribers.
-fn absorb_effects(store: &mut Store, hub: &Hub) -> Result<usize, String> {
-    let mut fanned = 0_usize;
-    let rows = store.drain_effects();
-    if !rows.is_empty() {
-        let report = hub
-            .absorb(store.conn(), rows, now_ms())
-            .map_err(|error| format!("absorbing row effects: {error}"))?;
-        fanned += usize::try_from(report.session_mutations + report.meta_events).unwrap_or(0);
-    }
-    let effects = store.drain_meta_effects();
-    if !effects.is_empty() {
-        fanned += hub
-            .absorb_meta(store.conn(), effects)
-            .map_err(|error| format!("absorbing metadata effects: {error}"))?;
-    }
-    Ok(fanned)
-}
-
-fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
-    for ack in worker.drain_acknowledgements() {
-        store
-            .acknowledge_search(&ack.projection_epoch, ack.revision)
-            .map_err(|error| format!("acknowledging search revision: {error}"))?;
-    }
-    Ok(())
 }
 
 /// Give the first detached generation a clean I/O window after canonical
@@ -511,206 +385,37 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         starter_budget: slice_budget,
         ..audit_free.clone()
     };
-    let mut schedule = ColdSchedule::new(
-        backfills
-            .iter()
-            .map(|entry| entry.roster.clone())
-            .collect::<Vec<_>>(),
-    );
-    // Whole-file mode has no slices to reveal breadth with — restore the old
-    // bootstrap through the boost lane: the first canonical-list session that
-    // has queued sources completes before ordinary rotation.
-    if slice_budget.is_none() {
-        let recent = queries::session_list(store.conn(), None, 1_000)
-            .map_err(|error| format!("selecting first-readable session: {error}"))?;
-        for session in recent {
-            if schedule.promote([session.id]) > 0 {
-                break;
-            }
-        }
-    }
-    let starter_files: usize = backfills.iter().map(|entry| entry.roster.len()).sum();
-    let mut starter_paused = 0_u64;
-    // The milestone line exists for the sweep harness; without slicing the
-    // starter lane is just whole-file backfill and the line stays absent.
-    let mut starter_drained_logged = slice_budget.is_none() || !schedule.starter_pending();
-    let log_starter_drained = |starter_paused: u64, logged: &mut bool| {
-        if !*logged {
-            *logged = true;
-            println!(
-                "milestone: starter-drained elapsed_s={:.2} files={starter_files} paused={starter_paused}",
-                started.elapsed().as_secs_f64(),
-            );
-        }
+    // The plan: meta's settled certainty as data. Ownership comes from the
+    // canonical rows the skims just committed; sessions the store cannot
+    // prove an owner for stay in the honest unassigned bucket. The board
+    // folds pass outcomes over it, and the app polls the fold off
+    // /api/status from the first pass on.
+    let rosters: Vec<Vec<SessionFile>> =
+        backfills.iter().map(|entry| entry.roster.clone()).collect();
+    let ownership: std::collections::BTreeMap<String, Option<String>> =
+        queries::session_list(store.conn(), None, i64::MAX)
+            .map_err(|error| format!("reading settled session ownership: {error}"))?
+            .into_iter()
+            .map(|session| (session.id, session.project_id))
+            .collect();
+    let mut engine = ColdEngine::new(rosters, &ownership, slice_budget, started);
+    engine.publish_projects(&health);
+    engine.bootstrap_whole_file(&store)?;
+    let mut cx = ColdCx {
+        store: &mut store,
+        hub: &hub,
+        health: &health,
+        search_worker: &search_worker,
+        instrument: &instrument,
+        boost: &boost,
+        stop: &stop,
+        opts: &opts,
+        sliced: &sliced,
+        audit_free: &audit_free,
+        backfills: &mut backfills,
     };
-    while schedule.pending() && !stop.load(Ordering::SeqCst) {
-        // The live lane during backfill: drain a bounded burst of watcher
-        // hints per runtime. Known sources jump to the live lane — budgeted,
-        // so they stay preemptible — and a claimed path no roster entry
-        // covers re-runs bounded meta, so a session started mid-backfill
-        // appears without waiting for the cold phase to end. Rescan hints
-        // defer to the live phase's stat poll, and anything dropped here is
-        // caught by the same poll after handoff.
-        for (index, entry) in backfills.iter_mut().enumerate() {
-            let mut needs_admission = false;
-            for _ in 0..COLD_HINT_BURST {
-                let Some(event) = entry.events.next_event(Duration::ZERO) else {
-                    break;
-                };
-                match event {
-                    SourceEvent::Changed(path) => {
-                        let mapping =
-                            rosetta_pipeline::map_hint(entry.adapter, &entry.roster, &path);
-                        needs_admission |= mapping.needs_admission;
-                        for nominated in mapping.nominated {
-                            if let Some(file) = entry
-                                .roster
-                                .iter()
-                                .find(|file| file.relative_path == nominated)
-                            {
-                                schedule.nominate_live(index, file.clone());
-                            }
-                        }
-                    }
-                    SourceEvent::Rescan => {}
-                }
-            }
-            if needs_admission {
-                let (_, fresh) = rosetta_pipeline::meta_ingest_into(
-                    entry.adapter,
-                    &entry.runtime,
-                    &entry.root,
-                    &mut store,
-                    &opts,
-                    &instrument,
-                    entry.ledger.as_mut(),
-                )
-                .map_err(|error| error.to_string())?;
-                for file in &fresh {
-                    if !entry
-                        .roster
-                        .iter()
-                        .any(|known| known.relative_path == file.relative_path)
-                    {
-                        schedule.nominate_live(index, file.clone());
-                    }
-                }
-                entry.roster = fresh;
-            }
-        }
-        schedule.promote(boost.drain());
-        // Check before the pass too: a promotion that empties the starter
-        // lane must not charge the following (possibly long, unbudgeted)
-        // boost pass to the starter-drained timing.
-        if !starter_drained_logged && !schedule.starter_pending() {
-            log_starter_drained(starter_paused, &mut starter_drained_logged);
-        }
-        let Some((lane, index, file)) = schedule.pop() else {
-            break;
-        };
-        // Arm the row-effects scope from the hub's open session
-        // subscriptions: the pass about to run collects a mutation log only
-        // for transcripts a reader is actually watching, so its seal (or its
-        // appended rows) push to them instead of waiting for the live phase.
-        // A subscriber arriving mid-pass is one slice from the next re-arm.
-        store.observe_effects_watched(hub.watched_sessions());
-        let entry = &mut backfills[index];
-        health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
-        entry.stream_meter.begin();
-        let pass_opts = match lane {
-            ColdLane::Boost => &audit_free,
-            ColdLane::Live | ColdLane::Starter | ColdLane::Completion => &sliced,
-        };
-        let report = rosetta_pipeline::stream_backfill_into(
-            entry.adapter,
-            &entry.runtime,
-            &entry.root,
-            &mut store,
-            std::slice::from_ref(&file),
-            pass_opts,
-            &instrument,
-            entry.ledger.as_mut(),
-        )
-        .map_err(|error| error.to_string())?;
-        entry.stream_meter.finish();
-        let paused = report.files_paused > 0;
-        entry.stream.merge_from(&report);
-        if paused {
-            if lane == ColdLane::Starter {
-                starter_paused += 1;
-            }
-            schedule.requeue(index, file.clone());
-        }
-        // A sibling's pass may have badged this session Indexed while other
-        // tasks for it are still queued (its own paused remainder included).
-        // Readiness is the scheduler's to grant during cold: hold Streaming
-        // until the session's last queued task is gone; the audit pass below
-        // re-derives the final verdict either way.
-        if schedule.session_pending(&file.session_id) {
-            store
-                .set_session_stream_state(&file.session_id, StreamState::Streaming)
-                .map_err(|error| format!("holding session readiness: {error}"))?;
-        }
-        if !starter_drained_logged && !schedule.starter_pending() {
-            log_starter_drained(starter_paused, &mut starter_drained_logged);
-        }
-        search_worker.wake();
-        acknowledge_search(&mut store, &search_worker)?;
-        absorb_effects(&mut store, &hub)?;
-    }
-
-    // Preserve the audit lane exactly once per runtime, after every ordinary
-    // file has reached its checkpoint. Passing the full roster is essential:
-    // rotating_audit_paths selects from the slice it receives.
-    if !stop.load(Ordering::SeqCst) {
-        for entry in &mut backfills {
-            // Audit replays are cold passes too: keep the row-effects scope
-            // current so a watched session's forced replay redelivers to its
-            // subscribers (idempotent by deterministic ids) instead of going
-            // dark.
-            store.observe_effects_watched(hub.watched_sessions());
-            health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
-            entry.stream_meter.begin();
-            let report = rosetta_pipeline::stream_backfill_into(
-                entry.adapter,
-                &entry.runtime,
-                &entry.root,
-                &mut store,
-                &entry.roster,
-                &opts,
-                &instrument,
-                entry.ledger.as_mut(),
-            )
-            .map_err(|error| error.to_string())?;
-            entry.stream_meter.finish();
-            entry.stream.merge_from(&report);
-            absorb_effects(&mut store, &hub)?;
-            let stream_totals = entry.stream_meter.snapshot();
-            health.ingest_done(
-                entry.adapter.kind(),
-                stream_totals.bytes_read,
-                stream_totals.records,
-            );
-            println!(
-                "{}: backfilled {} sessions ({} rows) — watching {}",
-                entry.adapter.kind(),
-                entry.meta.sessions,
-                entry.stream.stats.messages_inserted,
-                entry.root.display(),
-            );
-            record_backfill_failures(
-                entry.adapter.kind(),
-                entry.discovery_truncated,
-                &entry.meta,
-                &entry.stream,
-                &mut failures,
-            );
-        }
-        println!(
-            "milestone: cold-drained elapsed_s={:.2}",
-            started.elapsed().as_secs_f64(),
-        );
-    }
+    engine.run(&mut cx)?;
+    engine.audit(&mut cx, &mut failures)?;
     let interrupted = stop.load(Ordering::SeqCst);
     if !failures.is_empty() {
         return Err(failures.join("; "));
@@ -840,28 +545,4 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn interleaved_stream_meters_count_only_their_active_runtime() {
-        let instrument = Arc::new(Instrument::new());
-        let first = StreamMeter::new(&instrument);
-        let second = StreamMeter::new(&instrument);
-        first.begin();
-        instrument.add(Metric::BytesRead, 10);
-        instrument.add(Metric::RecordsFramed, 1);
-        first.finish();
-        second.begin();
-        instrument.add(Metric::BytesRead, 20);
-        instrument.add(Metric::RecordsFramed, 2);
-        second.finish();
-        assert_eq!(first.snapshot().bytes_read, 10);
-        assert_eq!(first.snapshot().records, 1);
-        assert_eq!(second.snapshot().bytes_read, 20);
-        assert_eq!(second.snapshot().records, 2);
-    }
 }

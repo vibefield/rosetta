@@ -25,7 +25,7 @@ pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -90,6 +90,33 @@ pub struct IngestProgress {
     pub phase: IngestPhase,
     /// Installed runtimes in serve order.
     pub runtimes: Vec<RuntimeBackfill>,
+    /// The ProgressBoard's per-project fold, largest plans first. Empty
+    /// until the skims settle the plan, and absent from daemons that
+    /// predate it.
+    #[serde(default)]
+    pub projects: Vec<ProjectBackfill>,
+}
+
+/// Cold-start progress for one project: the RAM board's fold of pass
+/// outcomes over the settled ingest plan. Denominators are census figures;
+/// `sessions_done` counts sessions whose last queued cold task finished.
+/// Nothing here is durable — a restart rebuilds it from the plan.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ProjectBackfill {
+    /// Canonical project id; `None` is the unassigned bucket (sessions
+    /// whose ownership bounded meta could not prove).
+    pub project_id: Option<String>,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub sessions_total: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub sessions_done: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub bytes_total: u64,
+    /// Bytes read by passes attributed to this project's sessions. May run
+    /// past `bytes_total` when sources grow mid-backfill; meters clamp.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub bytes_streamed: u64,
 }
 
 /// Cold-start progress for one runtime. Denominators come from discovery's

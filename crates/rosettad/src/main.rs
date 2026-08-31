@@ -36,6 +36,7 @@ use rosetta_search::{
 use rosetta_store::Store;
 
 mod bench;
+mod engine;
 mod serve;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {

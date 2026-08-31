@@ -49,7 +49,14 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > transcript streams in mid-backfill — appends push precise rows; a cold seal, retry sweep,
 > abandon, or append renumber pushes one `SessionSwept` marker and the subscriber re-snapshots —
 > while unwatched sessions pay no mutation log at all (their metadata still flows), and the live
-> handoff widens the scope to every session. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
+> handoff widens the scope to every session. The cold phase itself is one named unit,
+> `rosettad::engine::ColdEngine`: it settles an `IngestPlan` (projects → sessions → sources with
+> census bytes, from the skims' committed ownership; unproven ownership stays honestly unassigned;
+> a multi-session source is ONE planned pass) and folds pass outcomes through a `ProgressBoard`
+> onto `/api/status` as per-project rows (`ingest.projects`, protocol v5) — sessions done/total
+> and bytes streamed/total per project, refreshed between passes and kept current through
+> mid-cold admissions. Plan, board, and schedule are RAM only, rebuilt from a skim on every run;
+> durable progress remains cursors, generations, and `stream_state`. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
 > default 256 KiB with a 24-record floor; batches are soft-capped to the slice so a slice is
 > ~one transaction): a fresh source's clean prefix ACTIVATES and seals its ledger generation at
 > the boundary — indistinguishable from the file ending there and then growing — so every session

@@ -25,6 +25,7 @@ export type * from "./generated/GroupKind";
 export type * from "./generated/ModelDay";
 export type * from "./generated/Mutation";
 export type * from "./generated/Notice";
+export type * from "./generated/ProjectBackfill";
 export type * from "./generated/ProjectRow";
 export type * from "./generated/ProjectsResponse";
 export type * from "./generated/RuntimeBackfill";

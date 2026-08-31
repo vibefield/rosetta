@@ -14,10 +14,11 @@ use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, ContributionResponse, ContributionRow,
     DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest, EnableResponse, ErrorCode,
     HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, ModelDay,
-    Mutation, PROTOCOL_VERSION, ProjectRow, ProjectsResponse, RuntimeBackfill, RuntimeIngestStatus,
-    RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse,
-    SearchState, ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp,
-    StatusResponse, StreamState, TimelinePage, TokenSnapshot, UsageResponse,
+    Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow, ProjectsResponse, RuntimeBackfill,
+    RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness, SearchRequest,
+    SearchResponse, SearchState, ServerFrame, SessionResponse, SessionRole, SessionRow,
+    SessionsResponse, Stamp, StatusResponse, StreamState, TimelinePage, TokenSnapshot,
+    UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -186,6 +187,22 @@ fn exemplars() -> serde_json::Value {
                     sessions_total: 5_912,
                     records: 214_032,
                 }],
+                projects: vec![
+                    ProjectBackfill {
+                        project_id: Some("p1".into()),
+                        sessions_total: 214,
+                        sessions_done: 33,
+                        bytes_total: 536_870_912,
+                        bytes_streamed: 88_080_384,
+                    },
+                    ProjectBackfill {
+                        project_id: None,
+                        sessions_total: 12,
+                        sessions_done: 12,
+                        bytes_total: 1_048_576,
+                        bytes_streamed: 1_048_576,
+                    },
+                ],
             },
         }),
     };

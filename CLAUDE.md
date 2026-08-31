@@ -78,7 +78,13 @@ rewarm poll: the writer drains them into `Hub::absorb_meta` between passes. Row 
 run scoped during cold — armed per pass with the sessions readers hold open — so an open
 transcript streams in mid-backfill: appends push precise rows, and a seal, retry sweep,
 abandon, or renumber pushes one `SessionSwept` resync marker; unwatched sessions pay no
-mutation log, and the live handoff widens the scope to every session.
+mutation log, and the live handoff widens the scope to every session. The cold phase is
+one named unit (`rosettad::engine::ColdEngine`) built over an `IngestPlan` — meta's
+settled projects → sessions → sources as a RAM value, unproven ownership honestly
+unassigned — and a `ProgressBoard` that folds pass outcomes per project onto
+`/api/status` (`ingest.projects`, protocol v5); plan, board, and schedule are RAM only
+and rebuilt from a skim, while durable progress stays cursors, generations, and
+`stream_state`.
 Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,
 default 256 KiB / 24-record floor, batches soft-capped to the slice) that early-ACTIVATES
 and seals a clean prefix so every session opens readable fast; paused remainders requeue

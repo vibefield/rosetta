@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use rosetta_core::rows::Ms;
 use rosetta_protocol::{
-    BackfillState, DaemonStatus, IngestPhase, IngestProgress, RuntimeBackfill, RuntimeIngestStatus,
+    BackfillState, DaemonStatus, IngestPhase, IngestProgress, ProjectBackfill, RuntimeBackfill,
+    RuntimeIngestStatus,
 };
 
 use crate::hub::Hub;
@@ -44,6 +45,9 @@ struct BackfillEntry {
 struct IngestState {
     phase: IngestPhase,
     entries: Vec<BackfillEntry>,
+    /// The ProgressBoard's latest per-project fold, pushed by the serve
+    /// loop between passes. A view of RAM state — never authoritative.
+    projects: Vec<ProjectBackfill>,
 }
 
 /// One runtime's cumulative live-ingest counters, as the daemon reads them
@@ -85,6 +89,7 @@ impl DaemonHealth {
             ingest: Mutex::new(IngestState {
                 phase: IngestPhase::Discovering,
                 entries: Vec::new(),
+                projects: Vec::new(),
             }),
         }
     }
@@ -177,10 +182,17 @@ impl DaemonHealth {
         }
     }
 
+    /// Publish the board's latest per-project rows onto the status surface.
+    pub fn ingest_projects(&self, rows: Vec<ProjectBackfill>) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        ingest.projects = rows;
+    }
+
     fn ingest_progress(&self) -> IngestProgress {
         let ingest = self.ingest.lock().expect("ingest state poisoned");
         IngestProgress {
             phase: ingest.phase,
+            projects: ingest.projects.clone(),
             runtimes: ingest
                 .entries
                 .iter()
@@ -364,5 +376,31 @@ mod tests {
         assert_eq!(ingest.runtimes[0].state, BackfillState::Done);
         assert_eq!(ingest.runtimes[0].bytes_streamed, 1_000_000);
         assert_eq!(ingest.runtimes[0].records, 5_000);
+    }
+
+    #[test]
+    fn the_boards_project_rows_ride_the_status_surface() {
+        let hub = Hub::new(HubConfig::default(), 1);
+        let health = DaemonHealth::new(1_000);
+        assert!(
+            health.snapshot(&hub, 1_500).ingest.projects.is_empty(),
+            "no rows before the plan settles"
+        );
+
+        health.ingest_projects(vec![ProjectBackfill {
+            project_id: Some("p1".into()),
+            sessions_total: 4,
+            sessions_done: 1,
+            bytes_total: 400,
+            bytes_streamed: 120,
+        }]);
+        let ingest = health.snapshot(&hub, 2_000).ingest;
+        assert_eq!(ingest.projects.len(), 1);
+        assert_eq!(ingest.projects[0].project_id.as_deref(), Some("p1"));
+        assert_eq!(ingest.projects[0].sessions_done, 1);
+
+        // Each push replaces the fold wholesale — the board owns the math.
+        health.ingest_projects(Vec::new());
+        assert!(health.snapshot(&hub, 3_000).ingest.projects.is_empty());
     }
 }
