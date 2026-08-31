@@ -378,9 +378,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // and live passes carry the slice budget so every session opens fast and
     // everything stays preemptible; a paused file requeues into completion;
     // boost requests jump the cold lanes and run unbudgeted so the opened
-    // session finishes outright; watcher hints feed the live lane so a
-    // running session stays current during the backfill. Per-file durability
-    // and the graceful-stop boundary are unchanged.
+    // session finishes outright; watcher hints move not-yet-consumed work to
+    // the live lane but never recreate a completed cold obligation. Later
+    // growth belongs to the live runner, so continuous writers cannot block
+    // canonical publication. Virtual snapshot members coalesce into one
+    // physical pass. Per-file durability and the graceful-stop boundary are
+    // unchanged.
     let audit_free = IngestOptions {
         audit_files_per_run: 0,
         ..opts.clone()

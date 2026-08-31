@@ -2,15 +2,20 @@
 //! ▸ completion. Starter seeds one task per source (budgeted slices when
 //! serve enables them), paused tasks requeue into completion, boost
 //! promotions from the app jump the cold lanes, and watcher hints nominate
-//! actively-growing sources into the live lane so a running session stays
-//! current DURING the backfill. Fairness is per runtime inside the cold
-//! lanes: round-robin keeps one giant agent from hiding every smaller one,
-//! which a scalar priority alone would not.
+//! not-yet-consumed sources into the live lane. A hint may reprioritize the
+//! metadata cut, but it may not create a new cold obligation after that
+//! source has been consumed: growth beyond the cut belongs to the live
+//! runner and is recovered by its opening stat poll. This is the termination
+//! guarantee when agents keep writing throughout a cold start. Fairness is
+//! per runtime inside the cold lanes: round-robin keeps one giant agent from
+//! hiding every smaller one, which a scalar priority alone would not.
 //!
 //! Invariants the queue owns: a session's sources surface in canonical path
 //! order (the ordinal-reveal rule), sessions surface newest-first within a
 //! runtime, boost requests drain oldest-request-first, and a source is
-//! queued at most once across every lane.
+//! queued at most once across every lane. Virtual members of one physical
+//! document/database are coalesced when popped, preserving the snapshot
+//! driver's one-copy-per-physical-source contract.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -94,15 +99,17 @@ impl ColdSchedule {
         }
     }
 
-    /// A watcher hint nominated this source: move its queued task (from any
-    /// cold lane, boost included) into the live lane, or enqueue the given
-    /// file fresh when nothing is queued. A source is queued at most once,
-    /// so a chatty file cannot flood the lane.
-    pub fn nominate_live(&mut self, runtime: usize, file: SessionFile) {
+    /// A watcher hint nominated this source: move its EXISTING cold task
+    /// (from any lane, boost included) into the live lane. Once a source's
+    /// settled cold task has been consumed, later growth is deliberately not
+    /// re-enqueued here — otherwise a continuously-written source can keep
+    /// the cold phase alive forever. The live runner's opening poll catches
+    /// that suffix at handoff. Returns whether a queued task moved.
+    pub fn nominate_live(&mut self, runtime: usize, file: SessionFile) -> bool {
         if self.live.iter().any(|(queued_runtime, queued)| {
             *queued_runtime == runtime && queued.relative_path == file.relative_path
         }) {
-            return;
+            return false;
         }
         let take = |queue: &mut VecDeque<SessionFile>| -> Option<SessionFile> {
             let at = queue
@@ -118,13 +125,66 @@ impl ColdSchedule {
                 })?;
                 self.boost.remove(at).map(|(_, queued)| queued)
             });
-        match moved {
-            Some(queued) => self.live.push_back((runtime, queued)),
-            None => {
-                *self.sessions.entry(file.session_id.clone()).or_default() += 1;
-                self.live.push_back((runtime, file));
-            }
+        if let Some(queued) = moved {
+            self.live.push_back((runtime, queued));
+            true
+        } else {
+            false
         }
+    }
+
+    /// A bounded-meta rerun admitted a genuinely new source after the
+    /// original cut. Unlike [`Self::nominate_live`], this creates one new
+    /// cold obligation. Duplicate admissions are ignored across every lane.
+    pub fn admit_live(&mut self, runtime: usize, file: SessionFile) -> bool {
+        if self.contains(runtime, &file.relative_path) {
+            return false;
+        }
+        *self.sessions.entry(file.session_id.clone()).or_default() += 1;
+        self.live.push_back((runtime, file));
+        true
+    }
+
+    fn contains(&self, runtime: usize, relative_path: &str) -> bool {
+        self.live.iter().any(|(queued_runtime, file)| {
+            *queued_runtime == runtime && file.relative_path == relative_path
+        }) || self.boost.iter().any(|(queued_runtime, file)| {
+            *queued_runtime == runtime && file.relative_path == relative_path
+        }) || self
+            .starter
+            .get(runtime)
+            .is_some_and(|queue| queue.iter().any(|file| file.relative_path == relative_path))
+            || self
+                .completion
+                .get(runtime)
+                .is_some_and(|queue| queue.iter().any(|file| file.relative_path == relative_path))
+    }
+
+    /// Expand a popped virtual member to every still-queued member of the
+    /// same physical document/database, removing those siblings from their
+    /// lanes and readiness counts. `stream_backfill_into` then receives the
+    /// whole group and its snapshot driver performs one stable copy. JSONL
+    /// files have no virtual suffix and always remain singleton tasks.
+    pub fn coalesce_source(&mut self, runtime: usize, popped: SessionFile) -> Vec<SessionFile> {
+        if popped.driver == rosetta_adapter_support::StreamDriver::JsonLines {
+            return vec![popped];
+        }
+
+        let mut siblings = Vec::new();
+        take_group_files(&mut self.starter[runtime], &popped, &mut siblings);
+        take_group_files(&mut self.completion[runtime], &popped, &mut siblings);
+        take_group_tagged(&mut self.live, runtime, &popped, &mut siblings);
+        take_group_tagged(&mut self.boost, runtime, &popped, &mut siblings);
+        for sibling in &siblings {
+            self.session_popped(&sibling.session_id);
+        }
+        siblings.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        siblings.dedup_by(|left, right| left.relative_path == right.relative_path);
+
+        let mut group = Vec::with_capacity(siblings.len() + 1);
+        group.push(popped);
+        group.extend(siblings);
+        group
     }
 
     /// Whether any task for this session — in any lane — is still queued.
@@ -221,6 +281,66 @@ impl ColdSchedule {
     }
 }
 
+fn physical_source(file: &SessionFile) -> &str {
+    match file.driver {
+        rosetta_adapter_support::StreamDriver::JsonLines => &file.relative_path,
+        rosetta_adapter_support::StreamDriver::DocumentSnapshot
+        | rosetta_adapter_support::StreamDriver::SqliteSnapshot => file
+            .relative_path
+            .split_once('#')
+            .map_or(file.relative_path.as_str(), |(physical, _)| physical),
+    }
+}
+
+/// Stable identity of one physical cold task. Virtual snapshot members share
+/// it; ordinary JSONL files do not. The ingest plan uses the same key so a
+/// physical database contributes its census bytes exactly once.
+pub(crate) fn source_task_key(file: &SessionFile) -> String {
+    let driver = match file.driver {
+        rosetta_adapter_support::StreamDriver::JsonLines => "jsonl",
+        rosetta_adapter_support::StreamDriver::DocumentSnapshot => "document",
+        rosetta_adapter_support::StreamDriver::SqliteSnapshot => "sqlite",
+    };
+    format!("{driver}\0{}\0{}", file.stream_id, physical_source(file))
+}
+
+fn same_physical_source(left: &SessionFile, right: &SessionFile) -> bool {
+    left.driver == right.driver
+        && left.stream_id == right.stream_id
+        && physical_source(left) == physical_source(right)
+}
+
+fn take_group_files(
+    queue: &mut VecDeque<SessionFile>,
+    popped: &SessionFile,
+    output: &mut Vec<SessionFile>,
+) {
+    let mut at = 0;
+    while at < queue.len() {
+        if same_physical_source(&queue[at], popped) {
+            output.push(queue.remove(at).expect("index was in bounds"));
+        } else {
+            at += 1;
+        }
+    }
+}
+
+fn take_group_tagged(
+    queue: &mut VecDeque<(usize, SessionFile)>,
+    runtime: usize,
+    popped: &SessionFile,
+    output: &mut Vec<SessionFile>,
+) {
+    let mut at = 0;
+    while at < queue.len() {
+        if queue[at].0 == runtime && same_physical_source(&queue[at].1, popped) {
+            output.push(queue.remove(at).expect("index was in bounds").1);
+        } else {
+            at += 1;
+        }
+    }
+}
+
 fn pop_round_robin(
     queues: &mut [VecDeque<SessionFile>],
     cursor: &mut usize,
@@ -256,6 +376,16 @@ mod tests {
             agent_version: None,
             source_missing: false,
         }
+    }
+
+    fn snapshot_file(session_id: &str, physical: &str) -> SessionFile {
+        let mut file = file(session_id);
+        file.relative_path = format!("{physical}#{session_id}");
+        file.stream_id = "state-db".into();
+        file.file_format = FileFormat::Sqlite;
+        file.discipline = FileDiscipline::Database;
+        file.driver = StreamDriver::SqliteSnapshot;
+        file
     }
 
     fn drain(schedule: &mut ColdSchedule) -> Vec<(ColdLane, usize, String)> {
@@ -374,15 +504,15 @@ mod tests {
     }
 
     #[test]
-    fn live_nominations_outrank_boosts_and_never_double_queue() {
+    fn live_nominations_outrank_boosts_without_extending_the_cold_cut() {
         let mut schedule = ColdSchedule::new(vec![vec![file("cold"), file("hot")]]);
         schedule.promote(["cold".to_string()]);
 
         // Nominating a queued file MOVES it (session count stable, no dup);
         // nominating it again is a no-op while it waits.
         let hot = file("hot");
-        schedule.nominate_live(0, hot.clone());
-        schedule.nominate_live(0, hot.clone());
+        assert!(schedule.nominate_live(0, hot.clone()));
+        assert!(!schedule.nominate_live(0, hot.clone()));
         assert!(schedule.session_pending("hot"));
 
         let (lane, _, popped) = schedule.pop().unwrap();
@@ -390,16 +520,67 @@ mod tests {
         assert_eq!(popped.session_id, "hot");
         assert!(!schedule.session_pending("hot"), "no duplicate was queued");
 
-        // Once popped, a new hint enqueues it fresh into the live lane.
-        schedule.nominate_live(0, hot);
-        let (lane, _, popped) = schedule.pop().unwrap();
-        assert_eq!((lane, popped.session_id.as_str()), (ColdLane::Live, "hot"));
+        // Once popped, any number of source-growth hints cannot create new
+        // cold work. That suffix belongs to the live runner after handoff.
+        for _ in 0..100 {
+            assert!(!schedule.nominate_live(0, hot.clone()));
+        }
 
         let (lane, _, popped) = schedule.pop().unwrap();
         assert_eq!(
             (lane, popped.session_id.as_str()),
             (ColdLane::Boost, "cold")
         );
+        assert!(!schedule.pending());
+    }
+
+    #[test]
+    fn a_meta_admission_is_the_only_way_to_extend_the_cut() {
+        let mut schedule = ColdSchedule::new(vec![vec![file("settled")]]);
+        schedule.pop().unwrap();
+        assert!(!schedule.pending());
+
+        let fresh = file("fresh");
+        assert!(schedule.admit_live(0, fresh.clone()));
+        assert!(!schedule.admit_live(0, fresh), "one source queues once");
+        let (lane, _, popped) = schedule.pop().unwrap();
+        assert_eq!(
+            (lane, popped.session_id.as_str()),
+            (ColdLane::Live, "fresh")
+        );
+        assert!(!schedule.pending());
+    }
+
+    #[test]
+    fn virtual_snapshot_members_coalesce_across_every_lane() {
+        let first = snapshot_file("first", "state.sqlite");
+        let second = snapshot_file("second", "state.sqlite");
+        let third = snapshot_file("third", "state.sqlite");
+        let unrelated = file("unrelated");
+        let mut schedule = ColdSchedule::new(vec![vec![
+            first.clone(),
+            unrelated,
+            second.clone(),
+            third.clone(),
+        ]]);
+
+        // Scatter one physical database across live, boost, and starter.
+        assert!(schedule.nominate_live(0, second));
+        assert_eq!(schedule.promote(["third".to_string()]), 1);
+        let (lane, runtime, popped) = schedule.pop().unwrap();
+        assert_eq!(lane, ColdLane::Live);
+        let group = schedule.coalesce_source(runtime, popped);
+        let mut members: Vec<_> = group.iter().map(|file| file.session_id.as_str()).collect();
+        members.sort_unstable();
+        assert_eq!(members, ["first", "second", "third"]);
+        assert!(
+            members
+                .iter()
+                .all(|session| !schedule.session_pending(session))
+        );
+
+        let (_, _, remaining) = schedule.pop().unwrap();
+        assert_eq!(remaining.session_id, "unrelated");
         assert!(!schedule.pending());
     }
 

@@ -71,12 +71,16 @@ deterministic adapter checkpoints, watch-before-scan live ingestion, polling/aud
 recovery, and an append-only checksummed raw ledger. Fresh `serve` creates the public
 projection immediately: it skims every enrolled runtime first, then cold-streams through
 a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, runtime round-robin within
-the cold lanes); watcher hints feed the live lane during the backfill and mid-cold
-admissions re-run bounded meta, so a running session stays current before the cold phase
-ends. Metadata effects (identity keys, on for every path) replace the 500 ms mirror
+the cold lanes); watcher hints move not-yet-consumed work into the live lane and a claimed
+physical path absent from the settled roster re-runs bounded meta. A hint may reprioritize
+the metadata cut but MUST NOT recreate a cold obligation after that source has been consumed:
+continuous agent writes can never prevent canonical publication, and their suffix is recovered
+by the live runner at handoff. Virtual members of one document/database are one physical cold
+pass, never one snapshot copy per session. Metadata effects (identity keys, on for every path)
+replace the 500 ms mirror
 rewarm poll: the writer drains them into `Hub::absorb_meta` between passes. Row effects
 run scoped during cold — armed per pass with the sessions readers hold open — so an open
-transcript streams in mid-backfill: appends push precise rows, and a seal, retry sweep,
+transcript receives its prioritized cold rows: appends push precise rows, and a seal, retry sweep,
 abandon, or renumber pushes one `SessionSwept` resync marker; unwatched sessions pay no
 mutation log, and the live handoff widens the scope to every session. An idle daemon
 appends nothing to the raw ledger: the rotating audit verifies a file's committed

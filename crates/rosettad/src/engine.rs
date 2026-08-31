@@ -271,6 +271,12 @@ impl ColdEngine {
             let Some((lane, index, file)) = self.schedule.pop() else {
                 break;
             };
+            // One SQLite/document source may expose hundreds of virtual
+            // session members. The scheduler picks one representative, then
+            // removes every queued sibling so the snapshot driver sees the
+            // whole physical source and copies it exactly once.
+            let files = self.schedule.coalesce_source(index, file);
+            let file = &files[0];
             // Arm the row-effects scope from the hub's open session
             // subscriptions: the pass about to run collects a mutation log
             // only for transcripts a reader is actually watching, so its
@@ -291,7 +297,7 @@ impl ColdEngine {
                 &entry.runtime,
                 &entry.root,
                 cx.store,
-                std::slice::from_ref(&file),
+                &files,
                 pass_opts,
                 cx.instrument,
                 entry.ledger.as_mut(),
@@ -303,6 +309,8 @@ impl ColdEngine {
                 if lane == ColdLane::Starter {
                     self.starter_paused += 1;
                 }
+                // Only JSONL tasks can pause, and those never coalesce.
+                debug_assert_eq!(files.len(), 1);
                 self.schedule.requeue(index, file.clone());
             }
             // Fold the outcome onto the board: FRAMED PAYLOAD bytes to the
@@ -310,10 +318,7 @@ impl ColdEngine {
             // in the unassigned bucket) — physical reads amplify past any
             // census figure, payload never does — and completion when the
             // pass that just ran left nothing queued for the session.
-            let project = self
-                .plan
-                .project_of(index, &file.session_id)
-                .and_then(|row| row.project_id.clone());
+            let project = self.plan.source_project_of(index, file).map(str::to_owned);
             self.board.advance(project.as_deref(), report.payload_bytes);
             entry.stream.merge_from(&report);
             // A sibling's pass may have badged this session Indexed while
@@ -321,13 +326,24 @@ impl ColdEngine {
             // included). Readiness is the scheduler's to grant during cold:
             // hold Streaming until the session's last queued task is gone;
             // the audit pass below re-derives the final verdict either way.
-            if self.schedule.session_pending(&file.session_id) {
-                cx.store
-                    .set_session_stream_state(&file.session_id, StreamState::Streaming)
-                    .map_err(|error| format!("holding session readiness: {error}"))?;
-            } else if !paused {
-                self.board
-                    .session_done(project.as_deref(), &file.session_id);
+            let mut sessions = BTreeMap::new();
+            for member in &files {
+                sessions
+                    .entry(member.session_id.clone())
+                    .or_insert_with(|| {
+                        self.plan
+                            .project_of(index, &member.session_id)
+                            .and_then(|row| row.project_id.clone())
+                    });
+            }
+            for (session_id, project_id) in sessions {
+                if self.schedule.session_pending(&session_id) {
+                    cx.store
+                        .set_session_stream_state(&session_id, StreamState::Streaming)
+                        .map_err(|error| format!("holding session readiness: {error}"))?;
+                } else if !paused {
+                    self.board.session_done(project_id.as_deref(), &session_id);
+                }
             }
             self.publish_projects(cx.health);
             self.log_starter_drained();
@@ -339,12 +355,12 @@ impl ColdEngine {
     }
 
     /// The live lane during backfill: drain a bounded burst of watcher
-    /// hints per runtime. Known sources jump to the live lane — budgeted,
-    /// so they stay preemptible — and a claimed path no roster entry covers
-    /// re-runs bounded meta, so a session started mid-backfill appears
-    /// without waiting for the cold phase to end. Rescan hints defer to the
-    /// live phase's stat poll, and anything dropped here is caught by the
-    /// same poll after handoff.
+    /// hints per runtime. Known, not-yet-consumed sources jump to the live
+    /// lane — budgeted, so they stay preemptible — while a claimed physical
+    /// path no roster entry covers re-runs bounded meta. Once a source has
+    /// satisfied the metadata cut, later hints do not recreate cold work;
+    /// the live phase's stat poll catches that suffix after handoff. This is
+    /// the cold phase's termination guarantee under continuous writers.
     fn drain_hints(&mut self, cx: &mut ColdCx<'_>) -> Result<(), String> {
         for (index, entry) in cx.backfills.iter_mut().enumerate() {
             let mut needs_admission = false;
@@ -356,7 +372,15 @@ impl ColdEngine {
                     SourceEvent::Changed(path) => {
                         let mapping =
                             rosetta_pipeline::map_hint(entry.adapter, &entry.roster, &path);
-                        needs_admission |= mapping.needs_admission;
+                        // The metadata cut already settled membership for a
+                        // known physical snapshot. Its WAL movement may
+                        // reprioritize those known members, but re-enumerating
+                        // the database after every write would make one
+                        // active agent dominate the cold loop. New claimed
+                        // paths (no known nomination) still admit at once;
+                        // membership changes inside a known snapshot are
+                        // recovered by the live runner's opening poll.
+                        needs_admission |= mapping.needs_admission && mapping.nominated.is_empty();
                         for nominated in mapping.nominated {
                             if let Some(file) = entry
                                 .roster
@@ -387,7 +411,7 @@ impl ColdEngine {
                         .iter()
                         .any(|known| known.relative_path == file.relative_path)
                     {
-                        self.schedule.nominate_live(index, file.clone());
+                        self.schedule.admit_live(index, file.clone());
                         // Admit the file to the plan and board too: a session
                         // the rerun just settled reads its ownership off the
                         // row that rerun committed; a known session grows its
@@ -399,15 +423,16 @@ impl ColdEngine {
                         let settled = queries::session(cx.store.conn(), &file.session_id)
                             .map_err(|error| format!("reading admitted session: {error}"))?
                             .and_then(|session| session.project_id);
-                        if self.plan.admit(index, file, settled.clone()) {
+                        let admission = self.plan.admit(index, file, settled.clone());
+                        if admission.new_session {
                             self.board.seed_session(
                                 settled.as_deref(),
                                 &file.session_id,
-                                file.size,
+                                admission.bytes_added,
                             );
-                        } else {
+                        } else if admission.bytes_added > 0 {
                             self.board
-                                .extend_session(known_project.as_deref(), file.size);
+                                .extend_session(known_project.as_deref(), admission.bytes_added);
                         }
                     }
                 }

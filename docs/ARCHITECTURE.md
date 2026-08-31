@@ -38,15 +38,18 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > Fresh `serve` is progressive: the listener and empty public projection exist first, consent
 > precedes all reads, and every runtime is skimmed before streaming. Cold streaming then runs
 > through a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, round-robin across runtimes
-> inside the cold lanes). Watcher hints drain into the live lane DURING the backfill — an
-> actively-running session stays current mid-cold, and a claimed path no roster entry covers
-> re-runs bounded meta so a session started mid-backfill appears at once. The 500 ms mirror
+> inside the cold lanes). Watcher hints drain into the live lane DURING the backfill, but only to
+> reprioritize work inside the metadata cut; once that source's cold task has been consumed, later
+> growth belongs to the live runner and cannot recreate a cold obligation. This termination rule
+> lets canonical publication complete while agents keep writing. A claimed physical path no
+> roster entry covers still re-runs bounded meta so a genuinely new source appears immediately.
+> Virtual members of one document/database coalesce into one physical snapshot pass. The 500 ms mirror
 > rewarm poll is gone: metadata effects (identity keys only, collected on every path including
 > cold generations) are drained by the writer thread between passes into `Hub::absorb_meta`,
 > fanning precise `/ws/meta` diffs with no polling, no second read connection pinning the cold
 > WAL, and no hub mutation off the writer thread. Row effects run SCOPED during cold: each pass
 > arms the store with `Hub::watched_sessions` (the open `/ws/session` subscriptions), so an open
-> transcript streams in mid-backfill — appends push precise rows; a cold seal, retry sweep,
+> transcript receives its prioritized cold rows — appends push precise rows; a cold seal, retry sweep,
 > abandon, or append renumber pushes one `SessionSwept` marker and the subscriber re-snapshots —
 > while unwatched sessions pay no mutation log at all (their metadata still flows), and the live
 > handoff widens the scope to every session. The cold phase itself is one named unit,

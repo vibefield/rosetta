@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use crate::meta::SessionFile;
+use crate::sched::source_task_key;
 
 /// One session's share of the cold work, as the census measured it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +36,25 @@ pub struct SessionPlan {
 #[derive(Debug, Default)]
 struct RuntimePlan {
     sessions: BTreeMap<String, SessionPlan>,
+    sources: BTreeMap<String, SourcePlan>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SourcePlan {
+    /// A physical task is attributed once, to the first canonical session
+    /// metadata admitted for it. This is deliberately file-grained: a
+    /// database spanning projects cannot honestly split physical bytes by
+    /// query row without inventing precision.
+    project_id: Option<String>,
+}
+
+/// What one mid-cold admission added to the settled plan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlanAdmission {
+    pub new_session: bool,
+    /// Census bytes added by a genuinely new PHYSICAL source. A new virtual
+    /// member of an already-known snapshot adds zero.
+    pub bytes_added: u64,
 }
 
 /// The settled cold-work inventory, indexed like the backfill roster list.
@@ -69,30 +89,56 @@ impl IngestPlan {
 
     /// Admit one source file — plan construction, and the mid-cold admission
     /// path where a fresh meta rerun surfaced a brand-new session. Returns
-    /// `true` when this file's session was new to the plan.
+    /// the dimensions it added. Virtual members of one physical snapshot
+    /// share one source key and therefore charge census bytes exactly once.
     pub fn admit(
         &mut self,
         runtime: usize,
         file: &SessionFile,
         project_id: Option<String>,
-    ) -> bool {
+    ) -> PlanAdmission {
         let Some(entry) = self.runtimes.get_mut(runtime) else {
-            return false;
+            return PlanAdmission::default();
         };
         let new_session = !entry.sessions.contains_key(&file.session_id);
+        let source_key = source_task_key(file);
+        let new_source = !entry.sources.contains_key(&source_key);
+        if new_source {
+            entry.sources.insert(
+                source_key,
+                SourcePlan {
+                    project_id: project_id.clone(),
+                },
+            );
+        }
         let session = entry.sessions.entry(file.session_id.clone()).or_default();
         if new_session {
             session.project_id = project_id;
         }
-        session.files += 1;
-        session.bytes += file.size;
-        new_session
+        if new_source {
+            session.files += 1;
+            session.bytes += file.size;
+        }
+        PlanAdmission {
+            new_session,
+            bytes_added: if new_source { file.size } else { 0 },
+        }
     }
 
     /// The settled project of one planned session; the outer `None` means
     /// the session is not in the plan at all.
     pub fn project_of(&self, runtime: usize, session_id: &str) -> Option<&SessionPlan> {
         self.runtimes.get(runtime)?.sessions.get(session_id)
+    }
+
+    /// File-grained project attribution for one physical pass.
+    pub fn source_project_of(&self, runtime: usize, file: &SessionFile) -> Option<&str> {
+        self.runtimes
+            .get(runtime)?
+            .sources
+            .get(&source_task_key(file))?
+            .project_id
+            .as_deref()
     }
 
     /// Every planned session with its runtime index — the board's seed.
@@ -125,6 +171,15 @@ mod tests {
             agent_version: None,
             source_missing: false,
         }
+    }
+
+    fn snapshot_file(path: &str, session_id: &str, size: u64) -> SessionFile {
+        let mut file = file(path, session_id, size);
+        file.stream_id = "state-db".into();
+        file.file_format = FileFormat::Sqlite;
+        file.discipline = FileDiscipline::Database;
+        file.driver = StreamDriver::SqliteSnapshot;
+        file
     }
 
     fn owned(pairs: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
@@ -176,11 +231,14 @@ mod tests {
         let mut plan = IngestPlan::settle(&rosters, &owned(&[("s1", Some("p1"))]));
 
         assert!(
-            plan.admit(0, &file("fresh.jsonl", "s-new", 50), Some("p2".into())),
+            plan.admit(0, &file("fresh.jsonl", "s-new", 50), Some("p2".into()))
+                .new_session,
             "a brand-new session is new to the plan"
         );
         assert!(
-            !plan.admit(0, &file("a-growth.jsonl", "s1", 25), None),
+            !plan
+                .admit(0, &file("a-growth.jsonl", "s1", 25), None)
+                .new_session,
             "another file for a known session is not"
         );
         let s1 = plan.project_of(0, "s1").unwrap();
@@ -191,8 +249,38 @@ mod tests {
         );
         assert_eq!((s1.files, s1.bytes), (2, 125));
         assert!(
-            !plan.admit(9, &file("x.jsonl", "sx", 1), None),
+            !plan.admit(9, &file("x.jsonl", "sx", 1), None).new_session,
             "an unknown runtime index admits nothing"
         );
+    }
+
+    #[test]
+    fn a_virtual_snapshot_group_charges_its_physical_bytes_once() {
+        let rosters = vec![vec![
+            snapshot_file("state.sqlite#s1", "s1", 100),
+            snapshot_file("state.sqlite#s2", "s2", 100),
+            snapshot_file("other.sqlite#s3", "s3", 40),
+        ]];
+        let mut plan = IngestPlan::settle(
+            &rosters,
+            &owned(&[("s1", Some("p1")), ("s2", Some("p2")), ("s3", Some("p3"))]),
+        );
+
+        assert_eq!(plan.project_of(0, "s1").unwrap().bytes, 100);
+        assert_eq!(plan.project_of(0, "s2").unwrap().bytes, 0);
+        assert_eq!(plan.project_of(0, "s3").unwrap().bytes, 40);
+        assert_eq!(
+            plan.source_project_of(0, &rosters[0][1]),
+            Some("p1"),
+            "the physical task keeps its first file-grained attribution"
+        );
+
+        let admission = plan.admit(
+            0,
+            &snapshot_file("state.sqlite#s4", "s4", 100),
+            Some("p4".into()),
+        );
+        assert!(admission.new_session);
+        assert_eq!(admission.bytes_added, 0, "membership is not another db");
     }
 }
