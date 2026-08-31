@@ -42,17 +42,18 @@
    seat and the room says so. */
 .ah-cols {
   display: grid; height: 100%;
-  grid-template-columns: 260px 300px 280px minmax(0, 1fr) 0px;
+  grid-template-columns: 260px 300px 280px minmax(0, 1fr);
   transition: grid-template-columns 240ms var(--vf-ease-island);
 }
-.ah-cols[data-rail="off"] { grid-template-columns: 260px 300px 0px minmax(0, 1fr) 0px; }
-.ah-cols[data-foot="on"] { grid-template-columns: 260px 300px 280px minmax(0, 1fr) 280px; }
-.ah-cols[data-rail="off"][data-foot="on"] { grid-template-columns: 260px 300px 0px minmax(0, 1fr) 280px; }
-/* a closed guest leaves nothing behind — including its own hairline, which
-   would otherwise stand beside its neighbour's as a second line */
+.ah-cols[data-rail="off"] { grid-template-columns: 260px 300px 0px minmax(0, 1fr); }
+/* Four tracks, not the record's five. The design draws the worktree and the
+   session's git as two guests opening from two heads; they are one column
+   here — three tabs over one checkout — so the fifth track has nothing to
+   hold and a closed guest is the third track at 0px.
+   A closed guest leaves nothing behind, including its own hairline, which
+   would otherwise stand beside its neighbour's as a second line. */
 .ah-cols[data-rail="off"] .ah-col--rail,
-.ah-cols:not([data-foot="on"]) .ah-col--measure,
-.ah-col--foot { border-right: 0; }
+.ah-col--measure { border-right: 0; }
 /* the transcript head carries a range and an act, so they travel together */
 .ah-headacts { display: flex; align-items: center; gap: 8px; flex: none; }
 
@@ -467,8 +468,10 @@
 /* the only control in its row, so it takes the row: the same track and the
    same thumb, stretched — a switch's shape is its material, not its width */
 /* the two change groups head themselves like search's result groups do */
-.ah-col--foot .ah-group { padding-top: 10px; }
-.ah-col--foot .ah-group:first-child { padding-top: 6px; }
+/* Scoped to the rail because the record's fifth column is gone — files,
+   changes and history are three tabs of column ③ now. */
+.ah-col--rail .ah-group { padding-top: 10px; }
+.ah-col--rail .ah-group:first-child { padding-top: 6px; }
 
 /* ── the Transcript — a document, not a chat log ─────────────────────────── */
 .ah-transcript { max-width: 68ch; margin: 0 auto; padding: 20px 28px 30px; font-size: 14px; }
@@ -1442,3 +1445,15 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
    dot before the name says "and" without spending a second vocabulary */
 .ah-commitwho span[data-co]::before { content: "· "; color: var(--vf-text-faint); }
 .ah-commitwho time { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* three tabs over one checkout, so the track holds three */
+.ah-seg.ah-gitseg button { padding: 0 6px; }
+
+/* The agent that co-signed the commit, at the end of the message line.
+   §2.6's rule for provider identity: monochrome at `currentColor`, carrying
+   no hue of its own — the row's tint is the project's and this is not a
+   second colour competing with it. */
+.ah-commit__agents { flex: none; gap: 3px; margin-top: 1px; }
+.ah-commit__agents .ah-agent { width: 11px; height: 11px; opacity: 0.5; }
+.ah-commit:hover .ah-commit__agents .ah-agent,
+.ah-commit[data-selected] .ah-commit__agents .ah-agent { opacity: 0.75; }

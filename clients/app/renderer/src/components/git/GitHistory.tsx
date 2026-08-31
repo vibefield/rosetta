@@ -11,35 +11,43 @@
 //
 // The record's third rule was that the row carries no agent mark, because
 // "which one ran this session is already on the session row". That held for
-// the column it described, which was scoped to ONE session. This one is
-// scoped to the repository and lists commits from sessions that are not in
-// this room at all, so the session row cannot speak for them and the
-// redundancy the rule guarded against is gone.
-//
-// What it still does NOT get is the agent GLYPH — that is the provider
-// iconography the rule names, and it would be a second vocabulary for a fact
-// git already states in words. A co-author is shown the way git records it
-// and the way every other git client shows it: as a name in the byline.
+// the column it described, which was scoped to ONE session. This one is a
+// view of the PROJECT's repository and lists commits from sessions that are
+// not in this room at all — most of them from no session it has ever seen.
+// The session row cannot speak for them, so the redundancy the rule guarded
+// against does not exist here, and the mark is the fastest way to read a
+// history for who built it. It follows §2.6's rule for provider identity:
+// monochrome, at `currentColor`, carrying no hue of its own.
 //
 // The record also says the row is not pressable, "this proposal has no diff
 // view, and a hover fill would be promising one". There is a diff view now,
 // so the row is pressable and the promise is kept.
 
 import { EmptyState } from "../ui";
+import { AgentMark } from "../../lib/agents";
 import { lastActive } from "../../lib/format";
+import { creditedAgents } from "./co-author";
 import type { Commit } from "./types";
 
-/** Everyone git says wrote this commit: the author who signed it, then the
- * co-authors it names — which in this room is usually the agent. */
+/**
+ * Everyone git says wrote this commit, minus the agents the row is already
+ * drawing as marks.
+ *
+ * A recognised agent is a glyph at the end of the message line; naming it
+ * here as well would spend a 280px row saying the same thing twice. An
+ * UNRECOGNISED co-author is a person, and keeps their name.
+ */
 function byline(commit: Commit): string {
+  const drawn = new Set(creditedAgents(commit.coAuthors).map((agent) => agent.label));
   return [commit.author, ...commit.coAuthors.map((author) => author.name)]
-    .filter((name) => name !== "")
+    .filter((name) => name !== "" && !drawn.has(name))
     .join(", ");
 }
 
 export interface GitHistoryProps {
   readonly commits: readonly Commit[];
-  readonly selectedSha: string | null;
+  /** The commit the column has opened, so the row it came from stays lit. */
+  readonly selectedSha: Commit | null;
   readonly onSelect: (commit: Commit) => void;
   readonly currentTimestamp: number;
 }
@@ -81,17 +89,26 @@ export function GitHistory({
 
   return (
     <div className="ah-scroll">
-      {commits.map((commit) => (
+      {commits.map((commit) => {
+        const agents = creditedAgents(commit.coAuthors);
+        return (
         <button
           type="button"
           className="ah-commit"
           key={commit.sha}
-          data-selected={commit.sha === selectedSha ? "" : undefined}
+          data-selected={commit.sha === selectedSha?.sha ? "" : undefined}
           onClick={() => onSelect(commit)}
         >
           {commit.pushed === false && <PushMark />}
           <span className="ah-commit__l1">
             <strong title={commit.subject}>{commit.subject}</strong>
+            {agents.length > 0 && (
+              <span className="ah-agents ah-commit__agents">
+                {agents.map((agent) => (
+                  <AgentMark key={agent.kind} kind={agent.kind} note={agent.label} />
+                ))}
+              </span>
+            )}
           </span>
           <span className="ah-commit__meta">
             <span className="ah-commit__who" title={byline(commit)}>
@@ -118,7 +135,8 @@ export function GitHistory({
             <span className="ah-last">{lastActive(commit.timestampMs, currentTimestamp)}</span>
           </span>
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }

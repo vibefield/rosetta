@@ -3,6 +3,10 @@
 
 import type { PortFileExplorer } from "@vibecook/mille/port";
 
+/** The three views this column offers of one project: the worktree as it
+ * stands, what git has not recorded yet, and what it has. */
+export type RepoTab = "files" | "changes" | "history";
+
 /** A live connection to one mille engine, and the root it is walking.
  *
  * The root travels WITH the connection rather than beside it: the engine

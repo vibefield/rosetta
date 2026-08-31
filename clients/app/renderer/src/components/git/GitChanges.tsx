@@ -12,6 +12,34 @@ import { buildPathTree, filesUnder } from "./path-tree";
 import type { TreeRow } from "./path-tree";
 import type { StatusEntry, StatusLetter } from "./types";
 
+/** `2 added · 5 modified · 1 deleted` — what git would say about this set in
+ * one line, counted off the entries the column is drawing. */
+export function changeShapeOf(entries: readonly StatusEntry[]): string {
+  const tally = { added: 0, modified: 0, deleted: 0, untracked: 0, conflicted: 0 };
+  for (const entry of entries) {
+    // One file, one word: the index's letter is what a commit would record,
+    // so it speaks first.
+    const letter = entry.index ?? entry.worktree;
+    if (letter === "A") tally.added += 1;
+    else if (letter === "D") tally.deleted += 1;
+    else if (letter === "?") tally.untracked += 1;
+    else if (letter === "U") tally.conflicted += 1;
+    else if (letter !== null) tally.modified += 1;
+  }
+  return (
+    [
+      [tally.conflicted, "conflicted"],
+      [tally.added, "added"],
+      [tally.modified, "modified"],
+      [tally.deleted, "deleted"],
+      [tally.untracked, "untracked"],
+    ] as const
+  )
+    .filter(([count]) => count > 0)
+    .map(([count, word]) => `${count} ${word}`)
+    .join(" · ");
+}
+
 export interface GitChangesProps {
   readonly entries: readonly StatusEntry[];
   readonly sessionPaths: ReadonlySet<string>;

@@ -15,8 +15,8 @@ import type { SessionFacts } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import type { ThreadFocus } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
-import { GitColumn, sessionFilePaths, useGuests } from "./components/git";
-import { WorktreeColumn } from "./components/worktree";
+import { sessionFilePaths } from "./components/git";
+import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
 import {
   useDaemonStatus,
   useMeta,
@@ -189,12 +189,11 @@ export default function App() {
     [feed.rows, projectRoot],
   );
 
-  /* ── the two guests, per H-3 ────────────────────────────────────────────
-     "The rail is a guest; the measure is not" — and with two of them, the
-     newer takes the seat and the room says which one left. */
-  const guests = useGuests(projectRoot, (evicted) =>
-    showReceipt(evicted === "git" ? "git closed — the room seats one" : "worktree closed — the room seats one"),
-  );
+  /* ── column ③, a guest per H-3 ──────────────────────────────────────────
+     Files, changes and history are one column now, so the room is back to
+     one guest and the record's original rule applies unchanged: below a
+     1360px frame it closes rather than squeeze the transcript. */
+  const worktree = useWorktreeGuest(projectRoot);
 
   /* ── one search view model shared by all three result columns ───────── */
   const searchResults = useMemo(() => {
@@ -279,8 +278,7 @@ export default function App() {
           <div
             className="ah-cols"
             data-mode={searching ? "search" : "browse"}
-            data-rail={guests.worktreeVisible ? "on" : "off"}
-            data-foot={guests.gitVisible ? "on" : undefined}
+            data-rail={worktree.visible ? "on" : "off"}
           >
             <ProjectsColumn
               projects={projectViewModels}
@@ -306,8 +304,10 @@ export default function App() {
               activityGridStartTimestamp={getActivityGridStartTimestamp(nowMs)}
               currentTimestamp={nowMs}
               ingest={ingest}
-              isWorktreeVisible={guests.available ? guests.worktreeVisible : null}
-              onToggleWorktree={() => guests.toggle("worktree")}
+              isWorktreeVisible={
+                worktree.available && projectRoot !== null ? worktree.visible : null
+              }
+              onToggleWorktree={worktree.toggle}
               onSessionSelect={(selectedSession) => {
                 if (searching) {
                   setQuery("");
@@ -323,12 +323,11 @@ export default function App() {
               projectRoot={projectRoot}
               tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
               homeDirectory={home}
+              sessionPaths={sessionPaths}
+              currentTimestamp={nowMs}
               onReceipt={showReceipt}
             />
-            {/* Column ⑤ — always in the grid; closed, it is a 0px track. */}
             <TranscriptColumn
-              isGitVisible={guests.available ? guests.gitVisible : null}
-              onToggleGit={() => guests.toggle("git")}
               session={session}
               sessions={meta?.sessions ?? []}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
@@ -338,13 +337,6 @@ export default function App() {
               onReceipt={showReceipt}
               searchResults={searchResults}
               onOpenHit={openHit}
-            />
-            <GitColumn
-              tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
-              homeDirectory={home}
-              sessionPaths={sessionPaths}
-              currentTimestamp={nowMs}
-              onReceipt={showReceipt}
             />
           </div>
         )}

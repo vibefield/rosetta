@@ -1,18 +1,22 @@
-// Column ⑤ — the repository's git.
+// The git half of column ③ — what the repository has not recorded yet, and
+// what it has. The column that hosts these lives in `components/worktree`,
+// because files, changes and history are three views of one checkout.
 
+export { ChangeTree } from "./ChangeTree";
+export { creditedAgents } from "./co-author";
 export { CommitDetail } from "./CommitDetail";
-export { GitColumn } from "./GitColumn";
-export type { GitColumnProps } from "./GitColumn";
+export { createGitFileSource, diffHandle } from "./git-file-source";
+export { useGitClient, useGitRead } from "./git-host";
+export { changeShapeOf, GitChanges } from "./GitChanges";
+export { GitHistory } from "./GitHistory";
+export { buildPathTree, filesUnder } from "./path-tree";
 export { sessionFilePaths } from "./session-files";
-export { useGuests } from "./use-git-guest";
-export type { Guests, GuestName } from "./use-git-guest";
 export type {
   BranchFacts,
   CoAuthor,
   Commit,
   CommitFile,
   GitClient,
-  GitView,
   StatusEntry,
   StatusLetter,
 } from "./types";
