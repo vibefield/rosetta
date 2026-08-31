@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { IngestProgress } from "@rosetta/protocol";
-import { censusProgress, isCensusRunning, isIngestActive } from "../../lib/ingest";
+import { censusProgress, isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { PortfolioSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar, SegmentedControl, Veil } from "../ui";
@@ -44,6 +44,9 @@ export function ProjectsColumn({
   // is down and rows keep materializing beneath it. Once every runtime is
   // streaming, the list is whole and only the figures still cook.
   const censusRunning = isCensusRunning(ingest);
+  // The daemon's per-project fold: each cooking card draws its own byte
+  // meter from this, so progress reads at the row you actually care about.
+  const backfills = useMemo(() => projectBackfills(ingest), [ingest]);
   const sessionsFound = useMemo(
     () => projects.reduce((total, project) => total + project.sessionCount, 0),
     [projects],
@@ -103,6 +106,7 @@ export function ProjectsColumn({
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
+          projectBackfills={backfills}
           pending={censusRunning}
           onProjectSelect={onProjectSelect}
         />

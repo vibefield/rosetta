@@ -1,5 +1,7 @@
 import type { CSSProperties } from "react";
+import type { ProjectBackfill } from "@rosetta/protocol";
 import { AgentBadges } from "../../lib/agents";
+import { projectBackfillProgress } from "../../lib/ingest";
 import { fmtTokens, lastActive, tildePath, tokenText } from "../../lib/format";
 import type { ProjectViewModel } from "../../lib/model";
 import { ProjectActivitySparkline } from "./ProjectActivitySparkline";
@@ -7,6 +9,7 @@ import { ProjectActivitySparkline } from "./ProjectActivitySparkline";
 type ProjectListItemStyle = CSSProperties & {
   "--project-color": string;
   "--spend-share": string;
+  "--ingest-fill"?: string;
 };
 
 function TokenFigure({
@@ -38,6 +41,9 @@ export interface ProjectListItemProps {
   readonly currentTimestamp: number;
   /** A backfill is running — projects with unindexed sessions cook. */
   readonly ingestActive: boolean;
+  /** This project's row in the daemon's per-project backfill fold; null
+   * before the plan settles, and on a daemon too old to carry it. */
+  readonly backfill: ProjectBackfill | null;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -49,11 +55,24 @@ export function ProjectListItem({
   homeDirectory,
   currentTimestamp,
   ingestActive,
+  backfill,
   onProjectSelect,
 }: ProjectListItemProps) {
   // The cooking card: identity (name, path, agents) renders as itself from
   // the first skim; only the quantitative slots carry the processing state.
   const isCooking = ingestActive && project.readiness !== "ready";
+  // The board's fold turns the stove determinate: the accent fills to the
+  // project's byte meter instead of breathing. No fold (old daemon, plan
+  // not settled) degrades to the indeterminate breathe it always had.
+  const ingestFill = isCooking && backfill !== null
+    ? projectBackfillProgress(backfill)
+    : null;
+  const cookingLabel = isCooking
+    ? backfill !== null
+      ? `figures still cooking · ${backfill.sessions_done.toLocaleString()} of ${backfill.sessions_total.toLocaleString()} sessions` +
+        (ingestFill !== null ? ` · ${Math.round(ingestFill * 100)}% read` : "")
+      : `figures still cooking · ${project.indexedSessionCount} of ${project.sessionCount} sessions indexed`
+    : null;
   const spendShare = maximumTokensLast30Days > 0
     ? (project.tokensLast30Days / maximumTokensLast30Days) * 100
     : 0;
@@ -72,16 +91,20 @@ export function ProjectListItem({
       type="button"
       className={`ah-project-list-item${isSelected ? " is-selected" : ""}`}
       data-cooking={isCooking ? "" : undefined}
+      data-fill={ingestFill !== null ? "" : undefined}
       style={{
         "--project-color": project.tint,
         "--spend-share": `${spendShare.toFixed(2)}%`,
+        ...(ingestFill !== null
+          ? { "--ingest-fill": `${Math.max(2, ingestFill * 100).toFixed(1)}%` }
+          : {}),
       } as ProjectListItemStyle}
       aria-current={isSelected ? "true" : undefined}
       aria-label={`${project.row.name} · ${tokenText(
         project.tokensLast30Days,
       )} tokens over 30 days${searchHitLabel}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
-      }`}
+      }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
       onClick={() => onProjectSelect(project.row.id)}
     >
       <i className="ah-project-list-item__accent" />
@@ -101,11 +124,7 @@ export function ProjectListItem({
         <span
           className="ah-project-list-item__metrics"
           data-cooking={isCooking ? "" : undefined}
-          title={
-            isCooking
-              ? `figures still cooking · ${project.indexedSessionCount} of ${project.sessionCount} sessions indexed`
-              : undefined
-          }
+          title={cookingLabel ?? undefined}
         >
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
           <TokenFigure

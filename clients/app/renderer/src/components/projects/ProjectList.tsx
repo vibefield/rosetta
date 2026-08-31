@@ -1,3 +1,4 @@
+import type { ProjectBackfill } from "@rosetta/protocol";
 import type { ProjectViewModel } from "../../lib/model";
 import { EmptyState } from "../ui";
 import { ProjectListItem } from "./ProjectListItem";
@@ -13,6 +14,8 @@ export interface ProjectListProps {
   readonly currentTimestamp: number;
   /** A backfill is running: unfinished projects cook rather than lie. */
   readonly ingestActive: boolean;
+  /** The daemon's per-project backfill fold, keyed by project id. */
+  readonly projectBackfills: ReadonlyMap<string, ProjectBackfill>;
   /** The list itself is still being censused — only the ready may claim
    * emptiness, so the empty state yields to the section's veil. */
   readonly pending: boolean;
@@ -27,6 +30,7 @@ export function ProjectList({
   homeDirectory,
   currentTimestamp,
   ingestActive,
+  projectBackfills,
   pending,
   onProjectSelect,
 }: ProjectListProps) {
@@ -44,6 +48,7 @@ export function ProjectList({
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
+          backfill={projectBackfills.get(project.row.id) ?? null}
           onProjectSelect={onProjectSelect}
         />
       ))}

@@ -866,6 +866,20 @@ code, .mono { font-family: var(--vf-font-mono); }
 }
 @keyframes ah-stove { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
 
+/* …and once the daemon's per-project fold names a figure, the stove turns
+   determinate: the same accent becomes the meter, filled from the floor in
+   the project's own tint over an ember of itself. Geometry never moves —
+   the bar was always there — and the fill eases on the veil's clock. */
+.ah-project-list-item[data-cooking][data-fill] .ah-project-list-item__accent {
+  animation: none;
+  opacity: 0.9;
+  background:
+    linear-gradient(var(--project-color), var(--project-color))
+      bottom / 100% var(--ingest-fill) no-repeat,
+    color-mix(in srgb, var(--project-color) 24%, transparent);
+  transition: background-size 600ms var(--vf-ease-island), opacity 160ms ease;
+}
+
 /* the first run's honest room: per-runtime meters, no fiction */
 .ah-coldstart { display: flex; flex-direction: column; gap: 9px; width: min(340px, 84%); margin-top: 4px; }
 .ah-coldstart__row { display: grid; grid-template-columns: 86px 1fr; gap: 3px 10px; align-items: center; text-align: left; }

@@ -3,7 +3,8 @@
 // every veil and cooking affordance keys off these derivations plus
 // SessionRow.stream_state, and nothing else. A daemon too old to carry the
 // block yields null throughout, which degrades to today's behavior.
-import type { IngestProgress, SessionRow } from "@rosetta/protocol";
+import type { IngestProgress, ProjectBackfill, SessionRow } from "@rosetta/protocol";
+import { UNASSIGNED_PROJECT_ID } from "./model";
 
 /** The backfill is still running: veils may be down, cards may cook. */
 export function isIngestActive(ingest: IngestProgress | null): boolean {
@@ -56,6 +57,29 @@ export function backfillProgress(ingest: IngestProgress | null): number | null {
  * the cooking card; during live it marks a transcript still being read. */
 export function isSessionCooking(session: SessionRow): boolean {
   return session.stream_state !== "indexed";
+}
+
+/** The daemon's per-project backfill fold, keyed the way the room keys
+ * projects — the canonical id, with the daemon's unassigned bucket under
+ * UNASSIGNED_PROJECT_ID. Empty until the skims settle the plan, and empty
+ * on a daemon too old to carry the fold, so every consumer degrades to the
+ * meta-derived cooking state it had before. */
+export function projectBackfills(
+  ingest: IngestProgress | null,
+): ReadonlyMap<string, ProjectBackfill> {
+  const index = new Map<string, ProjectBackfill>();
+  for (const row of ingest?.projects ?? []) {
+    index.set(row.project_id ?? UNASSIGNED_PROJECT_ID, row);
+  }
+  return index;
+}
+
+/** One project's byte meter, 0..1. A source that grew mid-backfill can
+ * overshoot its census total, so the meter clamps; null when the census
+ * counted nothing to read. */
+export function projectBackfillProgress(row: ProjectBackfill): number | null {
+  if (row.bytes_total === 0) return null;
+  return Math.min(1, row.bytes_streamed / row.bytes_total);
 }
 
 /** "2,314 of 5,912 sessions" — the veil labels' one counting form. */
