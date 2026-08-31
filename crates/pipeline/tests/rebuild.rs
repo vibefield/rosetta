@@ -6,13 +6,15 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
+use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
 use rosetta_capture::{Ledger, LedgerEntry, SourceDef, scan_ledger};
+use rosetta_core::ids;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, discover, expand_data_root, meta_ingest_into, rebuild_runtime,
-    stream_backfill_into,
+    IngestOptions, Instrument, SliceBudget, discover, expand_data_root, meta_ingest_into,
+    rebuild_runtime, stream_backfill_into,
 };
 use rosetta_store::{Store, queries};
 use tempfile::TempDir;
@@ -413,4 +415,334 @@ fn rebuild_retains_the_clean_generation_but_downgrades_an_unclean_latest_seal() 
         )
         .unwrap();
     assert_eq!(state, "streaming");
+}
+
+// ---------------------------------------------------------------------------
+// Dirty-source rebuild parity.
+//
+// The runtime converged on live-growth semantics for a source that goes bad
+// partway through (`dirty_sources_converge_on_live_growth_semantics` in
+// tests/slice.rs): the parseable rows publish, sliced or not, and readiness
+// never leaves Streaming. Replay owes the reader the SAME projection from the
+// ledger alone — a rebuild that abandoned where the runtime activated would
+// silently empty a transcript the user was already reading.
+//
+// Codex is the stress corpus here for the reason it is there: its cumulative
+// usage counters have to survive every boundary the ledger draws.
+
+fn codex_runtime() -> RuntimeRow {
+    let adapter = &CodexAdapter;
+    RuntimeRow {
+        id: ids::runtime_id(adapter.kind(), &adapter.layout().data_root),
+        kind: adapter.kind().to_owned(),
+        data_root: adapter.layout().data_root.clone(),
+        enabled: true,
+        account: None,
+        config: None,
+        skills: None,
+        versions_seen: None,
+        discovered_at: 1,
+    }
+}
+
+/// Line 39 sits well past the first budgeted slice, so a sliced run activates
+/// and seals a clean prefix several passes before any pass reads the damage.
+const DIRTY_LINE: usize = 39;
+
+/// A one-session codex corpus with one mid-file line replaced by a byte that
+/// frames as a COMPLETE record and cannot parse: a hard error surrounded by
+/// good records, not a torn tail.
+fn dirty_codex_corpus(root: &std::path::Path) {
+    generate(&CorpusSpec::new(Agent::Codex, 1, 60, 11), root).unwrap();
+    let path: PathBuf = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .expect("the corpus wrote one jsonl source");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    assert!(
+        DIRTY_LINE < lines.len(),
+        "the corpus must reach line {DIRTY_LINE}"
+    );
+    lines[DIRTY_LINE] = "{".to_string();
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+}
+
+fn timeline_rows(store: &Store) -> Vec<rosetta_core::TimelineEntry> {
+    queries::timeline_page(store.conn(), &only_session(store), None, 10_000).unwrap()
+}
+
+type BucketRow = (i64, String, Option<i64>, Option<i64>, i64, i64);
+
+fn usage_buckets(store: &Store) -> Vec<BucketRow> {
+    let mut stmt = store
+        .conn()
+        .prepare(
+            "SELECT hour_ts, model, in_tokens, out_tokens, message_count, tool_call_count
+             FROM usage_bucket ORDER BY hour_ts, model",
+        )
+        .unwrap();
+    stmt.query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+        ))
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap()
+}
+
+/// The single-session corpora below give both stores exactly one session, and
+/// reading it back rather than carrying the id in proves the rebuilt store
+/// minted the same one.
+fn only_session(store: &Store) -> String {
+    let sessions = queries::session_list(store.conn(), None, 1000).unwrap();
+    assert_eq!(sessions.len(), 1, "the corpus holds one session");
+    sessions[0].id.clone()
+}
+
+fn session_stream_state(store: &Store) -> String {
+    store
+        .conn()
+        .query_row(
+            "SELECT stream_state FROM session WHERE id = ?1",
+            [&only_session(store)],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// Every seal in write order as `(generation, clean)`, plus how many raw
+/// records were written AFTER the last of them. Both proofs below assert the
+/// shape they claim to exercise, so a runtime change that stops producing it
+/// fails here loudly instead of quietly making the proof vacuous.
+fn ledger_shape(ledger_dir: &std::path::Path) -> (Vec<(u64, bool)>, usize) {
+    let entries = scan_ledger(ledger_dir).unwrap().entries;
+    let seals = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LedgerEntry::GenerationComplete {
+                generation,
+                normalized_clean,
+                ..
+            } => Some((*generation, *normalized_clean)),
+            _ => None,
+        })
+        .collect();
+    let raw_after_last_seal = entries
+        .iter()
+        .rposition(|entry| matches!(entry, LedgerEntry::GenerationComplete { .. }))
+        .map(|last| {
+            entries[last + 1..]
+                .iter()
+                .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
+                .count()
+        })
+        .unwrap_or_default();
+    (seals, raw_after_last_seal)
+}
+
+#[test]
+fn dirty_first_generation_rebuilds_to_its_parseable_rows() {
+    let adapter = &CodexAdapter;
+    let root = TempDir::new().unwrap();
+    dirty_codex_corpus(root.path());
+    let runtime = codex_runtime();
+    let ledger_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(ledger_dir.path()).unwrap();
+    let opts = IngestOptions::default();
+    let instrument = Instrument::new();
+
+    // One unbudgeted pass: the first generation reaches EOF unclean, so the
+    // ledger's ONLY seal for this path is an unclean one.
+    let mut live = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &runtime,
+        root.path(),
+        &mut live,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    let pass = stream_backfill_into(
+        adapter,
+        &runtime,
+        root.path(),
+        &mut live,
+        &files,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(pass.hard_errors, 1, "the corrupt line is one hard error");
+    assert_eq!(pass.files_incomplete, 1);
+    ledger.flush().unwrap();
+    drop(ledger);
+
+    let (seals, raw_after_last_seal) = ledger_shape(ledger_dir.path());
+    assert_eq!(
+        seals.len(),
+        1,
+        "one EOF seal, and it is the only one this path ever gets"
+    );
+    assert!(!seals[0].1, "that only seal is unclean");
+    assert_eq!(raw_after_last_seal, 0, "nothing follows the EOF seal");
+
+    let live_rows = timeline_rows(&live);
+    assert!(
+        !live_rows.is_empty(),
+        "a dirty first generation publishes its parseable rows"
+    );
+    assert_eq!(session_stream_state(&live), "streaming");
+
+    let mut rebuilt = Store::open_in_memory().unwrap();
+    let replayed = rebuild_runtime(
+        adapter,
+        &runtime,
+        ledger_dir.path(),
+        &mut rebuilt,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert!(
+        replayed.hard_errors > 0,
+        "the raw ledger carried the damage into replay"
+    );
+
+    assert_eq!(
+        timeline_rows(&rebuilt),
+        live_rows,
+        "replay must publish the same parseable rows the runtime did"
+    );
+    assert_eq!(usage_buckets(&rebuilt), usage_buckets(&live));
+    assert_eq!(session_stream_state(&rebuilt), "streaming");
+
+    // The load-bearing bit: no clean seal ever existed on this path, so replay
+    // elects the unclean one and ACTIVATES it. Abandoning would leave the
+    // cursor parked at generation 0 with nothing published.
+    let cursor = queries::cursor_state(rebuilt.conn(), &runtime.id, &files[0].relative_path)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        cursor.active_generation, 0,
+        "the only-dirty generation activated on replay"
+    );
+}
+
+#[test]
+fn sliced_dirty_ledger_rebuilds_to_the_same_projection() {
+    let adapter = &CodexAdapter;
+    let root = TempDir::new().unwrap();
+    dirty_codex_corpus(root.path());
+    let runtime = codex_runtime();
+    let ledger_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(ledger_dir.path()).unwrap();
+    let opts = IngestOptions {
+        starter_budget: Some(SliceBudget {
+            max_bytes: 1,
+            min_records: 10,
+        }),
+        audit_files_per_run: 0,
+        ..IngestOptions::default()
+    };
+    let instrument = Instrument::new();
+
+    let mut live = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &runtime,
+        root.path(),
+        &mut live,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+
+    // Budgeted passes until one finally reads the corrupt line. Every pause
+    // seals a CLEAN generation; the passes after it are append growth on that
+    // same generation, so the damage lands in the ledger as post-seal appends.
+    let mut passes = 0;
+    loop {
+        passes += 1;
+        assert!(
+            passes <= 32,
+            "the budgeted passes never reached the corrupt line"
+        );
+        let report = stream_backfill_into(
+            adapter,
+            &runtime,
+            root.path(),
+            &mut live,
+            &files,
+            &opts,
+            &instrument,
+            Some(&mut ledger),
+        )
+        .unwrap();
+        if report.hard_errors > 0 {
+            assert_eq!(report.files_incomplete, 1);
+            break;
+        }
+        assert_eq!(report.files_paused, 1, "a clean budgeted pass pauses");
+    }
+    assert!(
+        passes > 1,
+        "the seal must land before the damage, not with it"
+    );
+    ledger.flush().unwrap();
+    drop(ledger);
+
+    // The shape this proof exists for: a CLEAN seal, then raw appends that
+    // include the damage. Growth on an already-active generation is never
+    // resealed, so the seal cannot know what came after it.
+    let (seals, raw_after_last_seal) = ledger_shape(ledger_dir.path());
+    assert_eq!(seals.len(), 1, "the pause sealed once");
+    assert!(seals[0].1, "the sealed prefix was clean");
+    assert!(
+        raw_after_last_seal > 0,
+        "the dirty remainder is post-seal append growth"
+    );
+
+    let live_rows = timeline_rows(&live);
+    assert!(
+        !live_rows.is_empty(),
+        "the sliced prefix and its append growth are readable"
+    );
+    assert_eq!(session_stream_state(&live), "streaming");
+
+    // THE PROOF: a clean seal followed by dirty appends is the live-growth
+    // shape. Replay must activate at that seal and keep applying the appends —
+    // abandoning on the later dirt would empty a transcript the reader has.
+    let mut rebuilt = Store::open_in_memory().unwrap();
+    let replayed = rebuild_runtime(
+        adapter,
+        &runtime,
+        ledger_dir.path(),
+        &mut rebuilt,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert!(
+        replayed.hard_errors > 0,
+        "the post-seal appends carried the damage into replay"
+    );
+
+    assert_eq!(
+        timeline_rows(&rebuilt),
+        live_rows,
+        "a sliced dirty ledger must rebuild to the sliced projection"
+    );
+    assert_eq!(usage_buckets(&rebuilt), usage_buckets(&live));
+    assert_eq!(session_stream_state(&rebuilt), "streaming");
 }
