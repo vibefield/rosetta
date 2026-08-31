@@ -14,7 +14,7 @@ use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot,
 };
-use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ResourceRef};
+use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ResourceRef, ToolAction};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -573,8 +573,11 @@ fn tool_call(
         tool_id,
         Some(tool_id),
     );
-    row.tool = Some(match projected {
-        Ok(tool) => tool,
+    let (tool, is_delegate) = match projected {
+        Ok(tool) => {
+            let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
+            (tool, is_delegate)
+        }
         Err(error) => {
             ops.push(drift(
                 ctx,
@@ -584,17 +587,24 @@ fn tool_call(
                 &projection_shape_paths(&input),
                 Some(ts),
             ));
-            unknown_interaction(
-                tool_id.to_owned(),
-                rosetta_core::CorrelationDerivation::NativeId,
-                Some(tool_id.to_owned()),
-                None,
-                name.to_owned(),
-                None,
+            (
+                unknown_interaction(
+                    tool_id.to_owned(),
+                    rosetta_core::CorrelationDerivation::NativeId,
+                    Some(tool_id.to_owned()),
+                    None,
+                    name.to_owned(),
+                    None,
+                ),
+                false,
             )
         }
-    });
-    if name == "Agent" {
+    };
+    row.tool = Some(tool);
+    // Native naming cannot establish a canonical action. If the projector
+    // rejected this writer version or request shape, the Unknown opener must
+    // not later receive a Delegate-only child-session patch.
+    if is_delegate {
         row.branch_tool_id = Some(tool_id.to_owned());
         state.delegate_calls.insert(tool_id.to_owned());
     }

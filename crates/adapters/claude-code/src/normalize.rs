@@ -23,7 +23,7 @@ use rosetta_core::rows::{
 };
 use rosetta_core::timeline::{
     AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
-    ResourceRef, ResponseGroup, StatusBasis, TimelineGroup,
+    ResourceRef, ResponseGroup, StatusBasis, TimelineGroup, ToolAction,
 };
 use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
 use serde::{Deserialize, Serialize};
@@ -49,11 +49,6 @@ const UNKNOWN_FIELDS: &str = "unknown_fields";
 /// match the canonical file's own sentinel style (`<unmatched>`, `<str>`).
 const NO_TYPE: &str = "<none>";
 const INVALID_JSON: &str = "<invalid-json>";
-
-/// Tools that spawn a subagent thread: their row is the anchor a child session
-/// hangs from. `Agent` is the current name and `Task` the older one — both are
-/// live in the observed corpus (census `tool_use_names`: 2,237 and 71).
-const SPAWN_TOOLS: [&str; 2] = ["Agent", "Task"];
 
 /// Adapter-private per-file response-fold state.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -361,8 +356,11 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     Some(id),
                     None,
                 );
-                row.tool = Some(match projected {
-                    Ok(tool) => tool,
+                let (tool, is_delegate) = match projected {
+                    Ok(tool) => {
+                        let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
+                        (tool, is_delegate)
+                    }
                     Err(error) => {
                         emit.drift(
                             error.drift_code(),
@@ -371,17 +369,25 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                             ts,
                             Some(&line.version),
                         );
-                        unknown_interaction(
-                            id,
-                            CorrelationDerivation::NativeId,
-                            Some(id.clone()),
-                            None,
-                            name,
-                            None,
+                        (
+                            unknown_interaction(
+                                id,
+                                CorrelationDerivation::NativeId,
+                                Some(id.clone()),
+                                None,
+                                name,
+                                None,
+                            ),
+                            false,
                         )
                     }
-                });
-                if SPAWN_TOOLS.contains(&name.as_str()) {
+                };
+                row.tool = Some(tool);
+                // A native name is not enough to establish canonical
+                // delegation. In particular, an unpinned writer is projected
+                // as Unknown; remembering that opener as a delegate would make
+                // its later result an invalid cross-family update.
+                if is_delegate {
                     row.branch_tool_id = Some(id.clone());
                     emit.remember_delegate_call(id);
                 }

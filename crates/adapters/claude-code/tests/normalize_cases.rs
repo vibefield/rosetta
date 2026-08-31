@@ -636,6 +636,48 @@ fn incidental_agent_id_does_not_link_a_non_delegate_tool() {
 }
 
 #[test]
+fn unpinned_agent_writer_does_not_emit_a_delegate_only_update() {
+    let mut opener = assistant(
+        json!([{"type": "tool_use", "id": "toolu_spawn", "name": "Agent",
+                "input": {"prompt": "go", "description": "sub"}}]),
+        None,
+    );
+    opener["version"] = json!("2.1.251");
+    let mut result = user(
+        json!([{"type": "tool_result", "tool_use_id": "toolu_spawn"}]),
+        json!({"toolUseResult": {"agentId": "a4f994cdced06ed01"}}),
+    );
+    result["version"] = json!("2.1.251");
+
+    let lines = vec![opener, result];
+    let (ops, statuses) = run(&lines);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    assert_eq!(
+        run_with_checkpoint(&lines, 1),
+        ops,
+        "an unpinned native Agent opener must stay non-delegate across restart"
+    );
+    let opener = messages(&ops)[0];
+    assert!(matches!(
+        tool(opener).map(|tool| &tool.action),
+        Some(ToolAction::Unknown {})
+    ));
+    assert_eq!(opener.parent_tool_native_id, None);
+    let patch = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("tool result patch");
+    assert_eq!(patch.delegate_child_session_id, None);
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+}
+
+#[test]
 fn read_image_results_do_not_cross_the_canonical_boundary() {
     let encoded_png_signature = "iVBORw0KGgo=";
     let (ops, _) = run(&[user(

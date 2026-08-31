@@ -336,6 +336,54 @@ fn tool_results_are_merge_ops_not_timeline_rows() {
 }
 
 #[test]
+fn unpinned_agent_writer_does_not_emit_a_delegate_only_update() {
+    let mut ctx = synthetic_context();
+    ctx.agent_version = Some("0.39.0".into());
+    let call = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","event":{"type":"tool.call","stepUuid":"step-1","toolCallId":"call-agent","name":"Agent","args":{"prompt":"go","description":"sub"}},"time":1}"#,
+    );
+    assert_eq!(call.status, LineStatus::Parsed);
+    let [IngestOp::Drift(_), IngestOp::Message(opener)] = call.ops.as_slice() else {
+        panic!(
+            "expected projector drift and unknown opener, got {:?}",
+            call.ops
+        );
+    };
+    assert!(matches!(
+        tool(opener).map(|tool| &tool.action),
+        Some(ToolAction::Unknown {})
+    ));
+    assert_eq!(opener.parent_tool_native_id, None);
+
+    let checkpoint = KimiCodeAdapter
+        .checkpoint_state(ctx.state.as_deref())
+        .expect("checkpoint serializes")
+        .expect("state payload");
+    let mut resumed = synthetic_context();
+    resumed.agent_version = ctx.agent_version.clone();
+    resumed.next_ordinal = ctx.next_ordinal;
+    resumed.state = KimiCodeAdapter
+        .restore_state(Some(&checkpoint))
+        .expect("checkpoint restores");
+    let result = KimiCodeAdapter.ingest_line(
+        &mut resumed,
+        "wire",
+        br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-agent","result":{"output":[{"type":"text","text":"agent_id: child-1"}]}},"time":2}"#,
+    );
+    assert_eq!(result.status, LineStatus::Parsed);
+    let [IngestOp::ToolUpdate { patch, .. }] = result.ops.as_slice() else {
+        panic!("expected one terminal update, got {:?}", result.ops);
+    };
+    assert_eq!(patch.delegate_child_session_id, None);
+    assert_eq!(
+        patch.status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+}
+
+#[test]
 fn writer_declared_authored_media_projects_typed_references() {
     let mut ctx = synthetic_context();
     let message = KimiCodeAdapter.ingest_line(

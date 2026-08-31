@@ -32,7 +32,7 @@ impl AgentAdapter for KimiCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        6
+        7
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
