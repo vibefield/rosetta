@@ -618,3 +618,378 @@ fn pause_between_tool_use_and_result_matches_one_shot() {
     assert_eq!(page, timeline(&one_store, session));
     assert_eq!(buckets(&sliced_store), buckets(&one_store));
 }
+
+/// One budgeted Codex pass, ledger-free — the body of [`slice_until_done_for`]
+/// without its clean-run assertions, for the passes that expect a dirty file.
+fn codex_pass(
+    root: &Path,
+    runtime: &RuntimeRow,
+    store: &mut Store,
+    files: &[rosetta_pipeline::SessionFile],
+    opts: &IngestOptions,
+) -> rosetta_pipeline::StreamReport {
+    stream_backfill(
+        &CodexAdapter,
+        runtime,
+        root,
+        store,
+        files,
+        opts,
+        &Instrument::new(),
+    )
+    .unwrap()
+}
+
+/// Replace one 0-based line of a single-session corpus with a byte that frames
+/// as a COMPLETE record and cannot parse: a hard error mid-file, not a torn
+/// tail. Earlier and later lines are left exactly as generated.
+fn corrupt_line(root: &Path, index: usize) {
+    let path = only_jsonl(root);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    assert!(index < lines.len(), "the corpus must reach line {index}");
+    lines[index] = "{".to_string();
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+}
+
+/// Meta-ingest `root` under `opts` and take exactly ONE budgeted pass over it:
+/// the store, its roster, and the report a reader would see at the first pause.
+fn first_slice(
+    root: &Path,
+    runtime: &RuntimeRow,
+    opts: &IngestOptions,
+) -> (
+    Store,
+    Vec<rosetta_pipeline::SessionFile>,
+    rosetta_pipeline::StreamReport,
+) {
+    let mut store = Store::open_in_memory().unwrap();
+    let (_, files) = meta_ingest(
+        &CodexAdapter,
+        runtime,
+        root,
+        &mut store,
+        opts,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let report = codex_pass(root, runtime, &mut store, &files, opts);
+    (store, files, report)
+}
+
+#[test]
+fn byte_target_governs_the_pause_when_the_floor_is_met() {
+    // The byte half of `budget_stop`, isolated. Every other budgeted test here
+    // pins max_bytes = 1 — a target the very first batch clears — so in all of
+    // them the RECORD FLOOR alone decides where the pass stops. Here the floor
+    // is 1, which every batch clears, leaving the byte target as the only thing
+    // left to choose the boundary.
+    //
+    // Two roots hold identical bytes and differ only in that target. A pause on
+    // its own would prove little, so the claim is sharper: QUADRUPLING the
+    // target must slice materially further into the same file.
+    //
+    // The budget spends FRAMED RECORD PAYLOAD — the sum of `record.payload.len()`,
+    // delimiters and re-read anchors excluded — so the corpus's exact payload
+    // total is computable here, and a target at or above it correctly never
+    // pauses at all. Both targets are derived as fractions of that total, which
+    // is what stops either pass from quietly decaying into an EOF pass.
+    let one_root = TempDir::new().unwrap();
+    let small_root = TempDir::new().unwrap();
+    let large_root = TempDir::new().unwrap();
+    let spec = CorpusSpec::new(Agent::Codex, 1, 60, 42);
+    generate(&spec, one_root.path()).unwrap();
+    generate(&spec, small_root.path()).unwrap();
+    generate(&spec, large_root.path()).unwrap();
+
+    let text = std::fs::read_to_string(only_jsonl(small_root.path())).unwrap();
+    let total_payload: u64 = text.lines().map(|line| line.len() as u64).sum();
+    let total_records = u64::try_from(text.lines().count()).unwrap();
+    const FLOOR: u32 = 1;
+    let small_target = total_payload / 8;
+    let large_target = small_target * 4;
+    assert!(
+        small_target > 0 && large_target < total_payload && total_records > 1,
+        "the corpus must outlast both targets ({small_target}, {large_target}) \
+         over {total_payload} payload bytes in {total_records} records"
+    );
+
+    let runtime = runtime(&CodexAdapter);
+    let (one_store, _) = one_shot(&CodexAdapter, &runtime, one_root.path());
+
+    let small_opts = budgeted_opts(small_target, FLOOR);
+    let (mut small_store, small_files, small) =
+        first_slice(small_root.path(), &runtime, &small_opts);
+    let (_, _, large) = first_slice(
+        large_root.path(),
+        &runtime,
+        &budgeted_opts(large_target, FLOOR),
+    );
+
+    assert_eq!(
+        small.files_paused, 1,
+        "the byte target pauses the only file"
+    );
+    assert_eq!(large.files_paused, 1);
+    assert_eq!(small.files_incomplete, 0, "a pause is not a failure");
+    assert_eq!(large.files_incomplete, 0);
+    assert_eq!(small.hard_errors, 0);
+    assert_eq!(large.hard_errors, 0);
+
+    // These three bounds are the whole proof, and none of them can pass by
+    // accident: above the floor, the floor cannot have stopped the pass; the
+    // larger target reaching further says the bytes chose the boundary; and
+    // under the record count says neither pass merely ran out of file.
+    assert!(
+        small.records > u64::from(FLOOR),
+        "the floor of {FLOOR} was cleared long before the pass stopped, so the \
+         {small_target}-byte target is what stopped it (records {})",
+        small.records,
+    );
+    assert!(
+        small.records < large.records,
+        "a four-fold byte target must slice further: {} records at {small_target} \
+         bytes against {} at {large_target}",
+        small.records,
+        large.records,
+    );
+    assert!(
+        large.records < total_records,
+        "a budget met at EOF proves nothing ({} records of {total_records})",
+        large.records,
+    );
+
+    // Sharper still, now that the budget spends exactly what it frames: the
+    // pause lands on the FIRST record boundary at or past the target. The
+    // sealed prefix's payload clears it, and one record less would not have —
+    // the documented single record of overshoot, no more.
+    let payload_through = |records: u64| -> u64 {
+        text.lines()
+            .take(usize::try_from(records).unwrap())
+            .map(|line| line.len() as u64)
+            .sum()
+    };
+    assert!(
+        payload_through(small.records) >= small_target,
+        "the sealed prefix must clear the target: {} payload bytes over {} records \
+         against a {small_target}-byte target",
+        payload_through(small.records),
+        small.records,
+    );
+    assert!(
+        payload_through(small.records - 1) < small_target,
+        "one record earlier must NOT have cleared it, or the pass overshot by \
+         more than a record: {} payload bytes over {} records against {small_target}",
+        payload_through(small.records - 1),
+        small.records - 1,
+    );
+
+    // And a byte-governed slice is still just a slice: the remainder streams in
+    // as ordinary append growth, reaches Indexed, and rolls up identically.
+    let paused_passes = slice_until_done_for(
+        &CodexAdapter,
+        small_root.path(),
+        &runtime,
+        &mut small_store,
+        &small_files,
+        &small_opts,
+    );
+    assert!(paused_passes >= 1, "the remainder is sliced too");
+
+    let session = &small_files[0].session_id;
+    assert_eq!(session_state(&small_store, session), StreamState::Indexed);
+    assert_eq!(
+        timeline(&small_store, session).len(),
+        timeline(&one_store, session).len(),
+        "the same rows exist however the boundaries fell"
+    );
+    assert_eq!(buckets(&small_store), buckets(&one_store));
+
+    // NOTE — why this compares row COUNT and not the rows themselves, unlike
+    // every sibling test here. On a 60-record Codex corpus the two sides differ
+    // in exactly one field: a tool's `timing.completed_at`. That divergence is
+    // NOT the budget's. It needs only a pass boundary between an
+    // `event_msg/item_completed/CommandExecution` record and the
+    // `response_item/function_call_output` that follows it — the later record
+    // patches the persisted row's completed_at with its own timestamp while
+    // started_at and duration_ms keep the values CommandExecution derived, so
+    // the row ends up self-contradictory (completed_at - started_at of ~9.8s
+    // against duration_ms of 1). Plain UNBUDGETED two-pass append growth over
+    // this same corpus reproduces it at splits 34, 38, 42 and 46, and a single
+    // pass cut into one-record transactions does not reproduce it at all: the
+    // in-RAM accumulator ranks CommandExecution's completion above the output
+    // record's, and only a checkpoint-and-resume boundary loses that ranking.
+    // Restore full entry equality here once tool timing survives a resume.
+}
+
+#[test]
+fn dirty_suffix_divergence_is_pinned_not_accidental() {
+    // THIS TEST PINS A DIVERGENCE, NOT A DESIRED BEHAVIOUR.
+    //
+    // Review found that sliced and unsliced cold ingest disagree about a source
+    // that goes bad partway through. Unsliced cold reaches EOF with the
+    // generation unclean and ABANDONS it: the reader is shown nothing at all.
+    // Sliced cold has already activated and sealed a clean prefix by then, so
+    // it follows live-growth semantics instead — the readable prefix stays
+    // readable, later records keep appending, and readiness simply never leaves
+    // Streaming.
+    //
+    // Which of the two is right is an OPEN PRODUCT DECISION. Until it lands,
+    // this test exists so the disagreement is explicit and deliberate rather
+    // than silent. When the decision lands, UPDATE these assertions to state
+    // the new rule. Never delete this test to make a regression pass.
+    let unsliced_root = TempDir::new().unwrap();
+    let sliced_root = TempDir::new().unwrap();
+    let spec = CorpusSpec::new(Agent::Codex, 1, 60, 11);
+    generate(&spec, unsliced_root.path()).unwrap();
+    generate(&spec, sliced_root.path()).unwrap();
+
+    // Line 40 sits well past the first slice, so several clean passes activate
+    // and extend the prefix before any pass reaches the damage.
+    const BAD_LINE: usize = 39;
+    const FLOOR: u32 = 10;
+    corrupt_line(unsliced_root.path(), BAD_LINE);
+    corrupt_line(sliced_root.path(), BAD_LINE);
+    let runtime = runtime(&CodexAdapter);
+
+    // UNSLICED: one pass, EOF, unclean generation — Abandon. Nothing publishes.
+    let mut unsliced_store = Store::open_in_memory().unwrap();
+    let (_, unsliced_files) = meta_ingest(
+        &CodexAdapter,
+        &runtime,
+        unsliced_root.path(),
+        &mut unsliced_store,
+        &full_opts(),
+        &Instrument::new(),
+    )
+    .unwrap();
+    let session = unsliced_files[0].session_id.clone();
+    let whole = codex_pass(
+        unsliced_root.path(),
+        &runtime,
+        &mut unsliced_store,
+        &unsliced_files,
+        &full_opts(),
+    );
+    assert_eq!(whole.hard_errors, 1, "the bad line is a hard parse error");
+    assert_eq!(whole.files_incomplete, 1);
+    assert_eq!(whole.files_paused, 0, "no budget, no pauses");
+    assert!(
+        timeline(&unsliced_store, &session).is_empty(),
+        "an abandoned generation publishes nothing, not even its clean prefix"
+    );
+    assert_eq!(
+        session_state(&unsliced_store, &session),
+        StreamState::Streaming
+    );
+
+    // SLICED: the same bytes, budgeted. The first pass pauses on a clean prefix
+    // long before the damage, and that prefix is readable immediately.
+    let mut sliced_store = Store::open_in_memory().unwrap();
+    let opts = budgeted_opts(1, FLOOR);
+    let (_, sliced_files) = meta_ingest(
+        &CodexAdapter,
+        &runtime,
+        sliced_root.path(),
+        &mut sliced_store,
+        &opts,
+        &Instrument::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        sliced_files[0].session_id, session,
+        "both roots must project the same session for the comparison to mean anything"
+    );
+    let first = codex_pass(
+        sliced_root.path(),
+        &runtime,
+        &mut sliced_store,
+        &sliced_files,
+        &opts,
+    );
+    assert_eq!(first.files_paused, 1);
+    assert_eq!(
+        first.hard_errors, 0,
+        "the damage is far past the first slice"
+    );
+    let prefix = timeline(&sliced_store, &session);
+    assert!(
+        !prefix.is_empty(),
+        "the activated prefix is readable at once"
+    );
+
+    // Keep slicing until a pass finally reads the bad line.
+    let mut passes = 1;
+    let dirty = loop {
+        passes += 1;
+        assert!(
+            passes <= 32,
+            "the budgeted passes never reached the bad line"
+        );
+        let report = codex_pass(
+            sliced_root.path(),
+            &runtime,
+            &mut sliced_store,
+            &sliced_files,
+            &opts,
+        );
+        if report.hard_errors > 0 {
+            break report;
+        }
+        assert_eq!(report.files_paused, 1, "a clean pass pauses on budget");
+        assert_eq!(report.files_incomplete, 0);
+    };
+    assert_eq!(dirty.hard_errors, 1);
+    assert_eq!(
+        dirty.files_incomplete, 1,
+        "the dirty file is reported incomplete, once"
+    );
+    assert_eq!(
+        dirty.files_paused, 0,
+        "an unclean generation may not pause; the pass reads on to EOF"
+    );
+
+    // The prefix was not swept: the pass that hit the damage kept the rows it
+    // had already published AND appended the ones past the bad line.
+    let settled = timeline(&sliced_store, &session);
+    assert!(
+        settled.len() > prefix.len(),
+        "rows past the bad line append too (prefix {}, settled {})",
+        prefix.len(),
+        settled.len()
+    );
+    assert_eq!(
+        session_state(&sliced_store, &session),
+        StreamState::Streaming
+    );
+
+    // And it never converges: the checkpoint carries the unclean generation
+    // forward, so the badge stays Streaming and the rows stop moving.
+    for _ in 0..3 {
+        let report = codex_pass(
+            sliced_root.path(),
+            &runtime,
+            &mut sliced_store,
+            &sliced_files,
+            &opts,
+        );
+        assert_eq!(report.files_incomplete, 1);
+        assert_eq!(report.files_paused, 0);
+        assert_eq!(report.hard_errors, 0, "the bad line is not re-read");
+        assert_ne!(
+            session_state(&sliced_store, &session),
+            StreamState::Indexed,
+            "a dirty source must never earn the Indexed badge"
+        );
+        assert_eq!(
+            timeline(&sliced_store, &session),
+            settled,
+            "a settled dirty file stops changing"
+        );
+    }
+
+    // THE PIN: same bytes, same adapter, same damage — one side shows the
+    // reader a partial transcript, the other shows nothing.
+    assert!(!settled.is_empty());
+    assert!(timeline(&unsliced_store, &session).is_empty());
+}
