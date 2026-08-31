@@ -17,26 +17,26 @@
 //! canonical gate; the periodic mirror re-warm carries committed metadata
 //! during the cold load without charging every row for a mutation log.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport, Metric,
-    SessionFile, StreamReport,
+    ColdLane, ColdSchedule, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner,
+    MetaReport, Metric, SessionFile, SliceBudget, StreamReport,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
     IngestCounterSource, IngestCounters, RuntimeTick, router,
 };
-use rosetta_store::{Store, queries};
+use rosetta_store::Store;
 
 use crate::{
     ledger_root, open_ledger, open_progressive_backfill, parse_flags, projection_lock,
@@ -127,110 +127,6 @@ impl StreamMeter {
     }
 }
 
-struct BackfillSchedule {
-    queues: Vec<VecDeque<SessionFile>>,
-    attention: VecDeque<usize>,
-    round_robin: usize,
-}
-
-impl BackfillSchedule {
-    fn new(rosters: impl IntoIterator<Item = Vec<SessionFile>>) -> Self {
-        Self {
-            queues: rosters
-                .into_iter()
-                .map(Self::order_runtime_roster)
-                .map(VecDeque::from)
-                .collect(),
-            attention: VecDeque::new(),
-            round_robin: 0,
-        }
-    }
-
-    /// Newest session first, canonical source path within a session. The
-    /// latter makes public first-generation ordinals append in their final
-    /// order, avoiding a growing session-wide rank after every source while
-    /// preserving the product's newest-first reveal.
-    fn order_runtime_roster(roster: Vec<SessionFile>) -> Vec<SessionFile> {
-        let mut sessions: BTreeMap<String, Vec<SessionFile>> = BTreeMap::new();
-        for file in roster {
-            sessions
-                .entry(file.session_id.clone())
-                .or_default()
-                .push(file);
-        }
-        let mut sessions = sessions.into_values().collect::<Vec<_>>();
-        for files in &mut sessions {
-            files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-        }
-        sessions.sort_by(|left, right| {
-            let left_newest = left.iter().map(|file| file.modified_ms).max().unwrap_or(0);
-            let right_newest = right.iter().map(|file| file.modified_ms).max().unwrap_or(0);
-            right_newest
-                .cmp(&left_newest)
-                .then_with(|| left[0].session_id.cmp(&right[0].session_id))
-        });
-        sessions.into_iter().flatten().collect()
-    }
-
-    fn pending(&self) -> bool {
-        self.queues.iter().any(|queue| !queue.is_empty())
-    }
-
-    fn promote(&mut self, session_ids: impl IntoIterator<Item = String>) {
-        let mut promoted = Vec::new();
-        for session_id in session_ids {
-            for (index, queue) in self.queues.iter_mut().enumerate() {
-                let mut at = 0;
-                while at < queue.len() {
-                    if queue[at].session_id == session_id {
-                        let file = queue.remove(at).expect("queue index was in bounds");
-                        self.attention.push_back(index);
-                        promoted.push((index, file));
-                    } else {
-                        at += 1;
-                    }
-                }
-            }
-        }
-        // Reversing the physical push preserves the boost ledger's oldest-
-        // request-first order when several ids belong to one runtime.
-        for (index, file) in promoted.into_iter().rev() {
-            self.queues[index].push_front(file);
-        }
-    }
-
-    /// Complete the first streamable session in canonical list order before
-    /// ordinary runtime rotation. Returns whether a supplied id was queued.
-    fn bootstrap(&mut self, session_ids: impl IntoIterator<Item = String>) -> bool {
-        for session_id in session_ids {
-            let runtime = self
-                .queues
-                .iter()
-                .position(|queue| queue.iter().any(|file| file.session_id == session_id));
-            let Some(runtime) = runtime else {
-                continue;
-            };
-            self.promote([session_id]);
-            self.round_robin = (runtime + 1) % self.queues.len();
-            return true;
-        }
-        false
-    }
-
-    fn pop_next(&mut self) -> Option<(usize, SessionFile)> {
-        while let Some(index) = self.attention.pop_front() {
-            if let Some(file) = self.queues[index].pop_front() {
-                return Some((index, file));
-            }
-        }
-        let index = (0..self.queues.len())
-            .map(|offset| (self.round_robin + offset) % self.queues.len())
-            .find(|index| !self.queues[*index].is_empty())?;
-        self.round_robin = (index + 1) % self.queues.len();
-        self.queues[index].pop_front().map(|file| (index, file))
-    }
-}
-
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -314,8 +210,22 @@ fn await_initial_search(
 }
 
 pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
+    // Milestone base for the sweep harness: every `milestone:` line below
+    // reports seconds since this instant.
+    let started = Instant::now();
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("serve needs --db PATH")?;
+    // The starter-slice budget is the tunable under sweep: unset = the
+    // blessed default, `--slice-budget 0` = whole files, anything else = a
+    // byte target with the default record floor.
+    let slice_budget = match flags.slice_budget {
+        None => Some(SliceBudget::STARTER),
+        Some(0) => None,
+        Some(max_bytes) => Some(SliceBudget {
+            max_bytes,
+            min_records: SliceBudget::STARTER.min_records,
+        }),
+    };
     let addr: SocketAddr = flags
         .addr
         .clone()
@@ -611,43 +521,70 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    // Phase two: one newest-first file from each runtime in round-robin
-    // order. Attention requests temporarily jump ahead of that rotation but
-    // never weaken per-file durability or the graceful-stop boundary.
+    // Phase two: the cold scheduler — boost ▸ starter ▸ completion, round-
+    // robin across runtimes inside a lane. Starter passes carry the slice
+    // budget so every session opens fast; a paused file requeues into the
+    // completion lane; boost requests jump both and always run unbudgeted so
+    // the opened session finishes outright. Per-file durability and the
+    // graceful-stop boundary are unchanged.
     let audit_free = IngestOptions {
         audit_files_per_run: 0,
         ..opts.clone()
     };
-    let mut schedule = BackfillSchedule::new(
+    let sliced = IngestOptions {
+        starter_budget: slice_budget,
+        ..audit_free.clone()
+    };
+    let mut schedule = ColdSchedule::new(
         backfills
             .iter()
             .map(|entry| entry.roster.clone())
             .collect::<Vec<_>>(),
     );
-    let recent_sessions = queries::session_list(store.conn(), None, 1_000)
-        .map_err(|error| format!("selecting first-readable session: {error}"))?;
-    schedule.bootstrap(recent_sessions.into_iter().map(|session| session.id));
+    let starter_files: usize = backfills.iter().map(|entry| entry.roster.len()).sum();
+    let mut starter_paused = 0_u64;
+    // The milestone line exists for the sweep harness; without slicing the
+    // starter lane is just whole-file backfill and the line stays absent.
+    let mut starter_drained_logged = slice_budget.is_none() || !schedule.starter_pending();
     while schedule.pending() && !stop.load(Ordering::SeqCst) {
         schedule.promote(boost.drain());
-        let Some((index, file)) = schedule.pop_next() else {
+        let Some((lane, index, file)) = schedule.pop() else {
             break;
         };
         let entry = &mut backfills[index];
         health.ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
         entry.stream_meter.begin();
+        let pass_opts = match lane {
+            ColdLane::Boost => &audit_free,
+            ColdLane::Starter | ColdLane::Completion => &sliced,
+        };
         let report = rosetta_pipeline::stream_backfill_into(
             entry.adapter,
             &entry.runtime,
             &entry.root,
             &mut store,
             std::slice::from_ref(&file),
-            &audit_free,
+            pass_opts,
             &instrument,
             entry.ledger.as_mut(),
         )
         .map_err(|error| error.to_string())?;
         entry.stream_meter.finish();
+        let paused = report.files_paused > 0;
         fold_stream(&mut entry.stream, report);
+        if paused {
+            if lane == ColdLane::Starter {
+                starter_paused += 1;
+            }
+            schedule.requeue(index, file);
+        }
+        if !starter_drained_logged && !schedule.starter_pending() {
+            starter_drained_logged = true;
+            println!(
+                "milestone: starter-drained elapsed_s={:.2} files={starter_files} paused={starter_paused}",
+                started.elapsed().as_secs_f64(),
+            );
+        }
         search_worker.wake();
         acknowledge_search(&mut store, &search_worker)?;
     }
@@ -693,6 +630,10 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 &mut failures,
             );
         }
+        println!(
+            "milestone: cold-drained elapsed_s={:.2}",
+            started.elapsed().as_secs_f64(),
+        );
     }
     let interrupted = stop.load(Ordering::SeqCst);
     if !failures.is_empty() {
@@ -722,11 +663,19 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .finish_progressive_load(&mut store)
                 .map_err(|error| format!("finalizing progressive projection: {error}"))?;
         }
+        println!(
+            "milestone: canonical-ready elapsed_s={:.2}",
+            started.elapsed().as_secs_f64(),
+        );
 
         // Canonical reads are public now. Let the initial detached generation
         // finish without competing source scans or live SQLite writes; the
         // watchers created before backfill retain every intervening hint.
         await_initial_search(&mut store, &search, &search_worker, &stop)?;
+        println!(
+            "milestone: search-ready elapsed_s={:.2}",
+            started.elapsed().as_secs_f64(),
+        );
 
         // Backfill over: take one authoritative warm and hand the
         // already-progressive mirror to the effects drain.
@@ -825,149 +774,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use rosetta_adapter_support::{FileDiscipline, FileFormat, StreamDriver};
-
     use super::*;
-
-    fn file(session_id: &str) -> SessionFile {
-        SessionFile {
-            relative_path: format!("{session_id}.jsonl"),
-            stream_id: "transcript".into(),
-            file_format: FileFormat::Jsonl,
-            discipline: FileDiscipline::AppendOnly,
-            driver: StreamDriver::JsonLines,
-            session_id: session_id.into(),
-            native_session_id: session_id.into(),
-            size: 1,
-            modified_ms: 1,
-            agent_version: None,
-            source_missing: false,
-        }
-    }
-
-    #[test]
-    fn schedule_is_round_robin_and_preserves_each_runtime_order() {
-        let mut schedule = BackfillSchedule::new(vec![
-            vec![file("a-new"), file("a-old")],
-            vec![file("b-new"), file("b-old")],
-            vec![file("c-only")],
-        ]);
-        let mut order = Vec::new();
-        while let Some((runtime, file)) = schedule.pop_next() {
-            order.push((runtime, file.session_id));
-        }
-        assert_eq!(
-            order,
-            [
-                (0, "a-new".into()),
-                (1, "b-new".into()),
-                (2, "c-only".into()),
-                (0, "a-old".into()),
-                (1, "b-old".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn canonical_top_session_bootstraps_before_runtime_rotation() {
-        let mut older = file("older");
-        older.modified_ms = 10;
-        let mut newest_z = file("newest");
-        newest_z.relative_path = "z.jsonl".into();
-        newest_z.modified_ms = 30;
-        let mut newest_a = file("newest");
-        newest_a.relative_path = "a.jsonl".into();
-        newest_a.modified_ms = 29;
-        let mut middle = file("middle");
-        middle.modified_ms = 20;
-
-        let mut schedule =
-            BackfillSchedule::new(vec![vec![older], vec![newest_z, newest_a], vec![middle]]);
-        assert!(schedule.bootstrap(["newest".to_string()]));
-        let first = schedule.pop_next().unwrap();
-        let second = schedule.pop_next().unwrap();
-        let third = schedule.pop_next().unwrap();
-        assert_eq!(
-            (
-                first.0,
-                first.1.session_id.as_str(),
-                first.1.relative_path.as_str()
-            ),
-            (1, "newest", "a.jsonl")
-        );
-        assert_eq!(
-            (
-                second.0,
-                second.1.session_id.as_str(),
-                second.1.relative_path.as_str()
-            ),
-            (1, "newest", "z.jsonl")
-        );
-        assert_eq!((third.0, third.1.session_id.as_str()), (2, "middle"));
-    }
-
-    #[test]
-    fn boosts_jump_the_global_rotation_oldest_request_first() {
-        let mut schedule = BackfillSchedule::new(vec![
-            vec![file("a1"), file("a2"), file("a3")],
-            vec![file("b1"), file("b2")],
-        ]);
-        assert_eq!(schedule.pop_next().unwrap().1.session_id, "a1");
-        schedule.promote(["a3".to_string(), "a2".to_string()]);
-        assert_eq!(schedule.pop_next().unwrap().1.session_id, "a3");
-        assert_eq!(schedule.pop_next().unwrap().1.session_id, "a2");
-        assert_eq!(schedule.pop_next().unwrap().1.session_id, "b1");
-    }
-
-    #[test]
-    fn one_session_reveals_newest_first_but_activates_sources_in_path_order() {
-        let mut older_b = file("older");
-        older_b.relative_path = "z.jsonl".into();
-        older_b.modified_ms = 10;
-        let mut newest_b = file("newest");
-        newest_b.relative_path = "z.jsonl".into();
-        newest_b.modified_ms = 20;
-        let mut newest_a = file("newest");
-        newest_a.relative_path = "a.jsonl".into();
-        newest_a.modified_ms = 19;
-        let mut older_a = file("older");
-        older_a.relative_path = "a.jsonl".into();
-        older_a.modified_ms = 9;
-
-        let mut schedule = BackfillSchedule::new(vec![vec![older_b, newest_b, older_a, newest_a]]);
-        let order = std::iter::from_fn(|| schedule.pop_next().map(|(_, file)| file))
-            .map(|file| (file.session_id, file.relative_path))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            order,
-            [
-                ("newest".into(), "a.jsonl".into()),
-                ("newest".into(), "z.jsonl".into()),
-                ("older".into(), "a.jsonl".into()),
-                ("older".into(), "z.jsonl".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn boost_promotes_every_source_for_the_session_without_reordering_paths() {
-        let mut target_z = file("target");
-        target_z.relative_path = "z.jsonl".into();
-        let mut target_a = file("target");
-        target_a.relative_path = "a.jsonl".into();
-        let mut schedule = BackfillSchedule::new(vec![vec![
-            file("first"),
-            target_z,
-            file("middle"),
-            target_a,
-        ]]);
-        assert_eq!(schedule.pop_next().unwrap().1.session_id, "first");
-        schedule.promote(["target".to_string()]);
-        let first = schedule.pop_next().unwrap().1;
-        let second = schedule.pop_next().unwrap().1;
-        assert_eq!(first.relative_path, "a.jsonl");
-        assert_eq!(second.relative_path, "z.jsonl");
-    }
 
     #[test]
     fn interleaved_stream_meters_count_only_their_active_runtime() {

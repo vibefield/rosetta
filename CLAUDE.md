@@ -69,10 +69,14 @@ runtime adapters are registered in `rosettad`. The generic pipeline handles the
 JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrites,
 deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
 recovery, and an append-only checksummed raw ledger. Fresh `serve` creates the public
-projection immediately: it skims every enrolled runtime first, reveals the first
-canonical list session, then interleaves runtimes round-robin with per-session boost.
+projection immediately: it skims every enrolled runtime first, then cold-streams through
+a three-lane scheduler (boost ▸ starter ▸ completion, runtime round-robin within a lane).
+Starter passes carry a byte-governed slice budget (`--slice-budget`, default 256 KiB /
+24-record floor) that early-ACTIVATES and seals a clean prefix so every session opens
+readable fast; paused remainders requeue as append growth, and app boosts run unbudgeted
+with preemption bounded by one slice. `milestone:` stdout lines feed the sweep harness.
 Interrupted progress is durable and resumable. Finite `ingest` and explicit `rebuild`
-remain private, validated, atomic publication paths.
+remain private, validated, atomic publication paths and never slice.
 
 Projection schema 12 keeps user-facing canonical rows, rollups, and joins in SQLite while
 production FTS5 lives in a disposable detached sidecar. The asynchronous

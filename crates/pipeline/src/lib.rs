@@ -29,7 +29,7 @@ pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{LiveOptions, LiveReport, LiveRunner, stream_live};
 pub use meta::{MetaReport, SessionFile, meta_ingest, meta_ingest_into};
 pub use replay::{RebuildReport, rebuild_runtime};
-pub use sched::{Lane, WorkItem, WorkQueue};
+pub use sched::{ColdLane, ColdSchedule, order_runtime_roster};
 pub use stream::{StreamReport, stream_backfill, stream_backfill_into};
 
 /// Version of the canonical-op envelope stored in ledger meta frames. Replay

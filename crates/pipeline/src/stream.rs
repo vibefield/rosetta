@@ -23,7 +23,6 @@ use rosetta_store::{
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
-use crate::sched::{Lane, WorkItem, WorkQueue};
 use crate::{IngestOptions, PipelineError};
 
 #[derive(Debug, Default)]
@@ -94,14 +93,6 @@ pub fn stream_backfill_into(
     let audit_paths =
         rotating_audit_paths(store, &runtime.id, &tail_files, opts.audit_files_per_run)?;
     let audit_set: BTreeSet<&str> = audit_paths.iter().map(String::as_str).collect();
-    let mut queue = WorkQueue::new();
-    for file in &tail_files {
-        queue.push(WorkItem {
-            lane: Lane::Backfill,
-            relative_path: file.relative_path.clone(),
-            modified_ms: file.modified_ms,
-        });
-    }
 
     let mut report = StreamReport::default();
     let mut restarted_sessions: BTreeSet<String> = BTreeSet::new();
@@ -111,14 +102,9 @@ pub fn stream_backfill_into(
         .map(|file| (file.session_id.clone(), true))
         .collect();
     let mut file_health: BTreeMap<String, bool> = BTreeMap::new();
-    while let Some(work) = queue.pop() {
-        let Some(file) = tail_files
-            .iter()
-            .copied()
-            .find(|candidate| candidate.relative_path == work.relative_path)
-        else {
-            continue;
-        };
+    // Caller order is the schedule: meta hands rosters newest-session-first,
+    // and the daemon's cold scheduler passes exactly one file per call.
+    for file in tail_files.iter().copied() {
         report.files += 1;
         let restarts_before = report.generations_restarted;
         let outcome = ingest_file(

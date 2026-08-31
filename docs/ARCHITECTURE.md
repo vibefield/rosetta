@@ -36,11 +36,18 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > `project_assigned_at` arbitration column.
 >
 > Fresh `serve` is progressive: the listener and empty public projection exist first, consent
-> precedes all reads, every runtime is skimmed before streaming, the first streamable canonical-list
-> session is completed, and the remaining files interleave by runtime with boost and a final audit
-> pass. Interrupted commits resume in place. Finite `ingest` and `rebuild` stay private, validated,
-> and atomically installed. Watchers are armed before scan; the initial search build gets a clean I/O
-> window, then the live lane reuses the existing roster rather than re-skimming it.
+> precedes all reads, and every runtime is skimmed before streaming. Cold streaming then runs
+> through a three-lane scheduler (boost ▸ starter ▸ completion, round-robin across runtimes inside
+> a lane). Starter passes carry a byte-governed slice budget (`--slice-budget`, default 256 KiB
+> with a 24-record floor): a fresh source's clean prefix ACTIVATES and seals its ledger generation
+> at the boundary — indistinguishable from the file ending there and then growing — so every
+> session opens readable early while paused remainders requeue as ordinary append growth; app
+> boosts run unbudgeted and jump both lanes, preempted by at most one slice. A final per-runtime
+> audit pass, `milestone:` stdout lines for the budget-sweep harness, and the graceful-stop
+> boundary close the cold phase. Interrupted commits resume in place. Finite `ingest` and
+> `rebuild` stay private, validated, atomically installed, and never slice. Watchers are armed
+> before scan; the initial search build gets a clean I/O window, then the live lane reuses the
+> existing roster rather than re-skimming it.
 >
 > The accepted six-adapter frozen pair used 38,998 matched files, 6,063 skims, 6,419 sessions,
 > and 774,219 final messages with zero hard errors. Private atomic wall was 522.54 s. Progressive

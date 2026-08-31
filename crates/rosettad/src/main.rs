@@ -76,7 +76,7 @@ fn main() -> ExitCode {
             );
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--slice-budget BYTES|0]"
             );
             eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
             eprintln!(
@@ -113,6 +113,9 @@ struct Flags {
     /// serve only: expose the completed metadata projection and keep serving,
     /// but do not read any complete source records.
     stop_after_meta: bool,
+    /// serve only: starter-slice byte budget for the cold scheduler.
+    /// `None` = the blessed default; `Some(0)` disables slicing.
+    slice_budget: Option<u64>,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -128,6 +131,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         addr: None,
         all_agents: false,
         stop_after_meta: false,
+        slice_budget: None,
     };
     let mut at = 0;
     while at < args.len() {
@@ -157,6 +161,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
                 flags.stop_after_meta = true;
                 at += 1;
             }
+            "--slice-budget" => {
+                let value = take_value(args, &mut at)?;
+                flags.slice_budget = Some(parse_byte_size(&value)?);
+            }
             "--json" => {
                 flags.json = true;
                 at += 1;
@@ -179,6 +187,29 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         }
     }
     Ok(flags)
+}
+
+/// `256k`-style byte sizes for the slice budget: plain digits, or a `k`/`m`
+/// suffix (KiB/MiB). `0` means slicing off.
+fn parse_byte_size(value: &str) -> Result<u64, String> {
+    let lower = value.trim().to_ascii_lowercase();
+    let (digits, unit) = match lower.strip_suffix(['k', 'm']) {
+        Some(digits) => (
+            digits,
+            if lower.ends_with('k') {
+                1024
+            } else {
+                1024 * 1024
+            },
+        ),
+        None => (lower.as_str(), 1),
+    };
+    let number: u64 = digits
+        .parse()
+        .map_err(|_| format!("--slice-budget wants BYTES, `NNNk`, `NNNm`, or 0 — got {value}"))?;
+    number
+        .checked_mul(unit)
+        .ok_or_else(|| format!("--slice-budget {value} overflows"))
 }
 
 fn take_value(args: &[String], at: &mut usize) -> Result<String, String> {
@@ -1425,5 +1456,15 @@ mod tests {
         assert!(projection_lock(&db).is_err());
         drop(first);
         assert!(projection_lock(&db).is_ok());
+    }
+
+    #[test]
+    fn slice_budget_sizes_parse_with_suffixes() {
+        assert_eq!(parse_byte_size("0").unwrap(), 0);
+        assert_eq!(parse_byte_size("4096").unwrap(), 4096);
+        assert_eq!(parse_byte_size("256k").unwrap(), 256 * 1024);
+        assert_eq!(parse_byte_size("1M").unwrap(), 1024 * 1024);
+        assert!(parse_byte_size("many").is_err());
+        assert!(parse_byte_size("1g").is_err());
     }
 }
