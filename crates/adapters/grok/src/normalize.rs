@@ -37,7 +37,7 @@ const UNTYPED: &str = "<untyped>";
 /// Grok emits streaming chunks, reuses its envelope event counter after a
 /// resume, reports the model before the response, and reports usage after it.
 /// All four facts require cross-line state to normalize without duplicate rows.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GrokState {
     messages: BTreeMap<String, MessageRow>,
     current_model: Option<String>,
@@ -48,6 +48,22 @@ pub struct GrokState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pending_delegates: BTreeMap<String, Vec<String>>,
     plan_revision: i64,
+}
+
+impl GrokState {
+    /// Serialize only restart-portable state. `src_cursor` is a surrogate id
+    /// owned by one SQLite projection; carrying it through a ledger rebuild
+    /// made otherwise identical checkpoints depend on adapter scheduling.
+    /// The next chunk always stamps the current cursor before emitting the
+    /// cached message, so retaining that local rowid has no normalization
+    /// value and can create a dangling provenance reference after restore.
+    pub(crate) fn checkpoint_value(&self) -> serde_json::Result<Value> {
+        let mut checkpoint = self.clone();
+        for message in checkpoint.messages.values_mut() {
+            message.src_cursor = None;
+        }
+        serde_json::to_value(checkpoint)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

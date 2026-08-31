@@ -240,6 +240,49 @@ fn invalid_checkpoint_is_rejected() {
 }
 
 #[test]
+fn checkpoint_drops_projection_local_cursor_ids_and_restamps_on_resume() {
+    let adapter = GrokAdapter;
+    let mut first = context(&adapter, "native");
+    first.src_cursor = Some(41);
+    first.src_offset = Some(100);
+    let first_line = br#"{"timestamp":1,"method":"session/update","params":{"sessionId":"native","_meta":{"eventId":"e1","agentTimestampMs":1000,"promptId":"p","streamStartMs":1000,"turnStartMs":999,"totalTokens":1,"updateType":"AgentMessageChunk","chunkId":0},"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hel"}}}}"#;
+    let outcome = adapter.ingest_line(&mut first, spec::UPDATES, first_line);
+    assert_eq!(outcome.status, LineStatus::Parsed);
+
+    let checkpoint = adapter
+        .checkpoint_state(first.state.as_deref())
+        .unwrap()
+        .expect("grok state checkpoint");
+    assert!(
+        checkpoint["messages"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|message| message["src_cursor"].is_null()),
+        "a restart checkpoint must not persist a projection-local rowid"
+    );
+
+    let mut resumed = context(&adapter, "native");
+    resumed.next_ordinal = first.next_ordinal;
+    resumed.src_cursor = Some(99);
+    resumed.src_offset = Some(200);
+    resumed.state = adapter.restore_state(Some(&checkpoint)).unwrap();
+    let second_line = br#"{"timestamp":1,"method":"session/update","params":{"sessionId":"native","_meta":{"eventId":"e2","agentTimestampMs":1001,"promptId":"p","streamStartMs":1000,"turnStartMs":999,"totalTokens":1,"updateType":"AgentMessageChunk","chunkId":1},"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"lo"}}}}"#;
+    let outcome = adapter.ingest_line(&mut resumed, spec::UPDATES, second_line);
+    let message = outcome
+        .ops
+        .into_iter()
+        .find_map(|op| match op {
+            IngestOp::Message(row) => Some(row),
+            _ => None,
+        })
+        .expect("resumed chunk refines a message");
+    assert_eq!(message.provenance.src_cursor, Some(99));
+    assert_eq!(message.provenance.src_offset, Some(200));
+    assert_eq!(agent_prose(&message), Some("hello"));
+}
+
+#[test]
 fn chunks_refine_one_logical_message() {
     let adapter = GrokAdapter;
     let mut ctx = context(&adapter, "native");

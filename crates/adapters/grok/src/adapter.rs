@@ -49,7 +49,8 @@ impl AgentAdapter for GrokAdapter {
         let state = state
             .and_then(|state| state.downcast_ref::<GrokState>())
             .ok_or_else(|| "grok checkpoint state has the wrong type".to_owned())?;
-        serde_json::to_value(state)
+        state
+            .checkpoint_value()
             .map(Some)
             .map_err(|error| error.to_string())
     }
