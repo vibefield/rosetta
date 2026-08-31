@@ -333,6 +333,7 @@ export default function App() {
             />
             <TranscriptColumn
               session={session}
+              duringBackfill={ingestActive}
               sessions={meta?.sessions ?? []}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}

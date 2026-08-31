@@ -65,6 +65,7 @@ export function SessionsColumn({
           activityGridStartTimestamp={activityGridStartTimestamp}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
+          censusRunning={censusRunning}
           isWorktreeVisible={isWorktreeVisible}
           onToggleWorktree={onToggleWorktree}
         />

@@ -30,8 +30,12 @@ export function SessionListItem({
 }: SessionListItemProps) {
   const status = getSessionStatus(session, duringBackfill);
   // The cooking card: identity is real from the skim; the figure slots are
-  // what is still unknown, and they alone carry the processing state.
-  const isCooking = isSessionCooking(session) && facts === null;
+  // what is still unknown, and they alone carry the processing state. A
+  // facts row whose figures have not landed — a cooking session still
+  // counting from zero — is not a claim: the shimmer keeps the slot.
+  const cookingState = isSessionCooking(session);
+  const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
+  const isCooking = cookingState && landedFacts === null;
   const title = getSessionTitle(session);
   const lastActiveLabel = lastActive(session.updated_at, currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
@@ -40,8 +44,10 @@ export function SessionListItem({
     searchHitCount === null
       ? null
       : `${searchHitCount} ${searchHitCount === 1 ? "search hit" : "search hits"}`,
-    facts === null ? null : `${facts.messages} messages`,
-    facts !== null && facts.tokens > 0 ? `${tokenText(facts.tokens)} tokens` : null,
+    landedFacts === null ? null : `${landedFacts.messages} messages`,
+    landedFacts !== null && landedFacts.tokens > 0
+      ? `${tokenText(landedFacts.tokens)} tokens`
+      : null,
   ].filter((value): value is string => value !== null);
 
   return (
@@ -85,9 +91,9 @@ export function SessionListItem({
             <span>·</span>
           </>
         )}
-        {facts !== null && (
+        {landedFacts !== null && (
           <>
-            <span>{facts.messages} msgs</span>
+            <span>{landedFacts.messages} msgs</span>
             <span>·</span>
           </>
         )}
@@ -100,10 +106,10 @@ export function SessionListItem({
           </>
         )}
         <span>{duration(session.started_at, session.updated_at)}</span>
-        {facts !== null && facts.tokens > 0 && (
+        {landedFacts !== null && landedFacts.tokens > 0 && (
           <>
             <span>·</span>
-            <span>{tokenText(facts.tokens)}</span>
+            <span>{tokenText(landedFacts.tokens)}</span>
           </>
         )}
       </span>

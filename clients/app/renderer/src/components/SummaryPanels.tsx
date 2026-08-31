@@ -31,7 +31,8 @@ const PROJECT_CHART_OPTIONS = [
 
 /* ── four chips, not four cards ─────────────────────────────────────────── */
 
-function TokenSummaryValue({ value }: { value: number }) {
+function TokenSummaryValue({ value, unknown = false }: { value: number; unknown?: boolean }) {
+  if (unknown) return <b>—</b>;
   const formattedValue = fmtTokens(value);
   return (
     <b>
@@ -39,6 +40,12 @@ function TokenSummaryValue({ value }: { value: number }) {
       <small>{formattedValue.u}</small>
     </b>
   );
+}
+
+/** A veiled figure that has not landed yet is a dash, never a claimed zero
+ * (the design record's rule for every cooking slot). */
+function CountFigure({ value, veiled }: { readonly value: number; readonly veiled: boolean }) {
+  return <b>{veiled && value === 0 ? "—" : value.toLocaleString()}</b>;
 }
 
 interface SummaryStat {
@@ -77,6 +84,10 @@ export interface ProjectSummaryPanelProps {
   /** A backfill is running: figures for an unfinished project stay veiled.
    * Once the phase is live a veil never descends again. */
   readonly ingestActive: boolean;
+  /** The census itself is still running: the counts below this panel are
+   * incomplete, so its veil defers to the column's census veil instead of
+   * stacking a near-duplicate counting label on top of it. */
+  readonly censusRunning: boolean;
   /** `null` means the browser build has no desktop worktree integration. */
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
@@ -89,6 +100,7 @@ export function ProjectSummaryPanel({
   activityGridStartTimestamp,
   currentTimestamp,
   ingestActive,
+  censusRunning,
   isWorktreeVisible,
   onToggleWorktree,
 }: ProjectSummaryPanelProps) {
@@ -187,12 +199,16 @@ export function ProjectSummaryPanel({
         <div className="ah-meta__body ah-veilhost">
           {isVeiled && (
             <Veil
-              label={`counting · ${sessionCountLabel(
-                project.indexedSessionCount,
-                project.sessionCount,
-              )}`}
+              label={
+                censusRunning
+                  ? "waiting on the census"
+                  : `counting · ${sessionCountLabel(
+                      project.indexedSessionCount,
+                      project.sessionCount,
+                    )}`
+              }
               progress={
-                project.sessionCount > 0
+                !censusRunning && project.sessionCount > 0
                   ? project.indexedSessionCount / project.sessionCount
                   : null
               }
@@ -201,12 +217,23 @@ export function ProjectSummaryPanel({
           <SummaryStats
             stats={[
               { value: <b>{project.rootSessionCount}</b>, label: "sessions" },
-              { value: <b>{project.lifetimeMessages.toLocaleString()}</b>, label: "messages" },
               {
-                value: <TokenSummaryValue value={project.tokensLast53Weeks} />,
+                value: <CountFigure value={project.lifetimeMessages} veiled={isVeiled} />,
+                label: "messages",
+              },
+              {
+                value: (
+                  <TokenSummaryValue
+                    value={project.tokensLast53Weeks}
+                    unknown={isVeiled && project.tokensLast53Weeks === 0}
+                  />
+                ),
                 label: "tokens",
               },
-              { value: <b>{activityStats.activeDayCount}</b>, label: "active days" },
+              {
+                value: <CountFigure value={activityStats.activeDayCount} veiled={isVeiled} />,
+                label: "active days",
+              },
             ]}
           />
           <div className="ah-chartcard">
@@ -233,11 +260,25 @@ export function ProjectSummaryPanel({
                     data={heatmapData}
                     color={project.tint}
                     ariaLabel={`Daily token activity for ${project.row.name} over 53 weeks`}
-                    summary={`${activityStats.activeDayCount} active days · 53 weeks`}
+                    summary={`${
+                      isVeiled && activityStats.activeDayCount === 0
+                        ? "—"
+                        : activityStats.activeDayCount
+                    } active days · 53 weeks`}
                   />
                   <p className="ah-meta__facts">
-                    <b>{activityStats.currentStreakLength}d</b> streak ·{" "}
-                    <b>{activityStats.longestStreakLength}d</b> best
+                    <b>
+                      {isVeiled && activityStats.longestStreakLength === 0
+                        ? "—"
+                        : `${activityStats.currentStreakLength}d`}
+                    </b>{" "}
+                    streak ·{" "}
+                    <b>
+                      {isVeiled && activityStats.longestStreakLength === 0
+                        ? "—"
+                        : `${activityStats.longestStreakLength}d`}
+                    </b>{" "}
+                    best
                     {peakHour !== null && (
                       <>
                         {" "}
@@ -269,6 +310,9 @@ export interface PortfolioSummaryPanelProps {
   /** A backfill is running: the portfolio's totals are still counting, so
    * the whole panel stays veiled. It unveils last — the finale. */
   readonly ingestActive: boolean;
+  /** The census is still naming sessions: defer to the column's census veil
+   * rather than stacking a second counting label above it. */
+  readonly censusRunning: boolean;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -276,6 +320,7 @@ export function PortfolioSummaryPanel({
   projects,
   selectedProjectId,
   ingestActive,
+  censusRunning,
   onProjectSelect,
 }: PortfolioSummaryPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -362,12 +407,16 @@ export function PortfolioSummaryPanel({
         <div className="ah-meta__body ah-veilhost">
           {ingestActive && (
             <Veil
-              label={`preparing · ${sessionCountLabel(
-                readinessCounts.indexed,
-                readinessCounts.total,
-              )}`}
+              label={
+                censusRunning
+                  ? "waiting on the census"
+                  : `preparing · ${sessionCountLabel(
+                      readinessCounts.indexed,
+                      readinessCounts.total,
+                    )}`
+              }
               progress={
-                readinessCounts.total > 0
+                !censusRunning && readinessCounts.total > 0
                   ? readinessCounts.indexed / readinessCounts.total
                   : null
               }
@@ -376,9 +425,23 @@ export function PortfolioSummaryPanel({
           <SummaryStats
             stats={[
               { value: <b>{summary.sessionCount}</b>, label: "sessions" },
-              { value: <b>{summary.messageCount.toLocaleString()}</b>, label: "messages" },
-              { value: <TokenSummaryValue value={summary.tokenCount} />, label: "tokens" },
-              { value: <b>{summary.activeDayCount}</b>, label: "active days" },
+              {
+                value: <CountFigure value={summary.messageCount} veiled={ingestActive} />,
+                label: "messages",
+              },
+              {
+                value: (
+                  <TokenSummaryValue
+                    value={summary.tokenCount}
+                    unknown={ingestActive && summary.tokenCount === 0}
+                  />
+                ),
+                label: "tokens",
+              },
+              {
+                value: <CountFigure value={summary.activeDayCount} veiled={ingestActive} />,
+                label: "active days",
+              },
             ]}
           />
           <div className="ah-chartcard">

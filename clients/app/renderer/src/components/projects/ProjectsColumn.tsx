@@ -85,6 +85,7 @@ export function ProjectsColumn({
           projects={projects}
           selectedProjectId={selectedProjectId}
           ingestActive={ingestActive}
+          censusRunning={censusRunning}
           onProjectSelect={onProjectSelect}
         />
       )}

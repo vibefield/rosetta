@@ -129,7 +129,7 @@ export function ProjectListItem({
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
           <TokenFigure
             value={project.tokensLast30Days}
-            unknown={project.readiness === "pending" && project.tokensLast30Days === 0}
+            unknown={isCooking && project.tokensLast30Days === 0}
           />
         </span>
         {lastActiveLabel !== null && (

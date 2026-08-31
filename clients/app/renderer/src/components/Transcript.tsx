@@ -95,6 +95,7 @@ function fmtDur(ms: number | null): string {
 }
 
 interface WorkBlockProps {
+  readonly duringBackfill: boolean;
   readonly block: Extract<DocBlock, { type: "work" }>;
   readonly session: SessionRow;
   readonly childrenByTimelineId: ReadonlyMap<string, readonly SessionRow[]>;
@@ -106,6 +107,7 @@ interface WorkBlockProps {
 }
 
 function WorkBlock({
+  duringBackfill,
   block,
   session,
   childrenByTimelineId,
@@ -179,6 +181,7 @@ function WorkBlock({
                     index={index}
                     focus={focus}
                     anchored
+                    duringBackfill={duringBackfill}
                     onFocusConsumed={onFocusConsumed}
                     onReceipt={onReceipt}
                   />
@@ -211,6 +214,9 @@ function roleName(row: TimelineEntry): string {
 
 interface ThreadDocumentProps {
   readonly session: SessionRow;
+  /** The cold backfill is running: a streaming session is being INDEXED by
+   * the daemon, not run by an agent — the watermark must not claim life. */
+  readonly duringBackfill: boolean;
   readonly feed: TimelineFeed;
   readonly index: ThreadIndex;
   readonly focus: ThreadFocus | null;
@@ -222,6 +228,7 @@ interface ThreadDocumentProps {
 
 function ThreadDocument({
   session,
+  duringBackfill,
   feed,
   index,
   focus,
@@ -283,6 +290,7 @@ function ThreadDocument({
               <WorkBlock
                 block={block}
                 session={session}
+                duringBackfill={duringBackfill}
                 childrenByTimelineId={placement.byTimelineId}
                 index={index}
                 focus={focus}
@@ -358,6 +366,7 @@ function ThreadDocument({
               index={index}
               focus={focus}
               anchored={false}
+              duringBackfill={duringBackfill}
               onFocusConsumed={onFocusConsumed}
               onReceipt={onReceipt}
             />
@@ -391,8 +400,15 @@ function ThreadDocument({
           />
         ))}
       {session.stream_state === "streaming" && (
-        <div className="ah-mark ah-watermark" title="this session is still running">
-          live
+        <div
+          className="ah-mark ah-watermark"
+          title={
+            duringBackfill
+              ? "rosettad is reading this transcript"
+              : "this session is still running"
+          }
+        >
+          {duringBackfill ? "indexing" : "live"}
         </div>
       )}
     </>
@@ -401,6 +417,7 @@ function ThreadDocument({
 
 interface SubthreadProps {
   readonly session: SessionRow;
+  readonly duringBackfill: boolean;
   readonly index: ThreadIndex;
   readonly focus: ThreadFocus | null;
   readonly anchored: boolean;
@@ -417,6 +434,7 @@ function subthreadTitle(session: SessionRow): string {
 
 function Subthread({
   session,
+  duringBackfill,
   index,
   focus,
   anchored,
@@ -488,6 +506,7 @@ function Subthread({
         <div className="ah-subthread__body">
           <ThreadDocument
             session={session}
+            duringBackfill={duringBackfill}
             feed={feed}
             index={index}
             focus={focus}
@@ -504,6 +523,8 @@ function Subthread({
 
 export interface TranscriptColumnProps {
   readonly session: SessionRow | null;
+  /** The cold backfill is running — threaded to every watermark. */
+  readonly duringBackfill: boolean;
   /** Full metadata topology. Only roots are navigable, but descendants are
    * needed here to build the embedded thread tree. */
   readonly sessions: readonly SessionRow[];
@@ -518,6 +539,7 @@ export interface TranscriptColumnProps {
 
 export function TranscriptColumn({
   session,
+  duringBackfill,
   sessions,
   project,
   feed,
@@ -690,6 +712,7 @@ export function TranscriptColumn({
           <div className="ah-transcript">
             <ThreadDocument
               session={session}
+              duringBackfill={duringBackfill}
               feed={feed}
               index={index}
               focus={focus}
