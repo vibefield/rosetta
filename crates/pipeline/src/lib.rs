@@ -28,9 +28,14 @@ pub use checkpoint::PipeCheckpoint;
 pub use discover::{Discovery, discover, expand_data_root};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{HintMapping, LiveOptions, LiveReport, LiveRunner, map_hint, stream_live};
-pub use meta::{MetaReport, SessionFile, meta_ingest, meta_ingest_into};
+pub use meta::{
+    MetaReport, SessionFile, meta_ingest, meta_ingest_into, meta_ingest_inventory_into,
+};
 pub use plan::{IngestPlan, SessionPlan};
-pub use replay::{RebuildReport, rebuild_runtime};
+pub use replay::{
+    PreparedRuntime, RebuildOptions, RebuildReport, apply_prepared_runtime,
+    prepare_captured_runtime, prepare_runtime, rebuild_runtime, rebuild_runtime_with_options,
+};
 pub use sched::{ColdLane, ColdSchedule, order_runtime_roster};
 pub use stream::{StreamReport, stream_backfill, stream_backfill_into};
 

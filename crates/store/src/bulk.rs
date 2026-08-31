@@ -21,9 +21,20 @@ pub(crate) fn prepare(conn: &Connection) -> Result<(), StoreError> {
     // durable truth and a failed scratch file is never installed.
     conn.execute_batch(
         "PRAGMA journal_mode = MEMORY;
-         PRAGMA synchronous = OFF;",
+         PRAGMA synchronous = OFF;
+         PRAGMA foreign_keys = OFF;
+         PRAGMA ignore_check_constraints = ON;",
     )?;
     conn.execute_batch(schema::BULK_DROP_INDEXES)?;
+    Ok(())
+}
+
+/// Re-enable row constraints before the final whole-projection audit. SQLite
+/// `quick_check` then evaluates every CHECK against the finished rows, while
+/// `foreign_key_check` below evaluates the complete relationship graph. A
+/// violation keeps the scratch projection private and unpublishable.
+pub(crate) fn enable_constraint_validation(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch("PRAGMA ignore_check_constraints = OFF;")?;
     Ok(())
 }
 
@@ -78,14 +89,19 @@ pub(crate) fn validate_complete(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub(crate) fn finalize(tx: &Transaction<'_>) -> Result<BulkLoadStats, StoreError> {
+pub(crate) fn finalize(
+    tx: &Transaction<'_>,
+    ordinals_precomputed: bool,
+) -> Result<BulkLoadStats, StoreError> {
     let mut stats = BulkLoadStats::default();
     // Bulk activation assigns collision-free provisional ordinals. Rank every
     // session once after all sources have landed instead of running one
     // growing window/sort for each source activation.
-    let started = Instant::now();
-    stats.renumber_rows = crate::apply::renumber_all_sessions(tx)?;
-    stats.renumber_nanos = elapsed_nanos(started);
+    if !ordinals_precomputed {
+        let started = Instant::now();
+        stats.renumber_rows = crate::apply::renumber_all_sessions(tx)?;
+        stats.renumber_nanos = elapsed_nanos(started);
+    }
 
     // One set-based fold replaces per-message and per-session rescans. SUM's
     // NULL behavior preserves the model's never-reported != zero invariant.
@@ -155,7 +171,9 @@ pub(crate) fn validate(conn: &Connection) -> Result<(), StoreError> {
 pub(crate) fn restore_live_pragmas(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
-         PRAGMA synchronous = NORMAL;",
+         PRAGMA synchronous = NORMAL;
+         PRAGMA ignore_check_constraints = OFF;
+         PRAGMA foreign_keys = ON;",
     )?;
     Ok(())
 }

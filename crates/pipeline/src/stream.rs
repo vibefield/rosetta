@@ -557,7 +557,7 @@ fn ingest_file(
         let read = instrument.time(Metric::ReadNanos, || {
             read_tailer.read(&path, tail.as_ref(), force_replay)
         })?;
-        let batch = match read {
+        let mut batch = match read {
             TailRead::Missing => {
                 report.files_missing += 1;
                 return Ok(FilePass::Finished(false));
@@ -735,6 +735,16 @@ fn ingest_file(
         // may reference them. Oversized records are quarantined by the
         // tailer and carry no payload, so only ordinary records land here.
         if let Some(ledger) = ledger.as_deref_mut() {
+            let raw: Vec<(u64, Vec<u8>)> = batch
+                .items
+                .iter_mut()
+                .filter_map(|item| match item {
+                    TailItem::Record(record) if record.start_offset >= ledgered_through => {
+                        Some((record.start_offset, std::mem::take(&mut record.payload)))
+                    }
+                    TailItem::Record(_) | TailItem::Oversized { .. } => None,
+                })
+                .collect();
             instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
                 let source = rosetta_capture::SourceDef {
                     relative_path: file.relative_path.clone(),
@@ -743,20 +753,9 @@ fn ingest_file(
                     native_session_id: file.native_session_id.clone(),
                     agent_version: file.agent_version.clone(),
                 };
-                let raw: Vec<(u64, &[u8])> = batch
-                    .items
-                    .iter()
-                    .filter_map(|item| match item {
-                        TailItem::Record(record) => {
-                            Some((record.start_offset, record.payload.as_slice()))
-                        }
-                        TailItem::Oversized { .. } => None,
-                    })
-                    .filter(|(start_offset, _)| *start_offset >= ledgered_through)
-                    .collect();
                 let mut wrote = false;
                 if !raw.is_empty() {
-                    ledger.append_raw(&source, source_generation, raw)?;
+                    ledger.append_raw_owned(&source, source_generation, raw)?;
                     wrote = true;
                 }
                 if source_generation != active_generation

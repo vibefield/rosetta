@@ -405,6 +405,23 @@ impl Instrument {
         result
     }
 
+    /// Apply a closed runtime's source batches under one private SQLite
+    /// transaction while retaining the same aggregate attribution as the
+    /// ordinary per-source path.
+    pub fn apply_closed_bulk_sources(
+        &self,
+        store: &mut Store,
+        batches: &[Batch],
+    ) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.apply_closed_bulk_sources(batches)
+        });
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
     /// Flush the private-cold relational fold at a runtime boundary. The same
     /// counters are used as ordinary batches, while the RAM fold has its own
     /// exclusive timer for the audit UI.
@@ -505,6 +522,15 @@ impl Instrument {
     pub fn snapshot(&self) -> InstrumentSnapshot {
         InstrumentSnapshot {
             values: std::array::from_fn(|index| self.values[index].load(Ordering::Relaxed)),
+        }
+    }
+
+    /// Merge counters produced by an independent cold-preparation worker.
+    /// Each worker owns its profiler, so overlapping wall time never makes
+    /// row/byte counters race or lose attribution.
+    pub fn merge_snapshot(&self, snapshot: &InstrumentSnapshot) {
+        for (index, value) in snapshot.values.iter().copied().enumerate() {
+            self.values[index].fetch_add(value, Ordering::Relaxed);
         }
     }
 }

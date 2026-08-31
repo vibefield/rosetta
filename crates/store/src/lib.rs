@@ -151,6 +151,14 @@ pub struct Store {
     /// incomplete source. Keep accepting batches so callers can finish their
     /// diagnostic pass, but never allow that scratch file to be published.
     bulk_abandoned: bool,
+    /// A closed cold planner assigned final presentation ordinals before any
+    /// message reached SQLite, so finalization need not rank and rewrite the
+    /// complete message table.
+    bulk_ordinals_precomputed: bool,
+    /// Cold-capture planner: metadata/cursor control rows are projected into
+    /// this private in-memory connection, while source payload batches remain
+    /// process-local for the final closed writer.
+    planned_batches: Option<Vec<Batch>>,
     /// Hot-tier observation: `Some` collects the row-level [`Effects`] of
     /// every committed batch until drained. `None` (the default) costs
     /// nothing — backfill and rebuild never allocate a mutation log.
@@ -196,6 +204,8 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
+            bulk_ordinals_precomputed: false,
+            planned_batches: None,
             effects: None,
             meta_effects: None,
         })
@@ -215,6 +225,8 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
+            bulk_ordinals_precomputed: false,
+            planned_batches: None,
             effects: None,
             meta_effects: None,
         })
@@ -244,6 +256,8 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
+            bulk_ordinals_precomputed: false,
+            planned_batches: None,
             effects: None,
             meta_effects: None,
         })
@@ -282,6 +296,34 @@ impl Store {
         )
     }
 
+    /// In-memory canonical scratch projection with production asset
+    /// materialization. The caller must back the validated connection up to a
+    /// durable private file before atomic publication.
+    pub fn open_in_memory_for_rebuild_with_assets(projection: &Path) -> Result<Self, StoreError> {
+        Self::from_empty_connection_for_rebuild(
+            Connection::open_in_memory()?,
+            assets::AssetStore::for_projection(projection),
+        )
+    }
+
+    /// In-memory control plane for a fresh cold capture. It advances source
+    /// cursors/generations so the ordinary framing drivers can run unchanged,
+    /// but retains normalized source batches in RAM instead of projecting
+    /// their canonical rows into a throwaway database.
+    pub fn open_in_memory_for_cold_planning() -> Result<Self, StoreError> {
+        let mut store = Self::open_in_memory_for_rebuild()?;
+        store.planned_batches = Some(Vec::new());
+        Ok(store)
+    }
+
+    pub fn take_planned_batches(&mut self) -> Result<Vec<Batch>, StoreError> {
+        self.planned_batches
+            .take()
+            .ok_or_else(|| StoreError::BulkLoadState {
+                message: "store is not a cold-capture planner".to_string(),
+            })
+    }
+
     fn from_empty_connection_for_rebuild(
         conn: Connection,
         assets: assets::AssetStore,
@@ -305,6 +347,8 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
+            bulk_ordinals_precomputed: false,
+            planned_batches: None,
             effects: None,
             meta_effects: None,
         })
@@ -329,6 +373,9 @@ impl Store {
                 message: "source-scoped stream batch contains metadata-only session_meta"
                     .to_string(),
             });
+        }
+        if self.planned_batches.is_some() && batch.source.is_some() {
+            return self.apply_planning_source(batch);
         }
         let asset_stats = self
             .assets
@@ -368,6 +415,7 @@ impl Store {
             maintenance,
             bulk_load,
             self.mode == StoreMode::Progressive,
+            self.bulk_ordinals_precomputed,
             apply::Observation {
                 rows: fresh.as_mut(),
                 meta: fresh_meta.as_mut(),
@@ -404,7 +452,138 @@ impl Store {
         if let (Some(pending), Some(committed)) = (self.meta_effects.as_mut(), fresh_meta) {
             pending.merge(committed);
         }
+        if let Some(planned) = self.planned_batches.as_mut() {
+            planned.push(batch.clone());
+        }
         Ok(stats)
+    }
+
+    fn apply_planning_source(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
+        let control = Batch {
+            ops: Vec::new(),
+            checkpoints: batch.checkpoints.clone(),
+            source: batch.source.clone(),
+        };
+        let tx = self.conn.transaction()?;
+        let mut stats = apply::apply_batch(
+            &tx,
+            &control,
+            apply::BULK_MAINTENANCE,
+            true,
+            false,
+            false,
+            apply::Observation {
+                rows: None,
+                meta: None,
+            },
+        )?;
+        let commit_started = Instant::now();
+        tx.commit()?;
+        stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
+        self.planned_batches
+            .as_mut()
+            .expect("planning source branch requires a planning buffer")
+            .push(batch.clone());
+        Ok(stats)
+    }
+
+    /// Apply closed first-generation source batches in one private
+    /// transaction. The caller has already normalized, ordered, and sealed
+    /// every source; there are no readers and the raw ledger remains the
+    /// retry boundary, so per-source commits add cost without adding an
+    /// observable correctness guarantee.
+    pub fn apply_closed_bulk_sources(
+        &mut self,
+        batches: &[Batch],
+    ) -> Result<ApplyStats, StoreError> {
+        if self.mode != StoreMode::Bulk {
+            return Err(StoreError::BulkLoadState {
+                message: "closed source batches require a private cold rebuild".to_string(),
+            });
+        }
+
+        let mut cursor_ids = BTreeSet::new();
+        let mut deltas = Vec::with_capacity(batches.len());
+        let mut asset_totals = Vec::with_capacity(batches.len());
+        for batch in batches {
+            let source = batch
+                .source
+                .as_ref()
+                .ok_or_else(|| StoreError::BulkLoadState {
+                    message: "closed bulk source batch is missing source identity".to_string(),
+                })?;
+            if !matches!(source.mode, SourceMode::Activate | SourceMode::Abandon) {
+                return Err(StoreError::BulkLoadState {
+                    message: "closed bulk source batch is not terminal".to_string(),
+                });
+            }
+            if !cursor_ids.insert(source.cursor_id) {
+                return Err(StoreError::BulkLoadState {
+                    message: format!(
+                        "closed bulk transaction repeats cursor {}",
+                        source.cursor_id
+                    ),
+                });
+            }
+            if batch
+                .ops
+                .iter()
+                .any(|op| matches!(op, rosetta_core::IngestOp::SessionMeta(_)))
+            {
+                return Err(StoreError::SourceState {
+                    cursor_id: source.cursor_id,
+                    message: "source-scoped stream batch contains metadata-only session_meta"
+                        .to_string(),
+                });
+            }
+            asset_totals.push(self.assets.materialize_batch(batch, false)?);
+            let delta = apply::BulkReconciliationDelta::from_batch(batch, &self.conn, false)?
+                .ok_or_else(|| StoreError::BulkLoadState {
+                    message: "closed source batch did not produce reconciliation state".to_string(),
+                })?;
+            self.bulk_reconciliation.validate(&delta)?;
+            deltas.push(delta);
+        }
+
+        let mut totals = ApplyStats::default();
+        let tx = self.conn.transaction()?;
+        for (batch, asset_stats) in batches.iter().zip(asset_totals) {
+            let mut stats = apply::apply_batch(
+                &tx,
+                batch,
+                apply::BULK_MAINTENANCE,
+                true,
+                false,
+                self.bulk_ordinals_precomputed,
+                apply::Observation {
+                    rows: None,
+                    meta: None,
+                },
+            )?;
+            stats.projection_assets = asset_stats.assets;
+            stats.asset_files_written = asset_stats.files_written;
+            stats.asset_files_reused = asset_stats.files_reused;
+            stats.asset_bytes = asset_stats.bytes;
+            stats.asset_write_nanos = asset_stats.nanos;
+            totals.merge_from(&stats);
+        }
+        let commit_started = Instant::now();
+        tx.commit()?;
+        totals.sqlite_commit_nanos = totals
+            .sqlite_commit_nanos
+            .saturating_add(elapsed_nanos(commit_started));
+        for delta in deltas {
+            self.bulk_reconciliation.commit(delta);
+        }
+        if batches.iter().any(|batch| {
+            matches!(
+                batch.source.as_ref().map(|source| source.mode),
+                Some(SourceMode::Abandon)
+            )
+        }) {
+            self.bulk_abandoned = true;
+        }
+        Ok(totals)
     }
 
     /// Close every activated private-cold source currently buffered, fold its
@@ -425,7 +604,8 @@ impl Store {
 
         let tx = self.conn.transaction()?;
         let apply_started = Instant::now();
-        let mut stats = apply::apply_bulk_reconciliation(&tx, &mut plan)?;
+        let mut stats =
+            apply::apply_bulk_reconciliation(&tx, &mut plan, self.bulk_ordinals_precomputed)?;
         stats.profile.tool_reconcile_nanos = reconcile_nanos;
         stats.canonical_apply_nanos = elapsed_nanos(apply_started);
         let commit_started = Instant::now();
@@ -453,11 +633,12 @@ impl Store {
         bulk::validate_complete(&self.conn)?;
         let _ = self.flush_bulk_reconciliation()?;
         let tx = self.conn.transaction()?;
-        let mut stats = bulk::finalize(&tx)?;
+        let mut stats = bulk::finalize(&tx, self.bulk_ordinals_precomputed)?;
         search_sync::mark_canonical_ready(&tx)?;
         let started = Instant::now();
         tx.commit()?;
         stats.commit_nanos = elapsed_nanos(started);
+        bulk::enable_constraint_validation(&self.conn)?;
         let started = Instant::now();
         bulk::validate(&self.conn)?;
         stats.validate_nanos = elapsed_nanos(started);
@@ -488,7 +669,7 @@ impl Store {
         }
         bulk::validate_complete(&self.conn)?;
         let tx = self.conn.transaction()?;
-        let mut stats = bulk::finalize(&tx)?;
+        let mut stats = bulk::finalize(&tx, false)?;
         let started = Instant::now();
         tx.commit()?;
         stats.commit_nanos = elapsed_nanos(started);
@@ -520,6 +701,27 @@ impl Store {
         self.mode == StoreMode::Bulk
     }
 
+    /// Admit final ordinals supplied by a closed cold planner. Call this
+    /// before applying any source batch; live and progressive writers must
+    /// continue deriving order from committed state.
+    pub fn use_precomputed_bulk_ordinals(&mut self) -> Result<(), StoreError> {
+        if self.mode != StoreMode::Bulk {
+            return Err(StoreError::BulkLoadState {
+                message: "precomputed ordinals require a private cold rebuild".to_string(),
+            });
+        }
+        let messages: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))?;
+        if messages != 0 {
+            return Err(StoreError::BulkLoadState {
+                message: "precomputed ordinals must be enabled before message writes".to_string(),
+            });
+        }
+        self.bulk_ordinals_precomputed = true;
+        Ok(())
+    }
+
     /// Change only the derived readiness badge for one session. Pipeline
     /// completion must not round-trip a projected `SessionRow`: doing so
     /// would feed the public title back as fresh explicit title evidence.
@@ -542,6 +744,42 @@ impl Store {
             }
         }
         Ok(changed != 0)
+    }
+
+    /// Apply a closed cold batch's readiness decisions in one transaction.
+    /// The single-row variant remains the live scheduler primitive; replay
+    /// and RAM planning already know the complete runtime and must not pay one
+    /// SQLite autocommit per session.
+    pub fn set_session_stream_states(
+        &mut self,
+        states: &[(String, StreamState)],
+    ) -> Result<u64, StoreError> {
+        if states.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut changed_ids = Vec::new();
+        {
+            let mut update = tx.prepare_cached(
+                "UPDATE session SET stream_state = ?2
+                 WHERE id = ?1 AND stream_state != ?2",
+            )?;
+            for (session_id, state) in states {
+                if update.execute(rusqlite::params![session_id, state.as_str()])? != 0 {
+                    changed_ids.push(session_id.clone());
+                }
+            }
+        }
+        tx.commit()?;
+        for session_id in &changed_ids {
+            if let Some(effects) = self.effects.as_mut() {
+                effects.touch_session(session_id);
+            }
+            if let Some(meta) = self.meta_effects.as_mut() {
+                meta.note_session(session_id);
+            }
+        }
+        Ok(u64::try_from(changed_ids.len()).unwrap_or(u64::MAX))
     }
 
     /// Apply a search worker acknowledgement through the canonical single

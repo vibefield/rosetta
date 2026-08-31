@@ -32,6 +32,10 @@ pub struct Discovery {
     pub streamable_bytes: u64,
     pub newest_modified_ms: i64,
     pub walk_truncated: bool,
+    /// The already-filtered deterministic roster. A finite cold ingest can
+    /// hand this directly to metadata admission instead of walking the same
+    /// runtime root twice before it reads one transcript record.
+    pub inventory: Vec<rosetta_capture::ScannedFile>,
 }
 
 /// Expand the layout's `~` against a caller-chosen home. Only the leading
@@ -106,6 +110,7 @@ pub fn discover(
             streamable_bytes,
             newest_modified_ms,
             walk_truncated: report.truncated,
+            inventory: report.files,
         });
     }
     Ok(out)

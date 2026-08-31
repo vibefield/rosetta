@@ -1253,6 +1253,7 @@ dependencies = [
  "blake3",
  "notify",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "walkdir",
@@ -1368,6 +1369,7 @@ name = "rosettad"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "libc",
  "rosetta-adapter-antigravity",
  "rosetta-adapter-claude-code",
  "rosetta-adapter-codex",

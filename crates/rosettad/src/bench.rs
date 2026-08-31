@@ -49,6 +49,25 @@ pub(crate) fn emit_stage_profile(
     }));
 }
 
+pub(crate) fn emit_command_stage_profile(
+    command: &str,
+    stage: &str,
+    agent: Option<&str>,
+    started: Instant,
+    before: &InstrumentSnapshot,
+    instrument: &Instrument,
+) {
+    let delta = instrument.snapshot().delta_since(before);
+    emit(&json!({
+        "event": "stage-profile",
+        "command": command,
+        "stage": stage,
+        "agent": agent,
+        "wallMs": started.elapsed().as_secs_f64() * 1_000.0,
+        "report": delta.report(),
+    }));
+}
+
 fn driver_name(driver: StreamDriver) -> &'static str {
     match driver {
         StreamDriver::JsonLines => "json-lines",

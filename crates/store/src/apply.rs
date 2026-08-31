@@ -224,8 +224,9 @@ use rows::{
 pub(crate) fn apply_bulk_reconciliation(
     tx: &Transaction,
     plan: &mut BulkReconciliationPlan,
+    preserve_message_ordinals: bool,
 ) -> Result<ApplyStats, StoreError> {
-    bulk_reconcile::apply_plan(tx, plan)
+    bulk_reconcile::apply_plan(tx, plan, preserve_message_ordinals)
 }
 
 fn apply_session_usage(
@@ -500,6 +501,7 @@ fn sqlite_u64(cursor_id: i64, label: &str, value: u64) -> Result<i64, StoreError
 /// arrive and are canonicalized once the generation activates.
 struct DirectProjection<'a> {
     preserve_message_ordinals: bool,
+    trust_message_ordinals: bool,
     effects: Option<&'a mut Effects>,
 }
 
@@ -541,38 +543,40 @@ fn project_source_ops(
             } else {
                 None
             };
-            row.ordinal = match existing {
-                Some(ordinal) => ordinal,
-                None => {
-                    if let Some(next) = next_ordinals.get_mut(&row.session_id) {
-                        let ordinal = *next;
-                        *next = next.checked_add(1).ok_or_else(|| StoreError::SourceState {
-                            cursor_id: source.cursor_id,
-                            message: "session ordinal overflowed".to_string(),
-                        })?;
-                        ordinal
-                    } else {
-                        let ordinal: i64 = profile_ordinal_lookup(stats, || {
-                            Ok(tx
-                                .prepare_cached(
-                                    "SELECT COALESCE(MAX(ordinal) + 1, 0)
-                                     FROM message WHERE session_id = ?1",
-                                )?
-                                .query_row(params![row.session_id], |record| record.get(0))?)
-                        })?;
-                        next_ordinals.insert(
-                            row.session_id.clone(),
+            if !projection.trust_message_ordinals {
+                row.ordinal = match existing {
+                    Some(ordinal) => ordinal,
+                    None => {
+                        if let Some(next) = next_ordinals.get_mut(&row.session_id) {
+                            let ordinal = *next;
+                            *next = next.checked_add(1).ok_or_else(|| StoreError::SourceState {
+                                cursor_id: source.cursor_id,
+                                message: "session ordinal overflowed".to_string(),
+                            })?;
                             ordinal
-                                .checked_add(1)
-                                .ok_or_else(|| StoreError::SourceState {
-                                    cursor_id: source.cursor_id,
-                                    message: "session ordinal overflowed".to_string(),
-                                })?,
-                        );
-                        ordinal
+                        } else {
+                            let ordinal: i64 = profile_ordinal_lookup(stats, || {
+                                Ok(tx
+                                    .prepare_cached(
+                                        "SELECT COALESCE(MAX(ordinal) + 1, 0)
+                                     FROM message WHERE session_id = ?1",
+                                    )?
+                                    .query_row(params![row.session_id], |record| record.get(0))?)
+                            })?;
+                            next_ordinals.insert(
+                                row.session_id.clone(),
+                                ordinal
+                                    .checked_add(1)
+                                    .ok_or_else(|| StoreError::SourceState {
+                                        cursor_id: source.cursor_id,
+                                        message: "session ordinal overflowed".to_string(),
+                                    })?,
+                            );
+                            ordinal
+                        }
                     }
-                }
-            };
+                };
+            }
             if let Some(fx) = projection.effects.as_deref_mut() {
                 fx.touched_sessions.insert(row.session_id.clone());
             }
@@ -1162,6 +1166,7 @@ pub(crate) fn apply_batch(
     maintenance: Maintenance,
     bulk_load: bool,
     progressive_public: bool,
+    precomputed_bulk_ordinals: bool,
     observed: Observation<'_>,
 ) -> Result<ApplyStats, StoreError> {
     let Observation {
@@ -1340,6 +1345,7 @@ pub(crate) fn apply_batch(
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: false,
+                                trust_message_ordinals: precomputed_bulk_ordinals,
                                 effects: None,
                             },
                         )?;
@@ -1423,6 +1429,7 @@ pub(crate) fn apply_batch(
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: true,
+                                trust_message_ordinals: false,
                                 effects: effects.as_deref_mut(),
                             },
                         )?;

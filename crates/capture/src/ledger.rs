@@ -21,7 +21,11 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{SyncSender, sync_channel};
+use std::thread::JoinHandle;
 use std::time::Instant;
+
+use serde::{Deserialize, Serialize};
 
 use crate::{CaptureError, io_error};
 
@@ -34,6 +38,10 @@ const TAG_RAW: u8 = 2;
 const TAG_META: u8 = 3;
 const TAG_GENERATION_COMPLETE: u8 = 4;
 const TAG_META_VERSIONED: u8 = 5;
+/// Multiple records from one source/generation under one checksum. Readers
+/// retain `TAG_RAW` support forever; new writers amortize framing and syscalls
+/// across the capture batch they already received.
+const TAG_RAW_BATCH: u8 = 6;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 // One frozen mixed-corpus cold batch averaged about 1.10 MiB of ledger frames.
 // A 1 MiB buffer amortizes writes within that checkpoint boundary while
@@ -42,7 +50,7 @@ const LEDGER_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
 
 /// Everything replay needs to rebuild a normalization context for a source
 /// file. Written into each segment the first time the source appears there.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceDef {
     pub relative_path: String,
     pub stream_id: String,
@@ -124,6 +132,31 @@ pub struct Ledger {
     /// from their leaves through the first pre-existing ancestor.
     unsynced_directories: Vec<PathBuf>,
     write_stats: LedgerWriteStats,
+    async_backend: Option<AsyncBackend>,
+}
+
+enum AsyncCommand {
+    Raw {
+        source: SourceDef,
+        generation: u64,
+        records: Vec<(u64, Vec<u8>)>,
+    },
+    Complete {
+        source: SourceDef,
+        generation: u64,
+        normalizer_version: u32,
+        normalized_clean: bool,
+    },
+    Meta {
+        schema_version: u32,
+        payload: String,
+    },
+    Checkpoint,
+}
+
+struct AsyncBackend {
+    sender: Option<SyncSender<AsyncCommand>>,
+    worker: Option<JoinHandle<Result<Ledger, CaptureError>>>,
 }
 
 impl Ledger {
@@ -148,7 +181,71 @@ impl Ledger {
             unsynced_segments: Vec::new(),
             unsynced_directories,
             write_stats: LedgerWriteStats::default(),
+            async_backend: None,
         })
+    }
+
+    /// Move cold ledger IO/checksumming onto a bounded worker. Source bytes
+    /// remain ordered per runtime, queue capacity bounds owned payload RAM,
+    /// and [`Ledger::flush`] joins the worker before publication. This mode is
+    /// intentionally one-shot and only useful while the canonical projection
+    /// is still private.
+    pub fn into_async(self, queue_capacity: usize) -> Self {
+        assert!(
+            self.async_backend.is_none(),
+            "ledger is already asynchronous"
+        );
+        let dir = self.dir.clone();
+        let max_segment_bytes = self.max_segment_bytes;
+        let segment_seq = self.segment_seq;
+        let defer_checkpoint_sync = self.defer_checkpoint_sync;
+        let (sender, receiver) = sync_channel(queue_capacity.max(1));
+        let worker = std::thread::spawn(move || {
+            let mut ledger = self;
+            while let Ok(command) = receiver.recv() {
+                match command {
+                    AsyncCommand::Raw {
+                        source,
+                        generation,
+                        records,
+                    } => ledger.append_raw_owned(&source, generation, records)?,
+                    AsyncCommand::Complete {
+                        source,
+                        generation,
+                        normalizer_version,
+                        normalized_clean,
+                    } => ledger.complete_generation(
+                        &source,
+                        generation,
+                        normalizer_version,
+                        normalized_clean,
+                    )?,
+                    AsyncCommand::Meta {
+                        schema_version,
+                        payload,
+                    } => ledger.append_meta(schema_version, &payload)?,
+                    AsyncCommand::Checkpoint => ledger.checkpoint()?,
+                }
+            }
+            ledger.flush()?;
+            Ok(ledger)
+        });
+        Self {
+            dir,
+            max_segment_bytes,
+            segment_seq,
+            writer: None,
+            written: 0,
+            defined: HashMap::new(),
+            defer_checkpoint_sync,
+            unsynced_segments: Vec::new(),
+            unsynced_directories: Vec::new(),
+            write_stats: LedgerWriteStats::default(),
+            async_backend: Some(AsyncBackend {
+                sender: Some(sender),
+                worker: Some(worker),
+            }),
+        }
     }
 
     pub fn with_max_segment_bytes(mut self, max: u64) -> Self {
@@ -179,20 +276,43 @@ impl Ledger {
         generation: u64,
         records: impl IntoIterator<Item = (u64, impl AsRef<[u8]>)>,
     ) -> Result<(), CaptureError> {
+        if self.async_backend.is_some() {
+            let records = records
+                .into_iter()
+                .map(|(offset, payload)| (offset, payload.as_ref().to_vec()))
+                .collect();
+            return self.send_async(AsyncCommand::Raw {
+                source: source.clone(),
+                generation,
+                records,
+            });
+        }
         let file_id = self.define(source)?;
         for (start_offset, payload) in records {
-            let payload = payload.as_ref();
-            let started = Instant::now();
-            let mut body = Vec::with_capacity(20 + payload.len());
-            body.extend_from_slice(&file_id.to_be_bytes());
-            body.extend_from_slice(&generation.to_be_bytes());
-            body.extend_from_slice(&start_offset.to_be_bytes());
-            body.extend_from_slice(payload);
-            self.write_stats.frame_nanos = self
-                .write_stats
-                .frame_nanos
-                .saturating_add(elapsed_nanos(started));
-            self.frame(TAG_RAW, &body)?;
+            self.raw_frame(file_id, generation, start_offset, payload.as_ref())?;
+        }
+        Ok(())
+    }
+
+    /// Owned variant for cold pipelines that can move framed payloads out of
+    /// their tail batch. The bytes go straight through checksum/write and are
+    /// never copied into an intermediate frame body.
+    pub fn append_raw_owned(
+        &mut self,
+        source: &SourceDef,
+        generation: u64,
+        records: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), CaptureError> {
+        if self.async_backend.is_some() {
+            return self.send_async(AsyncCommand::Raw {
+                source: source.clone(),
+                generation,
+                records,
+            });
+        }
+        let file_id = self.define(source)?;
+        for (start_offset, payload) in records {
+            self.raw_frame(file_id, generation, start_offset, &payload)?;
         }
         Ok(())
     }
@@ -207,6 +327,14 @@ impl Ledger {
         normalizer_version: u32,
         normalized_clean: bool,
     ) -> Result<(), CaptureError> {
+        if self.async_backend.is_some() {
+            return self.send_async(AsyncCommand::Complete {
+                source: source.clone(),
+                generation,
+                normalizer_version,
+                normalized_clean,
+            });
+        }
         let file_id = self.define(source)?;
         let started = Instant::now();
         let mut body = Vec::with_capacity(17);
@@ -223,6 +351,12 @@ impl Ledger {
 
     /// Append a version-routed serialized meta-ops batch.
     pub fn append_meta(&mut self, schema_version: u32, ops_json: &str) -> Result<(), CaptureError> {
+        if self.async_backend.is_some() {
+            return self.send_async(AsyncCommand::Meta {
+                schema_version,
+                payload: ops_json.to_string(),
+            });
+        }
         let started = Instant::now();
         let mut body = Vec::with_capacity(4 + ops_json.len());
         body.extend_from_slice(&schema_version.to_be_bytes());
@@ -239,6 +373,9 @@ impl Ledger {
     /// userspace buffer and rotates at the same boundaries; its caller must
     /// invoke [`Ledger::flush`] before publication.
     pub fn checkpoint(&mut self) -> Result<(), CaptureError> {
+        if self.async_backend.is_some() {
+            return self.send_async(AsyncCommand::Checkpoint);
+        }
         if !self.defer_checkpoint_sync {
             return self.flush();
         }
@@ -250,6 +387,9 @@ impl Ledger {
     /// Durably flush every segment appended so far. This is always a physical
     /// sync barrier, including for private ledgers with deferred checkpoints.
     pub fn flush(&mut self) -> Result<(), CaptureError> {
+        if self.async_backend.is_some() {
+            return self.finish_async();
+        }
         self.flush_buffer()?;
 
         let current = self
@@ -283,6 +423,48 @@ impl Ledger {
         self.unsynced_directories.clear();
         self.rotate_if_needed(true);
         Ok(())
+    }
+
+    fn send_async(&mut self, command: AsyncCommand) -> Result<(), CaptureError> {
+        self.async_backend
+            .as_mut()
+            .and_then(|backend| backend.sender.as_mut())
+            .ok_or_else(|| {
+                CaptureError::InvalidConfig("asynchronous ledger is already closed".to_string())
+            })?
+            .send(command)
+            .map_err(|_| {
+                CaptureError::InvalidConfig("asynchronous ledger worker stopped".to_string())
+            })
+    }
+
+    fn finish_async(&mut self) -> Result<(), CaptureError> {
+        let mut backend = self
+            .async_backend
+            .take()
+            .ok_or_else(|| CaptureError::InvalidConfig("ledger is not asynchronous".to_string()))?;
+        drop(backend.sender.take());
+        let worker = backend.worker.take().ok_or_else(|| {
+            CaptureError::InvalidConfig("asynchronous ledger worker is missing".to_string())
+        })?;
+        let finished = worker.join().map_err(|_| {
+            CaptureError::InvalidConfig("asynchronous ledger worker panicked".to_string())
+        })??;
+        self.adopt_sync(finished);
+        Ok(())
+    }
+
+    fn adopt_sync(&mut self, mut finished: Ledger) {
+        self.dir = std::mem::take(&mut finished.dir);
+        self.max_segment_bytes = finished.max_segment_bytes;
+        self.segment_seq = finished.segment_seq;
+        self.writer = finished.writer.take();
+        self.written = finished.written;
+        self.defined = std::mem::take(&mut finished.defined);
+        self.defer_checkpoint_sync = finished.defer_checkpoint_sync;
+        self.unsynced_segments = std::mem::take(&mut finished.unsynced_segments);
+        self.unsynced_directories = std::mem::take(&mut finished.unsynced_directories);
+        self.write_stats = std::mem::take(&mut finished.write_stats);
     }
 
     fn flush_buffer(&mut self) -> Result<(), CaptureError> {
@@ -344,6 +526,12 @@ impl Ledger {
     }
 
     fn frame(&mut self, tag: u8, body: &[u8]) -> Result<(), CaptureError> {
+        if body.len() > MAX_FRAME_BYTES {
+            return Err(CaptureError::LimitExceeded(format!(
+                "raw ledger frame is {} bytes, limit is {MAX_FRAME_BYTES}",
+                body.len()
+            )));
+        }
         self.ensure_writer()?;
         let path = self.dir.join(segment_name(self.segment_seq));
         let started = Instant::now();
@@ -381,6 +569,67 @@ impl Ledger {
         Ok(())
     }
 
+    fn raw_frame(
+        &mut self,
+        file_id: u32,
+        generation: u64,
+        start_offset: u64,
+        payload: &[u8],
+    ) -> Result<(), CaptureError> {
+        const FIXED_BYTES: usize = 20;
+        let body_len = FIXED_BYTES.checked_add(payload.len()).ok_or_else(|| {
+            CaptureError::LimitExceeded("raw ledger record size overflowed usize".to_string())
+        })?;
+        if body_len > MAX_FRAME_BYTES {
+            return Err(CaptureError::LimitExceeded(format!(
+                "raw ledger record is {} bytes, frame limit is {}",
+                payload.len(),
+                MAX_FRAME_BYTES - FIXED_BYTES
+            )));
+        }
+        self.ensure_writer()?;
+        let path = self.dir.join(segment_name(self.segment_seq));
+        let started = Instant::now();
+        let mut head = [0_u8; 5];
+        head[0] = TAG_RAW;
+        head[1..5].copy_from_slice(&(body_len as u32).to_be_bytes());
+        let mut fixed = [0_u8; FIXED_BYTES];
+        fixed[0..4].copy_from_slice(&file_id.to_be_bytes());
+        fixed[4..12].copy_from_slice(&generation.to_be_bytes());
+        fixed[12..20].copy_from_slice(&start_offset.to_be_bytes());
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&head);
+        hasher.update(&fixed);
+        hasher.update(payload);
+        let digest = hasher.finalize();
+        let checksum = &digest.as_bytes()[..CHECKSUM_BYTES];
+        self.write_stats.frame_nanos = self
+            .write_stats
+            .frame_nanos
+            .saturating_add(elapsed_nanos(started));
+
+        let started = Instant::now();
+        let written = {
+            let writer = self.writer.as_mut().expect("ensure_writer just ran");
+            writer
+                .write_all(&head)
+                .and_then(|_| writer.write_all(&fixed))
+                .and_then(|_| writer.write_all(payload))
+                .and_then(|_| writer.write_all(checksum))
+        };
+        self.write_stats.buffer_write_nanos = self
+            .write_stats
+            .buffer_write_nanos
+            .saturating_add(elapsed_nanos(started));
+        written.map_err(|error| io_error("appending to", &path, error))?;
+
+        let frame_bytes = (head.len() + body_len + CHECKSUM_BYTES) as u64;
+        self.write_stats.frames = self.write_stats.frames.saturating_add(1);
+        self.write_stats.frame_bytes = self.write_stats.frame_bytes.saturating_add(frame_bytes);
+        self.written += frame_bytes;
+        Ok(())
+    }
+
     fn ensure_writer(&mut self) -> Result<(), CaptureError> {
         if self.writer.is_some() {
             return Ok(());
@@ -412,6 +661,17 @@ impl Ledger {
     fn queue_directory_sync(&mut self, path: PathBuf) {
         if !self.unsynced_directories.contains(&path) {
             self.unsynced_directories.push(path);
+        }
+    }
+}
+
+impl Drop for Ledger {
+    fn drop(&mut self) {
+        // A failed private build may unwind before its explicit durability
+        // barrier. Close and join the worker so it cannot keep writing into a
+        // staging directory after its owner starts cleanup.
+        if self.async_backend.is_some() {
+            let _ = self.finish_async();
         }
     }
 }
@@ -576,6 +836,50 @@ where
                     start_offset,
                     payload: body[20..].to_vec(),
                 })?;
+            }
+            TAG_RAW_BATCH => {
+                if body_len < 16 {
+                    return Ok(false);
+                }
+                let file_id = u32::from_be_bytes(body[0..4].try_into().expect("4 bytes"));
+                let generation = u64::from_be_bytes(body[4..12].try_into().expect("8 bytes"));
+                let count = u32::from_be_bytes(body[12..16].try_into().expect("4 bytes"));
+                if count == 0 {
+                    return Ok(false);
+                }
+                let Some(source) = defined.get(&file_id) else {
+                    return Ok(false);
+                };
+                let mut at = 16_usize;
+                for _ in 0..count {
+                    let Some(header_end) = at.checked_add(12) else {
+                        return Ok(false);
+                    };
+                    if header_end > body_len {
+                        return Ok(false);
+                    }
+                    let start_offset =
+                        u64::from_be_bytes(body[at..at + 8].try_into().expect("8 bytes"));
+                    let payload_len =
+                        u32::from_be_bytes(body[at + 8..header_end].try_into().expect("4 bytes"))
+                            as usize;
+                    let Some(payload_end) = header_end.checked_add(payload_len) else {
+                        return Ok(false);
+                    };
+                    if payload_end > body_len {
+                        return Ok(false);
+                    }
+                    visitor(LedgerEntry::Raw {
+                        source: source.clone(),
+                        generation,
+                        start_offset,
+                        payload: body[header_end..payload_end].to_vec(),
+                    })?;
+                    at = payload_end;
+                }
+                if at != body_len {
+                    return Ok(false);
+                }
             }
             TAG_GENERATION_COMPLETE => {
                 if body_len != 17 {
@@ -814,6 +1118,43 @@ mod tests {
         let scanned = scan(dir.path()).unwrap();
         assert_eq!(scanned.entries.len(), 2);
         assert_eq!(scanned.torn_segments, 0);
+    }
+
+    #[test]
+    fn asynchronous_owned_writer_preserves_order_and_joins_at_flush() {
+        let dir = TempDir::new().unwrap();
+        let source = source("async.jsonl");
+        let mut ledger = Ledger::open(dir.path())
+            .unwrap()
+            .defer_sync_until_flush()
+            .into_async(2);
+        ledger.append_meta(2, "[]").unwrap();
+        ledger.checkpoint().unwrap();
+        ledger
+            .append_raw_owned(&source, 1, vec![(0, b"one".to_vec()), (4, b"two".to_vec())])
+            .unwrap();
+        ledger.complete_generation(&source, 1, 7, true).unwrap();
+        ledger.checkpoint().unwrap();
+        ledger.flush().unwrap();
+
+        let stats = ledger.take_write_stats();
+        assert_eq!(stats.syncs, 1);
+        let scanned = scan(dir.path()).unwrap();
+        assert_eq!(scanned.torn_segments, 0);
+        assert!(matches!(scanned.entries[0], LedgerEntry::Meta { .. }));
+        assert!(matches!(
+            scanned.entries.last(),
+            Some(LedgerEntry::GenerationComplete { generation: 1, .. })
+        ));
+        let payloads = scanned
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                LedgerEntry::Raw { payload, .. } => Some(payload.as_slice()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(payloads, [b"one".as_slice(), b"two".as_slice()]);
     }
 
     #[test]

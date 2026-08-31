@@ -94,11 +94,41 @@ pub fn meta_ingest_into(
         })
     })?;
 
+    meta_ingest_inventory_into(
+        adapter,
+        runtime,
+        root,
+        store,
+        &walk.files,
+        walk.truncated,
+        opts,
+        instrument,
+        ledger,
+    )
+}
+
+/// Metadata admission over the exact roster already returned by discovery.
+/// The roster is immutable evidence from the same finite command; individual
+/// reads still handle files vanishing or changing after that census.
+#[allow(clippy::too_many_arguments)]
+pub fn meta_ingest_inventory_into(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    inventory: &[rosetta_capture::ScannedFile],
+    walk_truncated: bool,
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
+    let layout = adapter.layout();
+
     let mut report = MetaReport::default();
     let mut output = MetaOutput::default();
-    report.walk_truncated = walk.truncated;
+    report.walk_truncated = walk_truncated;
 
-    for file in &walk.files {
+    for file in inventory {
         let Some(stream) = layout.matching_stream(&file.relative_path) else {
             continue;
         };
@@ -288,8 +318,7 @@ pub fn meta_ingest_into(
     // missing path, so retain its existing virtual cursors as explicit empty
     // tombstones for one generation. JSONL files keep their ordinary missing
     // semantics and are never swept here.
-    let present: std::collections::BTreeSet<&str> = walk
-        .files
+    let present: std::collections::BTreeSet<&str> = inventory
         .iter()
         .map(|file| file.relative_path.as_str())
         .collect();

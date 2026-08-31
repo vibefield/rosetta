@@ -13,8 +13,9 @@ use rosetta_capture::{Ledger, LedgerEntry, SourceDef, scan_ledger};
 use rosetta_core::ids;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, SliceBudget, discover, expand_data_root, meta_ingest_into,
-    rebuild_runtime, stream_backfill_into,
+    IngestOptions, Instrument, SliceBudget, apply_prepared_runtime, discover, expand_data_root,
+    meta_ingest, meta_ingest_into, prepare_captured_runtime, rebuild_runtime, stream_backfill,
+    stream_backfill_into,
 };
 use rosetta_store::{Store, queries};
 use tempfile::TempDir;
@@ -54,6 +55,117 @@ fn snapshot(store: &Store) -> Snapshot {
         projects: one("SELECT COUNT(*) FROM project"),
         session_cwds: one("SELECT COUNT(*) FROM session WHERE cwd IS NOT NULL"),
     }
+}
+
+#[test]
+fn captured_ram_plan_matches_ordinary_cold_projection() {
+    let adapter = &ClaudeCodeAdapter;
+    let home = TempDir::new().unwrap();
+    let root = expand_data_root(&adapter.layout().data_root, home.path());
+    std::fs::create_dir_all(&root).unwrap();
+    generate(&CorpusSpec::new(Agent::ClaudeCode, 5, 220, 73), &root).unwrap();
+    let opts = IngestOptions {
+        audit_files_per_run: 0,
+        ..IngestOptions::default()
+    };
+    let discovery = discover(&[adapter], home.path(), &opts, &Instrument::new())
+        .unwrap()
+        .pop()
+        .unwrap();
+    let mut runtime = discovery.runtime;
+    runtime.enabled = true;
+
+    let mut ordinary = Store::open_in_memory_for_rebuild().unwrap();
+    let (_, ordinary_files) = meta_ingest(
+        adapter,
+        &runtime,
+        &root,
+        &mut ordinary,
+        &opts,
+        &Instrument::new(),
+    )
+    .unwrap();
+    stream_backfill(
+        adapter,
+        &runtime,
+        &root,
+        &mut ordinary,
+        &ordinary_files,
+        &opts,
+        &Instrument::new(),
+    )
+    .unwrap();
+    ordinary.finish_bulk_load().unwrap();
+
+    let planning_instrument = Instrument::new();
+    let mut planner = Store::open_in_memory_for_cold_planning().unwrap();
+    let (_, files) = meta_ingest(
+        adapter,
+        &runtime,
+        &root,
+        &mut planner,
+        &opts,
+        &planning_instrument,
+    )
+    .unwrap();
+    let stream = stream_backfill(
+        adapter,
+        &runtime,
+        &root,
+        &mut planner,
+        &files,
+        &opts,
+        &planning_instrument,
+    )
+    .unwrap();
+    let prepared =
+        prepare_captured_runtime(adapter, &runtime, &files, &mut planner, &stream).unwrap();
+    let mut planned = Store::open_in_memory_for_rebuild().unwrap();
+    planned.use_precomputed_bulk_ordinals().unwrap();
+    apply_prepared_runtime(
+        adapter,
+        &runtime,
+        prepared,
+        &mut planned,
+        &Instrument::new(),
+    )
+    .unwrap();
+    planned.flush_bulk_reconciliation().unwrap();
+    planned.finish_bulk_load().unwrap();
+
+    assert_eq!(snapshot(&planned), snapshot(&ordinary));
+    let messages = |store: &Store| {
+        let mut statement = store
+            .conn()
+            .prepare(
+                "SELECT timeline_id, session_id, ordinal, type, content, detail,
+                        tool_correlation_key, tool_name, tool_kind, tool_status,
+                        tool_detail, parent_tool_native_id
+                 FROM message ORDER BY timeline_id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(messages(&planned), messages(&ordinary));
 }
 
 struct Ledgered {

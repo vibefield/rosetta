@@ -27,8 +27,10 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, discover,
-    meta_ingest_into, rebuild_runtime, stream_backfill_into,
+    Discovery, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport,
+    Metric, PreparedRuntime, RebuildOptions, StreamReport, apply_prepared_runtime, discover,
+    meta_ingest_into, meta_ingest_inventory_into, prepare_captured_runtime, prepare_runtime,
+    rebuild_runtime_with_options, stream_backfill_into,
 };
 use rosetta_search::{
     Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness, synchronize_fts5_once,
@@ -36,6 +38,7 @@ use rosetta_search::{
 use rosetta_store::Store;
 
 mod bench;
+mod brutal;
 mod engine;
 mod serve;
 
@@ -60,18 +63,22 @@ fn main() -> ExitCode {
         Some("sources") => bench::cmd_sources(&args[1..]),
         Some("streams") => bench::cmd_streams(&args[1..]),
         Some("meta") => bench::cmd_meta(&args[1..]),
+        Some("brutal-ingest") => brutal::cmd_brutal_ingest(&args[1..], registry()),
         Some("ingest") => cmd_ingest(&args[1..]),
         Some("watch") => cmd_watch(&args[1..]),
         Some("serve") => serve::cmd_serve(&args[1..]),
         Some("rebuild") => cmd_rebuild(&args[1..]),
         _ => {
             eprintln!(
-                "usage: rosettad <discover|sources|streams|meta|ingest|watch|serve|rebuild> [options]"
+                "usage: rosettad <discover|sources|streams|meta|brutal-ingest|ingest|watch|serve|rebuild> [options]"
             );
             eprintln!("  discover [--home DIR] [--agent KIND ...] [--json]");
             eprintln!("  sources [--home DIR] [--agent KIND ...] [--json]");
             eprintln!("  streams [--agent KIND ...] [--json]");
             eprintln!("  meta --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json]");
+            eprintln!(
+                "  brutal-ingest --db PATH [--home DIR] [--agent KIND ...] [--granularity file|line] [--durability none|fsync|sqlite-full] [--page-size 4096|65536] [--sqlite-location disk|memory] [--source-cache default|bypass] [--quick-check] [--json]"
+            );
             eprintln!(
                 "  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json] [--audit-boundaries]"
             );
@@ -117,6 +124,59 @@ struct Flags {
     /// serve only: starter-slice byte budget for the cold scheduler.
     /// `None` = the blessed default; `Some(0)` disables slicing.
     slice_budget: Option<u64>,
+    /// Rebuild experiments only: trust the ordinary election/replay scans to
+    /// detect corrupt tails instead of first reading the whole ledger once.
+    experiment_skip_ledger_preflight: bool,
+    /// Rebuild experiments only: discard the private projection immediately
+    /// after ledger replay, before global finalization and publication.
+    experiment_stop_after_replay: bool,
+    /// Cold experiments: publish canonical SQLite without waiting for the
+    /// disposable search sidecar.
+    experiment_skip_search: bool,
+    /// Rebuild experiments only: run the payload-free election pass and stop.
+    experiment_election_only: bool,
+    /// Rebuild-only operation count per private SQLite transaction.
+    rebuild_chunk_ops: Option<usize>,
+    /// Rebuild experiment: directory containing one writer-maintained
+    /// generation-election cache per runtime.
+    experiment_election_cache: Option<PathBuf>,
+    /// Rebuild experiment: prefetch/checksum ledger frames concurrently with
+    /// normalization and canonical application.
+    experiment_prefetch_ledger: bool,
+    /// Rebuild experiment: suppress per-row FK/CHECK enforcement inside the
+    /// unpublished scratch projection. Final validation is deliberately not
+    /// implied; this is a cost-floor measurement.
+    experiment_unsafe_sqlite: bool,
+    /// Rebuild experiment: keep the private projection's hot B-trees in a
+    /// large process-local page cache and retain its exclusive lock. This is
+    /// independently switchable from constraint suppression so the two costs
+    /// remain measurable.
+    experiment_sqlite_memory_cache: bool,
+    /// Rebuild experiment: normalize every runtime concurrently into RAM,
+    /// then feed closed source batches to the sole SQLite writer.
+    experiment_parallel_prepare: bool,
+    /// First-ingest experiment: capture and normalize installed runtimes in
+    /// parallel into closed RAM batches, then feed the sole canonical writer
+    /// in deterministic registry order.
+    experiment_parallel_cold: bool,
+    /// First-ingest lower bound: do not duplicate source bytes into the raw
+    /// recovery ledger. This deliberately gives up ledger-backed rebuild and
+    /// exists only to measure the readiness cost of that durability policy.
+    experiment_skip_raw_ledger: bool,
+    /// Apply completed runtimes from the smallest discovered source footprint
+    /// upward, overlapping their canonical writes with the largest runtime's
+    /// still-running capture. The byte census makes the order deterministic.
+    experiment_cold_small_first: bool,
+    /// Consume capture workers as they actually finish. This maximizes
+    /// producer/writer overlap but makes surrogate SQLite row ids depend on
+    /// scheduling; canonical ids and presentation ordinals remain stable.
+    experiment_cold_completion_order: bool,
+    /// Queue moved raw payloads to a bounded per-runtime ledger worker so
+    /// checksumming/IO overlaps normalization and canonical application.
+    experiment_async_ledger: bool,
+    /// Build the private canonical projection in RAM, then stream its
+    /// validated pages once to the staged SQLite file before publication.
+    experiment_sqlite_in_memory: bool,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -133,6 +193,22 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         all_agents: false,
         stop_after_meta: false,
         slice_budget: None,
+        experiment_skip_ledger_preflight: false,
+        experiment_stop_after_replay: false,
+        experiment_skip_search: false,
+        experiment_election_only: false,
+        rebuild_chunk_ops: None,
+        experiment_election_cache: None,
+        experiment_prefetch_ledger: false,
+        experiment_unsafe_sqlite: false,
+        experiment_sqlite_memory_cache: false,
+        experiment_parallel_prepare: false,
+        experiment_parallel_cold: false,
+        experiment_skip_raw_ledger: false,
+        experiment_cold_small_first: false,
+        experiment_cold_completion_order: false,
+        experiment_async_ledger: false,
+        experiment_sqlite_in_memory: false,
     };
     let mut at = 0;
     while at < args.len() {
@@ -165,6 +241,75 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--slice-budget" => {
                 let value = take_value(args, &mut at)?;
                 flags.slice_budget = Some(parse_byte_size(&value)?);
+            }
+            "--experiment-skip-ledger-preflight" => {
+                flags.experiment_skip_ledger_preflight = true;
+                at += 1;
+            }
+            "--experiment-stop-after-replay" => {
+                flags.experiment_stop_after_replay = true;
+                at += 1;
+            }
+            "--experiment-skip-search" => {
+                flags.experiment_skip_search = true;
+                at += 1;
+            }
+            "--experiment-election-only" => {
+                flags.experiment_election_only = true;
+                at += 1;
+            }
+            "--rebuild-chunk-ops" => {
+                let value = take_value(args, &mut at)?;
+                let parsed = value.parse::<usize>().map_err(|_| {
+                    format!("--rebuild-chunk-ops needs a positive integer, got {value}")
+                })?;
+                if parsed == 0 {
+                    return Err("--rebuild-chunk-ops must be greater than zero".to_string());
+                }
+                flags.rebuild_chunk_ops = Some(parsed);
+            }
+            "--experiment-election-cache" => {
+                flags.experiment_election_cache = Some(PathBuf::from(take_value(args, &mut at)?));
+            }
+            "--experiment-prefetch-ledger" => {
+                flags.experiment_prefetch_ledger = true;
+                at += 1;
+            }
+            "--experiment-unsafe-sqlite" => {
+                flags.experiment_unsafe_sqlite = true;
+                at += 1;
+            }
+            "--experiment-sqlite-memory-cache" => {
+                flags.experiment_sqlite_memory_cache = true;
+                at += 1;
+            }
+            "--experiment-parallel-prepare" => {
+                flags.experiment_parallel_prepare = true;
+                at += 1;
+            }
+            "--experiment-parallel-cold" => {
+                flags.experiment_parallel_cold = true;
+                at += 1;
+            }
+            "--experiment-skip-raw-ledger" => {
+                flags.experiment_skip_raw_ledger = true;
+                at += 1;
+            }
+            "--experiment-cold-small-first" => {
+                flags.experiment_cold_small_first = true;
+                at += 1;
+            }
+            "--experiment-cold-completion-order" => {
+                flags.experiment_cold_completion_order = true;
+                at += 1;
+            }
+            "--experiment-async-ledger" => {
+                flags.experiment_async_ledger = true;
+                at += 1;
+            }
+            "--experiment-sqlite-in-memory" => {
+                flags.experiment_sqlite_in_memory = true;
+                at += 1;
             }
             "--json" => {
                 flags.json = true;
@@ -475,6 +620,448 @@ pub(crate) fn record_backfill_failures(
     }
 }
 
+struct CapturedColdRuntime {
+    adapter: &'static dyn AgentAdapter,
+    runtime: rosetta_core::rows::RuntimeRow,
+    discovery_truncated: bool,
+    meta: MetaReport,
+    stream: StreamReport,
+    prepared: PreparedRuntime,
+    ledger: Option<Ledger>,
+    meta_profile: InstrumentSnapshot,
+    stream_profile: InstrumentSnapshot,
+    profile: InstrumentSnapshot,
+    meta_wall_ms: f64,
+    stream_wall_ms: f64,
+    wall_ms: f64,
+}
+
+struct ColdCaptureRequest {
+    adapter: &'static dyn AgentAdapter,
+    runtime: rosetta_core::rows::RuntimeRow,
+    root: PathBuf,
+    inventory: Vec<rosetta_capture::ScannedFile>,
+    discovery_truncated: bool,
+    ledger_root: PathBuf,
+    opts: IngestOptions,
+    write_raw_ledger: bool,
+    async_raw_ledger: bool,
+}
+
+fn capture_parallel_cold_runtime(
+    request: ColdCaptureRequest,
+) -> Result<CapturedColdRuntime, String> {
+    let ColdCaptureRequest {
+        adapter,
+        mut runtime,
+        root,
+        inventory,
+        discovery_truncated,
+        ledger_root,
+        opts,
+        write_raw_ledger,
+        async_raw_ledger,
+    } = request;
+    runtime.enabled = true;
+    let instrument = Instrument::new();
+    let capture_started = Instant::now();
+    let mut planner = Store::open_in_memory_for_cold_planning()
+        .map_err(|error| format!("opening {} cold planner: {error}", adapter.kind()))?;
+    let mut ledger = write_raw_ledger
+        .then(|| open_ledger(&ledger_root, adapter.kind()))
+        .transpose()?
+        .map(Ledger::defer_sync_until_flush)
+        .map(|ledger| {
+            if async_raw_ledger {
+                ledger.into_async(4)
+            } else {
+                ledger
+            }
+        });
+
+    let meta_before = instrument.snapshot();
+    let meta_started = Instant::now();
+    let (meta, files) = meta_ingest_inventory_into(
+        adapter,
+        &runtime,
+        &root,
+        &mut planner,
+        &inventory,
+        discovery_truncated,
+        &opts,
+        &instrument,
+        ledger.as_mut(),
+    )
+    .map_err(|error| error.to_string())?;
+    let meta_wall_ms = meta_started.elapsed().as_secs_f64() * 1_000.0;
+    let meta_profile = instrument.snapshot().delta_since(&meta_before);
+
+    let stream_before = instrument.snapshot();
+    let stream_started = Instant::now();
+    let stream = stream_backfill_into(
+        adapter,
+        &runtime,
+        &root,
+        &mut planner,
+        &files,
+        &opts,
+        &instrument,
+        ledger.as_mut(),
+    )
+    .map_err(|error| error.to_string())?;
+    let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
+    let stream_profile = instrument.snapshot().delta_since(&stream_before);
+    let prepared = prepare_captured_runtime(adapter, &runtime, &files, &mut planner, &stream)
+        .map_err(|error| error.to_string())?;
+
+    Ok(CapturedColdRuntime {
+        adapter,
+        runtime,
+        discovery_truncated,
+        meta,
+        stream,
+        prepared,
+        ledger,
+        meta_profile,
+        stream_profile,
+        profile: instrument.snapshot(),
+        meta_wall_ms,
+        stream_wall_ms,
+        wall_ms: capture_started.elapsed().as_secs_f64() * 1_000.0,
+    })
+}
+
+fn apply_captured_cold_runtime(
+    flags: &Flags,
+    captured: CapturedColdRuntime,
+    store: &mut Store,
+    instrument: &Instrument,
+    failures: &mut Vec<String>,
+) -> Result<Option<Ledger>, String> {
+    instrument.merge_snapshot(&captured.profile);
+    if flags.json && flags.profile {
+        bench::emit(&serde_json::json!({
+            "event": "stage-profile",
+            "command": "ingest",
+            "stage": "parallel-metadata",
+            "agent": captured.adapter.kind(),
+            "wallMs": captured.meta_wall_ms,
+            "report": captured.meta_profile.report(),
+        }));
+        bench::emit(&serde_json::json!({
+            "event": "stage-profile",
+            "command": "ingest",
+            "stage": "parallel-stream-prepare",
+            "agent": captured.adapter.kind(),
+            "wallMs": captured.stream_wall_ms,
+            "captureWallMs": captured.wall_ms,
+            "report": captured.stream_profile.report(),
+        }));
+    }
+    if flags.json {
+        bench::emit(&bench::meta_event(captured.adapter.kind(), &captured.meta));
+        bench::emit(&serde_json::json!({
+            "event": "stream-prepared",
+            "agent": captured.adapter.kind(),
+            "records": captured.stream.records,
+            "parsed": captured.stream.parsed,
+            "unknown": captured.stream.unknown,
+            "hardErrors": captured.stream.hard_errors,
+            "oversized": captured.stream.oversized,
+            "filesMissing": captured.stream.files_missing,
+            "retriesExhausted": captured.stream.retries_exhausted,
+            "conflicts": captured.stream.conflicts,
+            "filesIncomplete": captured.stream.files_incomplete,
+            "captureWallMs": captured.wall_ms,
+        }));
+    } else {
+        println!(
+            "{}: prepared {} records and {} sessions in {:.2}s",
+            captured.adapter.kind(),
+            captured.stream.records,
+            captured.meta.sessions,
+            captured.wall_ms / 1_000.0,
+        );
+    }
+    record_backfill_failures(
+        captured.adapter.kind(),
+        captured.discovery_truncated,
+        &captured.meta,
+        &captured.stream,
+        failures,
+    );
+
+    let apply_started = Instant::now();
+    let apply_before = instrument.snapshot();
+    let report = apply_prepared_runtime(
+        captured.adapter,
+        &captured.runtime,
+        captured.prepared,
+        store,
+        instrument,
+    )
+    .map_err(|error| error.to_string())?;
+    if flags.json && flags.profile {
+        bench::emit_command_stage_profile(
+            "ingest",
+            "apply-prepared",
+            Some(captured.adapter.kind()),
+            apply_started,
+            &apply_before,
+            instrument,
+        );
+    }
+    if flags.json {
+        bench::emit(&serde_json::json!({
+            "event": "canonical-applied",
+            "agent": captured.adapter.kind(),
+            "files": report.files,
+            "messagesInserted": report.stats.messages_inserted,
+            "messagesUpdated": report.stats.messages_updated,
+            "toolResultsMerged": report.stats.tool_results_merged,
+        }));
+    }
+    // A runtime's session ids are namespaced by that runtime, so no tool or
+    // usage correlation can meet a later adapter. Reconcile this closed
+    // runtime now; completion-order scheduling overlaps the work with larger
+    // capture producers instead of leaving one global serial tail.
+    instrument
+        .flush_bulk_reconciliation(store)
+        .map_err(|error| format!("reconciling {}: {error}", captured.adapter.kind()))?;
+    Ok(captured.ledger)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ingest_parallel_cold(
+    flags: &Flags,
+    db: &std::path::Path,
+    adapters: &[&'static dyn AgentAdapter],
+    discoveries: &[Discovery],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    mut store: Store,
+    temp: tempfile::TempPath,
+    ledger_stage: ColdLedgerStage,
+) -> Result<(), String> {
+    if flags.audit_boundaries {
+        return Err("--audit-boundaries is not supported by --experiment-parallel-cold".into());
+    }
+    store
+        .use_precomputed_bulk_ordinals()
+        .map_err(|error| format!("enabling precomputed cold ordinals: {error}"))?;
+    if flags.experiment_unsafe_sqlite {
+        store
+            .conn()
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 PRAGMA ignore_check_constraints = ON;",
+            )
+            .map_err(|error| format!("configuring unsafe SQLite experiment: {error}"))?;
+    }
+    if flags.experiment_sqlite_memory_cache {
+        store
+            .conn()
+            .execute_batch(
+                "PRAGMA locking_mode = EXCLUSIVE;
+                 PRAGMA temp_store = MEMORY;
+                 PRAGMA cache_size = -2097152;",
+            )
+            .map_err(|error| format!("configuring SQLite memory-cache experiment: {error}"))?;
+    }
+
+    let ledger_root = ledger_stage.path().to_path_buf();
+    let mut work = Vec::new();
+    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
+        if !discovery.installed {
+            if flags.json {
+                bench::emit(&serde_json::json!({
+                    "event": "skipped",
+                    "phase": "ingest",
+                    "agent": adapter.kind(),
+                    "reason": "not-installed",
+                }));
+            } else {
+                println!("{}: not installed, skipping", adapter.kind());
+            }
+            continue;
+        }
+        work.push((
+            adapter,
+            discovery.runtime.clone(),
+            discovery.root.clone(),
+            discovery.inventory.clone(),
+            discovery.walk_truncated,
+            discovery.streamable_bytes,
+        ));
+    }
+    if work.is_empty() {
+        return Err("nothing to ingest: no selected runtime is installed".into());
+    }
+    if flags.experiment_cold_small_first {
+        work.sort_by(|left, right| (left.5, left.0.kind()).cmp(&(right.5, right.0.kind())));
+    }
+
+    let (mut ingest_ledgers, failures) = std::thread::scope(|scope| {
+        let mut ledgers = Vec::with_capacity(work.len());
+        let mut failures = Vec::new();
+        if flags.experiment_cold_completion_order {
+            let worker_count = work.len();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut handles = Vec::with_capacity(worker_count);
+            for (adapter, runtime, root, inventory, discovery_truncated, _) in work {
+                let ledger_root = ledger_root.clone();
+                let opts = opts.clone();
+                let sender = sender.clone();
+                let write_raw_ledger = !flags.experiment_skip_raw_ledger;
+                let async_raw_ledger = flags.experiment_async_ledger;
+                handles.push(scope.spawn(move || {
+                    let result = capture_parallel_cold_runtime(ColdCaptureRequest {
+                        adapter,
+                        runtime,
+                        root,
+                        inventory,
+                        discovery_truncated,
+                        ledger_root,
+                        opts,
+                        write_raw_ledger,
+                        async_raw_ledger,
+                    });
+                    sender
+                        .send(result)
+                        .map_err(|_| "parallel cold consumer stopped".to_string())
+                }));
+            }
+            drop(sender);
+            for _ in 0..worker_count {
+                let captured = receiver
+                    .recv()
+                    .map_err(|_| "parallel cold capture channel closed".to_string())??;
+                if let Some(ledger) = apply_captured_cold_runtime(
+                    flags,
+                    captured,
+                    &mut store,
+                    instrument,
+                    &mut failures,
+                )? {
+                    ledgers.push(ledger);
+                }
+            }
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|_| "parallel cold capture worker panicked".to_string())??;
+            }
+        } else {
+            let mut handles = Vec::with_capacity(work.len());
+            for (adapter, runtime, root, inventory, discovery_truncated, _) in work {
+                let ledger_root = ledger_root.clone();
+                let opts = opts.clone();
+                let write_raw_ledger = !flags.experiment_skip_raw_ledger;
+                let async_raw_ledger = flags.experiment_async_ledger;
+                handles.push(scope.spawn(move || {
+                    capture_parallel_cold_runtime(ColdCaptureRequest {
+                        adapter,
+                        runtime,
+                        root,
+                        inventory,
+                        discovery_truncated,
+                        ledger_root,
+                        opts,
+                        write_raw_ledger,
+                        async_raw_ledger,
+                    })
+                }));
+            }
+            // Registry/size order keeps surrogate row ids deterministic.
+            for handle in handles {
+                let captured = handle
+                    .join()
+                    .map_err(|_| "parallel cold capture worker panicked".to_string())??;
+                if let Some(ledger) = apply_captured_cold_runtime(
+                    flags,
+                    captured,
+                    &mut store,
+                    instrument,
+                    &mut failures,
+                )? {
+                    ledgers.push(ledger);
+                }
+            }
+        }
+        Ok::<_, String>((ledgers, failures))
+    })?;
+
+    let stage_started = Instant::now();
+    let stage_before = instrument.snapshot();
+    ingest_ledgers.iter_mut().try_for_each(|ledger| {
+        instrument
+            .ledger_write(ledger, |ledger| ledger.flush())
+            .map_err(|error| error.to_string())
+    })?;
+    if flags.json && flags.profile {
+        bench::emit_stage_profile(
+            "ledger-durability",
+            None,
+            stage_started,
+            &stage_before,
+            instrument,
+        );
+    }
+    if !failures.is_empty() {
+        if flags.json {
+            bench::emit_profile("ingest", instrument);
+        } else if flags.profile {
+            println!("\n== profile ==\n{}", instrument.report());
+        }
+        return Err(failures.join("; "));
+    }
+
+    instrument
+        .flush_bulk_reconciliation(&mut store)
+        .map_err(|error| format!("reconciling whole projection: {error}"))?;
+    drop(ingest_ledgers);
+    let stage_started = Instant::now();
+    let stage_before = instrument.snapshot();
+    publish_private_projection(
+        store,
+        temp,
+        db,
+        instrument,
+        |_| Ok(()),
+        || {
+            if flags.experiment_skip_raw_ledger {
+                drop(ledger_stage);
+                Ok(())
+            } else {
+                ledger_stage.publish()
+            }
+        },
+    )?;
+    if flags.json && flags.profile {
+        bench::emit_stage_profile(
+            "finalize-publish",
+            None,
+            stage_started,
+            &stage_before,
+            instrument,
+        );
+    }
+    if !flags.experiment_skip_search {
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
+        instrument.time(Metric::SearchSyncNanos, || build_search_wait(db))?;
+        if flags.json && flags.profile {
+            bench::emit_stage_profile("search", None, stage_started, &stage_before, instrument);
+        }
+    }
+    if flags.json {
+        bench::emit_profile("ingest", instrument);
+    } else if flags.profile {
+        println!("\n== profile ==\n{}", instrument.report());
+    }
+    Ok(())
+}
+
 fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("ingest needs --db PATH")?;
@@ -493,6 +1080,13 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let _projection_lock = projection_lock(&db)?;
 
     let (mut store, private_projection) = open_for_backfill(&db)?;
+    if flags.experiment_sqlite_in_memory {
+        if private_projection.is_none() {
+            return Err("--experiment-sqlite-in-memory requires a new private projection".into());
+        }
+        store = Store::open_in_memory_for_rebuild_with_assets(&db)
+            .map_err(|error| format!("opening in-memory cold projection: {error}"))?;
+    }
     let public_ledgers = ledger_root(&flags, &db);
     // Only a brand-new private projection may defer per-batch ledger sync.
     // Existing projections are public and retain the live durability order.
@@ -510,6 +1104,23 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
     if flags.json && flags.profile {
         bench::emit_stage_profile("discovery", None, stage_started, &stage_before, &instrument);
+    }
+    if flags.experiment_parallel_cold {
+        let temp = private_projection.ok_or_else(|| {
+            "--experiment-parallel-cold requires a new private projection".to_string()
+        })?;
+        let ledger_stage = ledger_stage.expect("a private projection has a private ledger stage");
+        return ingest_parallel_cold(
+            &flags,
+            &db,
+            &adapters,
+            &discoveries,
+            &opts,
+            &instrument,
+            store,
+            temp,
+            ledger_stage,
+        );
     }
     let mut failures = Vec::new();
 
@@ -974,6 +1585,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
 fn rebuild_adapters(
     flags: &Flags,
     ledgers: &std::path::Path,
+    preflight: bool,
 ) -> Result<Vec<&'static dyn AgentAdapter>, String> {
     let requested = selected(flags)?;
     let mut chosen = Vec::new();
@@ -1015,20 +1627,22 @@ fn rebuild_adapters(
         }
     }
 
-    for adapter in &chosen {
-        let dir = ledgers.join(adapter.kind());
-        let scan =
-            rosetta_capture::visit_ledger::<rosetta_capture::CaptureError, _>(&dir, |_| Ok(()))
-                .map_err(|error| error.to_string())?;
-        if scan.entries == 0 {
-            return Err(format!("{} ledger is empty", dir.display()));
-        }
-        if scan.torn_segments > 0 {
-            return Err(format!(
-                "{} has {} torn/corrupt segment tails; refusing to replace the projection",
-                dir.display(),
-                scan.torn_segments
-            ));
+    if preflight {
+        for adapter in &chosen {
+            let dir = ledgers.join(adapter.kind());
+            let scan =
+                rosetta_capture::visit_ledger::<rosetta_capture::CaptureError, _>(&dir, |_| Ok(()))
+                    .map_err(|error| error.to_string())?;
+            if scan.entries == 0 {
+                return Err(format!("{} ledger is empty", dir.display()));
+            }
+            if scan.torn_segments > 0 {
+                return Err(format!(
+                    "{} has {} torn/corrupt segment tails; refusing to replace the projection",
+                    dir.display(),
+                    scan.torn_segments
+                ));
+            }
         }
     }
     Ok(chosen)
@@ -1094,6 +1708,12 @@ fn publish_private_projection(
         .map_err(|error| format!("finalizing private projection: {error}"))?;
     after_finalize(&store)?;
     instrument.time(Metric::PublishNanos, || {
+        if store.conn().path().is_none_or(str::is_empty) {
+            store
+                .conn()
+                .backup(rusqlite::DatabaseName::Main, &*temp, None)
+                .map_err(|error| format!("backing up in-memory projection: {error}"))?;
+        }
         drop(store);
         let finished = rusqlite::Connection::open(&*temp)
             .map_err(|error| format!("reopening private projection: {error}"))?;
@@ -1167,6 +1787,21 @@ fn install_rebuilt_projection(db: &std::path::Path, temp: &std::path::Path) -> R
 /// Rebuild into a private sibling database and atomically install it only
 /// after every runtime replays cleanly. The live projection is never the work
 /// surface, so validation or replay failure leaves it byte-for-byte usable.
+fn ledger_runtime(adapter: &dyn AgentAdapter) -> rosetta_core::rows::RuntimeRow {
+    let layout = adapter.layout();
+    rosetta_core::rows::RuntimeRow {
+        id: rosetta_core::ids::runtime_id(adapter.kind(), &layout.data_root),
+        kind: adapter.kind().to_string(),
+        data_root: layout.data_root.clone(),
+        enabled: true,
+        account: None,
+        config: None,
+        skills: None,
+        versions_seen: None,
+        discovered_at: 0,
+    }
+}
+
 fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("rebuild needs --db PATH")?;
@@ -1174,7 +1809,20 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     if !ledgers.is_dir() {
         return Err(format!("no ledger at {}", ledgers.display()));
     }
-    let adapters = rebuild_adapters(&flags, &ledgers)?;
+    let instrument = Instrument::new();
+    let stage_started = Instant::now();
+    let stage_before = instrument.snapshot();
+    let adapters = rebuild_adapters(&flags, &ledgers, !flags.experiment_skip_ledger_preflight)?;
+    if flags.json && flags.profile {
+        bench::emit_command_stage_profile(
+            "rebuild",
+            "ledger-preflight",
+            None,
+            stage_started,
+            &stage_before,
+            &instrument,
+        );
+    }
     let _projection_lock = projection_lock(&db)?;
 
     let parent = projection_parent(&db);
@@ -1187,67 +1835,229 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         .map_err(|error| format!("creating rebuild database in {}: {error}", parent.display()))?;
     let temp = named.into_temp_path();
 
-    let instrument = Instrument::new();
     let mut store = Store::open_for_rebuild_with_assets(temp.as_ref(), &db)
         .map_err(|error| format!("opening rebuild database {}: {error:?}", temp.display()))?;
+    if flags.experiment_unsafe_sqlite {
+        store
+            .conn()
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 PRAGMA ignore_check_constraints = ON;",
+            )
+            .map_err(|error| format!("configuring unsafe SQLite experiment: {error}"))?;
+    }
+    if flags.experiment_sqlite_memory_cache {
+        store
+            .conn()
+            .execute_batch(
+                "PRAGMA locking_mode = EXCLUSIVE;
+                 PRAGMA temp_store = MEMORY;
+                 PRAGMA cache_size = -2097152;",
+            )
+            .map_err(|error| format!("configuring SQLite memory-cache experiment: {error}"))?;
+    }
     let mut reports = Vec::new();
-    for adapter in adapters {
-        let profile_before = instrument.snapshot();
-        let dir = ledgers.join(adapter.kind());
-        let layout = adapter.layout();
-        let runtime = rosetta_core::rows::RuntimeRow {
-            id: rosetta_core::ids::runtime_id(adapter.kind(), &layout.data_root),
-            kind: adapter.kind().to_string(),
-            data_root: layout.data_root.clone(),
-            enabled: true,
-            account: None,
-            config: None,
-            skills: None,
-            versions_seen: None,
-            discovered_at: 0,
-        };
-        let report = rebuild_runtime(adapter, &runtime, &dir, &mut store, &instrument)
+    if flags.experiment_parallel_prepare {
+        store
+            .use_precomputed_bulk_ordinals()
+            .map_err(|error| format!("enabling precomputed cold ordinals: {error}"))?;
+        let cache_root = flags.experiment_election_cache.clone().ok_or_else(|| {
+            "--experiment-parallel-prepare requires --experiment-election-cache".to_string()
+        })?;
+        let prefetch_ledger = flags.experiment_prefetch_ledger;
+        let prepared = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for adapter in adapters {
+                let runtime = ledger_runtime(adapter);
+                let dir = ledgers.join(adapter.kind());
+                let cache = cache_root.join(format!("{}.json", adapter.kind()));
+                handles.push(scope.spawn(move || {
+                    let local = Instrument::new();
+                    let started = Instant::now();
+                    let prepared = prepare_runtime(
+                        adapter,
+                        &runtime,
+                        &dir,
+                        &local,
+                        RebuildOptions {
+                            chunk_ops: 1,
+                            flush_reconciliation: false,
+                            election_only: false,
+                            election_cache: Some(cache),
+                            prefetch_ledger,
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                    Ok::<_, String>((
+                        adapter,
+                        runtime,
+                        prepared,
+                        local.snapshot(),
+                        started.elapsed().as_secs_f64() * 1_000.0,
+                    ))
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| "parallel preparation worker panicked".to_string())?
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+
+        for (adapter, runtime, prepared, prepare_profile, prepare_wall_ms) in prepared {
+            if prepared.report().hard_errors > 0 {
+                return Err(format!(
+                    "{}: {} hard errors during parallel preparation",
+                    adapter.kind(),
+                    prepared.report().hard_errors
+                ));
+            }
+            instrument.merge_snapshot(&prepare_profile);
+            if flags.json && flags.profile {
+                bench::emit(&serde_json::json!({
+                    "event": "stage-profile",
+                    "command": "rebuild",
+                    "stage": "parallel-prepare",
+                    "agent": adapter.kind(),
+                    "wallMs": prepare_wall_ms,
+                    "report": prepare_profile.report(),
+                }));
+            }
+            let stage_started = Instant::now();
+            let profile_before = instrument.snapshot();
+            let report =
+                apply_prepared_runtime(adapter, &runtime, prepared, &mut store, &instrument)
+                    .map_err(|error| error.to_string())?;
+            let profile = instrument.snapshot().delta_since(&profile_before);
+            if flags.json && flags.profile {
+                bench::emit_command_stage_profile(
+                    "rebuild",
+                    "apply-prepared",
+                    Some(adapter.kind()),
+                    stage_started,
+                    &profile_before,
+                    &instrument,
+                );
+            }
+            reports.push((adapter.kind(), report, profile));
+        }
+    } else {
+        for adapter in adapters {
+            let stage_started = Instant::now();
+            let profile_before = instrument.snapshot();
+            let dir = ledgers.join(adapter.kind());
+            let runtime = ledger_runtime(adapter);
+            let report = rebuild_runtime_with_options(
+                adapter,
+                &runtime,
+                &dir,
+                &mut store,
+                &instrument,
+                RebuildOptions {
+                    chunk_ops: flags.rebuild_chunk_ops.unwrap_or(512),
+                    flush_reconciliation: false,
+                    election_only: flags.experiment_election_only,
+                    election_cache: flags
+                        .experiment_election_cache
+                        .as_ref()
+                        .map(|root| root.join(format!("{}.json", adapter.kind()))),
+                    prefetch_ledger: flags.experiment_prefetch_ledger,
+                },
+            )
             .map_err(|error| error.to_string())?;
-        if report.hard_errors > 0 {
-            return Err(format!(
-                "{}: {} hard errors during replay",
-                adapter.kind(),
-                report.hard_errors
-            ));
+            if report.hard_errors > 0 {
+                return Err(format!(
+                    "{}: {} hard errors during replay",
+                    adapter.kind(),
+                    report.hard_errors
+                ));
+            }
+            if report.torn_segments > 0 {
+                return Err(format!(
+                    "{}: ledger changed or tore during replay",
+                    adapter.kind()
+                ));
+            }
+            let profile = instrument.snapshot().delta_since(&profile_before);
+            if flags.json && flags.profile {
+                bench::emit_command_stage_profile(
+                    "rebuild",
+                    "replay",
+                    Some(adapter.kind()),
+                    stage_started,
+                    &profile_before,
+                    &instrument,
+                );
+            }
+            reports.push((adapter.kind(), report, profile));
         }
-        if report.torn_segments > 0 {
-            return Err(format!(
-                "{}: ledger changed or tore during replay",
-                adapter.kind()
-            ));
-        }
-        let profile = instrument.snapshot().delta_since(&profile_before);
-        reports.push((adapter.kind(), report, profile));
     }
 
-    publish_private_projection(store, temp, &db, &instrument, |_| Ok(()), || Ok(()))?;
-    instrument.time(Metric::SearchSyncNanos, || build_search_wait(&db))?;
+    // The private projection has no observers between runtimes. Keeping every
+    // runtime's lifecycle fragments in RAM lets us scan existing tool rows and
+    // fold correlations exactly once for the whole projection.
+    instrument
+        .flush_bulk_reconciliation(&mut store)
+        .map_err(|error| format!("reconciling whole projection: {error}"))?;
+
+    if !flags.experiment_stop_after_replay && !flags.experiment_election_only {
+        let stage_started = Instant::now();
+        let stage_before = instrument.snapshot();
+        publish_private_projection(store, temp, &db, &instrument, |_| Ok(()), || Ok(()))?;
+        if flags.json && flags.profile {
+            bench::emit_command_stage_profile(
+                "rebuild",
+                "finalize-publish",
+                None,
+                stage_started,
+                &stage_before,
+                &instrument,
+            );
+        }
+        if !flags.experiment_skip_search {
+            let stage_started = Instant::now();
+            let stage_before = instrument.snapshot();
+            instrument.time(Metric::SearchSyncNanos, || build_search_wait(&db))?;
+            if flags.json && flags.profile {
+                bench::emit_command_stage_profile(
+                    "rebuild",
+                    "search",
+                    None,
+                    stage_started,
+                    &stage_before,
+                    &instrument,
+                );
+            }
+        }
+    }
 
     for (kind, report, profile) in reports {
-        println!(
-            "{kind}: rebuilt {} files from {} segments — {} records replayed \
+        if !flags.json {
+            println!(
+                "{kind}: rebuilt {} files from {} segments — {} records replayed \
              ({} stale, {} duplicate, {} already projected), {} meta batches, \
              {} rows inserted, {} sessions stubbed",
-            report.files,
-            report.segments,
-            report.raw_records,
-            report.stale_records_skipped,
-            report.duplicate_records_skipped,
-            report.records_already_projected,
-            report.meta_batches,
-            report.stats.messages_inserted,
-            report.sessions_stubbed,
-        );
-        if flags.profile {
-            print_agent_profile(kind, &profile);
+                report.files,
+                report.segments,
+                report.raw_records,
+                report.stale_records_skipped,
+                report.duplicate_records_skipped,
+                report.records_already_projected,
+                report.meta_batches,
+                report.stats.messages_inserted,
+                report.sessions_stubbed,
+            );
+            if flags.profile {
+                print_agent_profile(kind, &profile);
+            }
         }
     }
-    if flags.profile {
+    if flags.json && flags.profile {
+        bench::emit_profile("rebuild", &instrument);
+    } else if flags.profile {
         println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
@@ -1436,6 +2246,41 @@ mod tests {
         )
         .unwrap();
         assert!(db.exists());
+        assert!(!sidecar(&db, "-wal").exists());
+        Store::open(&db).unwrap();
+    }
+
+    #[test]
+    fn in_memory_backfill_is_backed_up_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("projection.db");
+        let (disk_store, private) = open_for_backfill(&db).unwrap();
+        drop(disk_store);
+        let private = private.expect("a missing projection takes the cold path");
+
+        let store = Store::open_in_memory_for_rebuild_with_assets(&db).unwrap();
+        store
+            .conn()
+            .execute_batch(
+                "CREATE TABLE memory_sentinel(value TEXT NOT NULL);
+                 INSERT INTO memory_sentinel VALUES ('from-memory');",
+            )
+            .unwrap();
+        publish_private_projection(
+            store,
+            private,
+            &db,
+            &Instrument::new(),
+            |_| Ok(()),
+            || Ok(()),
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        let value: String = connection
+            .query_row("SELECT value FROM memory_sentinel", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "from-memory");
         assert!(!sidecar(&db, "-wal").exists());
         Store::open(&db).unwrap();
     }

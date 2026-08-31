@@ -795,6 +795,7 @@ impl BulkReconciliationPlan {
 pub(crate) fn apply_plan(
     tx: &Transaction,
     plan: &mut BulkReconciliationPlan,
+    preserve_message_ordinals: bool,
 ) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
     stats.profile.tool_result_attempts = plan.native_updates;
@@ -808,32 +809,36 @@ pub(crate) fn apply_plan(
     let mut next_ordinals = BTreeMap::new();
     let mut dirty_buckets = BTreeSet::<BucketKey>::new();
     for message in &mut plan.messages {
-        let next = match next_ordinals.get_mut(&message.row.session_id) {
-            Some(next) => next,
-            None => {
-                let ordinal = profile_ordinal_lookup(&mut stats, || {
-                    Ok(tx
-                        .prepare_cached(
-                            "SELECT COALESCE(MAX(ordinal) + 1, 0)
-                             FROM message WHERE session_id = ?1",
-                        )?
-                        .query_row(params![message.row.session_id], |row| row.get::<_, i64>(0))?)
+        if !preserve_message_ordinals {
+            let next = match next_ordinals.get_mut(&message.row.session_id) {
+                Some(next) => next,
+                None => {
+                    let ordinal = profile_ordinal_lookup(&mut stats, || {
+                        Ok(tx
+                            .prepare_cached(
+                                "SELECT COALESCE(MAX(ordinal) + 1, 0)
+                                 FROM message WHERE session_id = ?1",
+                            )?
+                            .query_row(params![message.row.session_id], |row| {
+                                row.get::<_, i64>(0)
+                            })?)
+                    })?;
+                    next_ordinals.insert(message.row.session_id.clone(), ordinal);
+                    next_ordinals
+                        .get_mut(&message.row.session_id)
+                        .expect("inserted ordinal cursor")
+                }
+            };
+            message.row.ordinal = *next;
+            *next = next
+                .checked_add(1)
+                .ok_or_else(|| StoreError::ProjectionInvalid {
+                    message: format!(
+                        "session ordinal overflowed during cold tool write for {}",
+                        message.row.session_id
+                    ),
                 })?;
-                next_ordinals.insert(message.row.session_id.clone(), ordinal);
-                next_ordinals
-                    .get_mut(&message.row.session_id)
-                    .expect("inserted ordinal cursor")
-            }
-        };
-        message.row.ordinal = *next;
-        *next = next
-            .checked_add(1)
-            .ok_or_else(|| StoreError::ProjectionInvalid {
-                message: format!(
-                    "session ordinal overflowed during cold tool write for {}",
-                    message.row.session_id
-                ),
-            })?;
+        }
         apply_reconciled_tool_message(
             tx,
             &message.row,
