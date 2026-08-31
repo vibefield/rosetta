@@ -13,7 +13,7 @@
 // dependency of this app and had no user; this is its user.
 
 import { useEffect, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import { DialogShell } from "../ui";
 import { diffKind, resolveKind } from "./registry";
 import { useFileContent } from "./use-file-content";
 import { FileViewerHeader } from "./FileViewerHeader";
@@ -119,29 +119,10 @@ export function FileViewerDialog({
   const Body = kind.viewer.Body;
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        {/* `data-ah-fileview` is what the room's own stylesheet watches to
-            let the stage recede behind an open dialog. */}
-        <Dialog.Overlay className="ah-fileview__backdrop" data-ah-fileview />
-        <Dialog.Content
-          className="ah-fileview"
-          // The band names the file; the accessible name says the same thing
-          // once more, where a screen reader will find it.
-          aria-describedby={undefined}
-          // Radix focuses the first tabbable child, which lights a focus ring
-          // on a switch nobody pressed. The dialog itself takes focus instead
-          // — Escape and the focus trap still work, and Tab still walks in.
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            (event.currentTarget as HTMLElement | null)?.focus();
-          }}
-        >
-          <Dialog.Title className="ah-visually-hidden">
-            {handle.name}
-            {handle.path !== null ? ` — ${handle.path}` : ""}
-          </Dialog.Title>
-
+    <DialogShell
+      title={`${handle.name}${handle.path !== null ? ` — ${handle.path}` : ""}`}
+      onClose={onClose}
+    >
           <FileViewerHeader
             handle={handle}
             kind={kind}
@@ -185,8 +166,6 @@ export function FileViewerDialog({
               </div>
             )}
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    </DialogShell>
   );
 }

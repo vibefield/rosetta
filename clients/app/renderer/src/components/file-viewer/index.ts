@@ -7,6 +7,7 @@
 export { FileViewerDialog } from "./FileViewerDialog";
 export type { FileViewerDialogProps } from "./FileViewerDialog";
 export { diffKind, resolveKind } from "./registry";
+export { DiffBody } from "./views/DiffBody";
 export type {
   FileHandle,
   FileKind,

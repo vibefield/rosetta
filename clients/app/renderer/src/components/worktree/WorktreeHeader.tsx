@@ -2,6 +2,10 @@
 // — "Worktree" was a category, and the head names objects. A path is an id,
 // so it sets in mono.
 //
+// A commit no longer appears here: it opens over the room in its own
+// surface, where a file list and its diff fit side by side, so the head
+// never has to become something other than this column's own object.
+//
 // One column, three tabs, and the head names what THAT tab is a view of —
 // which is a different object per tab, and the design record already draws
 // it that way across the two columns this one merges: its rail head names
@@ -21,7 +25,7 @@
 import { ColumnHeading } from "../ui";
 import { tildePath } from "../../lib/format";
 import type { GitFacts } from "../../lib/desktop-host";
-import type { BranchFacts, Commit } from "../git";
+import type { BranchFacts } from "../git";
 import type { RepoTab } from "./types";
 
 export interface WorktreeHeaderProps {
@@ -38,9 +42,6 @@ export interface WorktreeHeaderProps {
   readonly count: number | null;
   readonly changeShape: string;
   readonly unpushed: number | null;
-  /** Set while the column has drilled into one commit. */
-  readonly commit: Commit | null;
-  readonly onBack: () => void;
 }
 
 /** `branch · n dirty` — and nothing at all without a branch to hang it on.
@@ -74,39 +75,7 @@ export function WorktreeHeader({
   count,
   changeShape,
   unpushed,
-  commit,
-  onBack,
 }: WorktreeHeaderProps) {
-  if (commit !== null) {
-    return (
-      <header>
-        <div className="ah-backhead">
-          <button
-            type="button"
-            className="ah-back"
-            onClick={onBack}
-            // Names where it goes, not just that it goes back.
-            title="Back to the history"
-            aria-label="Back to the history"
-          >
-            ‹
-          </button>
-          <ColumnHeading
-            name={commit.short}
-            tint={tint}
-            mono
-            count={count}
-            countTitle={`${count} ${count === 1 ? "file" : "files"}`}
-            title={commit.sha}
-          />
-        </div>
-        <span className="ah-caption tnum">
-          {commit.merge ? "merge" : `+${commit.added} −${commit.deleted}`}
-        </span>
-      </header>
-    );
-  }
-
   const caption =
     tab === "history"
       ? formatSync(branch, unpushed)

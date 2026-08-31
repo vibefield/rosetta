@@ -20,7 +20,7 @@ import type { FileHandle } from "../file-viewer";
 import { ConfirmDialog, EmptyState, SegmentedControl } from "../ui";
 import {
   changeShapeOf,
-  CommitDetail,
+  CommitViewer,
   createGitFileSource,
   diffHandle,
   GitChanges,
@@ -171,25 +171,14 @@ export function WorktreeColumn({
       });
   };
 
-  const showCommitFile = (path: string) => {
-    if (connection === null || openCommit === null) return;
-    setSelection({ path, staged: false });
-    setOpen({
-      handle: diffHandle({ path, sha: openCommit.sha }, { root: connection.root, label: path }),
-      diff: true,
-    });
-  };
-
   const count =
-    openCommit !== null
-      ? (commitFiles?.length ?? openCommit.files)
-      : tab === "history"
-        ? commits.length
-        : tab === "changes"
-          ? entries.length
-          : // The Files tab has no honest count: we know what the tree is
-            // showing, not what the repository holds.
-            null;
+    tab === "history"
+      ? commits.length
+      : tab === "changes"
+        ? entries.length
+        : // The Files tab has no honest count: we know what the tree is
+          // showing, not what the repository holds.
+          null;
 
   const source = open?.diff === true ? gitSource : fileSource;
 
@@ -205,45 +194,25 @@ export function WorktreeColumn({
         count={count}
         changeShape={changeShapeOf(entries)}
         unpushed={unpushed}
-        commit={openCommit}
-        onBack={() => {
-          setOpenCommit(null);
-          setCommitFiles(null);
-          setSelection(null);
-        }}
       />
 
-      {/* The switch belongs to the three views of a repository. Inside a
-          commit there is nothing to switch between, and leaving it there
-          would offer a control that changes the surface out from under you. */}
-      {openCommit === null && (
-        <div className="ah-listbar">
-          <SegmentedControl
-            className="ah-gitseg"
-            accessibleLabel="What this column shows"
-            value={tab}
-            options={TABS.map((option) => ({ value: option.value, label: option.label }))}
-            onValueChange={(next) => {
-              setTab(next as RepoTab);
-              setSelection(null);
-            }}
-          />
-        </div>
-      )}
+      <div className="ah-listbar">
+        <SegmentedControl
+          className="ah-gitseg"
+          accessibleLabel="What this column shows"
+          value={tab}
+          options={TABS.map((option) => ({ value: option.value, label: option.label }))}
+          onValueChange={(next) => {
+            setTab(next as RepoTab);
+            setSelection(null);
+          }}
+        />
+      </div>
 
       {!hasShell ? (
         <EmptyState
           title="No repository here"
           description="This column needs the desktop shell — a browser tab has no worktree to read."
-        />
-      ) : openCommit !== null ? (
-        <CommitDetail
-          commit={openCommit}
-          currentTimestamp={currentTimestamp}
-          files={commitFiles}
-          selectedPath={selection?.path ?? null}
-          onSelect={showCommitFile}
-          sessionPaths={sessionPaths}
         />
       ) : tab === "files" ? (
         engine === null || fileSource === null ? (
@@ -288,6 +257,21 @@ export function WorktreeColumn({
           selectedSha={openCommit}
           onSelect={showCommit}
           currentTimestamp={currentTimestamp}
+        />
+      )}
+
+      {openCommit !== null && (
+        <CommitViewer
+          commit={openCommit}
+          files={commitFiles}
+          client={client}
+          sessionPaths={sessionPaths}
+          currentTimestamp={currentTimestamp}
+          onReceipt={onReceipt}
+          onClose={() => {
+            setOpenCommit(null);
+            setCommitFiles(null);
+          }}
         />
       )}
 

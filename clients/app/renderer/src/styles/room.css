@@ -1457,3 +1457,52 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 .ah-commit__agents .ah-agent { width: 11px; height: 11px; opacity: 0.5; }
 .ah-commit:hover .ah-commit__agents .ah-agent,
 .ah-commit[data-selected] .ah-commit__agents .ah-agent { opacity: 0.75; }
+
+/* ── the commit, opened over the room ──────────────────────────────────────
+   The shape a commit wanted and a 280px column could not give it: the files
+   on the left, the change on the right, both at once. Same shell as the file
+   viewer, one size wider, because two panes need the room. */
+
+.ah-fileview[data-wide] { width: min(1320px, 94vw); height: min(820px, 90vh); }
+
+.ah-commitview__head { grid-template-columns: minmax(0, 1fr) auto; padding-bottom: 9px; }
+.ah-commitview__subject {
+  min-width: 0; color: var(--vf-text-primary); font-size: 13px; font-weight: 600;
+  line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Everyone and everything git says about it, on one line under the message:
+   the people it does not draw as marks, the agents it does, the sha, the
+   neutral diffstat, and the date. */
+.ah-commitview__meta {
+  grid-column: 1 / -1; margin: 5px 0 0;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 9px;
+  color: var(--vf-text-faint); font-size: 10.5px;
+}
+.ah-commitview__meta > span { color: var(--vf-text-tertiary); }
+.ah-commitview__meta code { font-family: var(--vf-font-mono); font-size: 10px; }
+.ah-commitview__meta .ah-agent { width: 12px; height: 12px; opacity: 0.6; }
+.ah-commitview__meta time { margin-left: auto; }
+
+.ah-commitview { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); }
+.ah-commitview__files {
+  display: flex; flex-direction: column; min-height: 0;
+  border-right: 1px solid var(--vf-hairline);
+}
+.ah-commitview__files .ah-group { padding: 11px 12px 7px; }
+.ah-commitview__list { flex: 1; min-height: 0; overflow: auto; padding-bottom: 10px; }
+.ah-commitview__list::-webkit-scrollbar { width: 9px; }
+.ah-commitview__list::-webkit-scrollbar-thumb {
+  border: 3px solid transparent; border-radius: 999px;
+  background: var(--vf-hairline-strong); background-clip: content-box;
+}
+
+.ah-commitview__diff { display: flex; flex-direction: column; min-height: 0; }
+/* The pane names the file it is showing, because the list beside it can be
+   scrolled away from the selection. */
+.ah-commitview__path {
+  flex: none; margin: 0; padding: 9px 16px; border-bottom: 1px solid var(--vf-hairline);
+  color: var(--vf-text-tertiary); font-size: 10.5px;
+  direction: rtl; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-commitview__diff .ah-diff__stat { padding-top: 8px; padding-bottom: 8px; }
