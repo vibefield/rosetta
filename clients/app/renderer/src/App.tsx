@@ -154,13 +154,17 @@ export default function App() {
     () => (meta?.sessions ?? []).find((s) => s.id === sessionId) ?? null,
     [meta, sessionId],
   );
-  // Attention-directed ingestion: opening a still-pending session moves its
-  // file to the front of the backfill queue, so nothing the reader actually
-  // reaches for is ever not-ready. Advisory — an old daemon just keeps its
-  // order, and the ledger dedupes repeats.
+  // Attention-directed ingestion: opening a not-yet-indexed session moves
+  // its queued work to the front of the backfill queue. Under slicing the
+  // common case is "streaming" — the starter landed and the completion
+  // remainder is still queued — and that remainder is exactly what the
+  // click promotes; "pending" covers a session no pass has reached at all.
+  // Advisory — a session with nothing queued is a no-op, an old daemon just
+  // keeps its order, and the ledger dedupes repeats.
   const sessionState = session?.stream_state ?? null;
   useEffect(() => {
-    if (sessionId === null || sessionState !== "pending" || ingest?.phase !== "backfilling") return;
+    if (sessionId === null || sessionState === null || sessionState === "indexed") return;
+    if (ingest?.phase !== "backfilling") return;
     client.boost(sessionId).catch(() => {});
   }, [sessionId, sessionState, ingest?.phase]);
   const feed = useTimeline(sessionId);
