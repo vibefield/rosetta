@@ -11,7 +11,7 @@
 //! the tailer's checkpoint decides what actually happened. A quiet or lying
 //! watcher degrades to the stat poll, never to wrong data.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,18 @@ pub fn map_hint(
     files: &[SessionFile],
     relative_path: &str,
 ) -> HintMapping {
+    // `-shm` is SQLite's shared-memory index, written by every reader — the
+    // daemon's own snapshot open included — and says nothing about content.
+    // Admitting it as a hint fed the watcher the daemon's own footsteps:
+    // each snapshot pass touched `-shm`, which nominated the database again
+    // and re-ran bounded meta, which opened the database again, forever —
+    // starving every other cold source behind the live lane.
+    if relative_path.ends_with("-shm") {
+        return HintMapping {
+            nominated: Vec::new(),
+            needs_admission: false,
+        };
+    }
     let snapshot = snapshot_alias(adapter, relative_path);
     let hinted = snapshot.as_deref().unwrap_or(relative_path);
     let nominated: Vec<String> = files
@@ -110,9 +122,10 @@ fn hint_claimed(adapter: &dyn AgentAdapter, relative_path: &str) -> bool {
 }
 
 /// Normalize a physical document/database hint to the source path whose
-/// virtual membership and content must be reconciled.
+/// virtual membership and content must be reconciled. `-shm` never reaches
+/// here — [`map_hint`] drops it before aliasing.
 fn snapshot_alias(adapter: &dyn AgentAdapter, relative_path: &str) -> Option<String> {
-    let base = ["-wal", "-shm", "-journal"]
+    let base = ["-wal", "-journal"]
         .iter()
         .find_map(|suffix| relative_path.strip_suffix(suffix))
         .unwrap_or(relative_path);
@@ -140,6 +153,11 @@ pub struct LiveRunner<'a> {
     ledger: Option<Ledger>,
     last_poll: Instant,
     report: LiveReport,
+    /// Physical paths that back virtual sources (databases, documents), by
+    /// the (size, modified) the last poll saw. A physical file's PRESENCE is
+    /// not admission evidence — meta already settled its membership — so the
+    /// poll admits and nominates it only when these stats move.
+    physical_seen: BTreeMap<String, (u64, i64)>,
 }
 
 impl<'a> LiveRunner<'a> {
@@ -216,6 +234,7 @@ impl<'a> LiveRunner<'a> {
             ledger,
             last_poll: Instant::now(),
             report: LiveReport::default(),
+            physical_seen: BTreeMap::new(),
         }
     }
 
@@ -383,12 +402,36 @@ impl<'a> LiveRunner<'a> {
                     }
                 }
                 None => {
-                    // A database file never appears in `files` itself — its
-                    // sessions do, as virtual sources. Nominate them and let
-                    // the snapshot pass's stamp check decide cheaply.
+                    // A path outside the roster: a database or document
+                    // backing virtual sources, a file meta judged and
+                    // withheld (unidentified), or a genuinely new claim the
+                    // watcher missed. PRESENCE is not evidence for any of
+                    // them — treating it as such re-ran bounded meta and
+                    // ledgered a full meta batch on every poll, forever, on
+                    // an idle machine. Evidence is a FIRST sighting (the
+                    // missed-creation recovery lane — once) or MOVEMENT
+                    // since the last poll (content changed: re-check
+                    // membership, retry identification).
+                    let stats = (walked.size, walked.modified_ms);
+                    let seen = self.physical_seen.get(&walked.relative_path);
+                    let moved = seen.is_some_and(|seen| *seen != stats);
+                    let first = seen.is_none();
+                    self.physical_seen
+                        .insert(walked.relative_path.clone(), stats);
+                    if !(first || moved) {
+                        continue;
+                    }
                     let mapping = map_hint(self.adapter, &self.files, &walked.relative_path);
-                    changed.extend(mapping.nominated);
-                    *needs_admission |= mapping.needs_admission;
+                    if moved {
+                        changed.extend(mapping.nominated);
+                        *needs_admission |= mapping.needs_admission;
+                    } else if mapping.nominated.is_empty() {
+                        // First sighting of a path meta yielded no source
+                        // for: the one-shot recovery admission. A first
+                        // sighting with KNOWN membership seeds silently —
+                        // meta ran strictly before this runner existed.
+                        *needs_admission |= mapping.needs_admission;
+                    }
                 }
             }
         }

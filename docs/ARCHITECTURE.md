@@ -72,7 +72,18 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > activates its parseable rows and the session holds Streaming, never Indexed — identical sliced,
 > unsliced, or rebuilt, with rebuild electing latest seals for only-dirty paths — while a dirty
 > REPLACEMENT still abandons to protect the active clean generation, and oversized or
-> raw-incomplete sources still abandon. A final per-runtime audit pass, `milestone:` stdout lines
+> raw-incomplete sources still abandon. An idle daemon appends NOTHING to the raw ledger
+> (fixed 2026-08-31, found by visual QA): the rotating audit re-reads a quiet file against the
+> tail checkpoint's committed content chain (checkpoint v2 — a resumable byte fold over
+> `0..committed`; v1 blobs still decode and the first audit establishes their chain in place) and
+> escalates to a replacement replay only on a real mismatch — the old audit forced that replay
+> unconditionally, re-appending every audited file to the append-only ledger each rotation and
+> sweeping its projection. Snapshot databases stat-gate: an unchanged stamp is never even opened
+> (a read-only SQLite open writes `-shm` beside the source, the watcher saw the daemon's own
+> footsteps, and the resulting hint loop starved the cold lanes — `-shm` is never a hint, and
+> poll admissions need evidence: first sighting or movement, never presence). Passes carrying an
+> audit budget still hash snapshot content whole, so a stamp-preserving rewrite is caught by the
+> audit sweep. A final per-runtime audit pass, `milestone:` stdout lines
 > for the budget-sweep harness (search-ready is claimed only when the detached build actually
 > reached Ready), and the graceful-stop boundary close the cold phase. Interrupted commits resume
 > in place. Finite `ingest` and `rebuild` stay private, validated, atomically installed, and never

@@ -20,7 +20,31 @@ use std::path::Path;
 use crate::{CaptureError, io_error};
 
 const CHECKPOINT_MAGIC: &[u8] = b"RSTC";
-const CHECKPOINT_VERSION: u8 = 1;
+const CHECKPOINT_VERSION: u8 = 2;
+/// Oldest checkpoint version `decode` still accepts. Version 1 predates the
+/// committed-content chain; its checkpoints resume with `committed_chain:
+/// None` and the audit lane establishes the chain on its first pass.
+const CHECKPOINT_VERSION_COMPAT: u8 = 1;
+
+/// FNV-1a basis/prime for the committed-content chain: a byte-sequential,
+/// resumable fold over exactly the bytes `0..committed_offset`. It exists to
+/// let an audit re-read a file and answer "is this still the content the
+/// checkpoint ingested?" without replaying — corruption and rewrite
+/// detection, deliberately not a cryptographic claim.
+pub const CONTENT_CHAIN_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const CONTENT_CHAIN_PRIME: u64 = 0x0000_0100_0000_01B3;
+
+#[inline]
+fn chain_byte(chain: u64, byte: u8) -> u64 {
+    (chain ^ byte as u64).wrapping_mul(CONTENT_CHAIN_PRIME)
+}
+
+/// Fold bytes into the committed-content chain.
+pub fn chain_bytes(chain: u64, bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(chain, |chain, byte| chain_byte(chain, *byte))
+}
 const HASH_BYTES: usize = 32;
 const READ_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -146,6 +170,10 @@ pub struct TailCheckpoint {
     pub observed_len: u64,
     pub unread_len: u64,
     pub incomplete_suffix_len: u64,
+    /// Resumable FNV-1a fold over exactly `0..committed_offset` — the audit
+    /// lane's full-content verification. `None` on checkpoints written
+    /// before the chain existed; the first audit establishes it.
+    pub committed_chain: Option<u64>,
     prefix_start: u64,
     prefix_len: u64,
     prefix_hash: [u8; HASH_BYTES],
@@ -165,12 +193,23 @@ impl TailCheckpoint {
         bytes.extend_from_slice(&self.prefix_start.to_be_bytes());
         bytes.extend_from_slice(&self.prefix_len.to_be_bytes());
         bytes.extend_from_slice(&self.prefix_hash);
+        match self.committed_chain {
+            Some(chain) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&chain.to_be_bytes());
+            }
+            None => bytes.push(0),
+        }
         bytes
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, CaptureError> {
-        let mut reader = ByteReader::new(bytes, CHECKPOINT_MAGIC, CHECKPOINT_VERSION)?;
-        let checkpoint = Self {
+        let (mut reader, version) = ByteReader::versioned(
+            bytes,
+            CHECKPOINT_MAGIC,
+            CHECKPOINT_VERSION_COMPAT..=CHECKPOINT_VERSION,
+        )?;
+        let mut checkpoint = Self {
             generation: reader.u64()?,
             identity: FileIdentity::decode_from(&mut reader)?,
             committed_offset: reader.u64()?,
@@ -180,7 +219,19 @@ impl TailCheckpoint {
             prefix_start: reader.u64()?,
             prefix_len: reader.u64()?,
             prefix_hash: reader.hash()?,
+            committed_chain: None,
         };
+        if version >= 2 {
+            checkpoint.committed_chain = match reader.byte()? {
+                0 => None,
+                1 => Some(reader.u64()?),
+                _ => {
+                    return Err(CaptureError::InvalidCheckpoint(
+                        "invalid committed-chain marker".to_string(),
+                    ));
+                }
+            };
+        }
         reader.finish()?;
         checkpoint.validate()?;
         Ok(checkpoint)
@@ -228,6 +279,24 @@ impl TailCheckpoint {
         }
         Ok(())
     }
+}
+
+/// What [`Tailer::verify_committed`] found at the path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommittedVerification {
+    /// The file is gone; the ordinary read path owns that outcome.
+    Missing,
+    /// A different file sits at the path.
+    IdentityChanged,
+    /// The file is shorter than the committed range.
+    Truncated,
+    /// The committed content is exactly what the checkpoint ingested.
+    Verified,
+    /// The committed content changed under a quiet stat — recovery time.
+    Mismatch,
+    /// The checkpoint predates the chain; here is the freshly computed
+    /// value for the caller to persist, after which audits verify cheaply.
+    Established(u64),
 }
 
 /// One complete delimiter-terminated record. Offsets are file positions of
@@ -357,11 +426,18 @@ impl Tailer {
             force_replay,
             &mut accounting,
         )?;
+        // Continuations resume the chain the checkpoint carries (None on a
+        // pre-chain blob); every read-from-zero transition restarts it.
+        let resume_chain = match transition {
+            Transition::Continued => previous.and_then(|prev| prev.committed_chain),
+            _ => Some(CONTENT_CHAIN_BASIS),
+        };
 
         let framed = self.frame(
             &mut file,
             path,
             start_offset,
+            resume_chain,
             snapshot_len,
             generation,
             &mut accounting,
@@ -397,6 +473,7 @@ impl Tailer {
             observed_len: snapshot_len,
             unread_len: snapshot_len - framed.committed_offset,
             incomplete_suffix_len: framed.incomplete_suffix_len,
+            committed_chain: framed.committed_chain,
             prefix_start: prefix.start,
             prefix_len: prefix.len,
             prefix_hash: prefix.hash,
@@ -412,6 +489,55 @@ impl Tailer {
             snapshot_len,
             bytes_read: accounting.consumed,
         }))
+    }
+
+    /// The audit lane's question, answered without a replay: is the file
+    /// still byte-for-byte the `0..committed_offset` content `previous`
+    /// ingested? One sequential read of the committed range, folded through
+    /// the content chain — no framing, no normalization, no generation, no
+    /// writes. The caller escalates a [`CommittedVerification::Mismatch`]
+    /// to a forced replay; everything else is already answered.
+    pub fn verify_committed(
+        &self,
+        path: &Path,
+        previous: &TailCheckpoint,
+    ) -> Result<CommittedVerification, CaptureError> {
+        let mut file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(CommittedVerification::Missing);
+            }
+            Err(error) => return Err(io_error("opening", path, error)),
+        };
+        let metadata = file
+            .metadata()
+            .map_err(|error| io_error("reading metadata for", path, error))?;
+        if file_identity(path, &metadata) != previous.identity {
+            return Ok(CommittedVerification::IdentityChanged);
+        }
+        if metadata.len() < previous.committed_offset {
+            return Ok(CommittedVerification::Truncated);
+        }
+        let mut remaining = previous.committed_offset;
+        let mut chain = CONTENT_CHAIN_BASIS;
+        let mut buffer = [0_u8; READ_BUFFER_BYTES];
+        while remaining > 0 {
+            let wanted = usize::try_from(remaining.min(READ_BUFFER_BYTES as u64))
+                .expect("bounded read length always fits usize");
+            let count = file
+                .read(&mut buffer[..wanted])
+                .map_err(|error| io_error("verifying", path, error))?;
+            if count == 0 {
+                return Ok(CommittedVerification::Truncated);
+            }
+            chain = chain_bytes(chain, &buffer[..count]);
+            remaining -= count as u64;
+        }
+        Ok(match previous.committed_chain {
+            Some(expected) if expected == chain => CommittedVerification::Verified,
+            Some(_) => CommittedVerification::Mismatch,
+            None => CommittedVerification::Established(chain),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -464,11 +590,13 @@ impl Tailer {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn frame(
         &self,
         file: &mut File,
         path: &Path,
         start_offset: u64,
+        resume_chain: Option<u64>,
         snapshot_len: u64,
         generation: u64,
         accounting: &mut ReadAccounting,
@@ -476,11 +604,14 @@ impl Tailer {
         file.seek(SeekFrom::Start(start_offset))
             .map_err(|error| io_error("seeking", path, error))?;
 
-        let mut output = FramedBatch::new(start_offset);
+        let mut output = FramedBatch::new(start_offset, resume_chain);
         let mut pending = PendingRecord::new(self.config.max_record_bytes);
         let mut buffer = [0_u8; READ_BUFFER_BYTES];
         let mut read_offset = start_offset;
         let mut batch_payload_bytes = 0_usize;
+        // The content chain folds every scanned byte in order; the snapshot
+        // taken at each record commit is the value for `0..committed`.
+        let mut running_chain = resume_chain;
 
         'read: while read_offset < snapshot_len {
             let wanted =
@@ -496,6 +627,9 @@ impl Tailer {
             let chunk = &buffer[..count];
             let mut segment_start = 0;
             for (index, byte) in chunk.iter().enumerate() {
+                if let Some(chain) = running_chain.as_mut() {
+                    *chain = chain_byte(*chain, *byte);
+                }
                 if *byte != self.config.delimiter {
                     continue;
                 }
@@ -523,6 +657,7 @@ impl Tailer {
                 }
                 output.items.push(item);
                 output.committed_offset = record_end;
+                output.committed_chain = running_chain;
                 pending = PendingRecord::new(self.config.max_record_bytes);
                 segment_start = index + 1;
 
@@ -595,15 +730,19 @@ impl Tailer {
 struct FramedBatch {
     items: Vec<TailItem>,
     committed_offset: u64,
+    /// Content chain at `committed_offset`; `None` when resuming a
+    /// pre-chain checkpoint whose prefix bytes were never folded.
+    committed_chain: Option<u64>,
     incomplete_suffix_len: u64,
     more_available: bool,
 }
 
 impl FramedBatch {
-    fn new(committed_offset: u64) -> Self {
+    fn new(committed_offset: u64, committed_chain: Option<u64>) -> Self {
         Self {
             items: Vec::new(),
             committed_offset,
+            committed_chain,
             incomplete_suffix_len: 0,
             more_available: false,
         }
@@ -754,19 +893,26 @@ struct ByteReader<'a> {
 }
 
 impl<'a> ByteReader<'a> {
-    fn new(bytes: &'a [u8], magic: &[u8], version: u8) -> Result<Self, CaptureError> {
+    /// Accept any version in `versions`, returning the one found so the
+    /// caller can decode the fields that version carries.
+    fn versioned(
+        bytes: &'a [u8],
+        magic: &[u8],
+        versions: std::ops::RangeInclusive<u8>,
+    ) -> Result<(Self, u8), CaptureError> {
         let Some(rest) = bytes.strip_prefix(magic) else {
             return Err(CaptureError::InvalidCheckpoint(
                 "checkpoint magic does not match".to_string(),
             ));
         };
         let mut reader = Self { remaining: rest };
-        if reader.byte()? != version {
+        let version = reader.byte()?;
+        if !versions.contains(&version) {
             return Err(CaptureError::InvalidCheckpoint(
                 "unsupported checkpoint version".to_string(),
             ));
         }
-        Ok(reader)
+        Ok((reader, version))
     }
 
     fn finish(self) -> Result<(), CaptureError> {
@@ -1175,5 +1321,95 @@ mod tests {
             Tailer::new(inverted),
             Err(CaptureError::InvalidConfig(_))
         ));
+    }
+
+    #[test]
+    fn the_committed_chain_resumes_across_batches_and_verifies() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("chain.jsonl");
+        let content = b"first record here\nsecond one\nthird, longer record\n";
+        std::fs::write(&path, content).unwrap();
+
+        // Two bounded reads: the chain must fold across the boundary to the
+        // same value one straight fold produces.
+        let tailer = Tailer::new(TailConfig {
+            max_record_bytes: 24,
+            max_batch_bytes: 24,
+            ..TailConfig::json_lines()
+        })
+        .unwrap();
+        let TailRead::Batch(first) = tailer.read(&path, None, false).unwrap() else {
+            panic!("expected a batch");
+        };
+        assert!(
+            first.more_available,
+            "the tiny batch bound must split reads"
+        );
+        let mut checkpoint = first.checkpoint;
+        loop {
+            let TailRead::Batch(batch) = tailer.read(&path, Some(&checkpoint), false).unwrap()
+            else {
+                panic!("expected a batch");
+            };
+            let done = !batch.more_available;
+            checkpoint = batch.checkpoint;
+            if done {
+                break;
+            }
+        }
+        assert_eq!(
+            checkpoint.committed_chain,
+            Some(chain_bytes(CONTENT_CHAIN_BASIS, content)),
+            "the chained fold equals one straight fold over the whole file"
+        );
+
+        // Verification answers off that chain without a replay.
+        assert_eq!(
+            tailer.verify_committed(&path, &checkpoint).unwrap(),
+            CommittedVerification::Verified
+        );
+        let mut rewritten = content.to_vec();
+        rewritten[3] = b'z'; // same length, out of any anchor window
+        std::fs::write(&path, rewritten).unwrap();
+        assert_eq!(
+            tailer.verify_committed(&path, &checkpoint).unwrap(),
+            CommittedVerification::Mismatch
+        );
+    }
+
+    #[test]
+    fn version_one_checkpoints_still_decode_and_establish_later() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("old.jsonl");
+        std::fs::write(&path, b"one record\n").unwrap();
+        let tailer = Tailer::new(TailConfig::json_lines()).unwrap();
+        let TailRead::Batch(batch) = tailer.read(&path, None, false).unwrap() else {
+            panic!("expected a batch");
+        };
+
+        // Reconstruct the version-1 wire form: strip the chain suffix and
+        // stamp the old version byte.
+        let mut v1 = batch.checkpoint.encode();
+        match batch.checkpoint.committed_chain {
+            Some(_) => v1.truncate(v1.len() - 9),
+            None => v1.truncate(v1.len() - 1),
+        }
+        v1[CHECKPOINT_MAGIC.len()] = 1;
+        let decoded = TailCheckpoint::decode(&v1).unwrap();
+        assert_eq!(decoded.committed_offset, batch.checkpoint.committed_offset);
+        assert_eq!(
+            decoded.committed_chain, None,
+            "pre-chain blobs carry no chain"
+        );
+
+        // The audit's first look at a pre-chain checkpoint establishes it.
+        match tailer.verify_committed(&path, &decoded).unwrap() {
+            CommittedVerification::Established(chain) => assert_eq!(
+                Some(chain),
+                batch.checkpoint.committed_chain,
+                "the established value is the maintained one"
+            ),
+            other => panic!("expected Established, got {other:?}"),
+        }
     }
 }

@@ -350,7 +350,7 @@ fn poll_ticks_carry_the_rotating_audit_sweep() {
         report.stream.files_audited, 2,
         "each poll tick advances the rotating sweep by audit_files_per_run"
     );
-    // Audited replays go through the generation swap — never duplicates.
+    // A verified audit leaves rows exactly as they were — never duplicates.
     let per_session_max: i64 = h
         .store
         .conn()
@@ -380,4 +380,69 @@ fn append_user_line(path: &Path, native_session_id: &str, content: &str) {
     });
     let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
     writeln!(file, "{line}").unwrap();
+}
+
+/// Total bytes across a raw-ledger directory — the growth probe.
+fn ledger_bytes(dir: &Path) -> u64 {
+    fn walk(dir: &Path, total: &mut u64) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, total);
+            } else {
+                *total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    let mut total = 0;
+    walk(dir, &mut total);
+    total
+}
+
+#[test]
+fn audits_verify_quiet_files_without_ledger_growth_or_generation_churn() {
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = backfilled_harness();
+    let ledger_dir = TempDir::new().unwrap();
+    let ledger = rosetta_capture::Ledger::open(ledger_dir.path()).unwrap();
+
+    let live = LiveOptions {
+        tick: Duration::ZERO,
+        poll_interval: Duration::ZERO,
+        max_coalesced: 16,
+    };
+    let mut runner = LiveRunner::start_with_ledger(
+        adapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::new(ScriptedEvents::default()),
+        &mut h.store,
+        h.opts.clone(),
+        live,
+        Some(ledger),
+        &h.instrument,
+    )
+    .unwrap();
+
+    // First tick pays the one-shot recovery admissions; measure after it.
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    let after_first = ledger_bytes(ledger_dir.path());
+    for _ in 0..4 {
+        runner.tick(&mut h.store, &h.instrument).unwrap();
+    }
+    let report = runner.report();
+    assert_eq!(report.polls, 5);
+    assert_eq!(
+        report.stream.files_audited, 5,
+        "the rotating sweep keeps advancing"
+    );
+    assert_eq!(
+        report.stream.generations_restarted, 0,
+        "a verified quiet file never opens a replacement generation"
+    );
+    assert_eq!(
+        ledger_bytes(ledger_dir.path()),
+        after_first,
+        "audit rotations append nothing to the append-only ledger"
+    );
 }

@@ -17,7 +17,7 @@ use rosetta_capture::{Ledger, ScriptedEvents, db_stamp};
 use rosetta_core::rows::{MessageKind, MessageRow, RuntimeRow};
 use rosetta_core::{IngestOp, ids};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, expand_data_root,
+    IngestOptions, Instrument, LiveOptions, LiveRunner, Metric, discover, expand_data_root,
     meta_ingest_into, rebuild_runtime, stream_backfill_into,
 };
 use rosetta_store::{Store, queries};
@@ -734,5 +734,99 @@ fn rebuild_reproduces_the_database_projection_without_sqlite() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[test]
+fn shm_touches_are_never_hints_and_wal_touches_are() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    let (_, files) = meta_ingest_into(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+
+    // The daemon's own snapshot open writes `-shm`; treating that as a hint
+    // fed the watcher the daemon's footsteps and starved the cold lanes.
+    let shm = rosetta_pipeline::map_hint(adapter, &files, "agent.db-shm");
+    assert!(shm.nominated.is_empty(), "-shm nominates nothing");
+    assert!(!shm.needs_admission, "-shm admits nothing");
+
+    // `-wal` carries committed content: it aliases to the database and
+    // nominates every virtual source the db backs.
+    let wal = rosetta_pipeline::map_hint(adapter, &files, "agent.db-wal");
+    assert_eq!(wal.nominated.len(), files.len());
+    assert!(wal.needs_admission, "content movement re-checks membership");
+}
+
+#[test]
+fn quiet_database_polls_neither_admit_nor_reopen_the_source() {
+    let adapter = &FakeDbAgent;
+    let mut h = harness();
+    let live = LiveOptions {
+        tick: std::time::Duration::ZERO,
+        poll_interval: std::time::Duration::ZERO,
+        max_coalesced: 16,
+    };
+    let mut runner = LiveRunner::start(
+        adapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::new(rosetta_capture::ScriptedEvents::default()),
+        &mut h.store,
+        h.opts.clone(),
+        live,
+        &h.instrument,
+    )
+    .unwrap();
+
+    // First tick backfills the database (construction meta named it). From
+    // then on the corpus is frozen: polls must neither re-run bounded meta
+    // (presence is not evidence) nor even OPEN the database — the stamp
+    // gate stats it and stops, so the daemon generates no filesystem
+    // events for the watcher to feed back.
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    let baseline = h.instrument.snapshot();
+    for _ in 0..3 {
+        runner.tick(&mut h.store, &h.instrument).unwrap();
+    }
+    let quiet = h.instrument.snapshot().delta_since(&baseline);
+    assert_eq!(
+        quiet.get(Metric::BytesRead),
+        0,
+        "a stamp-unchanged database is never copied or opened"
+    );
+    assert_eq!(
+        runner.report().admissions,
+        0,
+        "presence is not evidence: known membership seeds silently"
+    );
+
+    // Content actually moves: the poll notices the stamp drift, re-checks
+    // membership once, and the new row lands.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let conn = rusqlite::Connection::open(&h.db).unwrap();
+    conn.execute_batch("INSERT INTO messages VALUES (4, 'sess-b', 'agent', 'xolotl beta reply');")
+        .unwrap();
+    drop(conn);
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    assert_eq!(
+        runner.report().admissions,
+        1,
+        "movement admits exactly once"
+    );
+    assert_eq!(
+        queries::search(h.store.conn(), "\"beta reply\"", 5)
+            .unwrap()
+            .len(),
+        1,
+        "the moved database's new row is ingested"
     );
 }

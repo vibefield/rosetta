@@ -78,7 +78,15 @@ rewarm poll: the writer drains them into `Hub::absorb_meta` between passes. Row 
 run scoped during cold — armed per pass with the sessions readers hold open — so an open
 transcript streams in mid-backfill: appends push precise rows, and a seal, retry sweep,
 abandon, or renumber pushes one `SessionSwept` resync marker; unwatched sessions pay no
-mutation log, and the live handoff widens the scope to every session. The cold phase is
+mutation log, and the live handoff widens the scope to every session. An idle daemon
+appends nothing to the raw ledger: the rotating audit verifies a file's committed
+content chain (tail checkpoint v2 — a resumable byte fold; pre-chain checkpoints are
+established in place) and replays only on a real mismatch; snapshot passes stat-gate an
+unchanged database without opening it (a read-only SQLite open writes `-shm` inside the
+watched root, and the daemon must never hint itself — `-shm` is never a hint); poll
+admissions are evidence-driven (first sighting or movement, never presence). Audit-budget
+passes still hash snapshot content whole, so a stamp-preserving rewrite is caught by the
+audit sweep. The cold phase is
 one named unit (`rosettad::engine::ColdEngine`) built over an `IngestPlan` — meta's
 settled projects → sessions → sources as a RAM value, unproven ownership honestly
 unassigned — and a `ProgressBoard` that folds pass outcomes per project onto

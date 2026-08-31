@@ -25,7 +25,8 @@ pub use sqlite::{
     snapshot as snapshot_db, sqlite_file_status,
 };
 pub use tailer::{
-    RawRecord, TailBatch, TailCheckpoint, TailConfig, TailItem, TailRead, Tailer, Transition,
+    CommittedVerification, RawRecord, TailBatch, TailCheckpoint, TailConfig, TailItem, TailRead,
+    Tailer, Transition,
 };
 pub use watch::{NotifyEvents, ScriptedEvents, SourceEvent, SourceEvents};
 

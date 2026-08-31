@@ -105,8 +105,10 @@ pub fn stream_backfill_into(
     mut ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
-    // Snapshot-driven virtual sources take their own path: no tailing, no
-    // audit lane (every pass hashes full content — audit by construction).
+    // Snapshot-driven virtual sources take their own path: no tailing, and
+    // no rotating audit lane — any pass carrying an audit budget hashes
+    // their full content (audit by construction), while audit-free passes
+    // may trust a stamp their own checkpoint already ingested.
     let mut document_files = Vec::new();
     let mut snapshot_files = Vec::new();
     let mut tail_files = Vec::new();
@@ -134,6 +136,16 @@ pub fn stream_backfill_into(
     for file in tail_files.iter().copied() {
         report.files += 1;
         let restarts_before = report.generations_restarted;
+        // An audited file VERIFIES its committed content chain by re-reading
+        // it, and replays — a replacement generation, a projection sweep,
+        // the file re-appended to the ledger — only when the chain actually
+        // mismatches. The old audit forced that replay unconditionally,
+        // paying all of it for every quiet file on every rotation, forever.
+        let mode = if audit_set.contains(file.relative_path.as_str()) {
+            PassMode::Audit
+        } else {
+            PassMode::Normal
+        };
         let outcome = ingest_file(
             adapter,
             runtime,
@@ -144,7 +156,7 @@ pub fn stream_backfill_into(
             opts,
             instrument,
             &mut report,
-            audit_set.contains(file.relative_path.as_str()),
+            mode,
             ledger.as_deref_mut(),
         )?;
         if report.generations_restarted > restarts_before {
@@ -185,7 +197,7 @@ pub fn stream_backfill_into(
             opts,
             instrument,
             &mut report,
-            true, // forced replay
+            PassMode::ForceHeal,
             ledger.as_deref_mut(),
         )?;
         let complete = outcome == FilePass::Finished(true);
@@ -289,6 +301,21 @@ pub(crate) fn rotating_audit_paths(
         .collect())
 }
 
+/// What kind of pass [`ingest_file`] is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PassMode {
+    /// Read whatever the checkpoint says is new.
+    Normal,
+    /// The rotating audit: verify the committed content chain by re-reading
+    /// it, escalate to a replacement replay ONLY on a mismatch, and
+    /// otherwise behave exactly like a normal pass (which, on a verified
+    /// quiet file, reads nothing and writes nothing).
+    Audit,
+    /// Sibling healing after a generation restart: force a full replay so
+    /// cross-file merges re-derive into the rebuilt rows.
+    ForceHeal,
+}
+
 /// How one pass over one source file ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilePass {
@@ -350,7 +377,7 @@ fn ingest_file(
     opts: &IngestOptions,
     instrument: &Instrument,
     report: &mut StreamReport,
-    audit_requested: bool,
+    mode: PassMode,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<FilePass, PipelineError> {
     let path = root.join(&file.relative_path);
@@ -388,6 +415,16 @@ fn ingest_file(
     let mut tail = resumed
         .as_ref()
         .and_then(|(checkpoint, _)| checkpoint.tail_checkpoint());
+    // Ledger-first means everything at or below the resumed committed offset
+    // is already durable in the raw ledger for this generation. An audit (or
+    // sibling-heal) replay re-frames those records to verify the projection,
+    // but appending them again would grow the append-only ledger without
+    // bound — one full file copy per audit turn. Records below the watermark
+    // stay out of the ledger; a generation restart resets it, because a
+    // replacement generation's content is all new.
+    let mut ledgered_through = tail
+        .as_ref()
+        .map_or(0, |checkpoint| checkpoint.committed_offset);
 
     let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
     ctx.native_session_id = Some(file.native_session_id.clone());
@@ -444,8 +481,66 @@ fn ingest_file(
     let mut budget_records = 0_u64;
 
     let mut retries = 0_u32;
-    let mut force_replay =
-        audit_requested && tail.is_some() && source_generation == active_generation;
+    let mut force_replay = matches!(mode, PassMode::ForceHeal)
+        && tail.is_some()
+        && source_generation == active_generation;
+    // The audit: one sequential read of the committed range against the
+    // checkpoint's content chain. Verified — the common case, a quiet file —
+    // costs no generation, no ledger append, and no projection write; a
+    // mismatch is real content change hiding under a quiet stat, and THAT
+    // escalates to the full replacement replay. A pre-chain checkpoint has
+    // its chain computed once and persisted, so the next audit verifies.
+    if matches!(mode, PassMode::Audit)
+        && source_generation == active_generation
+        && let Some(tail_checkpoint) = tail.as_mut()
+    {
+        match tailer.verify_committed(&path, tail_checkpoint)? {
+            rosetta_capture::CommittedVerification::Verified => {
+                instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
+            }
+            rosetta_capture::CommittedVerification::Mismatch => {
+                instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
+                force_replay = true;
+            }
+            rosetta_capture::CommittedVerification::Established(chain) => {
+                instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
+                tail_checkpoint.committed_chain = Some(chain);
+                if let Some(mut previous) = PipeCheckpoint::decode(&prev_blob) {
+                    previous.tail = Some(tail_checkpoint.encode_hex());
+                    let next_blob = previous.encode();
+                    let applied = instrument.apply(
+                        store,
+                        &Batch {
+                            ops: vec![],
+                            checkpoints: vec![CheckpointUpdate {
+                                runtime_id: runtime.id.clone(),
+                                stream: file.stream_id.clone(),
+                                path: file.relative_path.clone(),
+                                session_id: file.session_id.clone(),
+                                expected: Some(prev_blob.clone()),
+                                next: next_blob.clone(),
+                                updated_at: Some(file.modified_ms),
+                            }],
+                            source: None,
+                        },
+                    );
+                    match applied {
+                        Ok(stats) => {
+                            merge_stats(&mut report.stats, &stats);
+                            report.batches += 1;
+                            prev_blob = next_blob;
+                        }
+                        Err(StoreError::CheckpointConflict { .. }) => report.conflicts += 1,
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+            // The ordinary read below reclassifies these and recovers.
+            rosetta_capture::CommittedVerification::Missing
+            | rosetta_capture::CommittedVerification::IdentityChanged
+            | rosetta_capture::CommittedVerification::Truncated => {}
+        }
+    }
     loop {
         // Chosen per iteration: a mid-pass rewrite that disables the budget
         // must also stop paying its batch shape for the replacement replay.
@@ -496,6 +591,7 @@ fn ingest_file(
                 .ok_or_else(|| PipelineError::Config("source generation overflowed".to_string()))?;
             highest_generation = source_generation;
             next_source_sequence = 0;
+            ledgered_through = 0;
             generation_clean = true;
             generation_raw_complete = true;
             ctx.next_ordinal = 0;
@@ -649,6 +745,7 @@ fn ingest_file(
                         }
                         TailItem::Oversized { .. } => None,
                     })
+                    .filter(|(start_offset, _)| *start_offset >= ledgered_through)
                     .collect();
                 let mut wrote = false;
                 if !raw.is_empty() {

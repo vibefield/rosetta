@@ -110,6 +110,49 @@ pub(crate) fn stream_snapshot_sources(
             )));
         };
 
+        // The stat gate first: opening the source — even read-only — writes
+        // its `-shm`, and the watcher sees that write as a database hint, so
+        // an unconditional open per pass feeds the daemon its own footsteps.
+        // When every cursor in the group already ingested exactly this
+        // stamp's content (and that generation is active), there is nothing
+        // to read and, critically, nothing to open. The gate yields to any
+        // pass carrying an audit budget: those hash full content by
+        // construction — the lane that still catches a database whose
+        // content moved under a preserved stamp, once per audit sweep —
+        // while the audit-free hint, catch-up, and cold lanes (the ones a
+        // self-hint loop can feed) trust a stamp their own checkpoint
+        // already ingested.
+        let current_stamp = (opts.audit_files_per_run == 0)
+            .then(|| rosetta_capture::db_stamp(&db_path))
+            .transpose()?
+            .flatten();
+        if let Some(stamp) = &current_stamp {
+            // The skip repeats the outcome the stamp's own pass reported:
+            // each file's generation_clean, never an unconditional true — a
+            // dirty-but-active generation stays Streaming through the gate.
+            let settled: Vec<bool> = group
+                .iter()
+                .zip(&cursors)
+                .filter_map(|(file, cursor)| {
+                    PipeCheckpoint::decode(&cursor.checkpoint)
+                        .filter(|checkpoint| {
+                            checkpoint.session_id == file.session_id
+                                && checkpoint.stream_id == file.stream_id
+                                && checkpoint.normalizer_version == adapter.normalizer_version()
+                                && checkpoint.source_generation == cursor.active_generation
+                                && checkpoint.snapshot_stamp.as_deref() == Some(stamp.as_str())
+                        })
+                        .map(|checkpoint| checkpoint.generation_clean)
+                })
+                .collect();
+            if settled.len() == group.len() {
+                for (file, clean) in group.iter().zip(settled) {
+                    mark(file, clean, file_health, session_health);
+                }
+                continue;
+            }
+        }
+
         // One stable copy per database per pass, shared by all its sessions.
         let mut retries = 0_u32;
         let snapshot = loop {
