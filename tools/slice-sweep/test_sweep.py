@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from sweep import (  # noqa: E402
     parse_budget,
     parse_budgets,
     parse_milestones,
+    resolve_home,
 )
 
 FULL_RUN = """\
@@ -220,6 +223,84 @@ class CommandTests(unittest.TestCase):
                 "--slice-budget", "0",
             ],
         )
+
+
+class HomeTests(unittest.TestCase):
+    """`--home` refusals, exercised against temp dirs standing in for a real home."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="slice-sweep-home-")).resolve()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.live = self.root / "live-home"
+        (self.live / ".claude" / "projects").mkdir(parents=True)
+        self.snapshot = self.root / "snapshot"
+        (self.snapshot / ".claude").mkdir(parents=True)
+
+    def _alias_of_live(self) -> Path:
+        """The live home spelled through a symlink and a `..` hop."""
+
+        alias = self.root / "by-another-name"
+        alias.symlink_to(self.live, target_is_directory=True)
+        return alias / ".." / "by-another-name"
+
+    def test_frozen_snapshot_is_accepted(self) -> None:
+        self.assertEqual(
+            resolve_home(str(self.snapshot), live_home=self.live), self.snapshot
+        )
+
+    def test_live_home_is_refused_however_it_is_spelled(self) -> None:
+        spelling = self._alias_of_live()
+        self.assertNotEqual(str(spelling), str(self.live))
+        with self.assertRaises(SweepError) as caught:
+            resolve_home(str(self.live), live_home=spelling)
+        self.assertIn("is the live home directory", str(caught.exception))
+
+    def test_live_home_reached_through_a_symlinked_parent_is_refused(self) -> None:
+        with self.assertRaises(SweepError) as caught:
+            resolve_home(str(self._alias_of_live()), live_home=self.live)
+        self.assertIn("is the live home directory", str(caught.exception))
+
+    def test_child_symlink_into_the_live_home_is_refused(self) -> None:
+        link = self.snapshot / ".codex"
+        link.symlink_to(self.live / ".claude", target_is_directory=True)
+        with self.assertRaises(SweepError) as caught:
+            resolve_home(str(self.snapshot), live_home=self.live)
+        self.assertIn(str(link), str(caught.exception))
+
+    def test_home_that_is_itself_a_symlink_into_the_live_home_is_refused(self) -> None:
+        alias = self.root / "looks-frozen"
+        alias.symlink_to(self.live / ".claude", target_is_directory=True)
+        with self.assertRaises(SweepError) as caught:
+            resolve_home(str(alias), live_home=self.live)
+        self.assertIn(str(alias), str(caught.exception))
+
+    def test_child_symlink_pointing_elsewhere_is_accepted(self) -> None:
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (self.snapshot / ".codex").symlink_to(elsewhere, target_is_directory=True)
+        self.assertEqual(
+            resolve_home(str(self.snapshot), live_home=self.live), self.snapshot
+        )
+
+    def test_a_real_directory_inside_the_live_home_is_accepted(self) -> None:
+        frozen = self.live / "snapshots" / "2026-08-30"
+        frozen.mkdir(parents=True)
+        self.assertEqual(resolve_home(str(frozen), live_home=self.live), frozen)
+
+    def test_symlinks_below_the_immediate_children_are_not_scanned(self) -> None:
+        # The documented bound: this check catches the common accident, it does
+        # not prove the snapshot is frozen.
+        deep = self.snapshot / ".claude" / "projects"
+        deep.mkdir(parents=True)
+        (deep / "live").symlink_to(self.live / ".claude", target_is_directory=True)
+        self.assertEqual(
+            resolve_home(str(self.snapshot), live_home=self.live), self.snapshot
+        )
+
+    def test_a_missing_directory_is_refused(self) -> None:
+        with self.assertRaises(SweepError) as caught:
+            resolve_home(str(self.root / "absent"), live_home=self.live)
+        self.assertIn("not a directory", str(caught.exception))
 
 
 if __name__ == "__main__":

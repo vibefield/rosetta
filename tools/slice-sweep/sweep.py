@@ -333,16 +333,87 @@ def resolve_repo_root() -> Path:
     return root
 
 
-def resolve_home(value: str) -> Path:
-    """Accept only a frozen snapshot directory — never the live home."""
+def _identity(path: Path) -> tuple[int, int] | None:
+    """`(st_dev, st_ino)` for `path` — `os.path.samestat`'s notion of sameness.
 
-    home = Path(value).expanduser().resolve()
+    Path spelling lies. A macOS firmlink alias (`/System/Volumes/Data/Users/x`)
+    and a Linux bind mount are not symlinks, so `Path.resolve()` hands them back
+    unchanged even though they are the same directory as `~`. Device and inode
+    are not fooled. `stat` follows symlinks and `..` itself, so the caller never
+    has to normalize a path before comparing it.
+    """
+
+    try:
+        status = os.stat(path)
+    except OSError:
+        return None
+    return status.st_dev, status.st_ino
+
+
+def _is_same_directory(left: Path, right: Path) -> bool:
+    """True when both paths name one directory, however each one is spelled."""
+
+    identity = _identity(left)
+    return identity is not None and identity == _identity(right)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """True when `path` is `root` or lies beneath it, compared by stat identity.
+
+    Walking the resolved ancestors and stat-ing each one — rather than testing a
+    string prefix — is what catches a target reached through an alias of `root`.
+    """
+
+    wanted = _identity(root)
+    if wanted is None:
+        return False
+    resolved = path.resolve()
+    return any(_identity(step) == wanted for step in (resolved, *resolved.parents))
+
+
+def _live_symlink(home: Path, spelled: Path, live_home: Path) -> Path | None:
+    """The first entry that links back into the live home, or None.
+
+    Only two rings are examined: the `--home` argument as the operator spelled it,
+    and `home`'s immediate children. A snapshot whose entries are symlinks into
+    live agent data (`ln -s ~/.claude snapshot/.claude`) sweeps mutating data
+    while looking frozen; this catches that accident, and nothing deeper.
+    """
+
+    entries = [spelled]
+    try:
+        entries.extend(sorted(home.iterdir()))
+    except OSError:
+        pass  # an unlistable snapshot cannot be checked here; serve will report it
+    for entry in entries:
+        if entry.is_symlink() and _is_within(entry, live_home):
+            return entry
+    return None
+
+
+def resolve_home(value: str, *, live_home: Path | None = None) -> Path:
+    """Accept only a frozen snapshot directory — never the live home.
+
+    The live home is recognised by stat identity rather than by path equality, so
+    an alias that `resolve()` cannot see through is still refused. `live_home` is
+    injectable so both refusals are testable against temporary directories.
+    """
+
+    spelled = Path(value).expanduser()
+    home = spelled.resolve()
     if not home.is_dir():
         raise SweepError(f"--home {value}: not a directory")
-    if home == Path.home().resolve():
+    live = Path.home() if live_home is None else live_home
+    if _is_same_directory(home, live):
         raise SweepError(
             f"--home {home} is the live home directory; sweep only frozen, "
             "permission-read-only snapshots"
+        )
+    linked = _live_symlink(home, spelled, live)
+    if linked is not None:
+        raise SweepError(
+            f"--home {home}: {linked} is a symlink into the live home directory "
+            f"({linked.resolve()}); sweep only frozen, permission-read-only snapshots"
         )
     return home
 

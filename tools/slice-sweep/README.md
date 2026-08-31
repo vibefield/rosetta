@@ -13,9 +13,28 @@ snapshot directory passed as `--home` — never a live agent home directory.** B
 compared across separate processes minutes apart; if the source data can change underneath
 them, the differences measure the data, not the budget. This is the repository's
 frozen-pair performance discipline: a cold-write comparison cites one checksummed source
-snapshot, one machine, and one configuration. The harness refuses a `--home` that resolves
-to the live home directory, but it cannot tell a frozen snapshot from any other writable
-directory — freezing it is yours to do.
+snapshot, one machine, and one configuration.
+
+The harness refuses two ways of pointing it at live data:
+
+- **`--home` that *is* the home directory**, recognised by stat identity (`st_dev`,
+  `st_ino`) rather than by comparing paths. Path spelling lies: a macOS firmlink alias
+  such as `/System/Volumes/Data/Users/you` and a Linux bind mount are not symlinks, so
+  `resolve()` hands them back unchanged even though they are the same directory as `~`.
+  Device and inode are not fooled, so every spelling of the home directory is refused.
+- **A snapshot that links back into the live home** — the classic
+  `ln -s ~/.claude snapshot/.claude`, which sweeps mutating data while looking frozen.
+  The `--home` argument itself and its *immediate children* are checked; an entry that is
+  a symlink whose target is the live home or anything beneath it is refused by name.
+  Targets are matched by walking the resolved path's ancestors and stat-ing each one, not
+  by string prefix, so an alias of the home directory is caught here too.
+
+**Both checks are floors, not proofs.** Symlinks deeper than the immediate children are
+not scanned, an unlistable directory is not checked at all, and nothing here can tell a
+frozen snapshot from any other writable directory: the checks catch the common accident,
+they do not establish that the data holds still. Freezing the snapshot is yours to do.
+A symlinked snapshot is refused even when its target is itself frozen — pass the real
+path instead.
 
 **Results are machine-local evidence and are never committed.** Write the CSV and any
 per-run logs outside the working tree, and quote them in a commit message or a document
@@ -97,4 +116,8 @@ python3 -m unittest discover -s tools/slice-sweep
 ```
 
 Budget parsing, milestone parsing, and row assembly are pure functions with no process
-handling, so the suite covers them over sample text and never starts a daemon.
+handling, so the suite covers them over sample text and never starts a daemon. The
+`--home` refusals are covered too: `resolve_home` takes the live home as an injectable
+argument defaulting to `Path.home()`, so the tests exercise both refusals — and the
+unscanned depth beyond the immediate children — against temporary directories, never a
+real home.
