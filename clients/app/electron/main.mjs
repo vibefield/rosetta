@@ -95,16 +95,9 @@ async function resolveDaemonBin() {
  * db awaits consent, so first launch IS the roll call. */
 function startDaemon(bin, dbPath) {
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  // Metadata audit posture: keep HTTP/WS alive at the exact phase boundary
-  // after every bounded skim commits, before any complete transcript record
-  // is read. `rosettad serve` remains full-ingest by default for other users.
-  const proc = spawn(
-    bin,
-    ["serve", "--db", dbPath, "--addr", "127.0.0.1:0", "--stop-after-meta"],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const proc = spawn(bin, ["serve", "--db", dbPath, "--addr", "127.0.0.1:0"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   daemonProcess = proc;
   return new Promise((resolve) => {
     let greeting = "";
