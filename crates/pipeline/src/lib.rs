@@ -91,9 +91,14 @@ pub struct SliceBudget {
 }
 
 impl SliceBudget {
-    /// Starting default until the ingest-bench sweep picks the sweet spot.
+    /// Measured default: the knee of the 2026-08-31 slice-sweep campaign
+    /// over a frozen 9-runtime snapshot (5 repeats, 32k–2m grid). Starter
+    /// drain stays ~3–5 s at every budget on that corpus; 1 MiB roughly
+    /// halves the full cold drain against 256 KiB (≈35 s → ≈19 s, within
+    /// ≈5 s of the unsliced floor), while 2 MiB trades starter latency for
+    /// little further gain. Still a `--slice-budget` tunable per machine.
     pub const STARTER: Self = Self {
-        max_bytes: 256 * 1024,
+        max_bytes: 1024 * 1024,
         min_records: 24,
     };
 }

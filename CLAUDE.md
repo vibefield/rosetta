@@ -86,7 +86,8 @@ unassigned — and a `ProgressBoard` that folds pass outcomes per project onto
 and rebuilt from a skim, while durable progress stays cursors, generations, and
 `stream_state`.
 Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,
-default 256 KiB / 24-record floor, batches soft-capped to the slice) that early-ACTIVATES
+default 1 MiB / 24-record floor — the measured knee of the 2026-08-31 slice-sweep
+campaign — batches soft-capped to the slice) that early-ACTIVATES
 and seals a clean prefix so every session opens readable fast; paused remainders requeue
 as append growth, app boosts run unbudgeted with preemption bounded by one slice, and a
 session badges Indexed only once no task for it remains queued. Snapshot-driver sources

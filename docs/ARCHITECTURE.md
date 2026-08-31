@@ -57,7 +57,10 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > and bytes streamed/total per project, refreshed between passes and kept current through
 > mid-cold admissions. Plan, board, and schedule are RAM only, rebuilt from a skim on every run;
 > durable progress remains cursors, generations, and `stream_state`. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
-> default 256 KiB with a 24-record floor; batches are soft-capped to the slice so a slice is
+> default 1 MiB with a 24-record floor — the measured knee of the 2026-08-31 slice-sweep campaign
+> (frozen 9-runtime snapshot, 5 repeats, 32k–2m grid: starter drain ~3–5 s at every budget, full
+> cold drain ≈35 s at 256 KiB vs ≈19 s at 1 MiB against an unsliced ≈13 s floor, with 2 MiB
+> trading starter latency for little further gain); batches are soft-capped to the slice so a slice is
 > ~one transaction): a fresh source's clean prefix ACTIVATES and seals its ledger generation at
 > the boundary — indistinguishable from the file ending there and then growing — so every session
 > opens readable early while paused remainders requeue as ordinary append growth; app boosts run
