@@ -71,10 +71,14 @@ deterministic adapter checkpoints, watch-before-scan live ingestion, polling/aud
 recovery, and an append-only checksummed raw ledger. Fresh `serve` creates the public
 projection immediately: it skims every enrolled runtime first, then cold-streams through
 a three-lane scheduler (boost ▸ starter ▸ completion, runtime round-robin within a lane).
-Starter passes carry a byte-governed slice budget (`--slice-budget`, default 256 KiB /
-24-record floor) that early-ACTIVATES and seals a clean prefix so every session opens
-readable fast; paused remainders requeue as append growth, and app boosts run unbudgeted
-with preemption bounded by one slice. `milestone:` stdout lines feed the sweep harness.
+Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,
+default 256 KiB / 24-record floor, batches soft-capped to the slice) that early-ACTIVATES
+and seals a clean prefix so every session opens readable fast; paused remainders requeue
+as append growth, app boosts run unbudgeted with preemption bounded by one slice, and a
+session badges Indexed only once no task for it remains queued. Snapshot-driver sources
+always stream whole (revision = whole-content hash); a source that turns unclean mid-pass
+falls back to whole-file handling, and the sliced-vs-unsliced dirty-file content rule is
+an explicitly pinned open decision. `milestone:` stdout lines feed the sweep harness.
 Interrupted progress is durable and resumable. Finite `ingest` and explicit `rebuild`
 remain private, validated, atomic publication paths and never slice.
 

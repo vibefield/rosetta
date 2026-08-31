@@ -118,8 +118,12 @@ pub struct IngestOptions {
     pub audit_files_per_run: usize,
     /// `Some` bounds each JSONL pass to a starter slice (fresh first
     /// generations early-activate at the boundary; active generations simply
-    /// pause). `None` — the default, and the setting for finite ingest,
-    /// rebuild, audits, and completion passes — reads every source to EOF.
+    /// pause). The daemon keeps the budget on for BOTH its starter and
+    /// completion lanes so an app boost is never stuck behind more than one
+    /// slice of anything. `None` — the default, and the setting for finite
+    /// ingest, rebuild, audits, and boost passes — reads every source to
+    /// EOF. Snapshot-driver sources (SQLite/document) always stream whole:
+    /// their revision identity is a whole-content hash.
     pub starter_budget: Option<SliceBudget>,
 }
 

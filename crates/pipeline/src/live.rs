@@ -22,7 +22,7 @@ use rosetta_store::Store;
 
 use crate::instrument::Instrument;
 use crate::meta::{SessionFile, meta_ingest_into};
-use crate::stream::{StreamReport, merge_stats, stream_backfill_into};
+use crate::stream::{StreamReport, stream_backfill_into};
 use crate::{IngestOptions, PipelineError};
 
 #[derive(Debug, Clone)]
@@ -244,7 +244,7 @@ impl<'a> LiveRunner<'a> {
                 instrument,
                 self.ledger.as_mut(),
             )?;
-            merge_stream(&mut self.report.stream, outcome);
+            self.report.stream.merge_from(&outcome);
         }
 
         // The rotating audit rides poll ticks and sweeps ALL known files —
@@ -280,7 +280,7 @@ impl<'a> LiveRunner<'a> {
                     instrument,
                     self.ledger.as_mut(),
                 )?;
-                merge_stream(&mut self.report.stream, outcome);
+                self.report.stream.merge_from(&outcome);
             }
         }
         Ok(())
@@ -499,23 +499,4 @@ pub fn stream_live(
         runner.tick(store, instrument)?;
     }
     Ok(runner.into_report())
-}
-
-fn merge_stream(total: &mut StreamReport, tick: StreamReport) {
-    total.files += tick.files;
-    total.files_missing += tick.files_missing;
-    total.batches += tick.batches;
-    total.records += tick.records;
-    total.oversized += tick.oversized;
-    total.parsed += tick.parsed;
-    total.unknown += tick.unknown;
-    total.hard_errors += tick.hard_errors;
-    total.generations_restarted += tick.generations_restarted;
-    total.files_audited += tick.files_audited;
-    total.conflicts += tick.conflicts;
-    total.retries_exhausted += tick.retries_exhausted;
-    total.files_incomplete += tick.files_incomplete;
-    total.files_paused += tick.files_paused;
-    total.sessions_indexed += tick.sessions_indexed;
-    merge_stats(&mut total.stats, &tick.stats);
 }

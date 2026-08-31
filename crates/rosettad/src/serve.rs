@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents};
-use rosetta_core::rows::RuntimeRow;
+use rosetta_core::rows::{RuntimeRow, StreamState};
 use rosetta_pipeline::{
     ColdLane, ColdSchedule, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner,
     MetaReport, Metric, SessionFile, SliceBudget, StreamReport,
@@ -36,7 +36,7 @@ use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
     IngestCounterSource, IngestCounters, RuntimeTick, router,
 };
-use rosetta_store::Store;
+use rosetta_store::{Store, queries};
 
 use crate::{
     ledger_root, open_ledger, open_progressive_backfill, parse_flags, projection_lock,
@@ -155,27 +155,6 @@ fn counter_source(
 
 /// Fold one per-file stream report into the runtime's aggregate — the
 /// fields the failure verdict and the operator's summary read.
-fn fold_stream(total: &mut StreamReport, part: StreamReport) {
-    total.files += part.files;
-    total.files_missing += part.files_missing;
-    total.batches += part.batches;
-    total.records += part.records;
-    total.oversized += part.oversized;
-    total.parsed += part.parsed;
-    total.unknown += part.unknown;
-    total.hard_errors += part.hard_errors;
-    total.generations_restarted += part.generations_restarted;
-    total.files_audited += part.files_audited;
-    total.conflicts += part.conflicts;
-    total.retries_exhausted += part.retries_exhausted;
-    total.files_incomplete += part.files_incomplete;
-    total.files_paused += part.files_paused;
-    total.sessions_indexed += part.sessions_indexed;
-    total.siblings_healed += part.siblings_healed;
-    total.stats.messages_inserted += part.stats.messages_inserted;
-    total.stats.messages_updated += part.stats.messages_updated;
-}
-
 fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
     for ack in worker.drain_acknowledgements() {
         store
@@ -541,13 +520,40 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             .map(|entry| entry.roster.clone())
             .collect::<Vec<_>>(),
     );
+    // Whole-file mode has no slices to reveal breadth with — restore the old
+    // bootstrap through the boost lane: the first canonical-list session that
+    // has queued sources completes before ordinary rotation.
+    if slice_budget.is_none() {
+        let recent = queries::session_list(store.conn(), None, 1_000)
+            .map_err(|error| format!("selecting first-readable session: {error}"))?;
+        for session in recent {
+            if schedule.promote([session.id]) > 0 {
+                break;
+            }
+        }
+    }
     let starter_files: usize = backfills.iter().map(|entry| entry.roster.len()).sum();
     let mut starter_paused = 0_u64;
     // The milestone line exists for the sweep harness; without slicing the
     // starter lane is just whole-file backfill and the line stays absent.
     let mut starter_drained_logged = slice_budget.is_none() || !schedule.starter_pending();
+    let log_starter_drained = |starter_paused: u64, logged: &mut bool| {
+        if !*logged {
+            *logged = true;
+            println!(
+                "milestone: starter-drained elapsed_s={:.2} files={starter_files} paused={starter_paused}",
+                started.elapsed().as_secs_f64(),
+            );
+        }
+    };
     while schedule.pending() && !stop.load(Ordering::SeqCst) {
         schedule.promote(boost.drain());
+        // Check before the pass too: a promotion that empties the starter
+        // lane must not charge the following (possibly long, unbudgeted)
+        // boost pass to the starter-drained timing.
+        if !starter_drained_logged && !schedule.starter_pending() {
+            log_starter_drained(starter_paused, &mut starter_drained_logged);
+        }
         let Some((lane, index, file)) = schedule.pop() else {
             break;
         };
@@ -571,19 +577,25 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         entry.stream_meter.finish();
         let paused = report.files_paused > 0;
-        fold_stream(&mut entry.stream, report);
+        entry.stream.merge_from(&report);
         if paused {
             if lane == ColdLane::Starter {
                 starter_paused += 1;
             }
-            schedule.requeue(index, file);
+            schedule.requeue(index, file.clone());
+        }
+        // A sibling's pass may have badged this session Indexed while other
+        // tasks for it are still queued (its own paused remainder included).
+        // Readiness is the scheduler's to grant during cold: hold Streaming
+        // until the session's last queued task is gone; the audit pass below
+        // re-derives the final verdict either way.
+        if schedule.session_pending(&file.session_id) {
+            store
+                .set_session_stream_state(&file.session_id, StreamState::Streaming)
+                .map_err(|error| format!("holding session readiness: {error}"))?;
         }
         if !starter_drained_logged && !schedule.starter_pending() {
-            starter_drained_logged = true;
-            println!(
-                "milestone: starter-drained elapsed_s={:.2} files={starter_files} paused={starter_paused}",
-                started.elapsed().as_secs_f64(),
-            );
+            log_starter_drained(starter_paused, &mut starter_drained_logged);
         }
         search_worker.wake();
         acknowledge_search(&mut store, &search_worker)?;
@@ -608,7 +620,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
             entry.stream_meter.finish();
-            fold_stream(&mut entry.stream, report);
+            entry.stream.merge_from(&report);
             let stream_totals = entry.stream_meter.snapshot();
             health.ingest_done(
                 entry.adapter.kind(),
@@ -672,10 +684,19 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         // finish without competing source scans or live SQLite writes; the
         // watchers created before backfill retain every intervening hint.
         await_initial_search(&mut store, &search, &search_worker, &stop)?;
-        println!(
-            "milestone: search-ready elapsed_s={:.2}",
-            started.elapsed().as_secs_f64(),
-        );
+        // The milestone is a claim the sweep harness trusts: a failed or
+        // interrupted build must not masquerade as a fast search-ready.
+        match search.state().readiness {
+            SearchReadiness::Ready => println!(
+                "milestone: search-ready elapsed_s={:.2}",
+                started.elapsed().as_secs_f64(),
+            ),
+            SearchReadiness::Failed => println!(
+                "milestone: search-failed elapsed_s={:.2}",
+                started.elapsed().as_secs_f64(),
+            ),
+            _ => {}
+        }
 
         // Backfill over: take one authoritative warm and hand the
         // already-progressive mirror to the effects drain.

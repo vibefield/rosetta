@@ -829,6 +829,26 @@ fn profile_renumber_session(
 /// needs the window/sort repair. The serve scheduler normally arranges that
 /// fast path, while this guard keeps Store correct for boosts, resumes, and
 /// direct callers that activate sources in an arbitrary order.
+/// An append writes rows at its own file-local checkpoint ordinals. Once any
+/// SIBLING source's messages share the session, a session renumber (the
+/// sibling's activation, or the finalize gate) owns the final order and those
+/// checkpoint ordinals are stale in either path direction — so the append
+/// must re-rank the session before this commit can be read. Single-source
+/// sessions, the overwhelmingly common case, skip this entirely.
+fn append_needs_renumber(tx: &Transaction, source: &SourceWrite) -> Result<bool, StoreError> {
+    Ok(tx
+        .prepare_cached(
+            "SELECT EXISTS(
+               SELECT 1 FROM message
+               WHERE session_id = ?2 AND src_cursor != ?1
+               LIMIT 1
+             )",
+        )?
+        .query_row(params![source.cursor_id, source.session_id], |row| {
+            row.get::<_, bool>(0)
+        })?)
+}
+
 fn progressive_source_needs_renumber(
     tx: &Transaction,
     source: &SourceWrite,
@@ -1361,6 +1381,7 @@ pub(crate) fn apply_batch(
                     // from deterministic ids and identity indexes, not a journal.
                     SourceMode::Append => {
                         let started = Instant::now();
+                        let messages_before = stats.messages_inserted + stats.messages_updated;
                         project_source_ops(
                             tx,
                             source,
@@ -1374,6 +1395,18 @@ pub(crate) fn apply_batch(
                                 effects: effects.as_deref_mut(),
                             },
                         )?;
+                        // A budget-paused sibling's remainder — or live growth
+                        // of a multi-source session — appends file-local
+                        // ordinals into a session a sibling's activation may
+                        // have renumbered. Re-rank before a reader can see the
+                        // collision; a private bulk rebuild defers to its one
+                        // finalize pass instead.
+                        if !defer_bulk_reconciliation
+                            && stats.messages_inserted + stats.messages_updated > messages_before
+                            && append_needs_renumber(tx, source)?
+                        {
+                            profile_renumber_session(tx, &source.session_id, &mut stats)?;
+                        }
                         stats.canonical_apply_nanos += elapsed_nanos(started);
                     }
                     SourceMode::Activate => {

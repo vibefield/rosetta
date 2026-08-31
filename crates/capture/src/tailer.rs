@@ -32,6 +32,15 @@ pub struct TailConfig {
     pub max_batch_bytes: usize,
     pub max_records_per_batch: usize,
     pub prefix_anchor_bytes: usize,
+    /// Close the batch at the first record boundary at or past this many
+    /// payload bytes. Unlike `max_batch_bytes` — a hard cap that must admit a
+    /// maximum-size record and therefore cannot sit below it — the soft cap
+    /// always admits the record that crosses it, so it may be arbitrarily
+    /// small. This is how a budgeted slice gets byte-sized batches without
+    /// shrinking `max_record_bytes` and turning large valid records into
+    /// oversized drift. `None` (the default) leaves batching to the hard
+    /// bounds alone.
+    pub soft_batch_bytes: Option<usize>,
 }
 
 impl TailConfig {
@@ -47,6 +56,7 @@ impl TailConfig {
             max_batch_bytes: 32 * 1024 * 1024,
             max_records_per_batch: 1_024,
             prefix_anchor_bytes: 4 * 1024,
+            soft_batch_bytes: None,
         }
     }
 }
@@ -281,6 +291,7 @@ impl Tailer {
             || config.max_batch_bytes == 0
             || config.max_records_per_batch == 0
             || config.prefix_anchor_bytes == 0
+            || config.soft_batch_bytes == Some(0)
         {
             return Err(CaptureError::InvalidConfig(
                 "tailer bounds must all be greater than zero".to_string(),
@@ -517,6 +528,10 @@ impl Tailer {
 
                 if output.items.len() == self.config.max_records_per_batch
                     || batch_payload_bytes == self.config.max_batch_bytes
+                    || self
+                        .config
+                        .soft_batch_bytes
+                        .is_some_and(|cap| batch_payload_bytes >= cap)
                 {
                     output.more_available = record_end < snapshot_len;
                     break 'read;
@@ -833,6 +848,38 @@ mod tests {
     }
 
     #[test]
+    fn soft_cap_closes_at_the_first_boundary_past_it_and_admits_big_records() {
+        let mut config = TailConfig::json_lines();
+        config.soft_batch_bytes = Some(10);
+        let tailer = Tailer::new(config).unwrap();
+        let file = NamedTempFile::new().unwrap();
+        // 4 + 4 crosses the 10-byte cap only on the third record; a record
+        // larger than the cap still frames alone instead of going oversized.
+        std::fs::write(file.path(), b"aaaa\nbbbb\ncccc\rdddd-oversoft\neeee\n").unwrap();
+
+        let first = batch(tailer.read(file.path(), None, false).unwrap());
+        assert_eq!(payloads(&first.items).len(), 3);
+        assert!(first.more_available);
+
+        let second = batch(
+            tailer
+                .read(file.path(), Some(&first.checkpoint), false)
+                .unwrap(),
+        );
+        assert_eq!(payloads(&second.items), vec![b"eeee".to_vec()]);
+        assert!(!second.more_available);
+
+        assert!(
+            Tailer::new(TailConfig {
+                soft_batch_bytes: Some(0),
+                ..TailConfig::json_lines()
+            })
+            .is_err(),
+            "a zero soft cap is a configuration error, not an infinite loop"
+        );
+    }
+
+    #[test]
     fn partial_final_record_is_not_emitted_or_advanced() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"{\"one\":1}\n{\"two\":").unwrap();
@@ -1053,6 +1100,7 @@ mod tests {
             max_batch_bytes: RECORD_PAYLOAD_BYTES,
             max_records_per_batch: 128,
             prefix_anchor_bytes: CHECKPOINT_ANCHOR_BYTES,
+            soft_batch_bytes: None,
         })
         .unwrap();
         let result = batch(

@@ -27,6 +27,8 @@ use crate::{IngestOptions, PipelineError};
 
 #[derive(Debug, Default)]
 pub struct StreamReport {
+    /// File PASSES, not distinct files: a budgeted source contributes one
+    /// per slice, so compare against roster sizes, never against this.
     pub files: usize,
     pub files_missing: usize,
     pub batches: u64,
@@ -48,6 +50,31 @@ pub struct StreamReport {
     /// generation restart, so cross-file merges land in the rebuilt rows.
     pub siblings_healed: u64,
     pub stats: ApplyStats,
+}
+
+impl StreamReport {
+    /// Fold another report into this one — the ONE merge every aggregator
+    /// (serve's per-runtime totals, live ticks) must use, so a new field can
+    /// never be silently dropped by a hand-rolled copy.
+    pub fn merge_from(&mut self, part: &StreamReport) {
+        self.files += part.files;
+        self.files_missing += part.files_missing;
+        self.batches += part.batches;
+        self.records += part.records;
+        self.oversized += part.oversized;
+        self.parsed += part.parsed;
+        self.unknown += part.unknown;
+        self.hard_errors += part.hard_errors;
+        self.generations_restarted += part.generations_restarted;
+        self.files_audited += part.files_audited;
+        self.conflicts += part.conflicts;
+        self.retries_exhausted += part.retries_exhausted;
+        self.files_incomplete += part.files_incomplete;
+        self.files_paused += part.files_paused;
+        self.sessions_indexed += part.sessions_indexed;
+        self.siblings_healed += part.siblings_healed;
+        self.stats.merge_from(&part.stats);
+    }
 }
 
 pub fn stream_backfill(
@@ -400,14 +427,19 @@ fn ingest_file(
         .filter(|_| active_generation == 0 || source_generation == active_generation);
     let budget_tailer = match budget {
         Some(slice) => Some(Tailer::new(TailConfig {
-            // The record floor is also the stop-check granularity: budgeted
-            // batches frame at most this many records per transaction.
-            max_records_per_batch: slice.min_records.max(1) as usize,
+            // A soft per-batch byte cap sizes budgeted batches to the slice
+            // itself — one transaction per slice in the common case — while
+            // the ordinary record and hard-byte bounds stay untouched, so a
+            // large valid record still frames instead of going oversized.
+            soft_batch_bytes: Some(
+                usize::try_from(slice.max_bytes)
+                    .unwrap_or(usize::MAX)
+                    .max(1),
+            ),
             ..opts.tail.clone()
         })?),
         None => None,
     };
-    let read_tailer = budget_tailer.as_ref().unwrap_or(tailer);
     let mut budget_bytes = 0_u64;
     let mut budget_records = 0_u64;
 
@@ -415,6 +447,12 @@ fn ingest_file(
     let mut force_replay =
         audit_requested && tail.is_some() && source_generation == active_generation;
     loop {
+        // Chosen per iteration: a mid-pass rewrite that disables the budget
+        // must also stop paying its batch shape for the replacement replay.
+        let read_tailer = match (&budget, &budget_tailer) {
+            (Some(_), Some(budgeted)) => budgeted,
+            _ => tailer,
+        };
         let read = instrument.time(Metric::ReadNanos, || {
             read_tailer.read(&path, tail.as_ref(), force_replay)
         })?;
@@ -435,7 +473,6 @@ fn ingest_file(
         };
         force_replay = false;
         instrument.add(Metric::BytesRead, batch.bytes_read);
-        budget_bytes = budget_bytes.saturating_add(batch.bytes_read);
 
         if batch.transition.starts_new_generation()
             && !matches!(batch.transition, Transition::Initial)
@@ -446,6 +483,11 @@ fn ingest_file(
                 // budget stops applying.
                 budget = None;
             }
+            // The replacement generation starts its own budget arithmetic;
+            // carrying the abandoned generation's counts could pause it
+            // below the documented record floor.
+            budget_bytes = 0;
+            budget_records = 0;
             report.generations_restarted += 1;
             source_generation = source_generation
                 .max(active_generation)
@@ -467,6 +509,10 @@ fn ingest_file(
                 TailItem::Record(record) => {
                     report.records += 1;
                     budget_records += 1;
+                    // The budget counts FRAMED PAYLOAD, mirroring the soft
+                    // batch cap — physical amplification (anchor and
+                    // continuity re-reads) must not spend the slice.
+                    budget_bytes = budget_bytes.saturating_add(record.payload.len() as u64);
                     instrument.add(Metric::RecordsFramed, 1);
                     ctx.src_offset = Some(record.start_offset as i64);
                     ctx.source_generation = source_generation;

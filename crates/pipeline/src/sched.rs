@@ -57,6 +57,10 @@ pub struct ColdSchedule {
     completion: Vec<VecDeque<SessionFile>>,
     starter_rr: usize,
     completion_rr: usize,
+    /// Queued tasks per session across every lane — the readiness guard:
+    /// a session with anything still queued must not be badged Indexed by a
+    /// sibling's pass completing.
+    sessions: BTreeMap<String, usize>,
 }
 
 impl ColdSchedule {
@@ -67,12 +71,31 @@ impl ColdSchedule {
             .map(VecDeque::from)
             .collect();
         let completion = starter.iter().map(|_| VecDeque::new()).collect();
+        let mut sessions: BTreeMap<String, usize> = BTreeMap::new();
+        for file in starter.iter().flatten() {
+            *sessions.entry(file.session_id.clone()).or_default() += 1;
+        }
         Self {
             boost: VecDeque::new(),
             starter,
             completion,
             starter_rr: 0,
             completion_rr: 0,
+            sessions,
+        }
+    }
+
+    /// Whether any task for this session — in any lane — is still queued.
+    pub fn session_pending(&self, session_id: &str) -> bool {
+        self.sessions.contains_key(session_id)
+    }
+
+    fn session_popped(&mut self, session_id: &str) {
+        if let Some(count) = self.sessions.get_mut(session_id) {
+            *count -= 1;
+            if *count == 0 {
+                self.sessions.remove(session_id);
+            }
         }
     }
 
@@ -93,13 +116,17 @@ impl ColdSchedule {
     /// A paused pass hands its file back for the completion lane; repeated
     /// pauses of a large file rotate fairly with its runtime's other work.
     pub fn requeue(&mut self, runtime: usize, file: SessionFile) {
+        *self.sessions.entry(file.session_id.clone()).or_default() += 1;
         self.completion[runtime].push_back(file);
     }
 
     /// Move every queued source of the named sessions into the boost lane,
     /// oldest request first; within one (session, runtime) the files keep
     /// canonical path order regardless of which lane they were waiting in.
-    pub fn promote(&mut self, session_ids: impl IntoIterator<Item = String>) {
+    /// Returns how many files moved (session counts are unchanged — the
+    /// tasks are still queued, just ahead of everything else).
+    pub fn promote(&mut self, session_ids: impl IntoIterator<Item = String>) -> usize {
+        let mut moved = 0;
         for session_id in session_ids {
             for runtime in 0..self.starter.len() {
                 let mut matched: Vec<SessionFile> = Vec::new();
@@ -114,11 +141,13 @@ impl ColdSchedule {
                     }
                 }
                 matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+                moved += matched.len();
                 for file in matched {
                     self.boost.push_back((runtime, file));
                 }
             }
         }
+        moved
     }
 
     /// Boost first, then every starter task, then completion. Starter fully
@@ -126,13 +155,19 @@ impl ColdSchedule {
     /// always beats depth.
     pub fn pop(&mut self) -> Option<(ColdLane, usize, SessionFile)> {
         if let Some((runtime, file)) = self.boost.pop_front() {
+            self.session_popped(&file.session_id);
             return Some((ColdLane::Boost, runtime, file));
         }
         if let Some((runtime, file)) = pop_round_robin(&mut self.starter, &mut self.starter_rr) {
+            self.session_popped(&file.session_id);
             return Some((ColdLane::Starter, runtime, file));
         }
-        pop_round_robin(&mut self.completion, &mut self.completion_rr)
-            .map(|(runtime, file)| (ColdLane::Completion, runtime, file))
+        let popped = pop_round_robin(&mut self.completion, &mut self.completion_rr)
+            .map(|(runtime, file)| (ColdLane::Completion, runtime, file));
+        if let Some((_, _, file)) = &popped {
+            self.session_popped(&file.session_id);
+        }
+        popped
     }
 }
 
@@ -286,6 +321,31 @@ mod tests {
                 (ColdLane::Completion, 0, "a2".into()),
             ]
         );
+    }
+
+    #[test]
+    fn session_pending_tracks_every_lane_until_the_last_pop() {
+        let mut first = file("s");
+        first.relative_path = "a.jsonl".into();
+        let mut second = file("s");
+        second.relative_path = "b.jsonl".into();
+        let mut schedule = ColdSchedule::new(vec![vec![first, second]]);
+        assert!(schedule.session_pending("s"));
+
+        let (_, runtime, popped) = schedule.pop().unwrap();
+        assert!(schedule.session_pending("s"), "a sibling is still queued");
+        schedule.requeue(runtime, popped);
+        assert_eq!(schedule.promote(["s".to_string()]), 2);
+        assert!(schedule.session_pending("s"), "boosted tasks still count");
+
+        schedule.pop().unwrap();
+        assert!(schedule.session_pending("s"));
+        schedule.pop().unwrap();
+        assert!(
+            !schedule.session_pending("s"),
+            "last pop clears the session"
+        );
+        assert!(!schedule.pending());
     }
 
     #[test]
