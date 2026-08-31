@@ -823,36 +823,30 @@ fn byte_target_governs_the_pause_when_the_floor_is_met() {
 }
 
 #[test]
-fn dirty_suffix_divergence_is_pinned_not_accidental() {
-    // THIS TEST PINS A DIVERGENCE, NOT A DESIRED BEHAVIOUR.
-    //
-    // Review found that sliced and unsliced cold ingest disagree about a source
-    // that goes bad partway through. Unsliced cold reaches EOF with the
-    // generation unclean and ABANDONS it: the reader is shown nothing at all.
-    // Sliced cold has already activated and sealed a clean prefix by then, so
-    // it follows live-growth semantics instead — the readable prefix stays
-    // readable, later records keep appending, and readiness simply never leaves
-    // Streaming.
-    //
-    // Which of the two is right is an OPEN PRODUCT DECISION. Until it lands,
-    // this test exists so the disagreement is explicit and deliberate rather
-    // than silent. When the decision lands, UPDATE these assertions to state
-    // the new rule. Never delete this test to make a regression pass.
+fn dirty_sources_converge_on_live_growth_semantics() {
+    // THE CONVERGED RULE (product decision 2026-08-31, replacing the
+    // divergence this test previously pinned): a source that goes bad
+    // partway follows LIVE-GROWTH semantics on every cold path. The
+    // parseable rows publish — sliced or not — drift records the damage,
+    // and readiness never leaves Streaming. A dirty REPLACEMENT generation
+    // still abandons so previously clean content survives; that rule is
+    // exercised by the store's replacement tests, not here.
     let unsliced_root = TempDir::new().unwrap();
     let sliced_root = TempDir::new().unwrap();
     let spec = CorpusSpec::new(Agent::Codex, 1, 60, 11);
     generate(&spec, unsliced_root.path()).unwrap();
     generate(&spec, sliced_root.path()).unwrap();
 
-    // Line 40 sits well past the first slice, so several clean passes activate
-    // and extend the prefix before any pass reaches the damage.
+    // Line 40 sits well past the first slice, so several clean passes
+    // activate and extend the sliced prefix before any pass finds the damage.
     const BAD_LINE: usize = 39;
     const FLOOR: u32 = 10;
     corrupt_line(unsliced_root.path(), BAD_LINE);
     corrupt_line(sliced_root.path(), BAD_LINE);
     let runtime = runtime(&CodexAdapter);
 
-    // UNSLICED: one pass, EOF, unclean generation — Abandon. Nothing publishes.
+    // UNSLICED: one pass, EOF, unclean FIRST generation — the parseable rows
+    // activate anyway, reported incomplete, held at Streaming.
     let mut unsliced_store = Store::open_in_memory().unwrap();
     let (_, unsliced_files) = meta_ingest(
         &CodexAdapter,
@@ -873,18 +867,18 @@ fn dirty_suffix_divergence_is_pinned_not_accidental() {
     );
     assert_eq!(whole.hard_errors, 1, "the bad line is a hard parse error");
     assert_eq!(whole.files_incomplete, 1);
-    assert_eq!(whole.files_paused, 0, "no budget, no pauses");
+    let unsliced_rows = timeline(&unsliced_store, &session);
     assert!(
-        timeline(&unsliced_store, &session).is_empty(),
-        "an abandoned generation publishes nothing, not even its clean prefix"
+        !unsliced_rows.is_empty(),
+        "a dirty first generation publishes its parseable rows"
     );
     assert_eq!(
         session_state(&unsliced_store, &session),
         StreamState::Streaming
     );
 
-    // SLICED: the same bytes, budgeted. The first pass pauses on a clean prefix
-    // long before the damage, and that prefix is readable immediately.
+    // SLICED: the same bytes, budgeted. The first pass pauses on a clean
+    // prefix long before the damage.
     let mut sliced_store = Store::open_in_memory().unwrap();
     let opts = budgeted_opts(1, FLOOR);
     let (_, sliced_files) = meta_ingest(
@@ -896,10 +890,7 @@ fn dirty_suffix_divergence_is_pinned_not_accidental() {
         &Instrument::new(),
     )
     .unwrap();
-    assert_eq!(
-        sliced_files[0].session_id, session,
-        "both roots must project the same session for the comparison to mean anything"
-    );
+    assert_eq!(sliced_files[0].session_id, session);
     let first = codex_pass(
         sliced_root.path(),
         &runtime,
@@ -913,14 +904,11 @@ fn dirty_suffix_divergence_is_pinned_not_accidental() {
         "the damage is far past the first slice"
     );
     let prefix = timeline(&sliced_store, &session);
-    assert!(
-        !prefix.is_empty(),
-        "the activated prefix is readable at once"
-    );
+    assert!(!prefix.is_empty());
 
-    // Keep slicing until a pass finally reads the bad line.
+    // Keep slicing until a pass finally reads the bad line, then settle.
     let mut passes = 1;
-    let dirty = loop {
+    loop {
         passes += 1;
         assert!(
             passes <= 32,
@@ -934,37 +922,30 @@ fn dirty_suffix_divergence_is_pinned_not_accidental() {
             &opts,
         );
         if report.hard_errors > 0 {
-            break report;
+            assert_eq!(report.files_incomplete, 1);
+            assert_eq!(
+                report.files_paused, 0,
+                "an unclean generation may not pause; the pass reads on to EOF"
+            );
+            break;
         }
         assert_eq!(report.files_paused, 1, "a clean pass pauses on budget");
-        assert_eq!(report.files_incomplete, 0);
-    };
-    assert_eq!(dirty.hard_errors, 1);
-    assert_eq!(
-        dirty.files_incomplete, 1,
-        "the dirty file is reported incomplete, once"
-    );
-    assert_eq!(
-        dirty.files_paused, 0,
-        "an unclean generation may not pause; the pass reads on to EOF"
-    );
+    }
 
-    // The prefix was not swept: the pass that hit the damage kept the rows it
-    // had already published AND appended the ones past the bad line.
+    // THE CONVERGENCE: same bytes, same damage — both paths show the reader
+    // the same partial transcript, hold the same badge, and count the same
+    // usage. Nobody is ever promoted to Indexed.
     let settled = timeline(&sliced_store, &session);
     assert!(
         settled.len() > prefix.len(),
-        "rows past the bad line append too (prefix {}, settled {})",
-        prefix.len(),
-        settled.len()
+        "rows past the bad line append too"
     );
+    assert_eq!(settled, unsliced_rows);
+    assert_eq!(buckets(&sliced_store), buckets(&unsliced_store));
     assert_eq!(
         session_state(&sliced_store, &session),
         StreamState::Streaming
     );
-
-    // And it never converges: the checkpoint carries the unclean generation
-    // forward, so the badge stays Streaming and the rows stop moving.
     for _ in 0..3 {
         let report = codex_pass(
             sliced_root.path(),
@@ -973,23 +954,12 @@ fn dirty_suffix_divergence_is_pinned_not_accidental() {
             &sliced_files,
             &opts,
         );
-        assert_eq!(report.files_incomplete, 1);
-        assert_eq!(report.files_paused, 0);
         assert_eq!(report.hard_errors, 0, "the bad line is not re-read");
         assert_ne!(
             session_state(&sliced_store, &session),
             StreamState::Indexed,
             "a dirty source must never earn the Indexed badge"
         );
-        assert_eq!(
-            timeline(&sliced_store, &session),
-            settled,
-            "a settled dirty file stops changing"
-        );
+        assert_eq!(timeline(&sliced_store, &session), settled);
     }
-
-    // THE PIN: same bytes, same adapter, same damage — one side shows the
-    // reader a partial transcript, the other shows nothing.
-    assert!(!settled.is_empty());
-    assert!(timeline(&unsliced_store, &session).is_empty());
 }

@@ -3390,6 +3390,61 @@ pub struct ToolFoldState {
     fields: Vec<ToolFieldStamp>,
 }
 
+impl ToolFoldState {
+    /// Merge state for a row RELOADED from the projection, where the live
+    /// fold's per-field stamps are gone by design — the only provenance the
+    /// store keeps is the winning status basis. Every present status, timing,
+    /// and failure field is assumed to carry that basis at the earliest
+    /// possible order, so a later cross-batch patch must OUTRANK the row (or
+    /// match its rank, the same-rank-correction rule) to move a proven field,
+    /// while absent fields stay open for any evidence — mirroring what one
+    /// uninterrupted fold over the same records produces. Action sub-fields
+    /// are not seeded: a known-family change is rejected at the store
+    /// boundary before merge state matters.
+    pub fn assume_resolved(tool: &ToolInteraction) -> Self {
+        let stamp = EvidenceStamp {
+            rank: status_rank(tool.status.basis),
+            order: EvidenceOrder {
+                source_identity: SourceIdentity(String::new()),
+                generation: 0,
+                record_offset: 0,
+                mutation_index: 0,
+            },
+        };
+        let mut state = Self::default();
+        let mut seed = |field: ToolField, present: bool| {
+            if present {
+                update_field_stamp(&mut state, field, &stamp);
+            }
+        };
+        seed(ToolField::LifecycleStatus, true);
+        let timing = tool.timing.as_ref();
+        seed(
+            ToolField::StartedAt,
+            timing.is_some_and(|timing| timing.started_at.is_some()),
+        );
+        seed(
+            ToolField::CompletedAt,
+            timing.is_some_and(|timing| timing.completed_at.is_some()),
+        );
+        seed(
+            ToolField::DurationMs,
+            timing.is_some_and(|timing| timing.duration_ms.is_some()),
+        );
+        let failure = tool.failure.as_ref();
+        seed(ToolField::FailureKind, failure.is_some());
+        seed(
+            ToolField::FailureSummary,
+            failure.is_some_and(|failure| failure.summary.is_some()),
+        );
+        seed(
+            ToolField::FailureDiagnostic,
+            failure.is_some_and(|failure| failure.diagnostic.is_some()),
+        );
+        state
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchLane {
     Prose,

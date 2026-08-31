@@ -591,6 +591,15 @@ fn ingest_file(
             SourceMode::Append
         } else if (complete || budget_stop) && generation_clean {
             SourceMode::Activate
+        } else if complete && active_generation == 0 && generation_raw_complete {
+            // The live-growth rule, converged (product decision 2026-08-31):
+            // a FIRST generation that reaches EOF unclean still activates its
+            // parseable rows and the session holds Streaming — exactly what
+            // the sliced path and live growth already produce. A dirty
+            // REPLACEMENT still abandons so previously clean content
+            // survives, and a raw-incomplete (oversized) generation still
+            // abandons because an unsealable generation must never activate.
+            SourceMode::Activate
         } else if complete {
             SourceMode::Abandon
         } else {

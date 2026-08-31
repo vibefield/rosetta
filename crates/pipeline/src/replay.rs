@@ -182,6 +182,20 @@ pub fn rebuild_runtime(
     })?;
     report.segments = first.segments;
     report.torn_segments = first.torn_segments;
+    // Live-growth convergence: a path whose only seals are unclean (a dirty
+    // FIRST generation — no clean content ever existed to protect) replays
+    // its newest seal instead of nothing, exactly as the runtime activated
+    // it. A path with any clean seal keeps electing the newest clean one, so
+    // a dirty replacement still cannot displace clean content; these
+    // no-clean-alternative paths are remembered because they alone may also
+    // activate when the replay itself finds the dirt.
+    let mut only_dirty: HashSet<String> = HashSet::new();
+    for (path, (generation, source, _)) in &latest_seals {
+        if !surviving.contains_key(path) {
+            only_dirty.insert(path.clone());
+            surviving.insert(path.clone(), (*generation, source.clone()));
+        }
+    }
     let mut unsealed: Vec<_> = raw_paths.difference(&sealed_paths).cloned().collect();
     unsealed.sort();
     if !unsealed.is_empty() {
@@ -379,7 +393,16 @@ pub fn rebuild_runtime(
                     .get_mut(&source.relative_path)
                     .expect("opened for complete marker");
                 if !file.activated {
-                    let mode = if file.generation_clean {
+                    // Clean at the seal activates — dirt found only in the
+                    // post-seal appends is the live-growth shape, and those
+                    // appends keep applying below. Dirt INSIDE the sealed
+                    // range means the seal lied; trust the replay and abandon
+                    // it, unless this path never had clean content to protect
+                    // (the dirty-first-generation case, which the runtime
+                    // activated too). Cleanliness still owns readiness.
+                    let mode = if file.generation_clean
+                        || only_dirty.contains(&source.relative_path)
+                    {
                         SourceMode::Activate
                     } else {
                         SourceMode::Abandon

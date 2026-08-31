@@ -191,8 +191,14 @@ fn status_rank(basis: StatusBasis) -> u8 {
 
 /// Apply one normalized patch to an already-resolved public row. The detailed
 /// evidence map is intentionally transaction-local: only the authority carried
-/// by the public status survives a process boundary. Lower-authority status may
-/// fill an unresolved opener, but may not erase stronger user-facing truth.
+/// by the public status survives a process boundary, so the fold state is
+/// SEEDED from it — every present status/timing/failure field is assumed to
+/// hold the row's winning basis. Without that seed a late cross-batch patch
+/// faces a virgin stamp table and clobbers proven fields a one-pass fold
+/// would have refused (a rank-100 usage record overwriting a NativeState
+/// completion time was the observed shape). Lower-authority evidence may
+/// still fill an unresolved opener; it may not erase stronger user-facing
+/// truth.
 fn apply_projected_patch(
     tool: &mut ToolInteraction,
     patch: &ToolUpdatePatch,
@@ -206,7 +212,7 @@ fn apply_projected_patch(
         patch.status = None;
     }
     let before = tool.clone();
-    let mut transient = ToolFoldState::default();
+    let mut transient = ToolFoldState::assume_resolved(tool);
     tool.apply_patch(&mut transient, &patch, evidence)
         .map_err(|error| StoreError::ProjectionInvalid {
             message: format!("invalid normalized tool update: {error}"),
@@ -726,7 +732,11 @@ pub(super) fn apply_tool_updates(
                 ),
             })?;
         let before = tool.clone();
-        let mut merge_state = ToolFoldState::default();
+        // Seed from the loaded row: its present fields carry the winning
+        // status basis, so a later batch's weaker evidence cannot clobber
+        // what an uninterrupted fold would have refused (see
+        // apply_projected_patch).
+        let mut merge_state = ToolFoldState::assume_resolved(&tool);
         let mut latest_at = None;
         for (evidence, (patch, at)) in ordered {
             let mut patch = patch.clone();
