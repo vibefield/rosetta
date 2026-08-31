@@ -9,13 +9,14 @@
 //! connection. Consent gates all reading: discovery fills the roll-call
 //! board, and a runtime is ingested only if it was enrolled on an earlier
 //! run (the projection's `enabled` flags), named on the command line, or
-//! chosen in the app while the daemon waits. During the backfill the mirror
-//! re-warms from the projection on a cadence and fans precise diffs to
-//! `/ws/meta`, and the stream queue is driven one file at a time so the
-//! boost ledger can move what the reader opened to the front. Effects
-//! observation starts only after the progressive projection passes its final
-//! canonical gate; the periodic mirror re-warm carries committed metadata
-//! during the cold load without charging every row for a mutation log.
+//! chosen in the app while the daemon waits. Metadata effects are observed
+//! from process start — ids only, cheap on the cold paths — and the writer
+//! thread drains them into the mirror between passes, fanning precise
+//! `/ws/meta` diffs with no polling cadence. The cold scheduler pops one
+//! budgeted pass at a time so the boost ledger and the live lane's watcher
+//! hints can jump ahead of the rotation. Row-effects observation still
+//! starts only after the progressive projection passes its final canonical
+//! gate, so the cold load never pays a per-row mutation log.
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -25,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rosetta_adapter_support::AgentAdapter;
-use rosetta_capture::{Ledger, NotifyEvents};
+use rosetta_capture::{Ledger, NotifyEvents, SourceEvent, SourceEvents};
 use rosetta_core::rows::{RuntimeRow, StreamState};
 use rosetta_pipeline::{
     ColdLane, ColdSchedule, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner,
@@ -44,8 +45,10 @@ use crate::{
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
-const REWARM_INTERVAL: Duration = Duration::from_millis(500);
 const CONSENT_POLL: Duration = Duration::from_millis(200);
+/// Watcher hints drained per runtime per cold-loop iteration — a bounded
+/// burst so a chatty agent cannot stall the pop.
+const COLD_HINT_BURST: usize = 32;
 
 struct BackfillRuntime {
     adapter: &'static dyn AgentAdapter,
@@ -155,6 +158,18 @@ fn counter_source(
 
 /// Fold one per-file stream report into the runtime's aggregate — the
 /// fields the failure verdict and the operator's summary read.
+/// Drain the metadata-effects seam into the mirror, strictly after commit —
+/// the writer thread's replacement for the old 500 ms whole-surface rewarm
+/// poll. Returns the precise diffs fanned to /ws/meta subscribers.
+fn absorb_meta_effects(store: &mut Store, hub: &Hub) -> Result<usize, String> {
+    let effects = store.drain_meta_effects();
+    if effects.is_empty() {
+        return Ok(0);
+    }
+    hub.absorb_meta(store.conn(), effects)
+        .map_err(|error| format!("absorbing metadata effects: {error}"))
+}
+
 fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
     for ack in worker.drain_acknowledgements() {
         store
@@ -279,44 +294,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     });
     println!("serving http://{local} — {warmed} mirror rows warm (ctrl-c to stop)");
 
-    // Mid-backfill readers: re-read the mirror from the projection on a
-    // cadence and fan precise diffs to /ws/meta. Skims and per-file stream
-    // commits become visible as they land. WAL keeps the read harmless. A
-    // fresh install now has a public file from process start, so every
-    // successful skim/source commit can fan out on this cadence.
-    let (rewarm_tx, rewarm_rx) = tokio::sync::watch::channel(false);
-    let rewarm_task = tokio_runtime.spawn({
-        let hub = hub.clone();
-        let db = db.clone();
-        let mut rewarm_rx = rewarm_rx;
-        async move {
-            let mut tick = tokio::time::interval(REWARM_INTERVAL);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    _ = tick.tick() => {
-                        let hub = hub.clone();
-                        let db = db.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            let Ok(conn) = rusqlite::Connection::open_with_flags(
-                                &db,
-                                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-                            ) else {
-                                return;
-                            };
-                            let _ = hub.rewarm(&conn);
-                        })
-                        .await;
-                    }
-                    changed = rewarm_rx.changed() => {
-                        if changed.is_err() || *rewarm_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    });
+    // Mid-backfill readers ride the metadata effects seam: every committed
+    // batch names exactly the identity rows it may have moved, and the
+    // writer thread drains them into the mirror between passes — precise
+    // diffs to /ws/meta with no polling cadence, no second read connection
+    // pinning the cold WAL, and no hub mutation off the writer thread.
+    // Budgeted slices keep passes short, so the drain cadence is bounded by
+    // one slice.
+    store.observe_meta_effects();
 
     // The census fills the roll-call board; consent decides what is read.
     let discoveries = rosetta_pipeline::discover(&adapters, &flags.home, &opts, &instrument)
@@ -429,6 +414,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             meta.sessions as u64,
             meta.files_skimmed as u64,
         );
+        // Every skim's lists fan out the moment its batch commits.
+        absorb_meta_effects(&mut store, &hub)?;
         let roster = files.clone();
         backfills.push(BackfillRuntime {
             adapter: *adapter,
@@ -460,14 +447,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
 
-        // Nothing else will write in this mode. Stop the cadence and take one
-        // authoritative mirror snapshot so the app audits the committed seam,
-        // not whichever 500 ms refresh happened to win the race.
-        let _ = rewarm_tx.send(true);
-        let _ = tokio_runtime.block_on(rewarm_task);
-        let published = hub
-            .rewarm(store.conn())
-            .map_err(|error| error.to_string())?;
+        // Nothing else will write in this mode: one precise drain of the
+        // committed skims is the authoritative mirror state the app audits.
+        let published = absorb_meta_effects(&mut store, &hub)?;
         println!(
             "metadata ready — {published} mirror diffs published; complete-record streaming is paused (ctrl-c to stop)"
         );
@@ -500,12 +482,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    // Phase two: the cold scheduler — boost ▸ starter ▸ completion, round-
-    // robin across runtimes inside a lane. Starter passes carry the slice
-    // budget so every session opens fast; a paused file requeues into the
-    // completion lane; boost requests jump both and always run unbudgeted so
-    // the opened session finishes outright. Per-file durability and the
-    // graceful-stop boundary are unchanged.
+    // Phase two: the cold scheduler — live ▸ boost ▸ starter ▸ completion,
+    // round-robin across runtimes inside the cold lanes. Starter, completion,
+    // and live passes carry the slice budget so every session opens fast and
+    // everything stays preemptible; a paused file requeues into completion;
+    // boost requests jump the cold lanes and run unbudgeted so the opened
+    // session finishes outright; watcher hints feed the live lane so a
+    // running session stays current during the backfill. Per-file durability
+    // and the graceful-stop boundary are unchanged.
     let audit_free = IngestOptions {
         audit_files_per_run: 0,
         ..opts.clone()
@@ -547,6 +531,60 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
     };
     while schedule.pending() && !stop.load(Ordering::SeqCst) {
+        // The live lane during backfill: drain a bounded burst of watcher
+        // hints per runtime. Known sources jump to the live lane — budgeted,
+        // so they stay preemptible — and a claimed path no roster entry
+        // covers re-runs bounded meta, so a session started mid-backfill
+        // appears without waiting for the cold phase to end. Rescan hints
+        // defer to the live phase's stat poll, and anything dropped here is
+        // caught by the same poll after handoff.
+        for (index, entry) in backfills.iter_mut().enumerate() {
+            let mut needs_admission = false;
+            for _ in 0..COLD_HINT_BURST {
+                let Some(event) = entry.events.next_event(Duration::ZERO) else {
+                    break;
+                };
+                match event {
+                    SourceEvent::Changed(path) => {
+                        let mapping =
+                            rosetta_pipeline::map_hint(entry.adapter, &entry.roster, &path);
+                        needs_admission |= mapping.needs_admission;
+                        for nominated in mapping.nominated {
+                            if let Some(file) = entry
+                                .roster
+                                .iter()
+                                .find(|file| file.relative_path == nominated)
+                            {
+                                schedule.nominate_live(index, file.clone());
+                            }
+                        }
+                    }
+                    SourceEvent::Rescan => {}
+                }
+            }
+            if needs_admission {
+                let (_, fresh) = rosetta_pipeline::meta_ingest_into(
+                    entry.adapter,
+                    &entry.runtime,
+                    &entry.root,
+                    &mut store,
+                    &opts,
+                    &instrument,
+                    entry.ledger.as_mut(),
+                )
+                .map_err(|error| error.to_string())?;
+                for file in &fresh {
+                    if !entry
+                        .roster
+                        .iter()
+                        .any(|known| known.relative_path == file.relative_path)
+                    {
+                        schedule.nominate_live(index, file.clone());
+                    }
+                }
+                entry.roster = fresh;
+            }
+        }
         schedule.promote(boost.drain());
         // Check before the pass too: a promotion that empties the starter
         // lane must not charge the following (possibly long, unbudgeted)
@@ -562,7 +600,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         entry.stream_meter.begin();
         let pass_opts = match lane {
             ColdLane::Boost => &audit_free,
-            ColdLane::Starter | ColdLane::Completion => &sliced,
+            ColdLane::Live | ColdLane::Starter | ColdLane::Completion => &sliced,
         };
         let report = rosetta_pipeline::stream_backfill_into(
             entry.adapter,
@@ -599,6 +637,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
         search_worker.wake();
         acknowledge_search(&mut store, &search_worker)?;
+        absorb_meta_effects(&mut store, &hub)?;
     }
 
     // Preserve the audit lane exactly once per runtime, after every ordinary
@@ -621,6 +660,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
             entry.stream_meter.finish();
             entry.stream.merge_from(&report);
+            absorb_meta_effects(&mut store, &hub)?;
             let stream_totals = entry.stream_meter.snapshot();
             health.ingest_done(
                 entry.adapter.kind(),
@@ -665,11 +705,6 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
 
-        // No periodic read snapshot should pin WAL frames while the final
-        // progressive checkpoint folds the durable log into the canonical
-        // file. The closing authoritative warm below replaces this cadence.
-        let _ = rewarm_tx.send(true);
-        let _ = tokio_runtime.block_on(rewarm_task);
         if progressive {
             instrument
                 .finish_progressive_load(&mut store)
@@ -698,8 +733,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             _ => {}
         }
 
-        // Backfill over: take one authoritative warm and hand the
-        // already-progressive mirror to the effects drain.
+        // Backfill over: drain the finalize gate's metadata effects and hand
+        // the already-precise mirror to the row-effects drain.
         for mut entry in backfills {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -718,9 +753,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             runners.push((entry.adapter.kind(), runner, 0_u64));
         }
         store.observe_effects();
-        let published = hub
-            .rewarm(store.conn())
-            .map_err(|error| error.to_string())?;
+        let published = absorb_meta_effects(&mut store, &hub)?;
         store.drain_effects();
         health.ingest_live();
         println!("live — {published} closing mirror diffs published");
@@ -755,6 +788,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
             search_worker.wake();
             acknowledge_search(&mut store, &search_worker)?;
+            absorbed += absorb_meta_effects(&mut store, &hub)? as u64;
             let effects = store.drain_effects();
             if !effects.is_empty() {
                 let report = hub
@@ -764,8 +798,6 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         }
     } else {
-        let _ = rewarm_tx.send(true);
-        let _ = tokio_runtime.block_on(rewarm_task);
         println!(
             "interrupted during backfill — committed progress retained for resume, shutting down"
         );

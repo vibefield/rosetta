@@ -26,7 +26,7 @@ pub mod stream;
 pub use checkpoint::PipeCheckpoint;
 pub use discover::{Discovery, discover, expand_data_root};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
-pub use live::{LiveOptions, LiveReport, LiveRunner, stream_live};
+pub use live::{HintMapping, LiveOptions, LiveReport, LiveRunner, map_hint, stream_live};
 pub use meta::{MetaReport, SessionFile, meta_ingest, meta_ingest_into};
 pub use replay::{RebuildReport, rebuild_runtime};
 pub use sched::{ColdLane, ColdSchedule, order_runtime_roster};

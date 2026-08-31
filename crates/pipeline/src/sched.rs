@@ -1,22 +1,27 @@
-//! The cold-start scheduler: one queue, three lanes — boost ▸ starter ▸
-//! completion. Starter seeds one task per source (budgeted slices when serve
-//! enables them), paused tasks requeue into completion, and boost promotions
-//! from the app jump both. Fairness is per runtime inside a lane: round-robin
-//! keeps one giant agent from hiding every smaller one, which a scalar
-//! priority alone would not.
+//! The cold-start scheduler: one queue, four lanes — live ▸ boost ▸ starter
+//! ▸ completion. Starter seeds one task per source (budgeted slices when
+//! serve enables them), paused tasks requeue into completion, boost
+//! promotions from the app jump the cold lanes, and watcher hints nominate
+//! actively-growing sources into the live lane so a running session stays
+//! current DURING the backfill. Fairness is per runtime inside the cold
+//! lanes: round-robin keeps one giant agent from hiding every smaller one,
+//! which a scalar priority alone would not.
 //!
 //! Invariants the queue owns: a session's sources surface in canonical path
 //! order (the ordinal-reveal rule), sessions surface newest-first within a
-//! runtime, and boost requests drain oldest-request-first.
+//! runtime, boost requests drain oldest-request-first, and a source is
+//! queued at most once across every lane.
 
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::meta::SessionFile;
 
 /// Which lane a popped task came from — the caller picks pass options by it
-/// (starter/completion passes may carry a slice budget; boost never does).
+/// (starter/completion/live passes may carry a slice budget; boost never
+/// does).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColdLane {
+    Live,
     Boost,
     Starter,
     Completion,
@@ -50,6 +55,9 @@ pub fn order_runtime_roster(roster: Vec<SessionFile>) -> Vec<SessionFile> {
 
 #[derive(Debug, Default)]
 pub struct ColdSchedule {
+    /// Watcher-nominated files across all runtimes, oldest hint first —
+    /// freshness beats everything, including a boost.
+    live: VecDeque<(usize, SessionFile)>,
     /// Boosted files across all runtimes, oldest request first; one
     /// promotion keeps a session's files in path order.
     boost: VecDeque<(usize, SessionFile)>,
@@ -76,12 +84,46 @@ impl ColdSchedule {
             *sessions.entry(file.session_id.clone()).or_default() += 1;
         }
         Self {
+            live: VecDeque::new(),
             boost: VecDeque::new(),
             starter,
             completion,
             starter_rr: 0,
             completion_rr: 0,
             sessions,
+        }
+    }
+
+    /// A watcher hint nominated this source: move its queued task (from any
+    /// cold lane, boost included) into the live lane, or enqueue the given
+    /// file fresh when nothing is queued. A source is queued at most once,
+    /// so a chatty file cannot flood the lane.
+    pub fn nominate_live(&mut self, runtime: usize, file: SessionFile) {
+        if self.live.iter().any(|(queued_runtime, queued)| {
+            *queued_runtime == runtime && queued.relative_path == file.relative_path
+        }) {
+            return;
+        }
+        let take = |queue: &mut VecDeque<SessionFile>| -> Option<SessionFile> {
+            let at = queue
+                .iter()
+                .position(|queued| queued.relative_path == file.relative_path)?;
+            queue.remove(at)
+        };
+        let moved = take(&mut self.starter[runtime])
+            .or_else(|| take(&mut self.completion[runtime]))
+            .or_else(|| {
+                let at = self.boost.iter().position(|(queued_runtime, queued)| {
+                    *queued_runtime == runtime && queued.relative_path == file.relative_path
+                })?;
+                self.boost.remove(at).map(|(_, queued)| queued)
+            });
+        match moved {
+            Some(queued) => self.live.push_back((runtime, queued)),
+            None => {
+                *self.sessions.entry(file.session_id.clone()).or_default() += 1;
+                self.live.push_back((runtime, file));
+            }
         }
     }
 
@@ -100,7 +142,10 @@ impl ColdSchedule {
     }
 
     pub fn pending(&self) -> bool {
-        !self.boost.is_empty() || self.starter_pending() || self.completion_pending()
+        !self.live.is_empty()
+            || !self.boost.is_empty()
+            || self.starter_pending()
+            || self.completion_pending()
     }
 
     /// Whether any un-started source remains — the starter-drained milestone
@@ -122,8 +167,9 @@ impl ColdSchedule {
 
     /// Move every queued source of the named sessions into the boost lane,
     /// oldest request first; within one (session, runtime) the files keep
-    /// canonical path order regardless of which lane they were waiting in.
-    /// Returns how many files moved (session counts are unchanged — the
+    /// canonical path order whether they waited in starter or completion. A
+    /// task already in the LIVE lane stays there — moving it would demote
+    /// it. Returns how many files moved (session counts are unchanged — the
     /// tasks are still queued, just ahead of everything else).
     pub fn promote(&mut self, session_ids: impl IntoIterator<Item = String>) -> usize {
         let mut moved = 0;
@@ -150,10 +196,14 @@ impl ColdSchedule {
         moved
     }
 
-    /// Boost first, then every starter task, then completion. Starter fully
-    /// drains before completion starts, so breadth ("every session opens")
-    /// always beats depth.
+    /// Live first, then boost, then every starter task, then completion.
+    /// Starter fully drains before completion starts, so breadth ("every
+    /// session opens") always beats depth.
     pub fn pop(&mut self) -> Option<(ColdLane, usize, SessionFile)> {
+        if let Some((runtime, file)) = self.live.pop_front() {
+            self.session_popped(&file.session_id);
+            return Some((ColdLane::Live, runtime, file));
+        }
         if let Some((runtime, file)) = self.boost.pop_front() {
             self.session_popped(&file.session_id);
             return Some((ColdLane::Boost, runtime, file));
@@ -321,6 +371,36 @@ mod tests {
                 (ColdLane::Completion, 0, "a2".into()),
             ]
         );
+    }
+
+    #[test]
+    fn live_nominations_outrank_boosts_and_never_double_queue() {
+        let mut schedule = ColdSchedule::new(vec![vec![file("cold"), file("hot")]]);
+        schedule.promote(["cold".to_string()]);
+
+        // Nominating a queued file MOVES it (session count stable, no dup);
+        // nominating it again is a no-op while it waits.
+        let hot = file("hot");
+        schedule.nominate_live(0, hot.clone());
+        schedule.nominate_live(0, hot.clone());
+        assert!(schedule.session_pending("hot"));
+
+        let (lane, _, popped) = schedule.pop().unwrap();
+        assert_eq!(lane, ColdLane::Live, "freshness beats the boost");
+        assert_eq!(popped.session_id, "hot");
+        assert!(!schedule.session_pending("hot"), "no duplicate was queued");
+
+        // Once popped, a new hint enqueues it fresh into the live lane.
+        schedule.nominate_live(0, hot);
+        let (lane, _, popped) = schedule.pop().unwrap();
+        assert_eq!((lane, popped.session_id.as_str()), (ColdLane::Live, "hot"));
+
+        let (lane, _, popped) = schedule.pop().unwrap();
+        assert_eq!(
+            (lane, popped.session_id.as_str()),
+            (ColdLane::Boost, "cold")
+        );
+        assert!(!schedule.pending());
     }
 
     #[test]

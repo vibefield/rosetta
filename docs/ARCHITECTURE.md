@@ -37,8 +37,14 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 >
 > Fresh `serve` is progressive: the listener and empty public projection exist first, consent
 > precedes all reads, and every runtime is skimmed before streaming. Cold streaming then runs
-> through a three-lane scheduler (boost ▸ starter ▸ completion, round-robin across runtimes inside
-> a lane). Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
+> through a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, round-robin across runtimes
+> inside the cold lanes). Watcher hints drain into the live lane DURING the backfill — an
+> actively-running session stays current mid-cold, and a claimed path no roster entry covers
+> re-runs bounded meta so a session started mid-backfill appears at once. The 500 ms mirror
+> rewarm poll is gone: metadata effects (identity keys only, collected on every path including
+> cold generations) are drained by the writer thread between passes into `Hub::absorb_meta`,
+> fanning precise `/ws/meta` diffs with no polling, no second read connection pinning the cold
+> WAL, and no hub mutation off the writer thread. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
 > default 256 KiB with a 24-record floor; batches are soft-capped to the slice so a slice is
 > ~one transaction): a fresh source's clean prefix ACTIVATES and seals its ledger generation at
 > the boundary — indistinguishable from the file ending there and then growing — so every session

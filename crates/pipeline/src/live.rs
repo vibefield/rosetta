@@ -59,6 +59,74 @@ pub struct LiveReport {
     pub stream: StreamReport,
 }
 
+/// One watcher hint mapped against an admitted roster — the single truth
+/// table shared by the live runner's ticks and the cold scheduler's
+/// mid-backfill drain, so the two lanes can never disagree about what a
+/// path means.
+#[derive(Debug, Default)]
+pub struct HintMapping {
+    /// Relative paths of admitted sources this hint nominates for streaming
+    /// (the path itself, or a snapshot's virtual members).
+    pub nominated: Vec<String>,
+    /// Bounded meta must re-admit before streaming settles this: a claimed
+    /// path no roster entry covers appeared, or a snapshot-backed physical
+    /// source changed and its membership may have moved.
+    pub needs_admission: bool,
+}
+
+/// Map one changed-path hint against the roster. Hints are nominations, not
+/// facts: the tailer's checkpoint (or the snapshot revision) decides what
+/// actually happened.
+pub fn map_hint(
+    adapter: &dyn AgentAdapter,
+    files: &[SessionFile],
+    relative_path: &str,
+) -> HintMapping {
+    let snapshot = snapshot_alias(adapter, relative_path);
+    let hinted = snapshot.as_deref().unwrap_or(relative_path);
+    let nominated: Vec<String> = files
+        .iter()
+        .filter(|file| file.relative_path == hinted || physical_snapshot_path(file) == Some(hinted))
+        .map(|file| file.relative_path.clone())
+        .collect();
+    if !nominated.is_empty() {
+        return HintMapping {
+            needs_admission: snapshot.is_some(),
+            nominated,
+        };
+    }
+    HintMapping {
+        nominated,
+        needs_admission: hint_claimed(adapter, relative_path),
+    }
+}
+
+/// Does any layout stream with a driver claim this path?
+fn hint_claimed(adapter: &dyn AgentAdapter, relative_path: &str) -> bool {
+    adapter
+        .layout()
+        .matching_stream(relative_path)
+        .is_some_and(|stream| adapter.stream_driver(&stream.id).is_some())
+}
+
+/// Normalize a physical document/database hint to the source path whose
+/// virtual membership and content must be reconciled.
+fn snapshot_alias(adapter: &dyn AgentAdapter, relative_path: &str) -> Option<String> {
+    let base = ["-wal", "-shm", "-journal"]
+        .iter()
+        .find_map(|suffix| relative_path.strip_suffix(suffix))
+        .unwrap_or(relative_path);
+    let stream = adapter
+        .layout()
+        .matching_stream(relative_path)
+        .or_else(|| adapter.layout().matching_stream(base))?;
+    match adapter.stream_driver(&stream.id)? {
+        rosetta_adapter_support::StreamDriver::SqliteSnapshot => Some(base.to_string()),
+        rosetta_adapter_support::StreamDriver::DocumentSnapshot => Some(relative_path.to_string()),
+        rosetta_adapter_support::StreamDriver::JsonLines => None,
+    }
+}
+
 /// One runtime's live loop, driven a tick at a time so a caller can
 /// round-robin several runtimes over one store without threads.
 pub struct LiveRunner<'a> {
@@ -183,28 +251,12 @@ impl<'a> LiveRunner<'a> {
             self.report.events += 1;
             match event {
                 SourceEvent::Changed(path) => {
-                    let snapshot = self.snapshot_hint(&path);
-                    let hinted = snapshot
-                        .as_ref()
-                        .map(|(path, _)| path.as_str())
-                        .unwrap_or(&path);
-                    let children: Vec<String> = self
-                        .files
-                        .iter()
-                        .filter(|file| {
-                            file.relative_path == hinted
-                                || physical_snapshot_path(file) == Some(hinted)
-                        })
-                        .map(|file| file.relative_path.clone())
-                        .collect();
-                    if !children.is_empty() {
-                        changed.extend(children);
-                        needs_admission |= snapshot.is_some();
-                    } else if self.claimed(&path) {
-                        needs_admission = true;
-                    } else {
+                    let mapping = map_hint(self.adapter, &self.files, &path);
+                    if mapping.nominated.is_empty() && !mapping.needs_admission {
                         self.report.hints_ignored += 1;
                     }
+                    changed.extend(mapping.nominated);
+                    needs_admission |= mapping.needs_admission;
                 }
                 SourceEvent::Rescan => {
                     self.report.rescans += 1;
@@ -286,41 +338,6 @@ impl<'a> LiveRunner<'a> {
         Ok(())
     }
 
-    /// Does any layout stream with a driver claim this path?
-    fn claimed(&self, relative_path: &str) -> bool {
-        self.adapter
-            .layout()
-            .matching_stream(relative_path)
-            .is_some_and(|stream| self.adapter.stream_driver(&stream.id).is_some())
-    }
-
-    /// Normalize a physical document/database hint to the source whose
-    /// virtual membership and content must be reconciled.
-    fn snapshot_hint(
-        &self,
-        relative_path: &str,
-    ) -> Option<(String, rosetta_adapter_support::StreamDriver)> {
-        let base = ["-wal", "-shm", "-journal"]
-            .iter()
-            .find_map(|suffix| relative_path.strip_suffix(suffix))
-            .unwrap_or(relative_path);
-        let stream = self
-            .adapter
-            .layout()
-            .matching_stream(relative_path)
-            .or_else(|| self.adapter.layout().matching_stream(base))?;
-        let driver = self.adapter.stream_driver(&stream.id)?;
-        match driver {
-            rosetta_adapter_support::StreamDriver::SqliteSnapshot => {
-                Some((base.to_string(), driver))
-            }
-            rosetta_adapter_support::StreamDriver::DocumentSnapshot => {
-                Some((relative_path.to_string(), driver))
-            }
-            rosetta_adapter_support::StreamDriver::JsonLines => None,
-        }
-    }
-
     /// Stat scan: the fallback signal, and it must be self-healing — it
     /// compares each file against its CURSOR's observed length, not against
     /// whatever this process last saw. Any growth the watcher missed (before
@@ -369,23 +386,9 @@ impl<'a> LiveRunner<'a> {
                     // A database file never appears in `files` itself — its
                     // sessions do, as virtual sources. Nominate them and let
                     // the snapshot pass's stamp check decide cheaply.
-                    let snapshot = self.snapshot_hint(&walked.relative_path);
-                    let hinted = snapshot
-                        .as_ref()
-                        .map(|(path, _)| path.as_str())
-                        .unwrap_or(walked.relative_path.as_str());
-                    let children: Vec<String> = self
-                        .files
-                        .iter()
-                        .filter(|file| physical_snapshot_path(file) == Some(hinted))
-                        .map(|file| file.relative_path.clone())
-                        .collect();
-                    if !children.is_empty() {
-                        changed.extend(children);
-                        *needs_admission |= snapshot.is_some();
-                    } else if self.claimed(&walked.relative_path) {
-                        *needs_admission = true;
-                    }
+                    let mapping = map_hint(self.adapter, &self.files, &walked.relative_path);
+                    changed.extend(mapping.nominated);
+                    *needs_admission |= mapping.needs_admission;
                 }
             }
         }

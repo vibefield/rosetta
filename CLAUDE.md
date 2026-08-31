@@ -70,7 +70,11 @@ JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrite
 deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
 recovery, and an append-only checksummed raw ledger. Fresh `serve` creates the public
 projection immediately: it skims every enrolled runtime first, then cold-streams through
-a three-lane scheduler (boost ▸ starter ▸ completion, runtime round-robin within a lane).
+a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, runtime round-robin within
+the cold lanes); watcher hints feed the live lane during the backfill and mid-cold
+admissions re-run bounded meta, so a running session stays current before the cold phase
+ends. Metadata effects (identity keys, on for every path) replace the 500 ms mirror
+rewarm poll: the writer drains them into `Hub::absorb_meta` between passes.
 Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,
 default 256 KiB / 24-record floor, batches soft-capped to the slice) that early-ACTIVATES
 and seals a clean prefix so every session opens readable fast; paused remainders requeue
