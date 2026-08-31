@@ -21,7 +21,7 @@ use rosetta_core::rows::StreamState;
 use rusqlite::Connection;
 
 pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
-pub use hot::{Effects, HotConfig, MetaMirror, Mutation, Replay, Stamp, TailRings};
+pub use hot::{Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, Stamp, TailRings};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BulkLoadStats {
@@ -152,6 +152,10 @@ pub struct Store {
     /// every committed batch until drained. `None` (the default) costs
     /// nothing — backfill and rebuild never allocate a mutation log.
     effects: Option<Effects>,
+    /// The other granularity, independently switched: `Some` collects the
+    /// identity keys every committed batch may have moved. Cheap enough for
+    /// the cold paths, which suppress `effects` above.
+    meta_effects: Option<MetaEffects>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +194,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
+            meta_effects: None,
         })
     }
 
@@ -208,6 +213,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
+            meta_effects: None,
         })
     }
 
@@ -236,6 +242,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
+            meta_effects: None,
         })
     }
 
@@ -296,6 +303,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             bulk_abandoned: false,
             effects: None,
+            meta_effects: None,
         })
     }
 
@@ -339,6 +347,7 @@ impl Store {
             self.bulk_reconciliation.validate(delta)?;
         }
         let mut fresh = self.effects.is_some().then(Effects::default);
+        let mut fresh_meta = self.meta_effects.is_some().then(MetaEffects::default);
         let tx = self.conn.transaction()?;
         let search_before = if self.mode == StoreMode::Live {
             Some(search_sync::before_batch(&tx, canonical_batch)?)
@@ -356,7 +365,10 @@ impl Store {
             maintenance,
             bulk_load,
             self.mode == StoreMode::Progressive,
-            fresh.as_mut(),
+            apply::Observation {
+                rows: fresh.as_mut(),
+                meta: fresh_meta.as_mut(),
+            },
         )?;
         let ram_outcome = self.ram_reconciliation.resolve(&tx, &ram_delta)?;
         stats.projection_assets = asset_stats.assets;
@@ -384,6 +396,9 @@ impl Store {
             self.bulk_abandoned = true;
         }
         if let (Some(pending), Some(committed)) = (self.effects.as_mut(), fresh) {
+            pending.merge(committed);
+        }
+        if let (Some(pending), Some(committed)) = (self.meta_effects.as_mut(), fresh_meta) {
             pending.merge(committed);
         }
         Ok(stats)
@@ -515,10 +530,13 @@ impl Store {
              WHERE id = ?1 AND stream_state != ?2",
             rusqlite::params![session_id, state.as_str()],
         )?;
-        if changed != 0
-            && let Some(effects) = self.effects.as_mut()
-        {
-            effects.touched_sessions.insert(session_id.to_owned());
+        if changed != 0 {
+            if let Some(effects) = self.effects.as_mut() {
+                effects.touched_sessions.insert(session_id.to_owned());
+            }
+            if let Some(meta) = self.meta_effects.as_mut() {
+                meta.note_session(session_id);
+            }
         }
         Ok(changed != 0)
     }
@@ -551,6 +569,26 @@ impl Store {
     /// on commit.
     pub fn drain_effects(&mut self) -> Effects {
         self.effects
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Start collecting metadata-tier effects. Independent of
+    /// [`Store::observe_effects`] and cheap enough to enable for cold work:
+    /// a batch contributes at most one id per identity row it projected, and
+    /// there is no mutation log to cap or overflow.
+    pub fn observe_meta_effects(&mut self) {
+        if self.meta_effects.is_none() {
+            self.meta_effects = Some(MetaEffects::default());
+        }
+    }
+
+    /// Take every identity key observed since the last drain (empty when
+    /// observation is disabled). Same commit discipline as
+    /// [`Store::drain_effects`]: a rolled-back batch contributes nothing.
+    pub fn drain_meta_effects(&mut self) -> MetaEffects {
+        self.meta_effects
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()

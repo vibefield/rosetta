@@ -24,7 +24,9 @@ use std::time::{Duration, Instant};
 
 use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRow};
 use rosetta_store::StoreError;
-use rosetta_store::hot::{Effects, HotConfig, MetaMirror, Mutation, Replay, Stamp, TailRings};
+use rosetta_store::hot::{
+    Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, Stamp, TailRings,
+};
 use rusqlite::Connection;
 
 #[derive(Debug, Clone)]
@@ -196,23 +198,34 @@ impl Hub {
             .subs
             .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
         let events = state.mirror.warm(conn)?;
-        let delivered = events.len();
-        let mut resyncs = 0_u64;
-        for event in events {
-            let item = Arc::new(event);
-            for entry in state.subs.values() {
-                if entry.topic == Topic::Meta {
-                    resyncs += u64::from(deliver(
-                        &entry.shared,
-                        self.config.subscriber_queue,
-                        HubItem::Mutation {
-                            stamp: None,
-                            mutation: item.clone(),
-                        },
-                    ));
-                }
-            }
-        }
+        let (delivered, resyncs) = publish_meta(state, self.config.subscriber_queue, events);
+        state.totals.meta_events += delivered as u64;
+        state.totals.resyncs += resyncs;
+        Ok(delivered)
+    }
+
+    /// Absorb one drained [`MetaEffects`] batch, strictly after its
+    /// transactions committed: re-read only the identity rows it names,
+    /// upsert-or-drop them in the mirror, and fan the diffs to meta
+    /// subscribers. The events are exactly the ones [`Hub::rewarm`] would
+    /// have emitted for those rows — precise, because the mirror diffs
+    /// against resident state — at the cost of the named rows instead of the
+    /// whole surface. Returns the diffs delivered.
+    ///
+    /// Same calling discipline as [`Hub::absorb`]: the writer that committed
+    /// the batch calls this, so the mirror advances in commit order.
+    pub fn absorb_meta(
+        &self,
+        conn: &Connection,
+        effects: MetaEffects,
+    ) -> Result<usize, StoreError> {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        let state = &mut *state;
+        state
+            .subs
+            .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
+        let events = state.mirror.refresh_meta(conn, &effects)?;
+        let (delivered, resyncs) = publish_meta(state, self.config.subscriber_queue, events);
         state.totals.meta_events += delivered as u64;
         state.totals.resyncs += resyncs;
         Ok(delivered)
@@ -339,22 +352,9 @@ impl Hub {
             }
         }
 
-        for event in meta_events {
-            let item = Arc::new(event);
-            report.meta_events += 1;
-            for entry in state.subs.values() {
-                if entry.topic == Topic::Meta {
-                    report.resyncs += u64::from(deliver(
-                        &entry.shared,
-                        self.config.subscriber_queue,
-                        HubItem::Mutation {
-                            stamp: None,
-                            mutation: item.clone(),
-                        },
-                    ));
-                }
-            }
-        }
+        let (delivered, resyncs) = publish_meta(state, self.config.subscriber_queue, meta_events);
+        report.meta_events += delivered as u64;
+        report.resyncs += resyncs;
 
         // Idle eviction, sparing sessions with live subscribers — their
         // readers wait passively and must not lose the ring under them.
@@ -406,6 +406,30 @@ fn register(state: &mut HubState, topic: Topic) -> Subscription {
         },
     );
     Subscription { id, shared }
+}
+
+/// Fan mirror diffs to every meta subscriber — the one delivery path for the
+/// metadata topic, whether the diffs came from a whole-surface warm or from
+/// the named rows an effects drain touched. Returns (delivered, resyncs).
+fn publish_meta(state: &HubState, capacity: usize, events: Vec<Mutation>) -> (usize, u64) {
+    let delivered = events.len();
+    let mut resyncs = 0_u64;
+    for event in events {
+        let item = Arc::new(event);
+        for entry in state.subs.values() {
+            if entry.topic == Topic::Meta {
+                resyncs += u64::from(deliver(
+                    &entry.shared,
+                    capacity,
+                    HubItem::Mutation {
+                        stamp: None,
+                        mutation: item.clone(),
+                    },
+                ));
+            }
+        }
+    }
+    (delivered, resyncs)
 }
 
 /// Queue one item unless the subscriber is barred; a full queue trips the

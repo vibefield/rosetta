@@ -11,18 +11,27 @@
 //!   fully resident, refreshed strictly after commit; row diffs become
 //!   precise events. List/browse reads never touch the DB.
 //!
-//! [`Effects`] is the seam between the store's write path and this tier:
-//! while observation is enabled, every committed batch appends the row
-//! mutations it projected. The daemon drains and feeds them to the hub.
-//! Everything here is rebuilt from the projection on restart, the way the
-//! projection rebuilds from the ledger — nothing is durable, and no clock is
-//! read internally (callers pass `now` so tests stay deterministic).
+//! Effects are the seam between the store's write path and this tier, split
+//! by granularity because the two halves cost very different amounts:
+//!
+//! * [`Effects`] — row level. Every committed batch appends the row
+//!   mutations it projected, which is only worth paying for sessions a
+//!   reader is watching; the cold paths suppress it deliberately.
+//! * [`MetaEffects`] — metadata level. Identity keys only, so it is cheap
+//!   enough to stay on everywhere, including the cold generations a fresh
+//!   `serve` projects before its final canonical gate.
+//!
+//! The daemon drains either and feeds it to the hub. Everything here is
+//! rebuilt from the projection on restart, the way the projection rebuilds
+//! from the ledger — nothing is durable, and no clock is read internally
+//! (callers pass `now` so tests stay deterministic).
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use rusqlite::Connection;
 
+use rosetta_core::IngestOp;
 use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRow, TokenSnapshot};
 use rosetta_core::{TimelineBody, TimelineEntry, ToolInteraction};
 
@@ -176,6 +185,97 @@ impl Effects {
         }
         self.mutations
             .extend(other.mutations.into_iter().take(room));
+    }
+}
+
+/// Which mirror-backed identity row an op may change. One classification,
+/// shared by both granularities so they can never disagree about what a
+/// batch touched.
+pub(crate) enum MetaTouch<'a> {
+    Runtime(&'a str),
+    Project(&'a str),
+    Session(&'a str),
+    /// The op projects rows the mirror does not hold.
+    None,
+}
+
+pub(crate) fn meta_touch(op: &IngestOp) -> MetaTouch<'_> {
+    match op {
+        IngestOp::Runtime(row) => MetaTouch::Runtime(&row.id),
+        IngestOp::Project(row) => MetaTouch::Project(&row.id),
+        IngestOp::SessionMeta(row) => MetaTouch::Session(&row.id),
+        IngestOp::SessionTitle(row) => MetaTouch::Session(&row.session_id),
+        // Messages and late merge facts touch the session's activity time.
+        IngestOp::Message(row) => MetaTouch::Session(&row.session_id),
+        IngestOp::ToolUpdate { session_id, .. } | IngestOp::Usage { session_id, .. } => {
+            MetaTouch::Session(session_id)
+        }
+        IngestOp::SessionUsage(row) => MetaTouch::Session(&row.session_id),
+        IngestOp::ProjectionAsset { .. }
+        | IngestOp::FileEdit(_)
+        | IngestOp::Plan(_)
+        | IngestOp::Task(_)
+        | IngestOp::GitCommit(_)
+        | IngestOp::Drift(_) => MetaTouch::None,
+    }
+}
+
+/// Metadata-level effects of committed batches: the identity keys of the
+/// mirror-backed rows they may have changed. Ids only — no mutation log, no
+/// row payloads, nothing to cap — which is what makes this half affordable
+/// on the bulk and progressive cold paths where row [`Effects`] are
+/// deliberately suppressed.
+///
+/// Removals need no tombstone set. A named row the projection no longer
+/// holds reads back absent, and [`MetaMirror::refresh_meta`] drops it on
+/// that evidence; a second set would only restate what the re-read proves.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MetaEffects {
+    pub runtimes: BTreeSet<String>,
+    pub projects: BTreeSet<String>,
+    pub sessions: BTreeSet<String>,
+}
+
+impl MetaEffects {
+    pub fn is_empty(&self) -> bool {
+        self.runtimes.is_empty() && self.projects.is_empty() && self.sessions.is_empty()
+    }
+
+    /// Record which mirror-backed row this op may change. Idempotent set
+    /// inserts of an id; the payload never leaves the batch.
+    pub(crate) fn note(&mut self, op: &IngestOp) {
+        match meta_touch(op) {
+            MetaTouch::Runtime(id) => self.note_runtime(id),
+            MetaTouch::Project(id) => self.note_project(id),
+            MetaTouch::Session(id) => self.note_session(id),
+            MetaTouch::None => {}
+        }
+    }
+
+    pub(crate) fn note_runtime(&mut self, id: &str) {
+        note_id(&mut self.runtimes, id);
+    }
+
+    pub(crate) fn note_project(&mut self, id: &str) {
+        note_id(&mut self.projects, id);
+    }
+
+    pub(crate) fn note_session(&mut self, id: &str) {
+        note_id(&mut self.sessions, id);
+    }
+
+    pub(crate) fn merge(&mut self, other: MetaEffects) {
+        self.runtimes.extend(other.runtimes);
+        self.projects.extend(other.projects);
+        self.sessions.extend(other.sessions);
+    }
+}
+
+/// A repeat touch — one session across a whole batch of messages is the
+/// common case — must not allocate a second copy of the id.
+fn note_id(set: &mut BTreeSet<String>, id: &str) {
+    if !set.contains(id) {
+        set.insert(id.to_owned());
     }
 }
 
@@ -440,6 +540,46 @@ impl MetaMirror {
         for id in &effects.touched_sessions {
             if let Some(row) = queries::session(conn, id)? {
                 self.absorb_session(row, &mut events);
+            }
+        }
+        Ok(events)
+    }
+
+    /// Reload exactly the identity rows a drained [`MetaEffects`] named:
+    /// upsert the ones the projection still holds, drop the ones it no
+    /// longer does. Unchanged rows emit nothing, so the diffs are precisely
+    /// the ones [`Self::warm`] would have produced for those rows, in the
+    /// same order. A dropped row leaves silently — the metadata surface has
+    /// no removal event, and the mirror ends up holding what a mirror warmed
+    /// from scratch would hold.
+    pub fn refresh_meta(
+        &mut self,
+        conn: &Connection,
+        effects: &MetaEffects,
+    ) -> Result<Vec<Mutation>, StoreError> {
+        let mut events = Vec::new();
+        for id in &effects.runtimes {
+            match queries::runtime(conn, id)? {
+                Some(row) => self.absorb_runtime(row, &mut events),
+                None => {
+                    self.runtimes.remove(id);
+                }
+            }
+        }
+        for id in &effects.projects {
+            match queries::project(conn, id)? {
+                Some(row) => self.absorb_project(row, &mut events),
+                None => {
+                    self.projects.remove(id);
+                }
+            }
+        }
+        for id in &effects.sessions {
+            match queries::session(conn, id)? {
+                Some(row) => self.absorb_session(row, &mut events),
+                None => {
+                    self.sessions.remove(id);
+                }
             }
         }
         Ok(events)

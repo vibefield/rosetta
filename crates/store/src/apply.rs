@@ -17,7 +17,7 @@ use rosetta_core::rows::{
 };
 
 use crate::StoreError;
-use crate::hot::{Effects, Mutation};
+use crate::hot::{Effects, MetaEffects, MetaTouch, Mutation, meta_touch};
 
 /// Compare-and-set update for one source file's driver checkpoint.
 #[derive(Debug, Clone)]
@@ -1044,38 +1044,21 @@ fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), S
 }
 
 /// Record which mirror-backed rows an op may change. Idempotent set inserts;
-/// runs for direct applies AND for staged ops at activation.
+/// runs for direct applies AND for staged ops at activation. The
+/// classification itself is shared with [`MetaEffects`] so the two
+/// granularities can never disagree about what a batch touched.
 fn note_touch(fx: &mut Effects, op: &IngestOp) {
-    match op {
-        IngestOp::ProjectionAsset { .. } => {}
-        IngestOp::Runtime(row) => {
-            fx.touched_runtimes.insert(row.id.clone());
+    match meta_touch(op) {
+        MetaTouch::Runtime(id) => {
+            fx.touched_runtimes.insert(id.to_owned());
         }
-        IngestOp::Project(row) => {
-            fx.touched_projects.insert(row.id.clone());
+        MetaTouch::Project(id) => {
+            fx.touched_projects.insert(id.to_owned());
         }
-        IngestOp::SessionMeta(row) => {
-            fx.touched_sessions.insert(row.id.clone());
+        MetaTouch::Session(id) => {
+            fx.touched_sessions.insert(id.to_owned());
         }
-        IngestOp::SessionTitle(row) => {
-            fx.touched_sessions.insert(row.session_id.clone());
-        }
-        // Messages and late merge facts touch the session's activity time.
-        IngestOp::Message(row) => {
-            fx.touched_sessions.insert(row.session_id.clone());
-        }
-        IngestOp::ToolUpdate { session_id, .. } | IngestOp::Usage { session_id, .. } => {
-            fx.touched_sessions.insert(session_id.clone());
-        }
-        IngestOp::SessionUsage(row) => {
-            fx.touched_sessions.insert(row.session_id.clone());
-        }
-        // No session/project/runtime row changes.
-        IngestOp::FileEdit(_)
-        | IngestOp::Plan(_)
-        | IngestOp::Task(_)
-        | IngestOp::GitCommit(_)
-        | IngestOp::Drift(_) => {}
+        MetaTouch::None => {}
     }
 }
 
@@ -1141,14 +1124,27 @@ fn apply_op(
     Ok(())
 }
 
+/// What this apply is observed at, per granularity. Row-level effects are
+/// worth their mutation log only for sessions a reader is watching, and the
+/// cold paths below suppress them on purpose; metadata effects are ids only,
+/// so they stay on for every path that projects an identity row.
+pub(crate) struct Observation<'a> {
+    pub rows: Option<&'a mut Effects>,
+    pub meta: Option<&'a mut MetaEffects>,
+}
+
 pub(crate) fn apply_batch(
     tx: &Transaction,
     batch: &Batch,
     maintenance: Maintenance,
     bulk_load: bool,
     progressive_public: bool,
-    mut effects: Option<&mut Effects>,
+    observed: Observation<'_>,
 ) -> Result<ApplyStats, StoreError> {
+    let Observation {
+        rows: mut effects,
+        meta: mut meta_effects,
+    } = observed;
     // A private projection has no readers. Keep relational lifecycle fragments
     // out of SQLite until the runtime closes, then fold each correlation once
     // in RAM and write only its final canonical row. Progressive/public and
@@ -1158,6 +1154,13 @@ pub(crate) fn apply_batch(
     let mut dirty_buckets = BTreeSet::new();
     match &batch.source {
         None => {
+            // The metadata batch: every op here projects directly, so the
+            // whole op list is what this transaction may have moved.
+            if let Some(fx) = meta_effects.as_deref_mut() {
+                for op in &batch.ops {
+                    fx.note(op);
+                }
+            }
             let started = Instant::now();
             let mut tool_updates = Vec::new();
             let mut usage_merges = Vec::new();
@@ -1257,6 +1260,25 @@ pub(crate) fn apply_batch(
             // later rewrites retain the exact live staging semantics below.
             let direct_cold_generation =
                 bulk_load && active_generation == 0 && source.mode != SourceMode::Append;
+
+            // Metadata effects follow what this transaction projects, not
+            // what the batch carries: a live Stage parks its ops in process
+            // RAM and a live Abandon commits only diagnostic drift, so
+            // neither can have moved an identity row. Every other path
+            // projects its ops, and any sweep along the way rewrote this
+            // session's title and activity time. Unlike the row mutations
+            // below, these are collected on the cold paths too — that is the
+            // whole point of the cheaper granularity.
+            if let Some(fx) = meta_effects
+                && (direct_cold_generation
+                    || matches!(source.mode, SourceMode::Append | SourceMode::Activate))
+            {
+                for op in &batch.ops {
+                    fx.note(op);
+                }
+                fx.note_session(&source.session_id);
+            }
+
             if direct_cold_generation {
                 let started = Instant::now();
                 match source.mode {
