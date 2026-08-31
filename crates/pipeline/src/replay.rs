@@ -400,13 +400,12 @@ pub fn rebuild_runtime(
                     // it, unless this path never had clean content to protect
                     // (the dirty-first-generation case, which the runtime
                     // activated too). Cleanliness still owns readiness.
-                    let mode = if file.generation_clean
-                        || only_dirty.contains(&source.relative_path)
-                    {
-                        SourceMode::Activate
-                    } else {
-                        SourceMode::Abandon
-                    };
+                    let mode =
+                        if file.generation_clean || only_dirty.contains(&source.relative_path) {
+                            SourceMode::Activate
+                        } else {
+                            SourceMode::Abandon
+                        };
                     flush_chunk(
                         adapter,
                         runtime,
