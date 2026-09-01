@@ -16,6 +16,10 @@ interface SessionListCommonProps {
   /** The census is still naming sessions: the empty state yields to the
    * section's veil, because only the ready may claim emptiness. */
   readonly pending: boolean;
+  readonly emptyState?: {
+    readonly title: string;
+    readonly description: string;
+  };
   readonly onSessionSelect: (session: SessionRow) => void;
 }
 
@@ -150,11 +154,15 @@ export function SessionList(props: SessionListProps) {
       )}
       {totalSessionCount === 0 && !props.pending && (
         <EmptyState
-          title={props.mode === "search" ? "Nothing matched" : "No sessions here yet"}
+          title={
+            props.emptyState?.title ??
+            (props.mode === "search" ? "Nothing matched" : "No sessions here yet")
+          }
           description={
-            props.mode === "search"
+            props.emptyState?.description ??
+            (props.mode === "search"
               ? "No indexed message contains that."
-              : "Sessions appear as rosettad reads this project's agent stores."
+              : "Sessions appear as rosettad reads this project's agent stores.")
           }
         />
       )}

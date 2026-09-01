@@ -82,6 +82,14 @@ export function SessionsColumn({
             currentTimestamp={currentTimestamp}
             duringBackfill={ingestActive}
             pending={censusRunning}
+            emptyState={
+              project === null
+                ? {
+                    title: "No project selected",
+                    description: "Pick a project to browse its sessions.",
+                  }
+                : undefined
+            }
             onSessionSelect={onSessionSelect}
           />
         ) : (

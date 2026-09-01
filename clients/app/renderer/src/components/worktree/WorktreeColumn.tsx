@@ -214,6 +214,11 @@ export function WorktreeColumn({
           title="No repository here"
           description="This column needs the desktop shell — a browser tab has no worktree to read."
         />
+      ) : projectRoot === null ? (
+        <EmptyState
+          title="No project selected"
+          description="Pick a project to browse its worktree."
+        />
       ) : tab === "files" ? (
         engine === null || fileSource === null ? (
           <EmptyState

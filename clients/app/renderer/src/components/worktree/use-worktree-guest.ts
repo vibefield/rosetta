@@ -48,7 +48,9 @@ export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
   const [chosen, setChosen] = useState(false);
   const frameWide = useFrameWiderThan(GUEST_MIN_FRAME_WIDTH);
 
-  const visible = available && projectRoot !== null && wanted && (chosen || frameWide);
+  // A wide room keeps the guest's empty state visible before a project is
+  // chosen. A missing root suppresses the engine, not the column explaining it.
+  const visible = available && wanted && (chosen || frameWide);
 
   const toggle = () => {
     // Flips what is SHOWN, not what was last wanted — the first press on an

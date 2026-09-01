@@ -118,17 +118,14 @@ export default function App() {
     return out;
   }, [stats]);
 
-  // Default selections once data lands; heal them when they go stale. Match
-  // the project's initial selection to the list's recent-first ranking.
+  // Selection is always an explicit reader act. Metadata may invalidate an
+  // existing selection, but arriving data never chooses a project for them.
   useEffect(() => {
-    if (projectViewModels.length === 0) return;
-    if (projectId === null || !projectById.has(projectId)) {
-      const top = [...projectViewModels].sort(
-        (a, b) => (b.lastActiveMs ?? 0) - (a.lastActiveMs ?? 0),
-      )[0];
-      setProjectId(top.row.id);
+    if (projectId !== null && !projectById.has(projectId)) {
+      setProjectId(null);
+      setSessionId(null);
     }
-  }, [projectViewModels, projectById, projectId]);
+  }, [projectById, projectId]);
 
   const projectSessions = useMemo(() => {
     if (projectId === null) return [];
@@ -142,12 +139,8 @@ export default function App() {
   }, [meta, projectId]);
 
   useEffect(() => {
-    if (projectSessions.length === 0) {
+    if (sessionId !== null && !projectSessions.some((s) => s.id === sessionId)) {
       setSessionId(null);
-      return;
-    }
-    if (sessionId === null || !projectSessions.some((s) => s.id === sessionId)) {
-      setSessionId(projectSessions[0].id);
     }
   }, [projectSessions, sessionId]);
 
