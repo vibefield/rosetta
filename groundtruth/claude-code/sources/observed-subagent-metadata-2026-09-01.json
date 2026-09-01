@@ -1,0 +1,142 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "claude-code",
+  "agent_version": "observed-subagent-metadata-2026-09-01",
+  "evidence": "observed",
+  "generator": "tools.groundtruth census 2",
+  "data_root": "~/.claude",
+  "streams": [
+    {
+      "id": "subagent-metadata",
+      "glob": "projects/*/*/subagents/**/agent-*.meta.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Structure-only census of a live organic dataset. Shapes sampled from the first 4096 records per type; nested facet shapes from the first 32 records per nested discriminator; observed counts cover the full tree.",
+      "record_types": {
+        "": {
+          "observed": 2758,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agentType": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2758
+              },
+              "color": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 546
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 1876
+              },
+              "isFork": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 5
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 592
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 590
+              },
+              "parentAgentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 173
+              },
+              "permissionMode": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "auto": 531,
+                    "default": 12,
+                    "plan": 3
+                  }
+                },
+                "required": false,
+                "observed": 546
+              },
+              "planModeRequired": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 546
+              },
+              "spawnDepth": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false,
+                "observed": 1426
+              },
+              "stoppedByUser": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 3
+              },
+              "taskKind": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "in_process_teammate": 546
+                  }
+                },
+                "required": false,
+                "observed": 546
+              },
+              "teamName": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 546
+              },
+              "toolUseId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 278
+              },
+              "worktreePath": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 13
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "captured_at": "subagent-metadata-2026-09-01"
+}

@@ -27,6 +27,14 @@ evidence = "observed"
 notes = "Subagent transcripts. Census: own record vocabulary — started, result, fork-context-ref — plus user/assistant/progress/attachment/system."
 
 [[streams]]
+id = "subagent-metadata"
+glob = "projects/*/*/subagents/**/agent-*.meta.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Subagent metadata sidecars. `worktreePath`, when present as an absolute path, is explicit worktree-isolation evidence; the enclosing session directory proves the owning parent session."
+
+[[streams]]
 id = "todos"
 glob = "todos/*.json"
 file_format = "json"

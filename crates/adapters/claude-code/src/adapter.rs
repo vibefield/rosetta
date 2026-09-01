@@ -4,7 +4,8 @@
 use std::any::Any;
 
 use rosetta_adapter_support::{
-    AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
+    AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, ProjectHint, SkimResult,
+    StreamDriver,
 };
 use rosetta_core::rows::{Ms, SessionRole, TitleKind};
 use serde_json::Value;
@@ -25,11 +26,15 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
-        matches!(stream_id, "transcript" | "subagent-transcript").then_some(StreamDriver::JsonLines)
+        match stream_id {
+            spec::TRANSCRIPT | spec::SUBAGENT_TRANSCRIPT => Some(StreamDriver::JsonLines),
+            spec::SUBAGENT_METADATA => Some(StreamDriver::DocumentSnapshot),
+            _ => None,
+        }
     }
 
     fn normalizer_version(&self) -> u32 {
-        9
+        10
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -71,6 +76,9 @@ impl AgentAdapter for ClaudeCodeAdapter {
         if self.stream_driver(stream_id).is_none() {
             return SkimResult::default();
         }
+        if stream_id == spec::SUBAGENT_METADATA {
+            return skim_subagent_metadata(stat, head);
+        }
         let mut skim = Skim::default();
         // The head begins at byte 0, so its first stamped record is the one
         // that OPENED the session — the only honest source for `started_at`.
@@ -98,14 +106,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
             }
         }
         let (session_id, parent_session_id, root_session_id, role) = match stream_id {
-            "transcript" => (
+            spec::TRANSCRIPT => (
                 skim.session_id
                     .or_else(|| file_stem(&stat.relative_path).map(str::to_owned)),
                 None,
                 None,
                 Some(SessionRole::Main),
             ),
-            "subagent-transcript" => {
+            spec::SUBAGENT_TRANSCRIPT => {
                 let parent = skim
                     .session_id
                     .or_else(|| parent_from_path(&stat.relative_path).map(str::to_owned));
@@ -131,6 +139,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             root_session_id,
             role,
             cwd: skim.cwd,
+            project: None,
             agent_version: skim.agent_version,
             title,
             title_kind,
@@ -144,7 +153,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // Subagent transcripts do not own the parent session title. Main
         // transcripts occasionally place every title record just outside both
         // fixed windows, so only that missing optional fact earns extra IO.
-        stream_id == "transcript" && skim.title.is_none()
+        stream_id == spec::TRANSCRIPT && skim.title.is_none()
     }
 
     fn absorb_skim_fallback_record(
@@ -177,7 +186,28 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
+        if stream_id == spec::SUBAGENT_METADATA {
+            return LineOutcome::parsed(Vec::new());
+        }
         normalize::ingest(ctx, stream_id, line)
+    }
+
+    fn document_size_limit(&self, stream_id: &str, pipeline_limit: usize) -> usize {
+        if stream_id == spec::SUBAGENT_METADATA {
+            pipeline_limit.min(64 * 1024)
+        } else {
+            pipeline_limit
+        }
+    }
+
+    fn document_records(
+        &self,
+        stream_id: &str,
+        _native_session_id: &str,
+        _document: &[u8],
+    ) -> Vec<Vec<u8>> {
+        debug_assert_eq!(stream_id, spec::SUBAGENT_METADATA);
+        Vec::new()
     }
 }
 
@@ -271,6 +301,15 @@ fn subagent_file_stem(relative_path: &str) -> Option<&str> {
     file_stem(relative_path)?.strip_prefix("agent-")
 }
 
+fn subagent_metadata_stem(relative_path: &str) -> Option<&str> {
+    relative_path
+        .rsplit('/')
+        .next()?
+        .strip_prefix("agent-")?
+        .strip_suffix(".meta.json")
+        .filter(|id| !id.is_empty())
+}
+
 fn parent_from_path(relative_path: &str) -> Option<&str> {
     let mut parts = relative_path.split('/');
     (parts.next()? == "projects").then_some(())?;
@@ -279,10 +318,61 @@ fn parent_from_path(relative_path: &str) -> Option<&str> {
     (parts.next()? == "subagents").then_some(session)
 }
 
+/// Claude's worktree path is a lifecycle/isolation marker, not necessarily
+/// the child's final shell cwd. Use it only to prove ownership by the parent;
+/// the transcript remains authoritative for the child's observed cwd.
+fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
+    let Ok(text) = std::str::from_utf8(document) else {
+        return SkimResult::default();
+    };
+    let Ok(meta) = crate::raw::parse_subagent_meta(text) else {
+        return SkimResult::default();
+    };
+    let Some(child) = subagent_metadata_stem(&stat.relative_path).map(str::to_owned) else {
+        return SkimResult::default();
+    };
+    let Some(parent) = parent_from_path(&stat.relative_path).map(str::to_owned) else {
+        return SkimResult::default();
+    };
+    let project = meta
+        .worktree_path
+        .as_deref()
+        .filter(|path| absolute_native_path(path))
+        .map(|_| ProjectHint::SameAsSession {
+            native_session_id: parent.clone(),
+        });
+    SkimResult {
+        ops: Vec::new(),
+        session_id: Some(child),
+        parent_session_id: Some(parent.clone()),
+        root_session_id: Some(parent),
+        role: Some(SessionRole::Subagent),
+        cwd: None,
+        project,
+        agent_version: None,
+        title: None,
+        title_kind: None,
+        summary: None,
+        started_at: None,
+        updated_at: None,
+    }
+}
+
+fn absolute_native_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with('/')
+        || path.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ClaudeCodeAdapter, FileStat};
-    use rosetta_adapter_support::AgentAdapter;
+    use crate::spec;
+    use rosetta_adapter_support::{AgentAdapter, ProjectHint, StreamDriver};
     use rosetta_core::rows::SessionRole;
 
     fn stat(relative_path: &str) -> FileStat {
@@ -415,6 +505,42 @@ mod tests {
     }
 
     #[test]
+    fn explicit_worktree_sidecar_joins_only_that_child_to_the_parent_project() {
+        let result = ClaudeCodeAdapter.skim(
+            spec::SUBAGENT_METADATA,
+            &stat("projects/p/parent-1/subagents/agent-child-7.meta.json"),
+            br#"{"agentType":"Explore","worktreePath":"/w/.claude/worktrees/agent-child-7"}"#,
+            b"",
+        );
+        assert_eq!(result.session_id.as_deref(), Some("child-7"));
+        assert_eq!(result.parent_session_id.as_deref(), Some("parent-1"));
+        assert_eq!(
+            result.project,
+            Some(ProjectHint::SameAsSession {
+                native_session_id: "parent-1".to_owned(),
+            })
+        );
+        assert_eq!(result.cwd, None);
+    }
+
+    #[test]
+    fn ordinary_subagent_sidecar_does_not_manufacture_worktree_ownership() {
+        for document in [
+            br#"{"agentType":"Explore"}"#.as_slice(),
+            br#"{"agentType":"Explore","worktreePath":"done"}"#.as_slice(),
+        ] {
+            let result = ClaudeCodeAdapter.skim(
+                spec::SUBAGENT_METADATA,
+                &stat("projects/p/parent-1/subagents/agent-child-7.meta.json"),
+                document,
+                b"",
+            );
+            assert_eq!(result.session_id.as_deref(), Some("child-7"));
+            assert_eq!(result.project, None);
+        }
+    }
+
+    #[test]
     fn inventory_json_never_falls_back_to_a_fake_session() {
         let result =
             ClaudeCodeAdapter.skim("state", &stat(".claude.json"), br#"{"projects":{}}"#, b"");
@@ -426,5 +552,17 @@ mod tests {
         let layout = ClaudeCodeAdapter.layout();
         let stream = layout.matching_stream("projects/-tmp-x/abc.jsonl");
         assert_eq!(stream.map(|s| s.id.as_str()), Some("transcript"));
+    }
+
+    #[test]
+    fn metadata_sidecars_are_bounded_document_sources() {
+        assert_eq!(
+            ClaudeCodeAdapter.stream_driver(spec::SUBAGENT_METADATA),
+            Some(StreamDriver::DocumentSnapshot)
+        );
+        assert_eq!(
+            ClaudeCodeAdapter.document_size_limit(spec::SUBAGENT_METADATA, usize::MAX),
+            64 * 1024
+        );
     }
 }

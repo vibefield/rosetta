@@ -248,7 +248,7 @@
       <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
     <div class="status"><b>Implementation checkpoint · 2026-08-31.</b> All ten logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
-      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 12 includes
+      bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 13 includes
       replacement-keyed <code>session_usage</code> for native totals that cannot be attributed to one
       response, deterministic metadata evidence ties, RAM-only replacement staging, and
       canonical/search epoch-revision state. Normal fresh serve constructs that exact canonical schema
@@ -1388,7 +1388,7 @@ enum MessageDetail {                         <span class="comment">// the only p
   succeeded. An update that never finds an opener becomes drift plus ledger provenance rather than a
   fabricated timeline row.</p>
 
-  <pre class="ddl"><span class="c">-- Shipped schema-12 message projection.</span>
+  <pre class="ddl"><span class="c">-- Shipped schema-13 message projection.</span>
 CREATE TABLE <b>message</b> (
   id               INTEGER PRIMARY KEY,
   timeline_id      TEXT NOT NULL UNIQUE,
@@ -1695,7 +1695,7 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
   </div>
 
   <!-- ================================================================ -->
-  <h2>Selected schema-12 projection DDL</h2>
+  <h2>Selected schema-13 projection DDL</h2>
   <p class="h2-note">The closed message DDL above plus this relational shell are the current contract.
   Schema 12 contains no serialized staging, pending joins, opener copies, workspace observations,
   winner histories, or tool-fact storage. Upgrades rebuild privately from the ledger rather than
@@ -1804,7 +1804,7 @@ CREATE TABLE <b>ingest_cursor</b> (           <span class="c">-- driver checkpoi
   UNIQUE (runtime_id, path)
 );
 
-<span class="c">-- The complete schema-12 message table appears in the closed message contract above.
+<span class="c">-- The complete schema-13 message table appears in the closed message contract above.
 -- No FTS table lives in the canonical database. The detached generation owns
 -- search_document metadata plus a contentless message_fts(prose, target, intent, change).
 -- Its search_state records projection_epoch + revision. The worker
@@ -1982,7 +1982,7 @@ ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pr
     ledger. Tables are admitted by named consumers rather than a numeric budget. This model is a
     Phase-2 hypothesis checked and evidence-amended against 9 of 11 ground-truth packs, not yet ratified;
     Gemini and Cursor captures may still amend mappings without reopening the strict raw-versus-canonical
-    boundary. The typed message/tool contract and metadata-only session ownership are active in schema 12 across code, search, protocol, and
+    boundary. The typed message/tool contract and metadata-only session ownership are active in schema 13 across code, search, protocol, and
     clients. Fold patches and replacement generations remain process-local; only resolved user-facing
     rows cross the canonical SQLite boundary. Implementation design: ingest-engine.html.
   </footer>

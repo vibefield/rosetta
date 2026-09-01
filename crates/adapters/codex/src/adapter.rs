@@ -79,6 +79,7 @@ impl AgentAdapter for CodexAdapter {
             root_session_id: parent_session_id,
             role: Some(role),
             cwd: nonempty(row.get("cwd").and_then(Value::as_str)),
+            project: None,
             agent_version: nonempty(row.get("cli_version").and_then(Value::as_str)),
             title,
             title_kind,
@@ -161,6 +162,7 @@ impl AgentAdapter for CodexAdapter {
             root_session_id,
             role,
             cwd: Some(meta.cwd.clone()),
+            project: None,
             agent_version: Some(meta.cli_version.clone()),
             // Rollouts do not carry the display title. The state database is a
             // sibling metadata source and merges onto this same native id.

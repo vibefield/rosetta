@@ -91,6 +91,7 @@ impl AgentAdapter for KimiCodeAdapter {
             root_session_id: identity.root_session_id,
             role: identity.role,
             cwd: facts.cwd,
+            project: None,
             // `metadata.protocol_version` is a wire protocol version, not the
             // Kimi Code release that wrote the file.
             agent_version: None,
@@ -129,6 +130,7 @@ impl AgentAdapter for KimiCodeAdapter {
             root_session_id: None,
             role: Some(SessionRole::Main),
             cwd: cwd.clone(),
+            project: None,
             agent_version: None,
             title_kind: title.as_ref().map(|_| TitleKind::Explicit),
             title,
@@ -151,6 +153,7 @@ impl AgentAdapter for KimiCodeAdapter {
                 root_session_id: Some(root.clone()),
                 role: Some(SessionRole::Subagent),
                 cwd: cwd.clone(),
+                project: None,
                 agent_version: None,
                 title: None,
                 title_kind: None,

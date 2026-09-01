@@ -17,14 +17,15 @@ pub fn runtime_id(kind: &str, data_root: &str) -> String {
     derive("rosetta/runtime", &[kind, data_root])
 }
 
-/// Rosetta's own project abstraction. A repository identity wins when one is
-/// known so worktrees and renamed checkouts merge; otherwise the normalized
-/// workspace root is the stable fallback.
-pub fn project_id(normalized_root: &str, git_repo: Option<&str>) -> String {
-    match git_repo.filter(|identity| !identity.is_empty()) {
-        Some(identity) => derive("rosetta/project/git", &[identity]),
-        None => derive("rosetta/project/root", &[normalized_root]),
-    }
+/// Rosetta's own project abstraction. `worktree_group` is a local folder path
+/// shared only by linked worktrees; ordinary clones use their own root. Both
+/// routes intentionally share one id domain so a deleted source checkout and
+/// a surviving native ownership hint still converge on the same project.
+pub fn project_id(normalized_root: &str, worktree_group: Option<&str>) -> String {
+    let identity = worktree_group
+        .filter(|identity| !identity.is_empty())
+        .unwrap_or(normalized_root);
+    derive("rosetta/project/root", &[identity])
 }
 
 /// Lexically normalize an agent-reported workspace path without requiring it
@@ -109,10 +110,10 @@ mod tests {
     }
 
     #[test]
-    fn repository_identity_merges_worktrees_and_root_is_the_fallback() {
+    fn git_common_dir_merges_only_linked_worktrees() {
         assert_eq!(
-            project_id("/work/one", Some("https://example.test/acme/repo")),
-            project_id("/work/two", Some("https://example.test/acme/repo"))
+            project_id("/work/main", None),
+            project_id("/work/linked", Some("/work/main"))
         );
         assert_ne!(project_id("/work/one", None), project_id("/work/two", None));
     }

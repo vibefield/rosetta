@@ -13,11 +13,15 @@ use serde_json::Value;
 
 const CANONICAL: &str = include_str!("../../../../groundtruth/claude-code/groundtruth.json");
 
+pub const TRANSCRIPT: &str = "transcript";
+pub const SUBAGENT_TRANSCRIPT: &str = "subagent-transcript";
+pub const SUBAGENT_METADATA: &str = "subagent-metadata";
+
 /// The two streams that carry timeline records in the same JSONL dialect. Their
 /// censuses are independent samples of one writer, so the adapter unions their
 /// vocabularies — a type missing from one census is not evidence of a different
 /// format, only of a smaller sample.
-const TRANSCRIPT_STREAMS: [&str; 2] = ["transcript", "subagent-transcript"];
+const TRANSCRIPT_STREAMS: [&str; 2] = [TRANSCRIPT, SUBAGENT_TRANSCRIPT];
 
 /// The layout view every adapter exposes through `AgentAdapter::layout`.
 pub fn doc() -> &'static GroundTruthDoc {
@@ -110,7 +114,7 @@ struct StreamRecordTypes {
 
 #[cfg(test)]
 mod tests {
-    use super::{declared_transcript_types, doc, unexpected_declared_fields};
+    use super::{SUBAGENT_METADATA, declared_transcript_types, doc, unexpected_declared_fields};
     use serde_json::json;
 
     #[test]
@@ -118,6 +122,7 @@ mod tests {
         assert_eq!(doc().agent, "claude-code");
         assert_eq!(doc().data_root, "~/.claude");
         assert!(doc().stream("transcript").is_some());
+        assert!(doc().stream(SUBAGENT_METADATA).is_some());
     }
 
     #[test]

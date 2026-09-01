@@ -31,6 +31,7 @@ from .render import render_agent
 
 GENERATOR = "tools.groundtruth census 2"
 SHAPE_MERGE_CAP = 256
+DOCUMENT_SHAPE_MERGE_CAP = 4096
 FACET_MERGE_CAP = 32
 
 
@@ -58,6 +59,7 @@ CENSUS_STREAMS = {
     "claude-code": {
         "transcript",
         "subagent-transcript",
+        "subagent-metadata",
         "prompt-history",
         "todos",
         "tasks",
@@ -260,7 +262,12 @@ def capture(
                     discriminant = jsonl_record_type(value)
                 cap_key = (stream["id"], discriminant)
                 merge_counts[cap_key] += 1
-                if merge_counts[cap_key] <= SHAPE_MERGE_CAP:
+                shape_merge_cap = (
+                    DOCUMENT_SHAPE_MERGE_CAP
+                    if stream["file_format"] == "json"
+                    else SHAPE_MERGE_CAP
+                )
+                if merge_counts[cap_key] <= shape_merge_cap:
                     accumulators[stream["id"]].absorb(
                         discriminant, _shape_sample(value)
                     )
@@ -296,7 +303,9 @@ def capture(
             "evidence": "observed",
             "notes": (
                 "Structure-only census of a live organic dataset. "
-                f"Shapes sampled from the first {SHAPE_MERGE_CAP} records per type; "
+                "Shapes sampled from the first "
+                f"{DOCUMENT_SHAPE_MERGE_CAP if spec['file_format'] == 'json' else SHAPE_MERGE_CAP} "
+                "records per type; "
                 f"nested facet shapes from the first {FACET_MERGE_CAP} records per "
                 "nested discriminator; observed counts cover the full tree."
             ),

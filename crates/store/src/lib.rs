@@ -94,7 +94,7 @@ impl fmt::Display for StoreError {
             }
             Self::SchemaVersionMismatch { found, expected } => write!(
                 f,
-                "projection schema version {found} does not match {expected}; run an explicit raw-ledger rebuild"
+                "projection schema version {found} does not match {expected}; run an explicit rebuild, or a fresh source ingest when the new version admits metadata absent from the old ledger"
             ),
             Self::SourceConflict {
                 cursor_id,

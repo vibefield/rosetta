@@ -19,9 +19,11 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > generations and late tool/usage relations stage only in process RAM. A process exit leaves the
 > prior projection active and reconstructs the lost accumulator by raw-ledger replay; no normalized
 > operation or reconciliation payload is serialized into SQLite. Unknown projection schemas fail
-> closed and are replaced only by explicit ledger rebuild.
+> closed and are replaced only by an explicit rebuild. When a new version admits native metadata
+> that an older ledger never captured, one fresh source ingest is required before future ledger-only
+> rebuilds become complete again.
 >
-> Projection schema 12 separates the one canonical SQLite projection from a disposable SQLite
+> Projection schema 13 separates the one canonical SQLite projection from a disposable SQLite
 > FTS5 sidecar. `projection_state`, the coalesced `search_dirty` repair set, and their asynchronous
 > worker landed together. Full generations publish through an atomic `CURRENT` manifest; epoch,
 > revision, acknowledgement, corruption, and crash tests prevent cross-generation results.
@@ -31,9 +33,10 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > SQLite carries relocatable service URLs, not Base64; the lossless ledger remains the replay
 > source.
 > Session ownership is closed during bounded metadata admission: one normalized primary cwd and
-> one optional project/repository link per session. The stream phase cannot manufacture projects
-> or reassign ownership; schema 12 removes the former `workspace_obs` relation and
-> `project_assigned_at` arbitration column.
+> one optional local-checkout project link per session. Schema 13 uses folder identity by default,
+> closes native checkout-group/session-owner hints, and merges only linked worktrees. The stream
+> phase cannot manufacture projects or reassign ownership; schema 12 removed the former
+> `workspace_obs` relation and `project_assigned_at` arbitration column.
 >
 > **Fresh-serve checkpoint (2026-08-31).** The normal first-run app path now uses the fast
 > parallel cold topology without giving up immediate or progressive reads. The listener binds
@@ -639,8 +642,12 @@ ingestion.
   crash the ledger recreates the discarded accumulator instead of SQLite acting as an event log.
   Ranked session titles follow the same boundary: SQLite retains one selected title and bounded
   winning provenance, never the losing candidate set.
-  Session cwd/project ownership is admitted once from bounded adapter metadata. Stream
-  normalization may retain a current execution cwd in checkpointed adapter state solely to
+  Session cwd/project ownership is admitted once from bounded adapter metadata. Adapters
+  may provide an agent-neutral checkout-group root or a same-project native-session edge;
+  the meta resolver closes those edges before journaling. Otherwise it falls back to the
+  local Git common directory, which merges linked worktrees but deliberately keeps ordinary
+  clones of the same remote separate. Stream normalization may retain a current execution
+  cwd in checkpointed adapter state solely to
   resolve relative tool arguments; it cannot write that state to canonical tables, consult today's
   checkout to enrich history, create a project, or reassign a session. Filesystem-derived project
   identity is captured during meta ingest and written into the ledger before it becomes canonical.
@@ -827,7 +834,7 @@ effectively flat at about 394 MiB. `tool_update_fact` plus its two indexes had o
 274 MiB. Public message/tool/title/file-edit/usage rows matched after excluding surrogate ids and
 source-provenance keys. The audit also found 6,415 historical `workspace_obs.git_repo` values that
 the old live path had inferred from a checkout but never captured in the ledger. Schema 12 removes
-that relation entirely: one primary cwd and its filesystem-derived project identity are captured
+that relation entirely: one primary cwd and its meta-settled local checkout identity are captured
 in the ledgered meta phase, and stream projection has no ownership mutation op. Peak RSS was 3.64 GB, so partitioning the disposable cold RAM
 fold is the next measured memory target. There is no speedup claim here: an exact same-machine
 schema-10 rerun is still required before attributing the roughly 95-second absolute wall.

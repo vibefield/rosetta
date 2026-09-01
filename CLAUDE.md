@@ -49,8 +49,11 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
    and counters only—never native payloads, normalized op JSON, candidate values, or
    merge history.
    **Session ownership is metadata-only:** every adapter must settle one normalized primary
-   `cwd` and at most one project/repository from its bounded session metadata source. If the
-   source cannot prove them, they stay absent. Full-stream records may carry a changing cwd
+   `cwd` and at most one local checkout project from its bounded session metadata source.
+   Adapters may identify that project by a checkout-group root or by another native session;
+   the shared meta resolver, never an adapter, mints the canonical id. Ordinary clones stay
+   separate while linked Git worktrees converge. If the source cannot prove ownership, it
+   stays absent. Full-stream records may carry a changing cwd
    transiently to resolve relative tool arguments, but may never create a project, reassign a
    session, persist workspace observations, or revise the canonical cwd.
 6. **Parsers exist once, in Rust.** Consumers get generated types (ts-rs from
@@ -133,7 +136,7 @@ explicit legacy archive/restart operation for old incomplete projection sets. A 
 is never moved. `pnpm dev` builds `rosettad --release` and
 passes that exact binary to Electron; mtime-based debug/release selection is forbidden.
 
-Projection schema 12 keeps user-facing canonical rows, rollups, and joins in SQLite while
+Projection schema 13 keeps user-facing canonical rows, rollups, and joins in SQLite while
 production FTS5 lives in a disposable detached sidecar. The asynchronous
 worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
 revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
@@ -142,8 +145,9 @@ SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the 
 remains lossless.
 Each session now carries exactly one adapter-selected primary cwd and one optional project link
 from bounded meta ingest. `workspace_obs` and timestamp-based stream reassignment no longer exist;
-repository roots are resolved once in the ledgered meta batch and nested working directories do
-not manufacture projects. A source-scoped stream batch containing `SessionMeta` is invalid and
+local checkout groups are resolved once in the ledgered meta batch; ordinary clones of one remote
+stay distinct, linked worktrees converge, and nested working directories do not manufacture
+projects. A source-scoped stream batch containing `SessionMeta` is invalid and
 must fail closed at the store boundary.
 The closed user-facing timeline and fixed semantic tool vocabulary are implemented across all
 captured adapters. Native payload noise and unsupported tool fields remain ledger-only. Tool

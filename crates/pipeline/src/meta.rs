@@ -3,10 +3,11 @@
 //! batch of Runtime + Project + SessionMeta upserts, plus the file→session
 //! map the stream phase keys its cursors by.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rosetta_adapter_support::{
-    AgentAdapter, FileDiscipline, FileFormat, FileStat, SkimResult, StreamDriver,
+    AgentAdapter, FileDiscipline, FileFormat, FileStat, ProjectHint, SkimResult, StreamDriver,
 };
 use rosetta_core::rows::{
     ProjectRow, RuntimeRow, SessionRole, SessionRow, SessionTitleRow, StreamState, TitleKind,
@@ -58,6 +59,7 @@ pub struct MetaReport {
 struct MetaOutput {
     projects: Vec<ProjectRow>,
     sessions: Vec<SessionRow>,
+    project_hints: BTreeMap<String, BTreeSet<ProjectHint>>,
     files: Vec<SessionFile>,
     ops: Vec<IngestOp>,
 }
@@ -393,6 +395,7 @@ pub fn meta_ingest_inventory_into(
         sessions,
         mut files,
         ops: meta_ops,
+        ..
     } = output;
     let mut ops: Vec<IngestOp> =
         Vec::with_capacity(1 + projects.len() + sessions.len() + meta_ops.len());
@@ -499,10 +502,10 @@ fn select_primary_cwd(
 
 /// Close the adapter metadata contract into one cwd/project assignment per
 /// session. A child with no native cwd may inherit its parent's already-set
-/// metadata; no parent is inferred from a child, and no source-body record is
-/// consulted here.
+/// metadata. Explicit adapter ownership can also join a deleted worktree to a
+/// native owner session or checkout root. No source-body record is consulted.
 fn settle_projects(output: &mut MetaOutput) {
-    let positions: std::collections::BTreeMap<String, usize> = output
+    let positions: BTreeMap<String, usize> = output
         .sessions
         .iter()
         .enumerate()
@@ -542,16 +545,98 @@ fn settle_projects(output: &mut MetaOutput) {
         }
     }
 
-    let mut projects = std::collections::BTreeMap::new();
-    for session in &mut output.sessions {
-        session.project_id = session.cwd.as_deref().map(|cwd| {
-            let project = crate::project::project(cwd);
-            let id = project.id.clone();
-            projects.entry(id.clone()).or_insert(project);
-            id
-        });
+    // Conflicting native ownership facts fail closed to the ordinary cwd
+    // resolver. A unique `SameAsSession` may form a chain, so resolve roots
+    // first and propagate only already-settled rows. Missing owners and cycles
+    // likewise fall back to cwd instead of manufacturing a relationship.
+    let hints: Vec<Option<ProjectHint>> = output
+        .sessions
+        .iter()
+        .map(|session| {
+            output
+                .project_hints
+                .get(&session.id)
+                .and_then(|hints| (hints.len() == 1).then(|| hints.first().cloned()).flatten())
+        })
+        .collect();
+    let mut resolved: Vec<Option<ProjectRow>> = output
+        .sessions
+        .iter()
+        .zip(&hints)
+        .map(|(session, hint)| match hint {
+            Some(ProjectHint::Root { root, git_repo }) => Some(crate::project::project_from_hint(
+                session.cwd.as_deref().unwrap_or(root),
+                root,
+                git_repo.as_deref(),
+            )),
+            Some(ProjectHint::SameAsSession { .. }) => None,
+            None => session.cwd.as_deref().map(crate::project::project),
+        })
+        .collect();
+
+    for _ in 0..output.sessions.len() {
+        let mut changed = false;
+        for index in 0..output.sessions.len() {
+            if resolved[index].is_some() {
+                continue;
+            }
+            let Some(ProjectHint::SameAsSession { native_session_id }) = &hints[index] else {
+                continue;
+            };
+            let Some(owner) = positions.get(native_session_id) else {
+                continue;
+            };
+            let Some(mut project) = resolved[*owner].clone() else {
+                continue;
+            };
+            extend_project_roots(&mut project, output.sessions[index].cwd.as_deref());
+            resolved[index] = Some(project);
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut projects = BTreeMap::new();
+    for (index, session) in output.sessions.iter_mut().enumerate() {
+        let project = resolved[index]
+            .take()
+            .or_else(|| session.cwd.as_deref().map(crate::project::project));
+        session.project_id = project.as_ref().map(|project| project.id.clone());
+        if let Some(project) = project {
+            merge_project(&mut projects, project);
+        }
     }
     output.projects = projects.into_values().collect();
+}
+
+fn extend_project_roots(project: &mut ProjectRow, cwd: Option<&str>) {
+    let Some(cwd) = cwd else {
+        return;
+    };
+    let observed = crate::project::project(cwd);
+    project.root_paths.extend(observed.root_paths);
+    project.root_paths.sort();
+    project.root_paths.dedup();
+    if project.git_repo.is_none() {
+        project.git_repo = observed.git_repo;
+    }
+}
+
+fn merge_project(projects: &mut BTreeMap<String, ProjectRow>, mut row: ProjectRow) {
+    let Some(existing) = projects.get_mut(&row.id) else {
+        projects.insert(row.id.clone(), row);
+        return;
+    };
+    existing.root_paths.append(&mut row.root_paths);
+    existing.root_paths.sort();
+    existing.root_paths.dedup();
+    existing.name = existing.name.clone().min(row.name);
+    existing.git_repo = match (existing.git_repo.take(), row.git_repo) {
+        (None, value) | (value, None) => value,
+        (Some(left), Some(right)) => Some(left.min(right)),
+    };
 }
 
 fn stronger_stream_state(left: StreamState, right: StreamState) -> StreamState {
@@ -590,6 +675,18 @@ fn admit_identified(
     native_session_id: String,
 ) {
     let session_id = ids::session_id(&runtime.id, &native_session_id);
+
+    if let Some(project) = skim
+        .project
+        .take()
+        .and_then(|hint| canonical_project_hint(&runtime.id, hint))
+    {
+        output
+            .project_hints
+            .entry(session_id.clone())
+            .or_default()
+            .insert(project);
+    }
 
     if let Some(title) = skim.title.take() {
         output.ops.push(IngestOp::SessionTitle(SessionTitleRow {
@@ -677,6 +774,20 @@ fn admit_identified(
         agent_version: skim.agent_version,
         source_missing: false,
     });
+}
+
+fn canonical_project_hint(runtime_id: &str, hint: ProjectHint) -> Option<ProjectHint> {
+    match hint {
+        ProjectHint::Root { root, git_repo } => {
+            let root = ids::normalize_root(&root);
+            (!root.is_empty()).then_some(ProjectHint::Root { root, git_repo })
+        }
+        ProjectHint::SameAsSession { native_session_id } => {
+            (!native_session_id.is_empty()).then(|| ProjectHint::SameAsSession {
+                native_session_id: ids::session_id(runtime_id, &native_session_id),
+            })
+        }
+    }
 }
 
 /// Meta admission for a rewrite-in-place document. One physical file may
@@ -972,5 +1083,90 @@ mod tests {
         assert_eq!(output.sessions[0].cwd, None);
         assert_eq!(output.sessions[0].project_id, None);
         assert!(output.projects.is_empty());
+    }
+
+    #[test]
+    fn native_owner_links_a_deleted_worktree_to_the_parent_project() {
+        let parent_cwd = "/work/original";
+        let child_cwd = "/gone/worktrees/child";
+        let mut output = MetaOutput {
+            sessions: vec![
+                session(
+                    "parent",
+                    Some(parent_cwd),
+                    None,
+                    "parent",
+                    SessionRole::Main,
+                    10,
+                ),
+                session(
+                    "child",
+                    Some(child_cwd),
+                    Some("parent"),
+                    "parent",
+                    SessionRole::Subagent,
+                    20,
+                ),
+            ],
+            project_hints: BTreeMap::from([(
+                "child".to_owned(),
+                BTreeSet::from([ProjectHint::SameAsSession {
+                    native_session_id: "parent".to_owned(),
+                }]),
+            )]),
+            ..MetaOutput::default()
+        };
+
+        settle_projects(&mut output);
+
+        assert_eq!(output.sessions[1].project_id, output.sessions[0].project_id);
+        assert_eq!(output.projects.len(), 1);
+        assert_eq!(output.projects[0].name, "original");
+        assert_eq!(
+            output.projects[0].root_paths,
+            vec![child_cwd.to_owned(), parent_cwd.to_owned()]
+        );
+    }
+
+    #[test]
+    fn native_checkout_root_links_a_deleted_worktree_without_live_git_metadata() {
+        let canonical_root = "/work/original";
+        let child_cwd = "/gone/worktrees/child";
+        let mut output = MetaOutput {
+            sessions: vec![session(
+                "child",
+                Some(child_cwd),
+                None,
+                "child",
+                SessionRole::Main,
+                20,
+            )],
+            project_hints: BTreeMap::from([(
+                "child".to_owned(),
+                BTreeSet::from([ProjectHint::Root {
+                    root: canonical_root.to_owned(),
+                    git_repo: Some("git@example.com:acme/repo.git".to_owned()),
+                }]),
+            )]),
+            ..MetaOutput::default()
+        };
+
+        settle_projects(&mut output);
+
+        assert_eq!(output.sessions[0].cwd.as_deref(), Some(child_cwd));
+        assert_eq!(output.projects.len(), 1);
+        assert_eq!(
+            output.sessions[0].project_id.as_deref(),
+            Some(ids::project_id(canonical_root, None).as_str())
+        );
+        assert_eq!(output.projects[0].name, "original");
+        assert_eq!(
+            output.projects[0].root_paths,
+            vec![child_cwd.to_owned(), canonical_root.to_owned()]
+        );
+        assert_eq!(
+            output.projects[0].git_repo.as_deref(),
+            Some("example.com:acme/repo")
+        );
     }
 }

@@ -1,13 +1,15 @@
 //! The projection DDL (docs/canonical-model.html, "The SQLite projection").
 //! Stamped with a schema version. A mismatch fails closed on ordinary open;
-//! replacement happens only through an explicit, validated raw-ledger rebuild.
+//! replacement happens only through an explicit validated rebuild or fresh
+//! source ingest.
 
 use rusqlite::Connection;
 
 use crate::StoreError;
 
-/// Bump on any DDL change. Existing nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 12;
+/// Bump on any DDL or incompatible projection-semantic change. Existing
+/// nonzero versions fail closed.
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————

@@ -5,28 +5,62 @@ use rosetta_core::rows::ProjectRow;
 
 pub(crate) fn project(cwd: &str) -> ProjectRow {
     let cwd = ids::normalize_root(cwd);
-    let (root, git_repo) = git_identity(&cwd).unwrap_or((cwd, None));
+    let (root, group_root, git_repo) = git_metadata(&cwd).unwrap_or((cwd, None, None));
+    let identity_root = group_root.unwrap_or_else(|| root.clone());
+    let mut root_paths = vec![root];
+    if !root_paths.contains(&identity_root) {
+        root_paths.push(identity_root.clone());
+    }
+    root_paths.sort();
     ProjectRow {
-        id: ids::project_id(&root, git_repo.as_deref()),
-        name: ids::project_name(&root),
-        root_paths: vec![root],
+        id: ids::project_id(&identity_root, None),
+        name: ids::project_name(&identity_root),
+        root_paths,
         git_repo,
     }
 }
 
-/// Best-effort repository identity without invoking git. Prefer a sanitized
-/// remote URL; retain the repository root separately from the session cwd so
-/// nested directories never become fake projects.
-fn git_identity(cwd: &str) -> Option<(String, Option<String>)> {
+pub(crate) fn project_from_hint(cwd: &str, group_root: &str, git_repo: Option<&str>) -> ProjectRow {
+    let mut observed = project(cwd);
+    let group_root = ids::normalize_root(group_root);
+    if !observed.root_paths.contains(&group_root) {
+        observed.root_paths.push(group_root.clone());
+        observed.root_paths.sort();
+        observed.root_paths.dedup();
+    }
+    observed.id = ids::project_id(&group_root, None);
+    observed.name = ids::project_name(&group_root);
+    if let Some(git_repo) = git_repo {
+        observed.git_repo = Some(sanitize_remote(git_repo));
+    }
+    observed
+}
+
+/// Best-effort repository metadata without invoking git. The common Git
+/// directory is the identity seam: it differs between ordinary clones and is
+/// shared by linked worktrees. The sanitized remote remains display metadata.
+fn git_metadata(cwd: &str) -> Option<(String, Option<String>, Option<String>)> {
     let (repo_root, git_dir) = find_git_dir(Path::new(cwd))?;
-    let common_dir = common_git_dir(&git_dir).unwrap_or(git_dir);
-    let config = std::fs::read_to_string(common_dir.join("config")).ok();
-    let identity = config
+    let common_dir = common_git_dir(&git_dir)
+        .map(|path| PathBuf::from(ids::normalize_root(&path.to_string_lossy())));
+    let metadata_dir = common_dir.as_deref().unwrap_or(&git_dir);
+    let config = std::fs::read_to_string(metadata_dir.join("config")).ok();
+    let git_repo = config.as_deref().and_then(remote_url).map(sanitize_remote);
+    let group_root = common_dir
         .as_deref()
-        .and_then(remote_url)
-        .map(sanitize_remote)
-        .or_else(|| Some(ids::normalize_root(&repo_root.to_string_lossy())));
-    Some((ids::normalize_root(&repo_root.to_string_lossy()), identity))
+        .map(|common_dir| {
+            if common_dir.file_name().is_some_and(|name| name == ".git") {
+                common_dir.parent().unwrap_or(common_dir)
+            } else {
+                common_dir
+            }
+        })
+        .unwrap_or(&repo_root);
+    Some((
+        ids::normalize_root(&repo_root.to_string_lossy()),
+        Some(ids::normalize_root(&group_root.to_string_lossy())),
+        git_repo,
+    ))
 }
 
 fn find_git_dir(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -165,5 +199,85 @@ mod tests {
             vec![ids::normalize_root(&root.path().to_string_lossy())]
         );
         assert_eq!(row.git_repo.as_deref(), Some("example.com:acme/repo"));
+    }
+
+    #[test]
+    fn ordinary_clones_with_the_same_remote_are_distinct_projects() {
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        for root in [&first, &second] {
+            std::fs::create_dir_all(root.join(".git")).unwrap();
+            std::fs::write(
+                root.join(".git/config"),
+                "[remote \"origin\"]\n  url = git@example.com:acme/repo.git\n",
+            )
+            .unwrap();
+        }
+
+        let first = project(&first.to_string_lossy());
+        let second = project(&second.to_string_lossy());
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.git_repo, second.git_repo);
+    }
+
+    #[test]
+    fn linked_worktrees_share_a_project_without_a_remote() {
+        let temp = TempDir::new().unwrap();
+        let main = temp.path().join("main");
+        let linked = temp.path().join("linked");
+        let linked_git_dir = main.join(".git/worktrees/linked");
+        std::fs::create_dir_all(&linked_git_dir).unwrap();
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(main.join(".git/config"), "[core]\n  bare = false\n").unwrap();
+        std::fs::write(linked_git_dir.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", linked_git_dir.display()),
+        )
+        .unwrap();
+
+        let main_project = project(&main.to_string_lossy());
+        let linked_project = project(&linked.to_string_lossy());
+        assert_eq!(main_project.id, linked_project.id);
+        assert_eq!(
+            linked_project.name,
+            ids::project_name(&main.to_string_lossy())
+        );
+        assert!(
+            linked_project
+                .root_paths
+                .contains(&ids::normalize_root(&main.to_string_lossy()))
+        );
+        assert!(
+            linked_project
+                .root_paths
+                .contains(&ids::normalize_root(&linked.to_string_lossy()))
+        );
+        assert_eq!(main_project.git_repo, None);
+        assert_eq!(linked_project.git_repo, None);
+    }
+
+    #[test]
+    fn gitfile_without_a_common_dir_keeps_the_checkout_folder_identity() {
+        let temp = TempDir::new().unwrap();
+        let parent = temp.path().join("parent");
+        let child = parent.join("child");
+        let child_git_dir = parent.join(".git/modules/child");
+        std::fs::create_dir_all(&child_git_dir).unwrap();
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(
+            child.join(".git"),
+            format!("gitdir: {}\n", child_git_dir.display()),
+        )
+        .unwrap();
+
+        let project = project(&child.to_string_lossy());
+
+        assert_eq!(project.name, "child");
+        assert_eq!(
+            project.root_paths,
+            vec![ids::normalize_root(&child.to_string_lossy())]
+        );
     }
 }

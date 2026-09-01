@@ -41,7 +41,10 @@ pub struct SnapshotPlan {
     /// One result row per native session. Recognized columns:
     /// `native_session_id` (required), `title`, `cwd`, `agent_version`,
     /// `started_at`, `updated_at` (ms epochs), `parent_native_session_id`,
-    /// `root_native_session_id`, `role` (`main` | `subagent` | `team`).
+    /// `root_native_session_id`, `role` (`main` | `subagent` | `team`),
+    /// `project_root`, `project_git_repo`, and
+    /// `project_owner_native_session_id`. The owner alias takes precedence
+    /// over a root when both are present.
     /// Order stably.
     pub sessions_sql: String,
     /// Per-session record queries; `?1` binds the native session id, and
@@ -72,6 +75,21 @@ pub struct FileStat {
 /// recorded. The pipeline owns rosetta id derivation and row construction;
 /// an adapter never sees a runtime id at skim time, so it could not mint a
 /// rosetta id if it tried.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProjectHint {
+    /// This session belongs to the local checkout group rooted at `root`.
+    /// Ordinary clones report their own root; linked worktrees report the
+    /// original/source checkout root. A remote is display metadata only.
+    Root {
+        root: String,
+        git_repo: Option<String>,
+    },
+    /// This session belongs to the same project as another native session.
+    /// The pipeline resolves the native id after every bounded metadata source
+    /// has contributed, so adapters never mint canonical ids.
+    SameAsSession { native_session_id: String },
+}
+
 #[derive(Debug, Default)]
 pub struct SkimResult {
     pub ops: Vec<IngestOp>,
@@ -87,6 +105,10 @@ pub struct SkimResult {
     /// One primary working directory proven by bounded native metadata. The
     /// pipeline normalizes it and settles project ownership before streaming.
     pub cwd: Option<String>,
+    /// Optional native project ownership stronger than cwd alone. This is
+    /// transient meta-ingest evidence; only the settled ProjectRow and
+    /// SessionMeta enter the raw ledger and canonical projection.
+    pub project: Option<ProjectHint>,
     pub agent_version: Option<String>,
     /// Session title/summary when the head or tail happens to carry one.
     pub title: Option<String>,
@@ -231,6 +253,14 @@ pub trait AgentAdapter: Send + Sync {
                 .map(str::to_owned)
         };
         let title = text("title");
+        let project = text("project_owner_native_session_id")
+            .map(|native_session_id| ProjectHint::SameAsSession { native_session_id })
+            .or_else(|| {
+                text("project_root").map(|root| ProjectHint::Root {
+                    root,
+                    git_repo: text("project_git_repo"),
+                })
+            });
         SkimResult {
             ops: Vec::new(),
             session_id: text("native_session_id"),
@@ -243,6 +273,7 @@ pub trait AgentAdapter: Send + Sync {
                 _ => None,
             },
             cwd: text("cwd"),
+            project,
             agent_version: text("agent_version"),
             title_kind: title.as_ref().map(|_| TitleKind::Explicit),
             title,

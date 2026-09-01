@@ -110,6 +110,7 @@ impl AgentAdapter for PiAdapter {
             root_session_id: parent,
             role: Some(SessionRole::Main),
             cwd: (!header.cwd.is_empty()).then_some(header.cwd),
+            project: None,
             // `version` is Pi's SESSION FORMAT version, not the agent release.
             agent_version: None,
             title_kind: title.as_ref().map(|_| TitleKind::Explicit),

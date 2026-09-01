@@ -5,10 +5,41 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.groundtruth.census import FACET_MERGE_CAP, capture
+from tools.groundtruth.census import FACET_MERGE_CAP, SHAPE_MERGE_CAP, capture
 
 
 class CensusTests(unittest.TestCase):
+    def test_json_metadata_keeps_a_rare_field_beyond_the_jsonl_sample_cap(self) -> None:
+        repo = Path(__file__).resolve().parents[3]
+        agent_dir = repo / "groundtruth" / "claude-code"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sidecars = root / "projects" / "project" / "parent" / "subagents"
+            sidecars.mkdir(parents=True)
+            for index in range(SHAPE_MERGE_CAP + 1):
+                (sidecars / f"agent-{index:04}.meta.json").write_text(
+                    json.dumps({"agentType": "Explore"})
+                )
+            (sidecars / "agent-late.meta.json").write_text(
+                json.dumps(
+                    {
+                        "agentType": "Explore",
+                        "worktreePath": "/tmp/project/.claude/worktrees/late",
+                    }
+                )
+            )
+            document, count = capture(agent_dir, root, "test")
+
+        self.assertEqual(count, SHAPE_MERGE_CAP + 2)
+        stream = next(
+            stream
+            for stream in document["streams"]
+            if stream["id"] == "subagent-metadata"
+        )
+        fields = stream["record_types"][""]["shape"]["fields"]
+        self.assertIn("worktreePath", fields)
+        self.assertEqual(fields["worktreePath"]["observed"], 1)
+
     def test_late_nested_variant_is_not_hidden_by_envelope_sample_cap(self) -> None:
         records = [
             {

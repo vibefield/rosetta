@@ -11,7 +11,7 @@
       "agent_version": "1.0.5",
       "evidence": "fixture",
       "path": "sources/1.0.5.fixtures.json",
-      "sha256": "0b806712be1d798e6899e3874c2f295d6af38ceb7b5616e2a4f644d03899ee10"
+      "sha256": "d91baa23b57002a86b2a1f98c289cf42e0bde9f1756bc89ae8791441ef57f74c"
     },
     {
       "generator": "tools.groundtruth census 2",
@@ -11679,7 +11679,7 @@
     },
     {
       "id": "subagents",
-      "glob": "sessions/*/*/subagents/**",
+      "glob": "sessions/*/*/subagents/*/meta.json",
       "file_format": "json",
       "discipline": "rewrite_in_place",
       "evidence": "observed",

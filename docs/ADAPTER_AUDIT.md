@@ -111,10 +111,34 @@ are swept. Live hints and polling both detect whole-source deletion.
 
 ### Project identity is stable and privacy-safe
 
-Workspace roots are lexically normalized. When a Git origin is available, project
-identity prefers a sanitized canonical remote (credentials and irrelevant URL spelling
-removed), so worktrees and renamed checkouts converge. The filesystem root remains the
-fallback. A missing cwd remains null and is presented honestly as Unassigned.
+Workspace roots are lexically normalized and are the default project identity, so two
+ordinary clones of one remote remain two projects. During meta ingest the shared adapter
+contract may prove either a local checkout-group root or ownership by another native
+session. The generic resolver uses that evidence to merge linked worktrees, including
+deleted temporary worktrees whose agent metadata survives. When no native ownership is
+available, the resolver reads Git's local common-directory relation without invoking Git;
+the sanitized remote is display metadata only. A missing cwd remains null and is presented
+honestly as Unassigned.
+
+The project-evidence pass was repeated across every implemented adapter on 2026-09-01.
+All nine use the shared live-filesystem resolver; only an adapter fact that distinguishes a
+linked worktree from an ordinary clone is allowed to outlive that filesystem evidence:
+
+| adapter | bounded native evidence | project decision |
+|---|---|---|
+| Antigravity CLI | first `workspace_uris` entry supplies cwd; `project_id` does not prove a local checkout group | cwd + live Git common directory |
+| Claude Code | transcript cwd; `agent-*.meta.json` optionally carries an absolute `worktreePath`, while its enclosing session directory identifies the parent | an explicitly isolated child uses `SameAsSession(parent)`; every other session uses cwd + live Git |
+| Codex | rollout/state cwd, parent thread and remote/branch metadata; no persisted Git common-directory or worktree-owner fact | cwd + live Git; remote identity never groups clones |
+| Copilot | `workspace.yaml` cwd and event repository context; no native worktree-group marker | cwd + live Git |
+| Grok | subagent metadata persists child cwd plus parent session identity | child uses `SameAsSession(parent)`; ordinary sessions use cwd + live Git |
+| Hermes | session cwd and `git_repo_root`; the latter describes the current checkout/worktree, not its shared common Git directory | cwd + live Git |
+| Kimi Code | one session-state cwd shared by the root and its enumerated agents | shared cwd + live Git |
+| OpenCode | session directory plus a project row whose id may be remote/root-commit based and whose `sandboxes` can include another clone | ignore native project grouping; use directory + live Git so ordinary clones stay distinct |
+| Pi | session-header cwd and optional parent-session path; no worktree-group marker | cwd + live Git |
+
+This boundary is intentional: Claude Code and Grok can still join a deleted temporary
+worktree to its surviving owner. For the other adapters, a deleted checkout remains separate
+unless a future, ground-truth-backed writer field proves its original Git common directory.
 
 ### Native session usage does not manufacture messages
 

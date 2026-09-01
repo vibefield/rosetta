@@ -93,6 +93,7 @@ impl AgentAdapter for AntigravityAdapter {
             root_session_id: None,
             role: Some(SessionRole::Main),
             cwd: None,
+            project: None,
             agent_version: None,
             title_kind: title.as_ref().map(|_| TitleKind::Fallback),
             title,

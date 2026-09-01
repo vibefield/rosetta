@@ -17,6 +17,7 @@ pub const UPDATES: &str = "updates";
 pub const CHAT_HISTORY: &str = "chat-history";
 pub const EVENTS: &str = "events";
 pub const SUMMARY: &str = "summary";
+pub const SUBAGENTS: &str = "subagents";
 
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
@@ -53,7 +54,7 @@ struct StreamRecordTypes {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHAT_HISTORY, EVENTS, SUMMARY, UPDATES, declared_update_types, doc};
+    use super::{CHAT_HISTORY, EVENTS, SUBAGENTS, SUMMARY, UPDATES, declared_update_types, doc};
 
     #[test]
     fn embedded_canonical_describes_grok() {
@@ -66,6 +67,7 @@ mod tests {
         assert!(doc().stream(CHAT_HISTORY).is_some());
         assert!(doc().stream(EVENTS).is_some());
         assert!(doc().stream(SUMMARY).is_some());
+        assert!(doc().stream(SUBAGENTS).is_some());
     }
 
     #[test]

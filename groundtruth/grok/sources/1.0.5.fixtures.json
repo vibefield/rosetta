@@ -3688,7 +3688,7 @@
     },
     {
       "id": "subagents",
-      "glob": "sessions/*/*/subagents/**",
+      "glob": "sessions/*/*/subagents/*/meta.json",
       "file_format": "json",
       "discipline": "rewrite_in_place",
       "evidence": "observed",

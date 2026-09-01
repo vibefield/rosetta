@@ -11,7 +11,7 @@
       "agent_version": "2.1.241",
       "evidence": "fixture",
       "path": "sources/2.1.241.fixtures.json",
-      "sha256": "120d9f99dc20a7196a76899c6bc83d0e0134d44f7f03171cff5ba1205fc5c6bc"
+      "sha256": "4eb3b71030f2eeef9e150b812d9dceac8c5930e9c9b20f3f322910e9eb709cb8"
     },
     {
       "generator": "tools.groundtruth census 2",
@@ -29,6 +29,14 @@
       "path": "sources/observed-2026-08-28.json",
       "sha256": "962c41b0e0681b11225c6748257aee897f07bdc3bdb3ffdd12d0d708bcb667c2",
       "captured_at": "2026-08-28"
+    },
+    {
+      "generator": "tools.groundtruth census 2",
+      "agent_version": "observed-subagent-metadata-2026-09-01",
+      "evidence": "observed",
+      "path": "sources/observed-subagent-metadata-2026-09-01.json",
+      "sha256": "8da0d16b2f27b7ef9a0fa53e26f3c6fe5edc151c43c196c6e69c681a3821e7a2",
+      "captured_at": "subagent-metadata-2026-09-01"
     }
   ],
   "streams": [
@@ -20555,6 +20563,138 @@
           }
         }
       ]
+    },
+    {
+      "id": "subagent-metadata",
+      "glob": "projects/*/*/subagents/**/agent-*.meta.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "observed",
+      "notes": "Subagent metadata sidecars. `worktreePath`, when present as an absolute path, is explicit worktree-isolation evidence; the enclosing session directory proves the owning parent session.",
+      "record_types": {
+        "": {
+          "observed": 2758,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agentType": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true,
+                "observed": 2758
+              },
+              "color": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 546
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 1876
+              },
+              "isFork": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 5
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 592
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 590
+              },
+              "parentAgentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 173
+              },
+              "permissionMode": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "auto": 531,
+                    "default": 12,
+                    "plan": 3
+                  }
+                },
+                "required": false,
+                "observed": 546
+              },
+              "planModeRequired": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 546
+              },
+              "spawnDepth": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false,
+                "observed": 1426
+              },
+              "stoppedByUser": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false,
+                "observed": 3
+              },
+              "taskKind": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "in_process_teammate": 546
+                  }
+                },
+                "required": false,
+                "observed": 546
+              },
+              "teamName": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 546
+              },
+              "toolUseId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 278
+              },
+              "worktreePath": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false,
+                "observed": 13
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      }
     },
     {
       "id": "todos",

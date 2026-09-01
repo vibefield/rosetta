@@ -4,9 +4,9 @@ use std::any::Any;
 
 use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
-    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
+    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, ProjectHint, SkimResult, StreamDriver,
 };
-use rosetta_core::rows::TitleKind;
+use rosetta_core::rows::{SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, GrokState};
@@ -25,20 +25,21 @@ impl AgentAdapter for GrokAdapter {
 
     /// `updates` alone owns canonical conversation rows. `summary` is a
     /// metadata-only document snapshot that admits summary-only sessions and
-    /// enriches transcript sessions without duplicating messages. `chat-history`
-    /// repeats the raw model messages, and `events` repeats turn/tool
-    /// telemetry; admitting either would make duplicate logical events
-    /// possible. JSON sidecars and text files remain inventory as well.
+    /// enriches transcript sessions without duplicating messages. `subagents`
+    /// is another metadata-only snapshot: it retains native parent/project
+    /// lineage after a temporary worktree is deleted. `chat-history` repeats
+    /// raw model messages, and `events` repeats telemetry; admitting either
+    /// would make duplicate logical events possible.
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
         match stream_id {
             spec::UPDATES => Some(StreamDriver::JsonLines),
-            spec::SUMMARY => Some(StreamDriver::DocumentSnapshot),
+            spec::SUMMARY | spec::SUBAGENTS => Some(StreamDriver::DocumentSnapshot),
             _ => None,
         }
     }
 
     fn normalizer_version(&self) -> u32 {
-        4
+        5
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -73,6 +74,9 @@ impl AgentAdapter for GrokAdapter {
     /// meaning is stated by the canonical session path.
     ///
     fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], tail: &[u8]) -> SkimResult {
+        if stream_id == spec::SUBAGENTS {
+            return skim_subagent(stat, head);
+        }
         if stream_id == spec::SUMMARY {
             let Ok(text) = std::str::from_utf8(head) else {
                 return SkimResult::default();
@@ -86,11 +90,10 @@ impl AgentAdapter for GrokAdapter {
                 ops: Vec::new(),
                 session_id: Some(summary.info.id),
                 root_session_id: None,
-                role: parent_session_id
-                    .as_ref()
-                    .map(|_| rosetta_core::rows::SessionRole::Subagent),
+                role: parent_session_id.as_ref().map(|_| SessionRole::Subagent),
                 parent_session_id,
                 cwd: (!summary.info.cwd.is_empty()).then_some(summary.info.cwd),
+                project: None,
                 agent_version: None,
                 title_kind: title.as_ref().map(|_| TitleKind::Generated),
                 title,
@@ -119,6 +122,7 @@ impl AgentAdapter for GrokAdapter {
             root_session_id: None,
             role: None,
             cwd: None,
+            project: None,
             agent_version: None,
             title: None,
             title_kind: None,
@@ -134,14 +138,16 @@ impl AgentAdapter for GrokAdapter {
         _native_session_id: &str,
         _document: &[u8],
     ) -> Vec<Vec<u8>> {
-        debug_assert_eq!(stream_id, spec::SUMMARY);
+        debug_assert!(matches!(stream_id, spec::SUMMARY | spec::SUBAGENTS));
         Vec::new()
     }
 
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
         // Admission control is authoritative even for direct callers: an
         // inventory rail can never accidentally emit overlapping messages.
-        if stream_id == spec::SUMMARY || self.stream_driver(stream_id).is_none() {
+        if matches!(stream_id, spec::SUMMARY | spec::SUBAGENTS)
+            || self.stream_driver(stream_id).is_none()
+        {
             return LineOutcome::parsed(Vec::new());
         }
 
@@ -180,9 +186,71 @@ fn session_from_path(relative_path: &str) -> Option<String> {
     }
 }
 
+fn subagent_from_path(relative_path: &str) -> Option<(&str, &str)> {
+    let parts: Vec<_> = relative_path.split('/').collect();
+    match parts.as_slice() {
+        [
+            "sessions",
+            _workspace,
+            parent,
+            "subagents",
+            child,
+            "meta.json",
+        ] if !parent.is_empty() && !child.is_empty() => Some((parent, child)),
+        _ => None,
+    }
+}
+
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| (!value.trim().is_empty()).then_some(value))
+}
+
+fn skim_subagent(stat: &FileStat, document: &[u8]) -> SkimResult {
+    let Ok(text) = std::str::from_utf8(document) else {
+        return SkimResult::default();
+    };
+    let Ok(meta) = crate::raw::parse_subagent_meta(text) else {
+        return SkimResult::default();
+    };
+    let from_path = subagent_from_path(&stat.relative_path);
+    let child =
+        nonempty(meta.child_session_id).or_else(|| from_path.map(|(_, child)| child.to_owned()));
+    let parent =
+        nonempty(meta.parent_session_id).or_else(|| from_path.map(|(parent, _)| parent.to_owned()));
+    let (Some(child), Some(parent)) = (child, parent) else {
+        return SkimResult::default();
+    };
+    let started_at = meta
+        .started_at
+        .as_deref()
+        .and_then(rosetta_adapter_support::rfc3339_ms);
+    let updated_at = meta
+        .completed_at
+        .as_deref()
+        .and_then(rosetta_adapter_support::rfc3339_ms)
+        .or(started_at);
+    SkimResult {
+        ops: Vec::new(),
+        session_id: Some(child),
+        parent_session_id: Some(parent.clone()),
+        root_session_id: Some(parent.clone()),
+        role: Some(SessionRole::Subagent),
+        cwd: nonempty(meta.child_cwd),
+        project: Some(ProjectHint::SameAsSession {
+            native_session_id: parent,
+        }),
+        agent_version: None,
+        title: None,
+        title_kind: None,
+        summary: None,
+        started_at,
+        updated_at,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use rosetta_adapter_support::adapter::{AgentAdapter, FileStat};
+    use rosetta_adapter_support::adapter::{AgentAdapter, FileStat, ProjectHint};
 
     use super::GrokAdapter;
     use crate::spec;
@@ -244,13 +312,17 @@ mod tests {
     }
 
     #[test]
-    fn only_updates_has_a_driver() {
+    fn only_primary_and_metadata_streams_have_drivers() {
         assert_eq!(
             GrokAdapter.stream_driver(spec::UPDATES),
             Some(rosetta_adapter_support::StreamDriver::JsonLines)
         );
         assert_eq!(
             GrokAdapter.stream_driver(spec::SUMMARY),
+            Some(rosetta_adapter_support::StreamDriver::DocumentSnapshot)
+        );
+        assert_eq!(
+            GrokAdapter.stream_driver(spec::SUBAGENTS),
             Some(rosetta_adapter_support::StreamDriver::DocumentSnapshot)
         );
         for inventory in [spec::CHAT_HISTORY, spec::EVENTS] {
@@ -289,5 +361,39 @@ mod tests {
         assert_eq!(result.summary.as_deref(), Some("Investigate the parser"));
         assert_eq!(result.started_at, Some(1_787_634_570_810));
         assert_eq!(result.role, Some(rosetta_core::rows::SessionRole::Subagent));
+    }
+
+    #[test]
+    fn subagent_metadata_retains_parent_project_ownership() {
+        let path = "sessions/%2Fw%2Fproject/parent/subagents/child/meta.json";
+        let document = br#"{
+            "child_session_id":"child",
+            "parent_session_id":"parent",
+            "child_cwd":"/gone/worktrees/child",
+            "started_at":"2026-08-25T05:09:30Z",
+            "completed_at":"2026-08-25T05:10:30Z",
+            "status":"completed"
+        }"#;
+        let result = GrokAdapter.skim(
+            spec::SUBAGENTS,
+            &FileStat {
+                relative_path: path.to_owned(),
+                size: document.len() as u64,
+                modified_ms: 0,
+            },
+            document,
+            &[],
+        );
+        assert_eq!(result.session_id.as_deref(), Some("child"));
+        assert_eq!(result.parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(result.cwd.as_deref(), Some("/gone/worktrees/child"));
+        assert_eq!(
+            result.project,
+            Some(ProjectHint::SameAsSession {
+                native_session_id: "parent".to_owned(),
+            })
+        );
+        assert_eq!(result.started_at, Some(1_787_634_570_000));
+        assert_eq!(result.updated_at, Some(1_787_634_630_000));
     }
 }
