@@ -614,12 +614,6 @@
 .ah-subthread__body .ah-tmsg p { font-size: 13px; }
 .ah-subthread__body .ah-work { margin-top: 8px; }
 .ah-subthread__empty { margin: 8px 0; color: var(--vf-text-faint); font-size: 11px; }
-.ah-unanchored { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--vf-hairline-strong); }
-.ah-unanchored__label {
-  margin-bottom: 5px; color: var(--vf-text-faint); font-size: 9.5px;
-  text-transform: uppercase; letter-spacing: 0.07em;
-}
-.ah-unanchored > .ah-subthread { margin-left: 0; }
 
 /* ── the two drawn markers ───────────────────────────────────────────────── */
 .ah-mark {

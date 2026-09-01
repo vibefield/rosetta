@@ -1,7 +1,7 @@
 // Column ④ — the transcript: a document, not a chat log. Child sessions are
 // document structure, not sibling navigation: a proven Delegate link places a
-// lazy subthread beneath its tool call; an unproven link stays visibly
-// unanchored at the end of its canonical parent rather than being guessed.
+// lazy subthread beneath its tool call; a parent-only link is interleaved by
+// session start time without pretending that timestamp proximity proves cause.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchHit, SessionRow, TimelineEntry } from "@rosetta/protocol";
 import { clock, clockShort, tokenText } from "../lib/format";
@@ -74,6 +74,27 @@ function messageDomId(sessionId: string, timelineId: string): string {
 
 function docBlockKey(block: DocBlock): string {
   return block.type === "work" ? block.key : block.row.timeline_id;
+}
+
+function docBlockStartTime(block: DocBlock): number | null {
+  if (block.type !== "work") return block.row.at;
+  const timestamps = block.calls
+    .map((call) => call.row.at)
+    .filter((timestamp): timestamp is number => timestamp !== null);
+  return timestamps.length === 0 ? null : Math.min(...timestamps);
+}
+
+/**
+ * Place a child before the first document block known to start after it. Rows
+ * with no timestamp retain their canonical ordinal position; they are not
+ * moved around on the strength of missing evidence.
+ */
+function timestampInsertionIndex(blocks: readonly DocBlock[], startedAt: number): number {
+  const index = blocks.findIndex((block) => {
+    const blockStartedAt = docBlockStartTime(block);
+    return blockStartedAt !== null && blockStartedAt > startedAt;
+  });
+  return index === -1 ? blocks.length : index;
 }
 
 function linkedChildSessionIds(row: TimelineEntry): readonly string[] {
@@ -267,9 +288,18 @@ function ThreadDocument({
         }
       }
     }
+
+    const byBlockIndex = new Map<number, SessionRow[]>();
+    for (const child of directChildren) {
+      if (claimed.has(child.id)) continue;
+      const index = timestampInsertionIndex(blocks, child.started_at);
+      const children = byBlockIndex.get(index);
+      if (children) children.push(child);
+      else byBlockIndex.set(index, [child]);
+    }
     return {
       byTimelineId,
-      unanchored: directChildren.filter((child) => !claimed.has(child.id)),
+      byBlockIndex,
     };
   }, [blocks, directChildren]);
 
@@ -285,6 +315,20 @@ function ThreadDocument({
     ? docBlockKey(firstAfterWatermark)
     : null;
 
+  const timestampedSubthreads = (blockIndex: number) =>
+    (placement.byBlockIndex.get(blockIndex) ?? []).map((child) => (
+      <Subthread
+        key={child.id}
+        session={child}
+        index={index}
+        focus={focus}
+        anchored={false}
+        duringBackfill={duringBackfill}
+        onFocusConsumed={onFocusConsumed}
+        onReceipt={onReceipt}
+      />
+    ));
+
   return (
     <>
       {feed.canLoadEarlier && (
@@ -292,7 +336,8 @@ function ThreadDocument({
           load earlier
         </button>
       )}
-      {blocks.map((block) => {
+      {timestampedSubthreads(0)}
+      {blocks.map((block, blockIndex) => {
         const marked = docBlockKey(block) === firstAfterWatermarkKey;
         if (block.type === "work") {
           return (
@@ -309,6 +354,7 @@ function ThreadDocument({
                 onFocusConsumed={onFocusConsumed}
                 onReceipt={onReceipt}
               />
+              {timestampedSubthreads(blockIndex + 1)}
             </div>
           );
         }
@@ -366,28 +412,10 @@ function ThreadDocument({
                 </p>
               ))}
             </div>
+            {timestampedSubthreads(blockIndex + 1)}
           </div>
         );
       })}
-      {placement.unanchored.length > 0 && (
-        <section className="ah-unanchored">
-          <div className="ah-unanchored__label">
-            Subthreads · source did not record a unique spawn anchor
-          </div>
-          {placement.unanchored.map((child) => (
-            <Subthread
-              key={child.id}
-              session={child}
-              index={index}
-              focus={focus}
-              anchored={false}
-              duringBackfill={duringBackfill}
-              onFocusConsumed={onFocusConsumed}
-              onReceipt={onReceipt}
-            />
-          ))}
-        </section>
-      )}
       {blocks.length === 0 && directChildren.length === 0 && feed.status !== "connecting" &&
         (nested ? (
           <p className="ah-subthread__empty">

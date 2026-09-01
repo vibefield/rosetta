@@ -544,9 +544,10 @@
       remain first-class addressable sessions for ingestion, provenance, search, and lazy loading, but
       render inside their parent transcript. A proven
       <span class="f">Delegate.child_session_id</span> places the child directly beneath its spawning
-      tool call. When the native source proves only the parent relationship, the child remains inside
-      that parent in an explicit unanchored-subthreads section; timestamp or adjacency is never used to
-      invent a spawn edge.</div>
+      tool call. When the native source proves only the parent relationship, the child is interleaved
+      among that parent's document blocks by <span class="f">started_at</span>. Its muted, unanchored
+      presentation makes clear that timestamp placement is reading order only and does not invent a
+      spawn edge.</div>
       <div class="consumers-line"><span class="cchip">agent-view</span></div>
     </div>
 

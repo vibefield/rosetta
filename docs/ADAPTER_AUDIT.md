@@ -43,12 +43,12 @@ The app now has a synthetic, client-only **Unassigned sessions** project. Only r
 threads appear in browse/search navigation; descendants are lazy, recursively embedded
 inside their canonical parent transcript, and a child search hit opens that root then
 expands to the actual descendant message. Proven native spawn links place a child under
-the delegate tool; parent-only evidence stays in an explicitly unanchored subthreads
-section instead of guessing by timestamps. The app also renders a deterministic initials
-badge for every unknown/unbundled runtime kind. Thinking, system, and summary rows are
-readable transcript asides instead of being discarded. “Unassigned” means exactly “the
-native records admitted so far contain no usable workspace fact”; it is not an agent
-classification or an ingest failure.
+the delegate tool; parent-only evidence is interleaved by the child's start time while
+remaining visibly unanchored, so approximate reading order is not presented as a proven
+spawn edge. The app also renders a deterministic initials badge for every unknown/unbundled
+runtime kind. Thinking, system, and summary rows are readable transcript asides instead of
+being discarded. “Unassigned” means exactly “the native records admitted so far contain no
+usable workspace fact”; it is not an agent classification or an ingest failure.
 
 A schema-6 metadata smoke against the same local roots used a temporary database and
 left the live daemon untouched. It matched 39,322 files with zero unidentified files
