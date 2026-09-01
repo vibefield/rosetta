@@ -68,21 +68,29 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
 runtime adapters are registered in `rosettad`. The generic pipeline handles the
 JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrites,
 deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
-recovery, and an append-only checksummed raw ledger. Fresh `serve` creates the public
-projection immediately: it skims every enrolled runtime first, then cold-streams through
-a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, runtime round-robin within
-the cold lanes); watcher hints move not-yet-consumed work into the live lane and a claimed
-physical path absent from the settled roster re-runs bounded meta. A hint may reprioritize
-the metadata cut but MUST NOT recreate a cold obligation after that source has been consumed:
-continuous agent writes can never prevent canonical publication, and their suffix is recovered
-by the live runner at handoff. Virtual members of one document/database are one physical cold
-pass, never one snapshot copy per session. Metadata effects (identity keys, on for every path)
-replace the 500 ms mirror
-rewarm poll: the writer drains them into `Hub::absorb_meta` between passes. Row effects
-run scoped during cold — armed per pass with the sessions readers hold open — so an open
-transcript receives its prioritized cold rows: appends push precise rows, and a seal, retry sweep,
-abandon, or renumber pushes one `SessionSwept` resync marker; unwatched sessions pay no
-mutation log, and the live handoff widens the scope to every session. An idle daemon
+recovery, and an append-only checksummed raw ledger. A normal fresh `serve` binds HTTP/WS
+before discovery, then constructs the canonical schema in a named shared-memory SQLite
+database. Each enrolled adapter's bounded, source-free metadata batches commit there first
+and drain through `Hub::absorb_meta`, so projects and top-level sessions are immediately
+public while payload ingestion continues. Adapters then stream, ledger, normalize, and
+reconcile in parallel RAM planners. The sole canonical writer admits only a complete,
+clean runtime: its closed source batches already have final ordinals, its tool/usage
+relations reconcile in RAM, and only its final readiness commit makes the canonical timeline
+visible through the ordinary REST/WS queries. Open session subscriptions receive one resync barrier; parser
+fragments and reconciliation state are never public. This is deliberately runtime-granular:
+cross-file relations cannot expose a half-reconciled session merely to manufacture finer UI
+progress.
+
+After every runtime closes, the daemon performs set-based finalization and full validation in
+RAM, drains and fsyncs the staged raw ledger, backs the canonical database up to a
+same-filesystem private file, syncs and atomically installs it, then switches the read router
+from RAM to disk before releasing the RAM generation. Detached search remains explicitly
+Building and does not start until that switch. Watchers are armed before metadata, and their
+queued suffixes flow into the ordinary live runner after publication. `--stop-after-meta` and
+an existing/resumable projection retain the disk-progressive `ColdEngine` path: its four lanes
+(live ▸ boost ▸ starter ▸ completion), slice budget, boost queue, and scoped row effects remain
+the recovery/audit topology. Finite `ingest` and explicit `rebuild` remain private, validated,
+atomic publication paths and never slice. An idle daemon
 appends nothing to the raw ledger: the rotating audit verifies a file's committed
 content chain (tail checkpoint v2 — a resumable byte fold; pre-chain checkpoints are
 established in place) and replays only on a real mismatch; snapshot passes stat-gate an
@@ -90,8 +98,8 @@ unchanged database without opening it (a read-only SQLite open writes `-shm` ins
 watched root, and the daemon must never hint itself — `-shm` is never a hint); poll
 admissions are evidence-driven (first sighting or movement, never presence). Audit-budget
 passes still hash snapshot content whole, so a stamp-preserving rewrite is caught by the
-audit sweep. The cold phase is
-one named unit (`rosettad::engine::ColdEngine`) built over an `IngestPlan` — meta's
+audit sweep. The resumable disk cold phase is one named unit
+(`rosettad::engine::ColdEngine`) built over an `IngestPlan` — meta's
 settled projects → sessions → sources as a RAM value, unproven ownership honestly
 unassigned — and a `ProgressBoard` that folds pass outcomes per project onto
 `/api/status` (`ingest.projects`, protocol v5); plan, board, and schedule are RAM only
@@ -108,8 +116,8 @@ falls back to whole-file handling. Dirty sources converge on live-growth semanti
 every cold path: a dirty FIRST generation activates its parseable rows with the session
 held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
 replacements still abandon. `milestone:` stdout lines feed the sweep harness.
-Interrupted progress is durable and resumable. Finite `ingest` and explicit `rebuild`
-remain private, validated, atomic publication paths and never slice.
+Interrupted disk-progressive work is durable and resumable. Interrupted fresh RAM work is
+discarded and retried from the unchanged sources; no incomplete canonical database is installed.
 
 Projection schema 12 keeps user-facing canonical rows, rollups, and joins in SQLite while
 production FTS5 lives in a disposable detached sidecar. The asynchronous

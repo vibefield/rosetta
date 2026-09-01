@@ -35,7 +35,34 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > or reassign ownership; schema 12 removes the former `workspace_obs` relation and
 > `project_assigned_at` arbitration column.
 >
-> Fresh `serve` is progressive: the listener and empty public projection exist first, consent
+> **Fresh-serve checkpoint (2026-08-31).** The normal first-run app path now uses the fast
+> parallel cold topology without giving up immediate or progressive reads. The listener binds
+> before discovery. Each adapter's bounded source-free metadata commits first to a named,
+> shared-memory SQLite database carrying the exact canonical schema and drains into the Hub;
+> projects and top-level sessions therefore appear adapter by adapter. All adapters then capture,
+> ledger, normalize, and reconcile concurrently in private RAM planners. The sole canonical
+> writer admits results in completion order, but only at a closed-runtime boundary: precomputed
+> ordinals and cross-file tool/usage folds are complete before the final readiness commit makes
+> that runtime's timelines visible. Pending sessions are an admission barrier, so intermediate
+> source commits cannot leak a half-reconciled canonical row.
+> Watched timelines receive one resync barrier and re-snapshot through the ordinary API. No raw
+> record, parser state, candidate value, or reconciliation map enters the read target.
+>
+> After every runtime closes, set-based indexes/rollups, `ANALYZE`, quick/FK checks, and projection
+> validation run against that RAM generation. The staged raw ledger is then drained and fsynced;
+> the canonical database is backed up to a same-filesystem private file, synced, installed by
+> atomic rename, and the read router switches RAM → disk before the RAM keeper is released.
+> Detached search stays explicitly Building and its worker remains paused until this switch.
+> Watchers were armed before metadata, so source suffixes written during the build feed the live
+> runner after handoff. RAM is a temporary location for the one canonical projection, not a third
+> representation or a recovery source. The app keeps one HTTP/WS contract across the switch.
+> Current payload progress is runtime-granular; exposing a partially reconciled multi-file runtime
+> for cosmetically finer progress is forbidden. A future session-partitioned plan must first prove
+> that every correlation and replacement boundary is closed inside the partition.
+>
+> The following disk-progressive path remains current for an existing/resumable projection and
+> for `--stop-after-meta`, but is superseded for a normal fresh app launch. Its listener and public
+> projection exist first, consent
 > precedes all reads, and every runtime is skimmed before streaming. Cold streaming then runs
 > through a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, round-robin across runtimes
 > inside the cold lanes). Watcher hints drain into the live lane DURING the backfill, but only to
@@ -93,7 +120,8 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > slice. Watchers are armed before scan; the initial search build gets a clean I/O window, then
 > the live lane reuses the existing roster rather than re-skimming it.
 >
-> The accepted six-adapter frozen pair used 38,998 matched files, 6,063 skims, 6,419 sessions,
+> The accepted six-adapter frozen pair below measured that predecessor disk-progressive path. It
+> used 38,998 matched files, 6,063 skims, 6,419 sessions,
 > and 774,219 final messages with zero hard errors. Private atomic wall was 522.54 s. Progressive
 > milestones were listener 1.19 s, lists 5.82 s, first readable 13.86 s, canonical ready 538.11 s,
 > search ready 704.74 s, and total wall 704.82 s (1.349× private; gate 1.5×). Full SQLite/FK checks,
@@ -786,11 +814,13 @@ still require a driver-specific frozen pair or a declared production-weighted ag
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
-- Private cold loads project each source's first generation directly and defer presentation
-  renumbering, rollups, and read indexes in an unpublished sibling database. Public fresh
-  serve commits per file with WAL durability, then runs the same set-based canonical gate.
-  FTS is always a detached generation. Live batches and replacement swaps remain
-  transactionally canonical and rebuild each distinct affected usage bucket once.
+- Private cold loads and a normal fresh `serve` capture adapters into independent RAM planners,
+  precompute presentation order, and feed closed runtimes to one canonical writer. Fresh serve
+  places that canonical schema in named shared memory: metadata is immediately public and each
+  completed runtime becomes transactionally readable before the global set-based gate. It then
+  installs one validated disk copy and atomically retargets readers. Existing/resumable serve keeps
+  the per-file WAL path. FTS is always a detached generation. Live batches and replacement swaps
+  remain transactionally canonical and rebuild each distinct affected usage bucket once.
 - A first cold projection now requires both the projection and ledger destination to be
   absent. It buffer-flushes into a same-filesystem private ledger tree, syncs every staged
   segment plus child-to-parent directory entries, atomically promotes the whole tree,

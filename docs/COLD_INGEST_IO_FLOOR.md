@@ -135,6 +135,46 @@ sessions, messages, edits, usage, drift, and source cursors; extracted assets
 were byte-identical. The comparison script is
 `tools/compare_projection_semantics.sql`.
 
+## Fresh app integration smoke
+
+The normal fresh `serve` path now uses the same parallel capture and closed-runtime
+application topology while keeping the app public throughout the build. It binds HTTP/WS
+first, commits source-free canonical metadata into a shared-memory SQLite projection, and
+routes ordinary list/timeline reads there. Completed runtimes become visible in completion
+order. After global validation, it backs that same canonical generation up to disk and
+atomically retargets readers; the detached search worker remains paused until then.
+
+An isolated real-corpus smoke on 2026-08-31 used the live nine-agent roots and wrote only to
+`SamsungRed/rosetta-agent-tests/runs/app-fast-ram-progressive-v1`. This is product-path
+evidence, not merge-admissible performance evidence: the sources were not a frozen,
+checksummed campaign and had changed slightly since V11.
+
+| Observation | Result |
+|---|---:|
+| Metadata public | 9.56 s |
+| Mid-cold API sample | 19.10 s uptime |
+| Canonical ready | 64.68 s |
+| Process wall | 66.08 s |
+| Bytes read | 9,968,102,528 |
+| Records framed / canonical ops | 2,414,417 / 1,765,818 |
+| Final canonical SQLite | 1,052,209,152 bytes |
+| Maximum resident set size | 7,626,342,400 bytes |
+| Publication (backup, sync, install, retarget) | 2.48 s |
+
+At the mid-cold sample, `/api/status` correctly reported `canonical_ready=false` and search
+Building. Claude Code and Codex were still Streaming, while Grok and every smaller completed
+runtime already reported Done; Grok sessions returned from the public session API as Indexed.
+The project/session mirror held 6,866 metadata events. This verifies useful progress without
+publishing parser fragments or half a canonical transaction. The current granularity is one
+complete runtime, so Claude Code's individual timelines still wait for its 35.03-second runtime
+fold; finer session-grained publication needs a separately proven closed correlation boundary.
+
+The final immutable read check returned `quick_check=ok`, no foreign-key rows, canonical ready,
+and 134 projects / 6,553 sessions / 568,699 messages. Search was intentionally not built in this
+`--ticks 0` smoke. Its 64.68-second canonical milestone is 9.37 seconds slower than V11, but the
+different live source cut and the RAM/public-serving topology make that delta diagnostic only.
+It may not be cited as an optimization regression or win without a frozen before/after pair.
+
 ## Reproduction
 
 ```sh
