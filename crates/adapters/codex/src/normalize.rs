@@ -238,7 +238,17 @@ fn response_item(
 ) -> LineStatus {
     match item.item_type.as_str() {
         "message" => {
+            let content = block_text(item.content.as_deref());
             let (kind, subtype) = match item.role.as_deref() {
+                // Codex records its generated workspace/date/permission snapshot
+                // as a user-role message. It is prompt context, not human prose.
+                Some("user")
+                    if content
+                        .as_deref()
+                        .is_some_and(is_injected_environment_context) =>
+                {
+                    (MessageKind::System, Some("environment_context".to_owned()))
+                }
                 Some("user") => (MessageKind::User, None),
                 Some("assistant") => (MessageKind::Agent, None),
                 // `developer` carries the injected skills/instructions preamble:
@@ -249,7 +259,7 @@ fn response_item(
             let mut row = row(ctx, discriminator, kind, ts);
             row.subtype = item.phase.clone().or(subtype);
             row.uuid = item.id.clone();
-            row.content = block_text(item.content.as_deref());
+            row.content = content;
             if kind == MessageKind::Agent {
                 stamp_model(&mut row, state);
                 begin_response(state, &row.timeline_id);
@@ -848,6 +858,13 @@ fn block_text(blocks: Option<&[ContentBlock]>) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     (!joined.is_empty()).then_some(joined)
+}
+
+fn is_injected_environment_context(text: &str) -> bool {
+    let text = text.trim();
+    text.strip_prefix("<environment_context>")
+        .and_then(|body| body.strip_suffix("</environment_context>"))
+        .is_some()
 }
 
 fn status_error(status: Option<&str>) -> Option<bool> {

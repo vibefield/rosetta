@@ -321,6 +321,58 @@ fn injected_developer_and_system_messages_remain_ledger_only() {
 }
 
 #[test]
+fn injected_environment_context_does_not_masquerade_as_user_prose() {
+    let mut ctx = context();
+    let injected = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "message",
+            "id": "environment",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "  <environment_context>\n  <cwd>/workspace</cwd>\n</environment_context>  ",
+            }],
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn"},
+        }),
+    );
+    assert_eq!(injected.status, LineStatus::Parsed);
+    assert!(
+        injected.ops.is_empty(),
+        "injected environment context crossed the canonical boundary: {:?}",
+        injected.ops
+    );
+
+    let human = ingest(
+        &mut ctx,
+        2,
+        "response_item",
+        json!({
+            "type": "message",
+            "id": "human",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "Please explain this <environment_context> element.",
+            }],
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn"},
+        }),
+    );
+    match human.ops.as_slice() {
+        [IngestOp::Message(row)] => {
+            assert!(matches!(row.body, TimelineBody::User { .. }));
+            assert_eq!(
+                text(row),
+                Some("Please explain this <environment_context> element.")
+            );
+        }
+        other => panic!("expected one human message row, got {other:?}"),
+    }
+}
+
+#[test]
 fn declared_subtypes_are_silent_and_undeclared_ones_drift() {
     let mut ctx = context();
     // Declared by the canonical, deliberately unprojected: no ops, no alarm.

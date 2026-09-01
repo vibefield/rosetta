@@ -235,6 +235,12 @@ function roleName(row: TimelineEntry): string {
   }
 }
 
+function reportedTokenTotal(row: TimelineEntry): number | null {
+  const reported = [row.usage.input, row.usage.output, row.usage.thinking];
+  if (reported.every((value) => value === null)) return null;
+  return reported.reduce<number>((total, value) => total + (value ?? 0), 0);
+}
+
 function MarkdownMessage({ text }: { readonly text: string }) {
   const blocks = useMemo(() => parseMarkdown(text), [text]);
   return (
@@ -362,6 +368,7 @@ function ThreadDocument({
         const text = timelineText(row) ?? "";
         const attachments = timelineAttachments(row);
         const citations = timelineCitations(row);
+        const tokenTotal = reportedTokenTotal(row);
         return (
           <div key={row.timeline_id}>
             {marked && <div className="ah-mark ah-watermark">live from here</div>}
@@ -386,13 +393,11 @@ function ThreadDocument({
                     {clock(row.at)}
                   </time>
                 )}
-                <span className="ah-caption tnum" style={{ marginLeft: "auto" }}>
-                  {tokenText(
-                    (row.usage.input ?? 0) +
-                      (row.usage.output ?? 0) +
-                      (row.usage.thinking ?? 0),
-                  )}
-                </span>
+                {tokenTotal !== null && (
+                  <span className="ah-caption tnum" style={{ marginLeft: "auto" }}>
+                    {tokenText(tokenTotal)}
+                  </span>
+                )}
               </div>
               {row.body.type === "user" || row.body.type === "agent" ? (
                 <MarkdownMessage text={text} />
