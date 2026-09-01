@@ -142,7 +142,7 @@ export function SessionList(props: SessionListProps) {
     : props.groups.reduce((total, group) => total + group.sessions.length, 0);
 
   return (
-    <div className="ah-scroll">
+    <div className="ah-scroll ah-session-list">
       {props.mode === "search" ? (
         <SearchSessionItems groups={props.groups} common={common} />
       ) : (

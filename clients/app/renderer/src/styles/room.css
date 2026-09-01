@@ -404,6 +404,10 @@
 .ah-meta__facts b { color: var(--vf-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
 
 /* ── Sessions ───────────────────────────────────────────────────────────── */
+/* The list already sits beneath its own toolbar. The shared scroll inset
+   would hold a sticky day header below that bar and expose the row behind it. */
+.ah-session-list { padding-top: 0; }
+.ah-session-list > .ah-day:first-child { margin-top: 0; }
 /* A 128-session list without day breaks is undifferentiated, so the days are
    drawn — sticky, quiet, and never a card. */
 .ah-day {
