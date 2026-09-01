@@ -37,7 +37,9 @@ pub use replay::{
     prepare_captured_runtime, prepare_runtime, rebuild_runtime, rebuild_runtime_with_options,
 };
 pub use sched::{ColdLane, ColdSchedule, order_runtime_roster};
-pub use stream::{StreamReport, stream_backfill, stream_backfill_into};
+pub use stream::{
+    StreamReport, reserve_unsealed_generation, stream_backfill, stream_backfill_into,
+};
 
 /// Version of the canonical-op envelope stored in ledger meta frames. Replay
 /// routes explicitly by this value instead of assuming today's row JSON.

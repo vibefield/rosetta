@@ -11,6 +11,8 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -48,6 +50,15 @@ pub struct RebuildOptions {
     /// Read/checksum ledger frames on a bounded producer thread while the
     /// caller normalizes and applies previously framed records.
     pub prefetch_ledger: bool,
+    /// Resume-only: ignore a path that has raw frames but no seal yet. The
+    /// source phase will restart that path with a higher generation after the
+    /// sealed ledger prefix has been reconstructed. Ordinary rebuild remains
+    /// fail-closed because it has no source tree to finish the evidence.
+    pub allow_unsealed_sources: bool,
+    /// Process-local cooperative cancellation for a restartable serve. A
+    /// cancelled replay has touched only a disposable RAM projection; the
+    /// named staged ledger remains the next boot's source.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for RebuildOptions {
@@ -58,6 +69,8 @@ impl Default for RebuildOptions {
             election_only: false,
             election_cache: None,
             prefetch_ledger: false,
+            allow_unsealed_sources: false,
+            cancel: None,
         }
     }
 }
@@ -80,6 +93,7 @@ struct ElectionCache {
     surviving: BTreeMap<String, (u64, SourceDef)>,
     latest_seals: BTreeMap<String, (u64, SourceDef, bool)>,
     only_dirty: HashSet<String>,
+    unsealed: BTreeMap<String, (u64, SourceDef)>,
 }
 
 struct ElectionState {
@@ -87,6 +101,7 @@ struct ElectionState {
     surviving: BTreeMap<String, (u64, SourceDef)>,
     latest_seals: BTreeMap<String, (u64, SourceDef, bool)>,
     only_dirty: HashSet<String>,
+    unsealed: BTreeMap<String, (u64, SourceDef)>,
 }
 
 fn segment_stamps(ledger_dir: &Path) -> Result<Vec<SegmentStamp>, PipelineError> {
@@ -133,7 +148,7 @@ fn load_election_cache(
 ) -> Option<ElectionState> {
     let payload = std::fs::read(path).ok()?;
     let cache: ElectionCache = serde_json::from_slice(&payload).ok()?;
-    if cache.schema != 1
+    if cache.schema != 2
         || cache.normalizer_version != normalizer_version
         || cache.segments != segments
     {
@@ -148,6 +163,7 @@ fn load_election_cache(
         surviving: cache.surviving,
         latest_seals: cache.latest_seals,
         only_dirty: cache.only_dirty,
+        unsealed: cache.unsealed,
     })
 }
 
@@ -169,7 +185,7 @@ fn save_election_cache(
         })?;
     }
     let cache = ElectionCache {
-        schema: 1,
+        schema: 2,
         normalizer_version,
         segments,
         visit_segments: state.visit.segments,
@@ -178,6 +194,7 @@ fn save_election_cache(
         surviving: state.surviving.clone(),
         latest_seals: state.latest_seals.clone(),
         only_dirty: state.only_dirty.clone(),
+        unsealed: state.unsealed.clone(),
     };
     let payload = serde_json::to_vec(&cache).map_err(|error| {
         PipelineError::Config(format!(
@@ -354,6 +371,10 @@ pub struct RebuildReport {
     pub parsed: u64,
     pub unknown: u64,
     pub hard_errors: u64,
+    /// Highest raw generation per source that has no matching complete marker.
+    /// Resume callers use this only as an in-memory generation fence before
+    /// rereading the source; it is never canonical application data.
+    pub unsealed_sources: BTreeMap<String, (u64, SourceDef)>,
     pub stats: ApplyStats,
 }
 
@@ -558,12 +579,22 @@ pub fn rebuild_runtime_with_options(
         // instead of silently promoting a crash-truncated generation.
         let mut surviving: BTreeMap<String, (u64, SourceDef)> = BTreeMap::new();
         let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
-        let mut raw_paths: HashSet<String> = HashSet::new();
-        let mut sealed_paths: HashSet<String> = HashSet::new();
+        let mut raw_generations: BTreeMap<(String, u64), SourceDef> = BTreeMap::new();
         let visit = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
+            if options
+                .cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+            {
+                return Err(PipelineError::Cancelled);
+            }
             match entry {
-                LedgerEntry::Raw { source, .. } => {
-                    raw_paths.insert(source.relative_path);
+                LedgerEntry::Raw {
+                    source, generation, ..
+                } => {
+                    raw_generations
+                        .entry((source.relative_path.clone(), generation))
+                        .or_insert(source);
                 }
                 LedgerEntry::GenerationComplete {
                     source,
@@ -571,7 +602,6 @@ pub fn rebuild_runtime_with_options(
                     normalizer_version,
                     normalized_clean,
                 } => {
-                    sealed_paths.insert(source.relative_path.clone());
                     let known_unclean =
                         normalizer_version == adapter.normalizer_version() && !normalized_clean;
                     let latest = latest_seals
@@ -601,12 +631,33 @@ pub fn rebuild_runtime_with_options(
                 surviving.insert(path.clone(), (*generation, source.clone()));
             }
         }
-        let mut unsealed: Vec<_> = raw_paths.difference(&sealed_paths).cloned().collect();
-        unsealed.sort();
-        if !unsealed.is_empty() {
+        let mut unsealed = BTreeMap::<String, (u64, SourceDef)>::new();
+        for ((path, generation), source) in raw_generations {
+            let latest_sealed = latest_seals
+                .get(&path)
+                .map(|(sealed_generation, _, _)| *sealed_generation);
+            // A later complete generation supersedes an earlier interrupted
+            // attempt. Only raw evidence newer than every seal still needs a
+            // retry fence.
+            if latest_sealed.is_some_and(|sealed| generation <= sealed) {
+                continue;
+            }
+            let entry = unsealed
+                .entry(path)
+                .or_insert_with(|| (generation, source.clone()));
+            if generation >= entry.0 {
+                *entry = (generation, source);
+            }
+        }
+        let never_sealed = unsealed
+            .keys()
+            .filter(|path| !latest_seals.contains_key(*path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !never_sealed.is_empty() && !options.allow_unsealed_sources {
             return Err(PipelineError::Config(format!(
                 "ledger has raw records but no complete-generation marker for: {}",
-                unsealed.join(", ")
+                never_sealed.join(", ")
             )));
         }
         let state = ElectionState {
@@ -614,6 +665,7 @@ pub fn rebuild_runtime_with_options(
             surviving,
             latest_seals,
             only_dirty,
+            unsealed,
         };
         if let (Some(path), Some(segments)) =
             (options.election_cache.as_deref(), cache_segments.clone())
@@ -627,9 +679,11 @@ pub fn rebuild_runtime_with_options(
         surviving,
         latest_seals,
         only_dirty,
+        unsealed,
     } = election;
     report.segments = first.segments;
     report.torn_segments = first.torn_segments;
+    report.unsealed_sources = unsealed;
     if options.election_only {
         return Ok(report);
     }
@@ -650,6 +704,13 @@ pub fn rebuild_runtime_with_options(
     let mut files: BTreeMap<String, FileReplay> = BTreeMap::new();
 
     let mut replay_entry = |entry| {
+        if options
+            .cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+        {
+            return Err(PipelineError::Cancelled);
+        }
         match entry {
             LedgerEntry::Meta {
                 schema_version,

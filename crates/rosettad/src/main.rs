@@ -40,6 +40,7 @@ use rosetta_store::Store;
 
 mod bench;
 mod brutal;
+mod cold_stage;
 mod engine;
 mod recovery;
 mod serve;
@@ -1979,6 +1980,8 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                             election_only: false,
                             election_cache: Some(cache),
                             prefetch_ledger,
+                            allow_unsealed_sources: false,
+                            cancel: None,
                         },
                     )
                     .map_err(|error| error.to_string())?;
@@ -2059,6 +2062,8 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                         .as_ref()
                         .map(|root| root.join(format!("{}.json", adapter.kind()))),
                     prefetch_ledger: flags.experiment_prefetch_ledger,
+                    allow_unsealed_sources: false,
+                    cancel: None,
                 },
             )
             .map_err(|error| error.to_string())?;

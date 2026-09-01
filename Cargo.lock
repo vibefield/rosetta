@@ -1387,6 +1387,7 @@ dependencies = [
  "rosetta-server",
  "rosetta-store",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

@@ -13,8 +13,9 @@ use rosetta_capture::{Ledger, LedgerEntry, SourceDef, scan_ledger};
 use rosetta_core::ids;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, SliceBudget, apply_prepared_runtime, discover, expand_data_root,
-    meta_ingest, meta_ingest_into, prepare_captured_runtime, rebuild_runtime, stream_backfill,
+    IngestOptions, Instrument, RebuildOptions, SliceBudget, apply_prepared_runtime, discover,
+    expand_data_root, meta_ingest, meta_ingest_into, prepare_captured_runtime, rebuild_runtime,
+    rebuild_runtime_with_options, reserve_unsealed_generation, stream_backfill,
     stream_backfill_into,
 };
 use rosetta_store::{Store, queries};
@@ -55,6 +56,178 @@ fn snapshot(store: &Store) -> Snapshot {
         projects: one("SELECT COUNT(*) FROM project"),
         session_cwds: one("SELECT COUNT(*) FROM session WHERE cwd IS NOT NULL"),
     }
+}
+
+#[test]
+fn resume_replay_ignores_a_never_sealed_source_but_ordinary_rebuild_fails_closed() {
+    let temp = TempDir::new().unwrap();
+    let ledger_dir = temp.path().join("ledger");
+    let source = SourceDef {
+        relative_path: "projects/interrupted.jsonl".into(),
+        stream_id: "transcript".into(),
+        session_id: "session-interrupted".into(),
+        native_session_id: "native-interrupted".into(),
+        agent_version: Some("test".into()),
+    };
+    let mut ledger = Ledger::open(&ledger_dir).unwrap();
+    ledger
+        .append_raw(&source, 1, [(0, br#"{"type":"partial"}"#.as_slice())])
+        .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+    let runtime = RuntimeRow {
+        id: "runtime-interrupted".into(),
+        kind: "claude-code".into(),
+        data_root: "/tmp/interrupted".into(),
+        enabled: true,
+        account: None,
+        config: None,
+        skills: None,
+        versions_seen: None,
+        discovered_at: 1,
+    };
+
+    let mut strict = Store::open_in_memory().unwrap();
+    let error = rebuild_runtime(
+        &ClaudeCodeAdapter,
+        &runtime,
+        &ledger_dir,
+        &mut strict,
+        &Instrument::new(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("no complete-generation marker"),
+        "{error}"
+    );
+
+    let mut resumed = Store::open_in_memory().unwrap();
+    let report = rebuild_runtime_with_options(
+        &ClaudeCodeAdapter,
+        &runtime,
+        &ledger_dir,
+        &mut resumed,
+        &Instrument::new(),
+        RebuildOptions {
+            allow_unsealed_sources: true,
+            ..RebuildOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.raw_records, 0);
+    assert_eq!(
+        report
+            .unsealed_sources
+            .get(&source.relative_path)
+            .unwrap()
+            .0,
+        1
+    );
+    assert!(
+        queries::cursor_state(resumed.conn(), &runtime.id, &source.relative_path)
+            .unwrap()
+            .is_none(),
+        "the source pass, not ledger replay, must restart this path"
+    );
+}
+
+#[test]
+fn interrupted_generation_is_reserved_before_source_retry() {
+    let adapter = &ClaudeCodeAdapter;
+    let home = TempDir::new().unwrap();
+    let root = expand_data_root(&adapter.layout().data_root, home.path());
+    std::fs::create_dir_all(&root).unwrap();
+    generate(&CorpusSpec::new(Agent::ClaudeCode, 1, 8, 91), &root).unwrap();
+    let opts = IngestOptions {
+        audit_files_per_run: 0,
+        ..IngestOptions::default()
+    };
+    let discovery = discover(&[adapter], home.path(), &opts, &Instrument::new())
+        .unwrap()
+        .pop()
+        .unwrap();
+    let mut runtime = discovery.runtime;
+    runtime.enabled = true;
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    let (_, files) = meta_ingest(
+        adapter,
+        &runtime,
+        &root,
+        &mut store,
+        &opts,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let file = files.first().unwrap().clone();
+    let source = SourceDef {
+        relative_path: file.relative_path.clone(),
+        stream_id: file.stream_id.clone(),
+        session_id: file.session_id.clone(),
+        native_session_id: file.native_session_id.clone(),
+        agent_version: file.agent_version.clone(),
+    };
+    let ledger_dir = home.path().join("ledger");
+    let mut ledger = Ledger::open(&ledger_dir).unwrap();
+    ledger
+        .append_raw(&source, 7, [(0, br#"{"type":"interrupted"}"#.as_slice())])
+        .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+
+    let report = rebuild_runtime_with_options(
+        adapter,
+        &runtime,
+        &ledger_dir,
+        &mut store,
+        &Instrument::new(),
+        RebuildOptions {
+            flush_reconciliation: false,
+            allow_unsealed_sources: true,
+            ..RebuildOptions::default()
+        },
+    )
+    .unwrap();
+    let (generation, _) = report.unsealed_sources.get(&file.relative_path).unwrap();
+    assert_eq!(*generation, 7);
+    reserve_unsealed_generation(
+        adapter,
+        &runtime,
+        &mut store,
+        &file,
+        *generation,
+        &Instrument::new(),
+    )
+    .unwrap();
+    let reserved = queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reserved.active_generation, 0);
+    assert_eq!(reserved.highest_generation, 7);
+
+    let mut ledger = Ledger::open(&ledger_dir).unwrap();
+    stream_backfill_into(
+        adapter,
+        &runtime,
+        &root,
+        &mut store,
+        std::slice::from_ref(&file),
+        &opts,
+        &Instrument::new(),
+        Some(&mut ledger),
+    )
+    .unwrap();
+    ledger.flush().unwrap();
+    let retried = queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(retried.active_generation, 8);
+    assert_eq!(retried.highest_generation, 8);
+    let scan = scan_ledger(&ledger_dir).unwrap();
+    assert!(
+        scan.entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::GenerationComplete { generation: 8, .. }))
+    );
 }
 
 #[test]

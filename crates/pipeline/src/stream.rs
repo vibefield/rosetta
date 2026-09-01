@@ -376,6 +376,45 @@ pub(crate) fn cursor_row(
         .ok_or_else(|| PipelineError::Config("cursor row vanished after insert".to_string()))
 }
 
+/// Reserve the highest raw generation observed without a matching seal during
+/// restartable cold capture. This is process-local recovery control: it writes
+/// no canonical payload and merely advances the disposable projection's cursor
+/// floor so rereading the source allocates a strictly newer generation. The
+/// caller must pass a roster entry settled by current metadata.
+pub fn reserve_unsealed_generation(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    store: &mut Store,
+    file: &SessionFile,
+    generation: u64,
+    instrument: &Instrument,
+) -> Result<bool, PipelineError> {
+    if generation == 0 {
+        return Err(PipelineError::Config(
+            "cannot reserve source generation zero".to_string(),
+        ));
+    }
+    let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
+    if cursor.highest_generation >= generation {
+        return Ok(false);
+    }
+    instrument.apply(
+        store,
+        &Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor.id,
+                session_id: file.session_id.clone(),
+                generation,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        },
+    )?;
+    Ok(true)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ingest_file(
     adapter: &dyn AgentAdapter,
