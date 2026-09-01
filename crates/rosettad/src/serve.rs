@@ -39,6 +39,7 @@ use rosetta_store::{Store, queries};
 use crate::engine::{
     BackfillRuntime, ColdCx, ColdEngine, StreamMeter, absorb_effects, acknowledge_search, now_ms,
 };
+use crate::recovery::restart_incomplete_projection;
 use crate::{
     ColdCaptureRequest, ColdLedgerStage, Flags, apply_captured_cold_runtime,
     finish_parallel_cold_runtime, install_rebuilt_projection, ledger_root, make_single_file,
@@ -119,6 +120,23 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let instrument = Arc::new(Instrument::new());
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
+    let public_ledgers = ledger_root(&flags, &db);
+    let recovered = if flags.restart_incomplete {
+        restart_incomplete_projection(&db, &public_ledgers)?
+    } else {
+        None
+    };
+    let recovered_enrollment = recovered
+        .as_ref()
+        .map(|recovery| recovery.enabled_agents.clone())
+        .unwrap_or_default();
+    if let Some(recovery) = &recovered {
+        println!(
+            "recovery: archived incomplete projection at {} — retained {} enrolled runtimes",
+            recovery.path.display(),
+            recovery.enabled_agents.len()
+        );
+    }
 
     // A normal fresh app launch keeps canonical construction in RAM and lets
     // HTTP/WS read that same canonical shape progressively. Metadata is the
@@ -154,7 +172,6 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         )
     };
     let progressive = store.is_progressive();
-    let public_ledgers = ledger_root(&flags, &db);
 
     // The transport comes up before any ingest work. A returning user's
     // mirror warms from the standing projection so the room is instantly
@@ -243,6 +260,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .map(|(adapter, _)| adapter.kind().to_string())
         .collect();
     let mut consented: BTreeSet<String> = persisted.intersection(&installed).cloned().collect();
+    consented.extend(recovered_enrollment.intersection(&installed).cloned());
     // `--agent` names kinds outright and `--all-agents` says everything
     // installed — both are consent from the command line, the headless
     // stand-in for the app's roll call.

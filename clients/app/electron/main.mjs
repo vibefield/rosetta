@@ -55,9 +55,11 @@ function resolveDbPath() {
   return process.env.AH_DB ?? path.join(app.getPath("userData"), "archive", "rosetta.db");
 }
 
-/** Find a rosettad binary: explicit `ROSETTAD_BIN`, else the newest build in
+/** Find a rosettad binary: explicit `ROSETTAD_BIN`, else an optimized build in
  * the repo's cargo target dir (which a machine-local `target-dir` override
- * may place anywhere — ask cargo rather than guess). */
+ * may place anywhere — ask cargo rather than guess). `pnpm dev` always builds
+ * and supplies release explicitly; the debug binary is only a last-resort
+ * fallback for direct Electron launches. */
 async function resolveDaemonBin() {
   if (process.env.ROSETTAD_BIN) return process.env.ROSETTAD_BIN;
   const repo = path.join(here, "..", "..", "..");
@@ -76,17 +78,15 @@ async function resolveDaemonBin() {
   } catch {
     return null;
   }
-  let best = null;
-  for (const profile of ["debug", "release"]) {
+  for (const profile of ["release", "debug"]) {
     const candidate = path.join(targetDir, profile, "rosettad");
     try {
-      const mtime = statSync(candidate).mtimeMs;
-      if (best === null || mtime > best.mtime) best = { candidate, mtime };
+      if (statSync(candidate).isFile()) return candidate;
     } catch {
       // not built in this profile
     }
   }
-  return best?.candidate ?? null;
+  return null;
 }
 
 /** Spawn `rosettad serve` on the app's db and resolve the origin from its
@@ -95,9 +95,12 @@ async function resolveDaemonBin() {
  * db awaits consent, so first launch IS the roll call. */
 function startDaemon(bin, dbPath) {
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  const proc = spawn(bin, ["serve", "--db", dbPath, "--addr", "127.0.0.1:0"], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  console.log(`starting optimized rosettad: ${bin}`);
+  const proc = spawn(
+    bin,
+    ["serve", "--db", dbPath, "--addr", "127.0.0.1:0", "--restart-incomplete"],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
   daemonProcess = proc;
   return new Promise((resolve) => {
     let greeting = "";

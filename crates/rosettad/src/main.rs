@@ -41,6 +41,7 @@ use rosetta_store::Store;
 mod bench;
 mod brutal;
 mod engine;
+mod recovery;
 mod serve;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
@@ -85,7 +86,7 @@ fn main() -> ExitCode {
             );
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--slice-budget BYTES|0]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0]"
             );
             eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
             eprintln!(
@@ -122,6 +123,10 @@ struct Flags {
     /// serve only: expose the completed metadata projection and keep serving,
     /// but do not read any complete source records.
     stop_after_meta: bool,
+    /// serve only: preserve an interrupted first projection under recovery/
+    /// and restart it through the production RAM cold path. The app enables
+    /// this because a progressive projection was never canonical.
+    restart_incomplete: bool,
     /// serve only: starter-slice byte budget for the cold scheduler.
     /// `None` = the blessed default; `Some(0)` disables slicing.
     slice_budget: Option<u64>,
@@ -193,6 +198,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         addr: None,
         all_agents: false,
         stop_after_meta: false,
+        restart_incomplete: false,
         slice_budget: None,
         experiment_skip_ledger_preflight: false,
         experiment_stop_after_replay: false,
@@ -237,6 +243,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--stop-after-meta" => {
                 flags.stop_after_meta = true;
+                at += 1;
+            }
+            "--restart-incomplete" => {
+                flags.restart_incomplete = true;
                 at += 1;
             }
             "--slice-budget" => {
