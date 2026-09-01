@@ -25,7 +25,7 @@ export function MarkdownView(props: ViewBodyProps) {
 
   return (
     <div className="ah-fileview__scroll ah-md">
-      <div className="ah-md__measure">
+      <div className="ah-md__measure ah-markdown">
         <MarkdownBlocks blocks={blocks} />
       </div>
     </div>

@@ -20,6 +20,8 @@ import {
   verbSummary,
 } from "../lib/model";
 import type { SearchResultsViewModel } from "../lib/search-results";
+import { parseMarkdown } from "./file-viewer/markdown";
+import { MarkdownBlocks } from "./file-viewer/markdown/render";
 import { getSessionTitle } from "./sessions/session-display";
 import { ColumnHeading, EmptyState, ResultGroupHeader } from "./ui";
 
@@ -212,6 +214,15 @@ function roleName(row: TimelineEntry): string {
   }
 }
 
+function MarkdownMessage({ text }: { readonly text: string }) {
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
+  return (
+    <div className="ah-tmsg__markdown ah-markdown ah-syntax">
+      <MarkdownBlocks blocks={blocks} />
+    </div>
+  );
+}
+
 interface ThreadDocumentProps {
   readonly session: SessionRow;
   /** The cold backfill is running: a streaming session is being INDEXED by
@@ -337,8 +348,12 @@ function ThreadDocument({
                   )}
                 </span>
               </div>
-              {text.split("\n\n").map((paragraph, index) =>
-                paragraph.trim() === "" ? null : <p key={index}>{paragraph}</p>,
+              {row.body.type === "user" || row.body.type === "agent" ? (
+                <MarkdownMessage text={text} />
+              ) : (
+                text.split("\n\n").map((paragraph, index) =>
+                  paragraph.trim() === "" ? null : <p key={index}>{paragraph}</p>,
+                )
               )}
               {attachments.map((attachment, index) => (
                 <p className="ah-caption" key={`attachment-${index}`}>

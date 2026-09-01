@@ -1088,7 +1088,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
    Only lightness moves between themes, the way `--tint-l` already does for
    project identity: the same six hues in both, mixed toward the ground so
    neither theme has to invent a colour. */
-.ah-fileview {
+.ah-fileview, .ah-syntax {
   --ah-syn-keyword: color-mix(in oklab, var(--vf-accent-6) 88%, black);
   --ah-syn-type: color-mix(in oklab, var(--vf-accent-4) 84%, black);
   --ah-syn-function: color-mix(in oklab, var(--vf-accent-8) 92%, black);
@@ -1096,7 +1096,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   --ah-syn-value: color-mix(in oklab, var(--vf-accent-5) 88%, black);
   --ah-syn-property: color-mix(in oklab, var(--vf-accent-1) 94%, black);
 }
-.dark .ah-fileview {
+.dark .ah-fileview, .dark .ah-syntax {
   --ah-syn-keyword: color-mix(in oklab, var(--vf-accent-6) 72%, white);
   --ah-syn-type: color-mix(in oklab, var(--vf-accent-4) 88%, white);
   --ah-syn-function: color-mix(in oklab, var(--vf-accent-8) 74%, white);
@@ -1105,23 +1105,23 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   --ah-syn-property: color-mix(in oklab, var(--vf-accent-1) 64%, white);
 }
 
-/* Scoped to the viewer, like every other rule in this file. Unscoped,
-   `[data-t=…]` is nine global selectors waiting for the first component that
-   picks the same attribute name. */
-.ah-fileview [data-t="comment"] { color: var(--vf-text-faint); font-style: italic; }
-.ah-fileview [data-t="operator"] { color: var(--vf-text-tertiary); }
-.ah-fileview [data-t="keyword"] { color: var(--ah-syn-keyword); }
+/* Scoped to the two syntax hosts. Unscoped, `[data-t=…]` is nine global
+   selectors waiting for the first component that picks the same attribute. */
+:is(.ah-fileview, .ah-syntax) [data-t="comment"] { color: var(--vf-text-faint); font-style: italic; }
+:is(.ah-fileview, .ah-syntax) [data-t="operator"] { color: var(--vf-text-tertiary); }
+:is(.ah-fileview, .ah-syntax) [data-t="keyword"] { color: var(--ah-syn-keyword); }
 /* A markup tag is the keyword of its language, and an attribute is a
    property. Two syntaxes, the same two roles — so the same two colours,
    rather than a second palette for a reader to learn. */
-.ah-fileview [data-t="tag"] { color: var(--ah-syn-keyword); }
-.ah-fileview [data-t="type"] { color: var(--ah-syn-type); }
-.ah-fileview [data-t="function"] { color: var(--ah-syn-function); }
-.ah-fileview [data-t="string"] { color: var(--ah-syn-string); }
+:is(.ah-fileview, .ah-syntax) [data-t="tag"] { color: var(--ah-syn-keyword); }
+:is(.ah-fileview, .ah-syntax) [data-t="type"] { color: var(--ah-syn-type); }
+:is(.ah-fileview, .ah-syntax) [data-t="function"] { color: var(--ah-syn-function); }
+:is(.ah-fileview, .ah-syntax) [data-t="string"] { color: var(--ah-syn-string); }
 /* Numbers and named literals are one idea — a value the language spells for
    you — and they share an accent to say so. */
-.ah-fileview [data-t="number"], .ah-fileview [data-t="constant"] { color: var(--ah-syn-value); }
-.ah-fileview [data-t="property"] { color: var(--ah-syn-property); }
+:is(.ah-fileview, .ah-syntax) [data-t="number"],
+:is(.ah-fileview, .ah-syntax) [data-t="constant"] { color: var(--ah-syn-value); }
+:is(.ah-fileview, .ah-syntax) [data-t="property"] { color: var(--ah-syn-property); }
 
 /* ── the markdown view ─────────────────────────────────────────────────── */
 
@@ -1133,38 +1133,40 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   max-width: 68ch; margin: 0 auto; padding: 18px 28px 0;
   color: var(--vf-text-secondary); font-size: 14px; line-height: 1.55;
 }
-.ah-md__measure > :first-child { margin-top: 0; }
-.ah-md__measure h1, .ah-md__measure h2, .ah-md__measure h3,
-.ah-md__measure h4, .ah-md__measure h5, .ah-md__measure h6 {
+.ah-tmsg__markdown { color: var(--vf-text-secondary); line-height: 1.55; }
+.ah-tmsg__markdown > :last-child { margin-bottom: 0; }
+.ah-markdown > :first-child { margin-top: 0; }
+.ah-markdown h1, .ah-markdown h2, .ah-markdown h3,
+.ah-markdown h4, .ah-markdown h5, .ah-markdown h6 {
   margin: 26px 0 9px; color: var(--vf-text-primary); font-weight: 600; line-height: 1.3;
 }
-.ah-md__measure h1 { font-size: 20px; }
-.ah-md__measure h2 { font-size: 16.5px; padding-bottom: 6px; border-bottom: 1px solid var(--vf-hairline); }
-.ah-md__measure h3 { font-size: 14.5px; }
-.ah-md__measure h4, .ah-md__measure h5, .ah-md__measure h6 {
+.ah-markdown h1 { font-size: 20px; }
+.ah-markdown h2 { font-size: 16.5px; padding-bottom: 6px; border-bottom: 1px solid var(--vf-hairline); }
+.ah-markdown h3 { font-size: 14.5px; }
+.ah-markdown h4, .ah-markdown h5, .ah-markdown h6 {
   font-size: 13px; color: var(--vf-text-secondary);
 }
-.ah-md__measure p { margin: 0 0 12px; }
-.ah-md__measure strong { color: var(--vf-text-primary); font-weight: 600; }
-.ah-md__measure s { color: var(--vf-text-faint); }
-.ah-md__measure a { color: var(--vf-cyan); text-decoration: none; }
-.ah-md__measure a:hover { text-decoration: underline; }
-.ah-md__measure code {
+.ah-markdown p { margin: 0 0 12px; }
+.ah-markdown strong { color: var(--vf-text-primary); font-weight: 600; }
+.ah-markdown s { color: var(--vf-text-faint); }
+.ah-markdown a { color: var(--vf-cyan); text-decoration: none; }
+.ah-markdown a:hover { text-decoration: underline; }
+.ah-markdown code {
   padding: 1px 4px; border-radius: 4px; background: var(--vf-fill);
   font-family: var(--vf-font-mono); font-size: 12px; color: var(--vf-text-primary);
 }
-.ah-md__measure ul, .ah-md__measure ol { margin: 0 0 12px; padding-left: 22px; }
-.ah-md__measure li { margin-bottom: 5px; }
-.ah-md__measure li > ul, .ah-md__measure li > ol { margin: 5px 0 0; }
+.ah-markdown ul, .ah-markdown ol { margin: 0 0 12px; padding-left: 22px; }
+.ah-markdown li { margin-bottom: 5px; }
+.ah-markdown li > ul, .ah-markdown li > ol { margin: 5px 0 0; }
 /* A tight list is one the author wrote without blank lines, and it should
    read as one block rather than as a column of paragraphs. */
-.ah-md__measure [data-tight] > li > p { margin: 0; }
-.ah-md__measure blockquote {
+.ah-markdown [data-tight] > li > p { margin: 0; }
+.ah-markdown blockquote {
   margin: 0 0 12px; padding: 2px 0 2px 14px;
   border-left: 2px solid var(--vf-hairline-strong); color: var(--vf-text-tertiary);
 }
-.ah-md__measure blockquote > :last-child { margin-bottom: 0; }
-.ah-md__measure hr { margin: 22px 0; border: 0; border-top: 1px solid var(--vf-hairline); }
+.ah-markdown blockquote > :last-child { margin-bottom: 0; }
+.ah-markdown hr { margin: 22px 0; border: 0; border-top: 1px solid var(--vf-hairline); }
 .ah-md__code {
   margin: 0 0 14px; padding: 10px 13px; border-radius: 10px;
   background: var(--vf-fill); overflow-x: auto;
@@ -1175,13 +1177,13 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 /* A wide table scrolls inside its own box: the document's measure is a rule
    about the prose, and a table is not allowed to overrule it. */
 .ah-md__tablebox { margin: 0 0 14px; overflow-x: auto; }
-.ah-md__measure table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-.ah-md__measure th, .ah-md__measure td {
+.ah-markdown table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.ah-markdown th, .ah-markdown td {
   padding: 6px 10px; border-bottom: 1px solid var(--vf-hairline); text-align: left;
   vertical-align: top;
 }
-.ah-md__measure th { color: var(--vf-text-primary); font-weight: 500; white-space: nowrap; }
-.ah-md__measure thead tr { border-bottom: 1px solid var(--vf-hairline-strong); }
+.ah-markdown th { color: var(--vf-text-primary); font-weight: 500; white-space: nowrap; }
+.ah-markdown thead tr { border-bottom: 1px solid var(--vf-hairline-strong); }
 /* An embedded image is named, not fetched — see markdown/render.tsx. */
 .ah-md__image {
   display: inline-flex; align-items: center; gap: 5px;
