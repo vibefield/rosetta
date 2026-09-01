@@ -47,6 +47,7 @@ const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 // A 1 MiB buffer amortizes writes within that checkpoint boundary while
 // preserving the caller's explicit flush/durability cadence.
 const LEDGER_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
+const META_HEAD: &str = ".meta-head";
 
 /// Everything replay needs to rebuild a normalization context for a source
 /// file. Written into each segment the first time the source appears there.
@@ -366,6 +367,56 @@ impl Ledger {
             .frame_nanos
             .saturating_add(elapsed_nanos(started));
         self.frame(TAG_META_VERSIONED, &body)
+    }
+
+    /// Journal a metadata snapshot only when its caller-supplied semantic key
+    /// changed. The sidecar is merely an optimization: the ledger checkpoint
+    /// becomes durable first, then the key is atomically installed. A crash in
+    /// between can cause one duplicate meta frame on restart, never missing
+    /// recovery evidence. Private/deferred and async ledgers conservatively
+    /// append because their one final durability barrier has not happened yet.
+    pub fn append_meta_checkpoint_if_changed(
+        &mut self,
+        schema_version: u32,
+        ops_json: &str,
+        semantic_key: &str,
+    ) -> Result<bool, CaptureError> {
+        if self.async_backend.is_some() || self.defer_checkpoint_sync {
+            self.append_meta(schema_version, ops_json)?;
+            self.checkpoint()?;
+            return Ok(true);
+        }
+
+        let head = format!("{schema_version}:{semantic_key}\n");
+        let path = self.dir.join(META_HEAD);
+        if std::fs::read(&path).is_ok_and(|current| current == head.as_bytes()) {
+            return Ok(false);
+        }
+
+        self.append_meta(schema_version, ops_json)?;
+        self.checkpoint()?;
+        let temporary = self
+            .dir
+            .join(format!("{META_HEAD}.tmp-{}", std::process::id()));
+        match std::fs::remove_file(&temporary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error("removing stale meta head", &temporary, error)),
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| io_error("creating meta head", &temporary, error))?;
+        file.write_all(head.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|error| io_error("syncing meta head", &temporary, error))?;
+        drop(file);
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| io_error("installing meta head", &path, error))?;
+        sync_directory(&self.dir)
+            .map_err(|error| io_error("syncing meta head directory", &self.dir, error))?;
+        Ok(true)
     }
 
     /// Cross one projection checkpoint. Live/default ledgers make it durable
@@ -1091,6 +1142,38 @@ mod tests {
         assert_eq!(from_scan, &source("a.jsonl"));
         assert_eq!((*generation, *start_offset), (1, 4));
         assert_eq!(payload, b"two");
+    }
+
+    #[test]
+    fn semantic_meta_head_skips_identical_warm_snapshots() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        assert!(
+            ledger
+                .append_meta_checkpoint_if_changed(2, "[{\"run\":1}]", "stable-a")
+                .unwrap()
+        );
+        assert!(
+            !ledger
+                .append_meta_checkpoint_if_changed(2, "[{\"run\":2}]", "stable-a")
+                .unwrap()
+        );
+        assert!(
+            ledger
+                .append_meta_checkpoint_if_changed(2, "[{\"run\":3}]", "stable-b")
+                .unwrap()
+        );
+
+        let meta = scan(dir.path())
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                LedgerEntry::Meta { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(meta, ["[{\"run\":1}]", "[{\"run\":3}]"]);
     }
 
     #[test]

@@ -18,16 +18,18 @@
 //! boosts can reorder its lanes, and scoped row effects serve only sessions
 //! readers currently hold open.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use rosetta_capture::NotifyEvents;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, SessionFile,
-    SliceBudget, StreamReport,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, RebuildOptions,
+    SessionFile, SliceBudget, StreamReport, meta_ingest_inventory_into,
+    rebuild_runtime_with_options, reserve_unsealed_generation, stream_backfill_into,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
@@ -36,12 +38,13 @@ use rosetta_server::{
 };
 use rosetta_store::{Store, queries};
 
+use crate::cold_stage::ServeColdStage;
 use crate::engine::{
     BackfillRuntime, ColdCx, ColdEngine, StreamMeter, absorb_effects, acknowledge_search, now_ms,
 };
 use crate::recovery::restart_incomplete_projection;
 use crate::{
-    ColdCaptureRequest, ColdLedgerStage, Flags, apply_captured_cold_runtime,
+    AppliedColdRuntime, ColdCaptureRequest, Flags, apply_captured_cold_runtime,
     finish_parallel_cold_runtime, install_rebuilt_projection, ledger_root, make_single_file,
     open_ledger, open_progressive_backfill, parse_flags, plan_parallel_cold_runtime,
     projection_lock, projection_parent, record_backfill_failures, selected,
@@ -121,15 +124,31 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
     let public_ledgers = ledger_root(&flags, &db);
-    let recovered = if flags.restart_incomplete {
+    // A named fresh-cold generation is the normal resume source. Inspect it
+    // before the legacy archive/restart policy so an app restart never throws
+    // away raw evidence that the previous process already captured.
+    let pending_cold = if db.exists() {
+        None
+    } else {
+        ServeColdStage::inspect(&public_ledgers, &db)?
+    };
+    let recovered = if flags.restart_incomplete && pending_cold.is_none() {
         restart_incomplete_projection(&db, &public_ledgers)?
     } else {
         None
     };
-    let recovered_enrollment = recovered
+    let mut recovered_enrollment = recovered
         .as_ref()
         .map(|recovery| recovery.enabled_agents.clone())
         .unwrap_or_default();
+    if let Some(generation) = &pending_cold {
+        recovered_enrollment.extend(generation.enabled_agents.iter().cloned());
+        println!(
+            "recovery: resuming cold generation at {} — {} enrolled runtimes",
+            generation.path.display(),
+            generation.enabled_agents.len()
+        );
+    }
     if let Some(recovery) = &recovered {
         println!(
             "recovery: archived incomplete projection at {} — retained {} enrolled runtimes",
@@ -172,11 +191,18 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         )
     };
     let progressive = store.is_progressive();
+    let warm_live = !fresh_fast && !progressive && !flags.stop_after_meta;
 
     // The transport comes up before any ingest work. A returning user's
     // mirror warms from the standing projection so the room is instantly
     // whole; a fresh install serves empty lists and honest meters.
     let health = Arc::new(DaemonHealth::new(now_ms()));
+    if warm_live {
+        // The standing canonical projection is already valid and readable.
+        // Offline catch-up is live maintenance, not another cold backfill, so
+        // returning users must never see their room veiled as stale.
+        health.ingest_live();
+    }
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
     let consent = Arc::new(ConsentGate::new());
     let boost = Arc::new(BoostLedger::new());
@@ -259,8 +285,23 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .filter(|(_, discovery)| discovery.installed)
         .map(|(adapter, _)| adapter.kind().to_string())
         .collect();
-    let mut consented: BTreeSet<String> = persisted.intersection(&installed).cloned().collect();
-    consented.extend(recovered_enrollment.intersection(&installed).cloned());
+    let mut consented: BTreeSet<String> = if warm_live {
+        // Enrollment is user state, not a discovery result. A temporarily
+        // missing root disables its runner below but must not silently revoke
+        // consent from the standing canonical projection.
+        persisted.clone()
+    } else {
+        persisted.intersection(&installed).cloned().collect()
+    };
+    if pending_cold.is_some() {
+        // The manifest is durable consent and its ledger may remain rebuildable
+        // even if discovery currently cannot see the source root. The resume
+        // branch below diagnoses an unavailable root instead of silently
+        // dropping an enrolled runtime from the generation.
+        consented.extend(recovered_enrollment.iter().cloned());
+    } else {
+        consented.extend(recovered_enrollment.intersection(&installed).cloned());
+    }
     // `--agent` names kinds outright and `--all-agents` says everything
     // installed — both are consent from the command line, the headless
     // stand-in for the app's roll call.
@@ -282,7 +323,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             })
             .collect(),
     );
-    if consented.is_empty() {
+    if consented.is_empty() && !warm_live {
         // Nothing enrolled and nobody said yes: the board is published and
         // NOTHING has been read. Wait for the roll call.
         let granted = consent.arm();
@@ -316,12 +357,98 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
     }
 
+    let runtime_roots: BTreeMap<String, String> = adapters
+        .iter()
+        .zip(&discoveries)
+        .map(|(adapter, discovery)| {
+            (
+                adapter.kind().to_string(),
+                discovery.root.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+
     if fresh_fast {
         let temp = cold_temp.expect("fresh fast serve owns a private projection file");
-        let ledger_stage = ColdLedgerStage::new(&public_ledgers)?;
-        let (mut store, absorbed) = run_fresh_fast_serve(
+        let ledger_stage = ServeColdStage::open(&public_ledgers, &db, &consented, &runtime_roots)?;
+        let outcome = if pending_cold.is_some() {
+            run_resumed_fresh_serve(
+                &flags,
+                &db,
+                &adapters,
+                &discoveries,
+                &consented,
+                &opts,
+                &live,
+                &instrument,
+                store,
+                temp,
+                ledger_stage,
+                &projection_reader,
+                &health,
+                &hub,
+                &search_worker,
+                &stop,
+                started,
+            )
+        } else {
+            run_fresh_fast_serve(
+                &flags,
+                &db,
+                &adapters,
+                &discoveries,
+                &consented,
+                &opts,
+                &live,
+                &instrument,
+                store,
+                temp,
+                ledger_stage,
+                &projection_reader,
+                &health,
+                &hub,
+                &search_worker,
+                &stop,
+                started,
+            )
+        };
+        let (mut store, absorbed) = match outcome {
+            Ok(done) => done,
+            Err(error) if stop.load(Ordering::SeqCst) => {
+                eprintln!(
+                    "cold ingest paused — staged raw ledger retained for the next app start ({error})"
+                );
+                let _ = shutdown_tx.send(true);
+                let _ = tokio_runtime.block_on(server);
+                search_worker.stop();
+                return Ok(());
+            }
+            Err(error) => {
+                let _ = shutdown_tx.send(true);
+                let _ = tokio_runtime.block_on(server);
+                search_worker.stop();
+                return Err(error);
+            }
+        };
+
+        let _ = shutdown_tx.send(true);
+        match tokio_runtime.block_on(server) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("server: {error}")),
+            Err(error) => return Err(format!("server task: {error}")),
+        }
+        acknowledge_search(&mut store, &search_worker)?;
+        search_worker.stop();
+        println!("hub: {absorbed} live items fanned out");
+        if flags.profile {
+            println!("\n== profile ==\n{}", instrument.report());
+        }
+        return Ok(());
+    }
+
+    if warm_live {
+        let (mut store, absorbed) = run_warm_live_serve(
             &flags,
-            &db,
             &adapters,
             &discoveries,
             &consented,
@@ -329,16 +456,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             &live,
             &instrument,
             store,
-            temp,
-            ledger_stage,
-            &projection_reader,
+            &public_ledgers,
             &health,
             &hub,
             &search_worker,
             &stop,
-            started,
         )?;
-
         let _ = shutdown_tx.send(true);
         match tokio_runtime.block_on(server) {
             Ok(Ok(())) => {}
@@ -646,6 +769,271 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn run_resumed_fresh_serve(
+    flags: &Flags,
+    db: &Path,
+    adapters: &[&'static dyn rosetta_adapter_support::AgentAdapter],
+    discoveries: &[rosetta_pipeline::Discovery],
+    consented: &BTreeSet<String>,
+    opts: &IngestOptions,
+    live: &LiveOptions,
+    instrument: &Arc<Instrument>,
+    mut store: Store,
+    temp: tempfile::TempPath,
+    ledger_stage: ServeColdStage,
+    projection_reader: &Arc<ProjectionReader>,
+    health: &Arc<DaemonHealth>,
+    hub: &Arc<Hub>,
+    search_worker: &Fts5SearchWorker,
+    stop: &Arc<AtomicBool>,
+    started: Instant,
+) -> Result<(Store, u64), String> {
+    store.observe_meta_effects();
+    let stage_root = ledger_stage.path().to_path_buf();
+    let cold_opts = IngestOptions {
+        starter_budget: None,
+        audit_files_per_run: 0,
+        cancel: Some(stop.clone()),
+        ..opts.clone()
+    };
+    let mut events = BTreeMap::new();
+    let mut applied = Vec::new();
+    let mut failures = Vec::new();
+    let mut handled = BTreeSet::new();
+
+    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
+        if !consented.contains(adapter.kind()) {
+            continue;
+        }
+        handled.insert(adapter.kind().to_string());
+        if !discovery.installed {
+            return Err(format!(
+                "cannot resume {} cold generation: data root {} is unavailable",
+                adapter.kind(),
+                discovery.root.display()
+            ));
+        }
+        if stop.load(Ordering::SeqCst) {
+            return Err("cold resume cancelled before runtime replay".to_string());
+        }
+
+        // Watch before touching either recovery evidence or today's inventory.
+        // Hints queue while sealed generations rebuild into the fresh RAM view.
+        let watcher = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let mut runtime = discovery.runtime.clone();
+        runtime.enabled = true;
+        let ledger_dir = stage_root.join(adapter.kind());
+        let baseline = instrument.snapshot();
+        health.ingest_stream(adapter.kind(), counter_source(instrument, baseline));
+
+        let unsealed = if has_ledger_segments(&ledger_dir)? {
+            let report = rebuild_runtime_with_options(
+                adapter,
+                &runtime,
+                &ledger_dir,
+                &mut store,
+                instrument,
+                RebuildOptions {
+                    flush_reconciliation: false,
+                    allow_unsealed_sources: true,
+                    cancel: Some(stop.clone()),
+                    ..RebuildOptions::default()
+                },
+            )
+            .map_err(|error| format!("replaying {} staged ledger: {error}", adapter.kind()))?;
+            if report.hard_errors != 0 {
+                return Err(format!(
+                    "{} staged ledger replay had {} hard normalization errors",
+                    adapter.kind(),
+                    report.hard_errors
+                ));
+            }
+            if report.torn_segments != 0 {
+                println!(
+                    "{}: recovered {} sealed ledger segments ({} torn tail ignored)",
+                    adapter.kind(),
+                    report.segments,
+                    report.torn_segments
+                );
+            } else {
+                println!(
+                    "{}: recovered {} sealed ledger segments",
+                    adapter.kind(),
+                    report.segments
+                );
+            }
+            report.unsealed_sources
+        } else {
+            BTreeMap::new()
+        };
+
+        // Current bounded metadata settles the roster after replay. A raw-only
+        // source must still be present: otherwise there is no complete evidence
+        // from which this generation can ever be published.
+        let mut ledger = open_ledger(&stage_root, adapter.kind())?
+            .defer_sync_until_flush()
+            .into_async(4);
+        let (meta, roster) = meta_ingest_inventory_into(
+            adapter,
+            &runtime,
+            &discovery.root,
+            &mut store,
+            &discovery.inventory,
+            discovery.walk_truncated,
+            &cold_opts,
+            instrument,
+            Some(&mut ledger),
+        )
+        .map_err(|error| format!("{} resume metadata: {error}", adapter.kind()))?;
+        for (path, (generation, source)) in &unsealed {
+            let file = roster
+                .iter()
+                .find(|file| file.relative_path == *path)
+                .ok_or_else(|| {
+                    format!(
+                        "cannot finish {}: interrupted source {path} is no longer present",
+                        adapter.kind()
+                    )
+                })?;
+            if file.stream_id != source.stream_id
+                || file.session_id != source.session_id
+                || file.native_session_id != source.native_session_id
+            {
+                return Err(format!(
+                    "cannot finish {}: interrupted source {path} changed identity",
+                    adapter.kind()
+                ));
+            }
+            reserve_unsealed_generation(
+                adapter,
+                &runtime,
+                &mut store,
+                file,
+                *generation,
+                instrument,
+            )
+            .map_err(|error| format!("reserving {path} generation: {error}"))?;
+        }
+
+        let stream = stream_backfill_into(
+            adapter,
+            &runtime,
+            &discovery.root,
+            &mut store,
+            &roster,
+            &cold_opts,
+            instrument,
+            Some(&mut ledger),
+        )
+        .map_err(|error| format!("{} resume source catch-up: {error}", adapter.kind()))?;
+        record_backfill_failures(
+            adapter.kind(),
+            discovery.walk_truncated,
+            &meta,
+            &stream,
+            &mut failures,
+        );
+        instrument
+            .ledger_write(&mut ledger, |ledger| ledger.flush())
+            .map_err(|error| error.to_string())?;
+        absorb_effects(&mut store, hub)?;
+        let session_ids = queries::session_list(store.conn(), None, i64::MAX)
+            .map_err(|error| format!("reading {} resumed sessions: {error}", adapter.kind()))?
+            .into_iter()
+            .filter(|session| session.runtime_id == runtime.id)
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+        hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
+        health.ingest_done(adapter.kind(), stream.payload_bytes, stream.records);
+        events.insert(adapter.kind().to_string(), watcher);
+        applied.push(AppliedColdRuntime {
+            adapter,
+            runtime,
+            root: discovery.root.clone(),
+            roster,
+            ledger: Some(ledger),
+        });
+    }
+
+    let unavailable = consented.difference(&handled).cloned().collect::<Vec<_>>();
+    if !unavailable.is_empty() {
+        return Err(format!(
+            "cold generation names unavailable adapters: {}",
+            unavailable.join(", ")
+        ));
+    }
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    if applied.is_empty() {
+        return Err("nothing to resume: cold generation has no enrolled runtimes".to_string());
+    }
+
+    instrument
+        .flush_bulk_reconciliation(&mut store)
+        .map_err(|error| format!("reconciling resumed projection: {error}"))?;
+    for output in &mut applied {
+        drop(output.ledger.take());
+    }
+    let mut store =
+        publish_fresh_ram_projection(store, temp, db, ledger_stage, projection_reader, instrument)?;
+    println!(
+        "milestone: canonical-ready elapsed_s={:.2}",
+        started.elapsed().as_secs_f64()
+    );
+
+    let public_ledgers = ledger_root(flags, db);
+    let mut runners = Vec::with_capacity(applied.len());
+    for output in applied {
+        let watcher = events
+            .remove(output.adapter.kind())
+            .ok_or_else(|| format!("lost {} resume watcher", output.adapter.kind()))?;
+        let ledger = open_ledger(&public_ledgers, output.adapter.kind())?;
+        let runner = LiveRunner::resume_from_roster(
+            output.adapter,
+            output.runtime,
+            output.root,
+            Box::new(watcher),
+            output.roster,
+            opts.clone(),
+            live.clone(),
+            Some(ledger),
+        );
+        runners.push((output.adapter.kind(), runner));
+    }
+    let absorbed = drive_live_runners(
+        flags,
+        &mut store,
+        &mut runners,
+        instrument,
+        health,
+        hub,
+        search_worker,
+        stop,
+    )?;
+    Ok((store, absorbed))
+}
+
+fn has_ledger_segments(path: &Path) -> Result<bool, String> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("listing ledger {}: {error}", path.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("listing ledger {}: {error}", path.display()))?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with(".rledger"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_fresh_fast_serve(
     flags: &Flags,
     db: &std::path::Path,
@@ -657,7 +1045,7 @@ fn run_fresh_fast_serve(
     instrument: &Arc<Instrument>,
     mut store: Store,
     temp: tempfile::TempPath,
-    ledger_stage: ColdLedgerStage,
+    ledger_stage: ServeColdStage,
     projection_reader: &Arc<ProjectionReader>,
     health: &Arc<DaemonHealth>,
     hub: &Arc<Hub>,
@@ -868,12 +1256,137 @@ fn run_fresh_fast_serve(
         );
         runners.push((output.adapter.kind(), runner));
     }
+    let absorbed = drive_live_runners(
+        flags,
+        &mut store,
+        &mut runners,
+        instrument,
+        health,
+        hub,
+        search_worker,
+        stop,
+    )?;
+    Ok((store, absorbed))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_warm_live_serve(
+    flags: &Flags,
+    adapters: &[&'static dyn rosetta_adapter_support::AgentAdapter],
+    discoveries: &[rosetta_pipeline::Discovery],
+    consented: &BTreeSet<String>,
+    opts: &IngestOptions,
+    live: &LiveOptions,
+    instrument: &Arc<Instrument>,
+    mut store: Store,
+    public_ledgers: &Path,
+    health: &Arc<DaemonHealth>,
+    hub: &Arc<Hub>,
+    search_worker: &Fts5SearchWorker,
+    stop: &Arc<AtomicBool>,
+) -> Result<(Store, u64), String> {
+    let mut runners = Vec::new();
+    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
+        if !consented.contains(adapter.kind()) {
+            continue;
+        }
+        if !discovery.installed {
+            eprintln!(
+                "{}: enrolled data root is unavailable; standing canonical data remains public",
+                adapter.kind()
+            );
+            continue;
+        }
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+
+        // Watch before the bounded current inventory is skimmed. The forced
+        // catch-up below then combines queued hints with cursor-relative stat
+        // evidence, closing both the offline and scan/watch races.
+        let watcher = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let mut ledger = open_ledger(public_ledgers, adapter.kind())?;
+        let mut runtime = discovery.runtime.clone();
+        runtime.enabled = true;
+        let (meta, roster) = meta_ingest_inventory_into(
+            adapter,
+            &runtime,
+            &discovery.root,
+            &mut store,
+            &discovery.inventory,
+            discovery.walk_truncated,
+            opts,
+            instrument,
+            Some(&mut ledger),
+        )
+        .map_err(|error| format!("{} warm metadata catch-up: {error}", adapter.kind()))?;
+        if meta.walk_truncated || meta.files_unidentified > 0 || meta.files_vanished > 0 {
+            eprintln!(
+                "{}: warm inventory changed during scan (truncated={}, unidentified={}, vanished={}); live admission will retry",
+                adapter.kind(),
+                meta.walk_truncated,
+                meta.files_unidentified,
+                meta.files_vanished
+            );
+        }
+        let runner = LiveRunner::resume_from_roster(
+            adapter,
+            runtime,
+            discovery.root.clone(),
+            Box::new(watcher),
+            roster,
+            opts.clone(),
+            live.clone(),
+            Some(ledger),
+        );
+        runners.push((adapter.kind(), runner));
+    }
+
+    let absorbed = drive_live_runners(
+        flags,
+        &mut store,
+        &mut runners,
+        instrument,
+        health,
+        hub,
+        search_worker,
+        stop,
+    )?;
+    Ok((store, absorbed))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive_live_runners(
+    flags: &Flags,
+    store: &mut Store,
+    runners: &mut [(&'static str, LiveRunner<'static>)],
+    instrument: &Instrument,
+    health: &DaemonHealth,
+    hub: &Hub,
+    search_worker: &Fts5SearchWorker,
+    stop: &AtomicBool,
+) -> Result<u64, String> {
     store.observe_meta_effects();
     store.observe_effects();
     health.ingest_live();
-    search_worker.wake();
+    let mut absorbed = absorb_effects(store, hub)? as u64;
 
-    let mut absorbed = 0_u64;
+    // One non-blocking recovery pass is part of entering live mode. It catches
+    // offline growth and the private-public handoff even if the OS watcher
+    // dropped or coalesced the corresponding event.
+    for (kind, runner) in runners.iter_mut() {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        runner
+            .catch_up(store, instrument)
+            .map_err(|error| format!("{kind} startup catch-up: {error}"))?;
+        update_live_health(health, kind, runner);
+        search_worker.wake();
+        acknowledge_search(store, search_worker)?;
+        absorbed += absorb_effects(store, hub)? as u64;
+    }
+
     let mut remaining = flags.ticks;
     while !stop.load(Ordering::SeqCst) {
         match &mut remaining {
@@ -881,44 +1394,53 @@ fn run_fresh_fast_serve(
             Some(count) => *count -= 1,
             None => {}
         }
-        for (kind, runner) in &mut runners {
+        if runners.is_empty() {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        for (kind, runner) in runners.iter_mut() {
             runner
-                .tick(&mut store, instrument)
+                .tick(store, instrument)
                 .map_err(|error| error.to_string())?;
-            let report = runner.report();
-            health.update(
-                kind,
-                RuntimeTick {
-                    ticks: report.ticks,
-                    events: report.events,
-                    polls: report.polls,
-                    rescans: report.rescans,
-                    admissions: report.admissions,
-                    live_rows: report.stream.stats.messages_inserted
-                        + report.stream.stats.messages_updated,
-                },
-                now_ms(),
-            );
+            update_live_health(health, kind, runner);
         }
         search_worker.wake();
-        acknowledge_search(&mut store, search_worker)?;
-        absorbed += absorb_effects(&mut store, hub)? as u64;
+        acknowledge_search(store, search_worker)?;
+        absorbed += absorb_effects(store, hub)? as u64;
     }
-    for (kind, runner) in &runners {
+    for (kind, runner) in runners.iter() {
         let report = runner.report();
         println!(
             "{kind}: {} ticks — {} events, {} polls, {} rows live",
-            report.ticks, report.events, report.polls, report.stream.stats.messages_inserted,
+            report.ticks,
+            report.events,
+            report.polls,
+            report.stream.stats.messages_inserted + report.stream.stats.messages_updated,
         );
     }
-    Ok((store, absorbed))
+    Ok(absorbed)
+}
+
+fn update_live_health(health: &DaemonHealth, kind: &str, runner: &LiveRunner<'_>) {
+    let report = runner.report();
+    health.update(
+        kind,
+        RuntimeTick {
+            ticks: report.ticks,
+            events: report.events,
+            polls: report.polls,
+            rescans: report.rescans,
+            admissions: report.admissions,
+            live_rows: report.stream.stats.messages_inserted + report.stream.stats.messages_updated,
+        },
+        now_ms(),
+    );
 }
 
 fn publish_fresh_ram_projection(
     mut store: Store,
     temp: tempfile::TempPath,
     db: &std::path::Path,
-    ledger_stage: ColdLedgerStage,
+    mut ledger_stage: ServeColdStage,
     projection_reader: &ProjectionReader,
     instrument: &Instrument,
 ) -> Result<Store, String> {
@@ -945,6 +1467,7 @@ fn publish_fresh_ram_projection(
         // The switch precedes dropping the writer. Any request that captured
         // the old target owns its RAM keeper; every later request opens disk.
         projection_reader.publish_file(db.to_path_buf());
+        ledger_stage.complete()?;
         Ok::<(), String>(())
     })?;
     drop(store);

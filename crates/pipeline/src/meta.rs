@@ -401,12 +401,28 @@ pub fn meta_ingest_inventory_into(
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
     ops.extend(meta_ops);
     if let Some(ledger) = ledger {
+        let mut semantic_ops = ops.clone();
+        for op in &mut semantic_ops {
+            if let IngestOp::Runtime(runtime) = op {
+                // Discovery wall time is intentionally insert-only in the
+                // projection and must not turn an otherwise identical bounded
+                // skim into a new durable metadata generation every boot.
+                runtime.discovered_at = 0;
+            }
+        }
+        let semantic = serde_json::to_vec(&semantic_ops).map_err(|error| {
+            PipelineError::Config(format!("serializing semantic meta key: {error}"))
+        })?;
+        let semantic_key = blake3::hash(&semantic).to_hex().to_string();
         instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
             let json = serde_json::to_string(&ops).map_err(|error| {
                 PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
             })?;
-            ledger.append_meta(crate::LEDGER_META_SCHEMA_VERSION, &json)?;
-            ledger.checkpoint()?;
+            ledger.append_meta_checkpoint_if_changed(
+                crate::LEDGER_META_SCHEMA_VERSION,
+                &json,
+                &semantic_key,
+            )?;
             Ok(())
         })?;
     }

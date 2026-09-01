@@ -145,6 +145,46 @@ fn resume_from_backfill_roster_preserves_queued_hints_without_reskimming() {
 }
 
 #[test]
+fn containing_directory_hint_nominates_the_changed_source() {
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = backfilled_harness();
+    let target = h.files[0].clone();
+    append_user_line(
+        &h.root.join(&target.relative_path),
+        &target.native_session_id,
+        "xipe totec directory-level hint",
+    );
+    let directory = Path::new(&target.relative_path)
+        .parent()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut events = ScriptedEvents::default();
+    events.push_changed(&directory);
+
+    let mut runner = resumed_runner(&h, adapter, events, hot_live());
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    assert_eq!(runner.report().stream.stats.messages_inserted, 1);
+}
+
+#[test]
+fn startup_catch_up_forces_one_silent_cursor_relative_poll() {
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = backfilled_harness();
+    let target = h.files[0].clone();
+    append_user_line(
+        &h.root.join(&target.relative_path),
+        &target.native_session_id,
+        "tlaloc offline append",
+    );
+    let mut runner = resumed_runner(&h, adapter, ScriptedEvents::default(), hot_live());
+
+    runner.catch_up(&mut h.store, &h.instrument).unwrap();
+    assert_eq!(runner.report().polls, 1);
+    assert_eq!(runner.report().stream.stats.messages_inserted, 1);
+}
+
+#[test]
 fn event_hint_streams_only_the_appended_tail() {
     let adapter = &ClaudeCodeAdapter;
     let mut h = backfilled_harness();

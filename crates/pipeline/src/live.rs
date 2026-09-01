@@ -96,9 +96,18 @@ pub fn map_hint(
     }
     let snapshot = snapshot_alias(adapter, relative_path);
     let hinted = snapshot.as_deref().unwrap_or(relative_path);
+    let descendant_prefix = format!("{hinted}/");
     let nominated: Vec<String> = files
         .iter()
-        .filter(|file| file.relative_path == hinted || physical_snapshot_path(file) == Some(hinted))
+        .filter(|file| {
+            file.relative_path == hinted
+                // macOS FSEvents commonly reports only the containing
+                // directory. An ancestor hint nominates its admitted children;
+                // their cursor anchors still decide whether any source work is
+                // actually needed.
+                || file.relative_path.starts_with(&descendant_prefix)
+                || physical_snapshot_path(file) == Some(hinted)
+        })
         .map(|file| file.relative_path.clone())
         .collect();
     if !nominated.is_empty() {
@@ -253,13 +262,39 @@ impl<'a> LiveRunner<'a> {
         store: &mut Store,
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
+        self.tick_inner(store, instrument, self.live.tick, false, true)
+    }
+
+    /// Perform the process-start handoff without sleeping: drain every queued
+    /// watcher hint and force the stat-poll recovery lane once. This closes the
+    /// gap between the preceding bounded skim/backfill and the ordinary live
+    /// cadence, including writes that landed while the daemon was offline or
+    /// while a private cold projection was being published. Rotating audits
+    /// remain on normal poll ticks; startup catch-up reads only files with
+    /// changed cursor-relative evidence.
+    pub fn catch_up(
+        &mut self,
+        store: &mut Store,
+        instrument: &Instrument,
+    ) -> Result<(), PipelineError> {
+        self.tick_inner(store, instrument, Duration::ZERO, true, false)
+    }
+
+    fn tick_inner(
+        &mut self,
+        store: &mut Store,
+        instrument: &Instrument,
+        initial_wait: Duration,
+        force_poll: bool,
+        run_audit: bool,
+    ) -> Result<(), PipelineError> {
         self.report.ticks += 1;
         let mut changed: BTreeSet<String> = BTreeSet::new();
         let mut needs_admission = false;
-        let mut poll_due = self.last_poll.elapsed() >= self.live.poll_interval;
+        let mut poll_due = force_poll || self.last_poll.elapsed() >= self.live.poll_interval;
 
         let mut budget = self.live.max_coalesced;
-        let mut wait = self.live.tick;
+        let mut wait = initial_wait;
         while budget > 0 {
             let Some(event) = self.events.next_event(wait) else {
                 break;
@@ -322,7 +357,7 @@ impl<'a> LiveRunner<'a> {
         // its duty cycle is poll_interval × (files ÷ audit_files_per_run).
         // The picks come from the store's own rotation state, so restarting
         // the process never restarts the sweep.
-        if poll_due && self.opts.audit_files_per_run > 0 {
+        if run_audit && poll_due && self.opts.audit_files_per_run > 0 {
             let audit_candidates: Vec<&SessionFile> = self
                 .files
                 .iter()

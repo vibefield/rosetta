@@ -98,7 +98,7 @@ function startDaemon(bin, dbPath) {
   console.log(`starting optimized rosettad: ${bin}`);
   const proc = spawn(
     bin,
-    ["serve", "--db", dbPath, "--addr", "127.0.0.1:0", "--restart-incomplete"],
+    ["serve", "--db", dbPath, "--addr", "127.0.0.1:0"],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
   daemonProcess = proc;
