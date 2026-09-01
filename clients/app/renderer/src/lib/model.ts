@@ -27,6 +27,9 @@ export interface ProjectStats {
 export interface ProjectViewModel {
   readonly row: ProjectRow;
   readonly tint: string;
+  /** Tokens across the project's whole life (root contributions include
+   * their subagent trees). This is the project card's primary figure. */
+  readonly lifetimeTokens: number;
   /** Tokens over the last 30 days — the ledger's stated window. */
   readonly tokensLast30Days: number;
   /** 15 two-day buckets, oldest first — the activity shape. */
@@ -168,6 +171,10 @@ export function buildProjectViewModel(
     (total, value) => total + Math.max(0, value),
     0,
   );
+  const lifetimeTokens = (projectStats?.contribution ?? []).reduce(
+    (total, contribution) => total + contribution.tokens,
+    0,
+  );
   const lifetimeMessages = (projectStats?.contribution ?? []).reduce(
     (total, contribution) => total + contribution.messages,
     0,
@@ -195,6 +202,7 @@ export function buildProjectViewModel(
   return {
     row: projectRow,
     tint: projectTint(projectRow.id),
+    lifetimeTokens,
     tokensLast30Days,
     recentTokenBuckets,
     dailyTokens,

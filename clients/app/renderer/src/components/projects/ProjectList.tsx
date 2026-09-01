@@ -7,7 +7,7 @@ export interface ProjectListProps {
   /** Projects in display order; sorting and filtering belong to the container. */
   readonly projects: readonly ProjectViewModel[];
   readonly selectedProjectId: string | null;
-  readonly maximumTokensLast30Days: number;
+  readonly maximumLifetimeTokens: number;
   /** `null` denotes browse mode; a map denotes search mode. */
   readonly searchHitCounts: ReadonlyMap<string, number> | null;
   readonly homeDirectory: string | null;
@@ -25,7 +25,7 @@ export interface ProjectListProps {
 export function ProjectList({
   projects,
   selectedProjectId,
-  maximumTokensLast30Days,
+  maximumLifetimeTokens,
   searchHitCounts,
   homeDirectory,
   currentTimestamp,
@@ -42,7 +42,7 @@ export function ProjectList({
         <ProjectListItem
           key={project.row.id}
           project={project}
-          maximumTokensLast30Days={maximumTokensLast30Days}
+          maximumLifetimeTokens={maximumLifetimeTokens}
           isSelected={project.row.id === selectedProjectId}
           searchHitCount={isSearching ? (searchHitCounts.get(project.row.id) ?? 0) : null}
           homeDirectory={homeDirectory}

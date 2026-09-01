@@ -33,7 +33,7 @@ function TokenFigure({
 export interface ProjectListItemProps {
   readonly project: ProjectViewModel;
   /** Maximum across the complete project collection, not a filtered subset. */
-  readonly maximumTokensLast30Days: number;
+  readonly maximumLifetimeTokens: number;
   readonly isSelected: boolean;
   /** `null` hides the search hit badge. */
   readonly searchHitCount: number | null;
@@ -49,7 +49,7 @@ export interface ProjectListItemProps {
 
 export function ProjectListItem({
   project,
-  maximumTokensLast30Days,
+  maximumLifetimeTokens,
   isSelected,
   searchHitCount,
   homeDirectory,
@@ -73,8 +73,8 @@ export function ProjectListItem({
         (ingestFill !== null ? ` · ${Math.round(ingestFill * 100)}% read` : "")
       : `figures still cooking · ${project.indexedSessionCount} of ${project.sessionCount} sessions indexed`
     : null;
-  const spendShare = maximumTokensLast30Days > 0
-    ? (project.tokensLast30Days / maximumTokensLast30Days) * 100
+  const spendShare = maximumLifetimeTokens > 0
+    ? (project.lifetimeTokens / maximumLifetimeTokens) * 100
     : 0;
   const lastActiveLabel = project.lastActiveMs === null
     ? null
@@ -101,8 +101,8 @@ export function ProjectListItem({
       } as ProjectListItemStyle}
       aria-current={isSelected ? "true" : undefined}
       aria-label={`${project.row.name} · ${tokenText(
-        project.tokensLast30Days,
-      )} tokens over 30 days${searchHitLabel}${
+        project.lifetimeTokens,
+      )} lifetime tokens${searchHitLabel}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
       }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
       onClick={() => onProjectSelect(project.row.id)}
@@ -128,8 +128,8 @@ export function ProjectListItem({
         >
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
           <TokenFigure
-            value={project.tokensLast30Days}
-            unknown={isCooking && project.tokensLast30Days === 0}
+            value={project.lifetimeTokens}
+            unknown={isCooking && project.lifetimeTokens === 0}
           />
         </span>
         {lastActiveLabel !== null && (

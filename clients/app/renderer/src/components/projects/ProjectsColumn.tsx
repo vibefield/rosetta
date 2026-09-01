@@ -51,9 +51,9 @@ export function ProjectsColumn({
     () => projects.reduce((total, project) => total + project.sessionCount, 0),
     [projects],
   );
-  const maximumTokensLast30Days = useMemo(
+  const maximumLifetimeTokens = useMemo(
     () => projects.reduce(
-      (maximum, project) => Math.max(maximum, project.tokensLast30Days),
+      (maximum, project) => Math.max(maximum, project.lifetimeTokens),
       0,
     ),
     [projects],
@@ -62,7 +62,7 @@ export function ProjectsColumn({
     const sortedProjects = [...projects].sort((left, right) =>
       sort === "recent"
         ? (right.lastActiveMs ?? 0) - (left.lastActiveMs ?? 0)
-        : right.tokensLast30Days - left.tokensLast30Days,
+        : right.lifetimeTokens - left.lifetimeTokens,
     );
 
     return searchHitCounts === null
@@ -89,7 +89,7 @@ export function ProjectsColumn({
           onProjectSelect={onProjectSelect}
         />
       )}
-      <ListToolbar label="tokens over 30d">
+      <ListToolbar label="lifetime tokens">
         <SegmentedControl
           value={sort}
           options={PROJECT_SORT_OPTIONS}
@@ -102,7 +102,7 @@ export function ProjectsColumn({
         <ProjectList
           projects={visibleProjects}
           selectedProjectId={selectedProjectId}
-          maximumTokensLast30Days={maximumTokensLast30Days}
+          maximumLifetimeTokens={maximumLifetimeTokens}
           searchHitCounts={searchHitCounts}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
