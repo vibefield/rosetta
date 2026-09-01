@@ -20,15 +20,19 @@ runtime adapters, and CLI registration. The generic pipeline ingests adapter-sel
 JSONL transcripts, rewrite-in-place metadata documents, and SQLite session databases;
 it reconciles virtual membership and whole-source deletion, generation-stages rewrites, tails live
 changes with polling/audit recovery, and writes the canonical SQLite projection.
-Verified inline images are content-addressed in a sibling `<projection>.images/` directory;
+Verified inline images are content-addressed in a sibling `<projection>.assets/` directory;
 SQLite stores only stable service URLs while the raw ledger preserves the native bytes.
 Existing/live `ingest`, `watch`, and `serve` append source records to a checksummed raw
-ledger durably before visible projection commits. A fresh `serve` projection is public and
-resumable from its first commit: all enrolled runtimes are skimmed before streaming, the
-first canonical list session is bootstrapped, then runtimes interleave round-robin with
-per-session boost. Finite `ingest` and `rebuild` retain a private same-filesystem ledger and
-SQLite build followed by validated atomic publication. A missing projection beside an
-existing ledger fails closed to `rebuild`, and ordinary opens fail closed on schema mismatch.
+ledger durably before visible projection commits. A normal fresh `serve` binds HTTP/WS first,
+publishes bounded project/session metadata from the canonical shared-memory SQLite generation,
+then captures and reconciles runtimes in parallel RAM. Only closed runtimes enter that generation;
+the final handoff fsyncs and promotes the staged ledger first, then atomically installs the validated
+SQLite file. Project/session/timeline reads remain progressive, while global heatmap, usage, and
+contribution queries return `not_ready` until canonical publication; detached search starts after
+that gate. Finite `ingest` and `rebuild` retain the same private-build/atomic-publication contract.
+The app starts `serve --restart-incomplete`: an interrupted noncanonical artifact set is moved
+intact under `recovery/incomplete-*`, its enrollment is retained, and the fast fresh path restarts.
+Ordinary opens still fail closed on schema mismatch.
 
 The in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, generated
 TypeScript protocol package, and backend-neutral search seam are implemented. Production

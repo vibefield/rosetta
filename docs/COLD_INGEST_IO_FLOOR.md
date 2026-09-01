@@ -175,6 +175,56 @@ and 134 projects / 6,553 sessions / 568,699 messages. Search was intentionally n
 different live source cut and the RAM/public-serving topology make that delta diagnostic only.
 It may not be cited as an optimization regression or win without a frozen before/after pair.
 
+The disposable `app-fast-ram-progressive-v1` artifact was later removed to reclaim 10 GiB on the
+test SSD. The recorded measurements remain diagnostic; the deleted artifact cannot serve as one
+side of a future frozen comparison and must be rerun if such a pair is required.
+
+## App read-isolation and recovery gate
+
+A second product-path investigation on 2026-08-31 explained why `pnpm dev` could still run for
+minutes despite selecting the fast RAM topology. The first correct release/RAM run reached metadata
+in 9.35 seconds but canonical readiness only after 225.02 seconds. A native stack sample showed the
+renderer issuing heatmap and contribution for all 135 displayed projects at once—roughly 270
+requests—and repeating them every five seconds. Each old contribution query also re-aggregated the
+whole message corpus. Those blocking reads serialized on SQLite's shared-cache mutex and starved the
+sole canonical writer.
+
+The accepted correctness fix establishes three boundaries:
+
+1. The server returns HTTP 503 plus protocol-v6 `not_ready` for heatmap, usage, and contribution
+   while `ProjectionReader` targets shared RAM. Project/session lists and bounded timelines remain
+   progressive.
+2. The renderer waits for exact `canonical_ready`, then hydrates project figures with four workers;
+   stable refresh is five minutes. Contribution selects the requested project's root/session tree
+   before aggregating messages, usage, commits, and edits.
+3. `pnpm dev` builds release `rosettad` and passes the exact artifact to Electron. Electron starts
+   `serve --restart-incomplete`; a marker-driven filesystem transaction preserves an incomplete DB,
+   WAL sidecars, ledger, `.assets`, search sidecar, and enrollment under `recovery/incomplete-*`
+   before a fresh RAM restart. Complete projections are never moved.
+
+The post-fix exact-window visual run used
+`SamsungRed/rosetta-agent-tests/runs/app-visual-gate-v2`:
+
+| Observation | Result |
+|---|---:|
+| Direct process elapsed to canonical ready | 77.64 s |
+| Manual-consent metadata point | 25.28 s |
+| Metadata → canonical | 52.36 s |
+| Corrected automatic cold-work estimate | 9.35 + 52.36 = 61.71 s |
+| Same-project contribution SQL | 0.46 s → 0.03 s, equal result |
+| Projects / sessions / root sessions | 134 / 6,553 / 1,406 |
+| Messages after queued live events | 569,004 |
+| SQLite / ledger / assets / search | 1.0 GiB / 9.1 GiB / 110 MiB / 769 MiB |
+
+`canonical_ready=1`, `quick_check=ok`, and foreign-key checking returned no rows. The exact Electron
+window showed 135 UI projects (134 canonical projects plus the unassigned pseudo-project), 565
+unassigned sessions, populated project figures, session navigation, and a rendered transcript with
+no stale/warming overlay. The 61.71-second value remains about 1.71 seconds above the goal.
+
+These sources were live organic histories, not a frozen permission-read-only snapshot. The numbers
+prove the contention mechanism and the functional/visual recovery gate; they are not a
+merge-admissible performance before/after pair and must not be reported as a formal 3.65× speedup.
+
 ## Reproduction
 
 ```sh

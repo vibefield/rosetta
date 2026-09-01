@@ -246,14 +246,20 @@
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
       <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
-    <div class="status"><b>Implementation checkpoint · 2026-08-30.</b> All ten logical entities
+    <div class="status"><b>Implementation checkpoint · 2026-08-31.</b> All ten logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
       bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 12 includes
       replacement-keyed <code>session_usage</code> for native totals that cannot be attributed to one
       response, deterministic metadata evidence ties, RAM-only replacement staging, and
-      canonical/search epoch-revision state. Fresh serve commits to a public,
-      resumable WAL projection; finite ingest and whole-ledger rebuild validate privately before atomic
-      installation. Verified inline images are decoded into content-addressed projection members;
+      canonical/search epoch-revision state. Normal fresh serve constructs that exact canonical schema
+      in named shared-memory SQLite: bounded metadata is immediately public, then only closed,
+      RAM-reconciled runtimes enter the generation. Project/session/timeline reads are progressive;
+      cross-session heatmap, usage, and contribution reads return <code>not_ready</code> until full
+      validation, staged-ledger durability, and atomic disk installation. Detached search starts after
+      that switch. The app durably archives an interrupted noncanonical artifact set before restarting
+      the fresh RAM path; complete projections are never moved. Finite ingest and whole-ledger rebuild
+      also validate privately before atomic installation. Verified inline images are decoded into
+      content-addressed <code>&lt;projection&gt;.assets/</code> members;
       message rows retain stable service URLs and the raw ledger remains lossless. FTS5 is a detached disposable generation built asynchronously after canonical
       validation, then repaired from a coalesced session set. Ordinary schema mismatches fail closed.
       The in-process hot tier, subscription hub, HTTP/WebSocket transport, and generated clients exist.
@@ -1628,15 +1634,15 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
       <!-- lane A: canonical transcript -->
       <g>
         <rect x="560" y="40" width="500" height="70" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
-        <text x="576" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">canonical transcript — public backfill</text>
-        <text x="576" y="86" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">message rows per pass · starter slices then completion · runtime round-robin · boost</text>
+        <text x="576" y="64" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">canonical transcript — progressive RAM</text>
+        <text x="576" y="86" font-size="11" fill="var(--muted)" font-family="'Source Sans 3',sans-serif">metadata first · closed reconciled runtimes · final ordinals · no parser fragments</text>
       </g>
 
       <!-- lane B: rollups -->
       <g>
         <rect x="560" y="127" width="500" height="70" rx="6" fill="var(--card)" stroke="var(--teal)" stroke-width="1.25"/>
         <text x="576" y="151" font-size="12.5" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">usage buckets — accumulate</text>
-        <text x="576" y="173" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">deltas land per batch — session totals stay current while backfill runs</text>
+        <text x="576" y="173" font-size="11" style="fill:var(--teal)" font-family="'Source Sans 3',sans-serif">built in canonical RAM · global aggregate reads open only after durable publication</text>
       </g>
 
       <!-- lane C: live watch -->
@@ -1648,7 +1654,8 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
     </svg>
     </div>
     <figcaption>Widths are not to scale — discovery is milliseconds, meta ingest a couple of seconds,
-    and stream commits continue while the app serves. Search is a later detached generation, not an
+    and closed runtime commits continue while the app serves metadata and bounded timelines. Global
+    aggregates open only after canonical publication; search is a later detached generation, not an
     extra write in canonical transactions. Nothing past discovery is read until the user opts in.</figcaption>
   </figure>
 
@@ -1670,11 +1677,13 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
     </div>
     <div class="job">
       <h3>3 · Stream lanes</h3>
-      <p>Writes funnel through one canonical writer with batched commits. Message rows, rollup
-      corrections, checkpoints, and coalesced search-repair keys commit in the <b>same transaction</b>;
-      detached FTS generations never share that transaction. Aggregates cannot drift, and cumulative→delta
-      normalization (the codex trap) happens here, once. Priority: live tails first, then sessions the
-      user opens, then newest-first backfill. Everything resumes via
+      <p>On a normal fresh serve, adapters capture, parse, normalize, and reconcile concurrently in
+      private RAM planners; one canonical writer admits only complete runtimes into the shared-memory
+      generation. Message rows, rollup corrections, checkpoints, and coalesced search-repair keys
+      commit in the <b>same transaction</b>; detached FTS generations never share that transaction.
+      Aggregates cannot drift, and cumulative→delta normalization (the codex trap) happens here, once.
+      Existing projections and explicit disk-progressive resume retain live ▸ boost ▸ starter ▸
+      completion priority. Everything resumes via
       <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">ingest_cursor</span>
       (a versioned driver checkpoint: generation · file identity · committed offset · boundary
       anchor) — the simplest form of the pattern codex itself ships as

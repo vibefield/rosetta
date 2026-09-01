@@ -317,7 +317,7 @@
   <a href="#apply">4 · Apply</a>
   <a href="#ledger">Ledger protocol</a>
   <a href="#live">5 · Live</a>
-  <a href="#serve">Progressive serve</a>
+  <a href="#serve">Fresh RAM serve</a>
   <a href="#rebuild">Rebuild</a>
   <a href="#search">Search sidecar</a>
   <div class="g">Roster</div>
@@ -336,7 +336,7 @@
     Every production ingest path — <code>ingest</code>, <code>watch</code>, <code>serve</code>,
     <code>rebuild</code> — is the same three phases plus a live loop that re-enters them.
     This page is a map of those stages down to the functions that implement them,
-    read from the crates as of 2026-08-29. Companion to
+    read from the crates as of 2026-08-31. Companion to
     <a href="ingest-engine.html">ingest-engine.html</a> (design) and
     <a href="canonical-model.html">canonical-model.html</a> (what gets stored).
   </p>
@@ -358,8 +358,9 @@
     already-serialized JSON rows — never a file handle, DB connection, or watcher.
     Capture never sees a session. Store never sees a JSONL line. Search never
     writes canonical rows. Two durable representations only: the checksummed
-    raw ledger, and one canonical SQLite projection. <code>source_op</code> is
-    temporary replacement staging, empty in steady state, not a third store.
+    raw ledger, and one canonical SQLite projection. Replacement generations,
+    tool correlations, and late usage reconcile in process RAM; no serialized
+    op journal or pending-merge table is a third store.
   </div>
 
   <!-- ============================================================ -->
@@ -476,7 +477,9 @@
     <div class="card">
       <div class="kicker">representation 2</div>
       <h3>Canonical projection</h3>
-      <p>SQLite schema 12. Disposable. <code>Store::apply</code> is the only writer. On schema/normalizer bump, rebuild from the ledger — never migrate.</p>
+      <p>SQLite schema 12 plus content-addressed <code>&lt;db&gt;.assets/</code> members. Disposable.
+      <code>Store::apply</code> is the only row writer. On schema/normalizer bump, rebuild from the
+      ledger—never migrate.</p>
     </div>
     <div class="card">
       <div class="kicker">not a representation</div>
@@ -538,13 +541,15 @@
       <text class="t" x="40" y="246" style="font-size:12.5px">projection_lock → open_* store → discover → per runtime: NotifyEvents::watch? → meta_ingest_into → stream_backfill_into</text>
       <text class="s" x="40" y="268">ingest: private atomic publication if the projection is new (ColdLedgerStage + finish_bulk_load)</text>
       <text class="s" x="40" y="286">watch: watch-before-scan, then LiveRunner::start_with_ledger (re-skims meta). No Hub — Effects stay off.</text>
-      <text class="s" x="40" y="304">serve: listener first, consent, skim every runtime, round-robin first files, audit, finish_progressive_load, LiveRunner::resume_from_roster</text>
+      <text class="s" x="40" y="304">fresh serve: listener + consent → canonical RAM metadata → parallel closed runtimes → validate → durable ledger/SQLite publish → live</text>
       <text class="s" x="40" y="322">rebuild: open_for_rebuild empty file → rebuild_runtime (two ledger passes) → finish_bulk_load → install_rebuilt_projection</text>
       <text class="s" x="40" y="348">then: ledger.flush · synchronize_fts5_once / Fts5SearchWorker · Store::acknowledge_search</text>
       <text class="s" x="40" y="380">CLI ingest/watch imply consent (enabled=true). apply_runtime never overwrites enabled on rediscovery. Serve waits on ConsentGate unless --all-agents or persisted enrollment.</text>
     </svg>
     </div>
-    <figcaption>Finite <code>ingest</code> and <code>rebuild</code> stay private until validated. Fresh <code>serve</code> is public from the first committed skim.</figcaption>
+    <figcaption>Finite <code>ingest</code> and <code>rebuild</code> stay private until validated. Fresh
+    <code>serve</code> exposes metadata and closed timelines from canonical RAM, then atomically
+    retargets readers to the validated disk projection.</figcaption>
   </figure>
 
   <!-- ============================================================ -->
@@ -909,7 +914,7 @@
         <tr><td class="cm">Runtime</td><td>Installed agent runtime</td><td><code>apply_runtime</code></td></tr>
         <tr><td class="cm">Project</td><td>Repository root / normalized non-git root</td><td><code>apply_project</code></td></tr>
         <tr><td class="cm">SessionMeta</td><td>Metadata-only identity, primary cwd, and ownership; stream cannot revise</td><td><code>apply_session</code></td></tr>
-        <tr><td class="cm">SessionTitle</td><td>Ranked title fact (explicit &gt; generated &gt; fallback)</td><td><code>apply_session_title</code> → <code>refresh_session_title</code></td></tr>
+        <tr><td class="cm">SessionTitle</td><td>Ranked title fact (explicit &gt; generated &gt; fallback)</td><td><code>apply_session_title</code> → <code>select_session_title</code></td></tr>
         <tr><td class="cm">Message</td><td>Flattened timeline row, upsert by timeline_id</td><td><code>apply_message</code> + pending drain</td></tr>
         <tr><td class="cm">ToolResult</td><td>Merge into tool_use by (session, tool id)</td><td><code>apply_tool_result</code> or <code>queue_pending</code></td></tr>
         <tr><td class="cm">Usage</td><td>Replacement snapshot for an existing response</td><td><code>apply_usage</code> (new − old on hour bucket)</td></tr>
@@ -940,7 +945,7 @@
         .edge { stroke: currentColor; stroke-width: 1.1; fill: none; marker-end: url(#arr); opacity: .5; }
       </style>
       <rect class="box" x="20" y="20" width="1140" height="50" rx="8" style="stroke: var(--forest)"/>
-      <text class="t" x="36" y="50">Store::apply(batch)  ·  modes: Live · Bulk (private cold) · Progressive (public first run)</text>
+      <text class="t" x="36" y="50">Store::apply(batch)  ·  modes: Live · Bulk (private/file or fresh canonical RAM) · Progressive (explicit disk resume)</text>
 
       <rect class="box" x="20" y="90" width="270" height="70" rx="8"/>
       <text class="t" x="36" y="114">search_sync::before_batch</text>
@@ -979,28 +984,30 @@
       <rect class="box" x="320" y="184" width="410" height="250" rx="10"/>
       <text class="t" x="336" y="208">direct cold generation</text>
       <text class="s" x="336" y="228">bulk && active==0 && mode≠Append</text>
-      <text class="s" x="336" y="250">Stage/Activate: maybe sweep, project_source_ops</text>
+      <text class="s" x="336" y="250">Stage/Activate: maybe sweep, project resolved ops</text>
       <text class="s" x="336" y="266">Activate: set_active_generation</text>
-      <text class="s" x="336" y="282">progressive: renumber if out of order</text>
-      <text class="s" x="336" y="298">delete source_op (should be empty)</text>
+      <text class="s" x="336" y="282">disk-progressive: renumber if out of order</text>
+      <text class="s" x="336" y="298">RAM reconcile already closed tool/usage relations</text>
       <text class="s" x="336" y="322">Abandon: drift only, sweep, refuse finalize</text>
       <text class="s" x="336" y="346">effects suppressed — unpublished DB</text>
       <text class="s" x="336" y="370">provisional ordinals until bulk finalize</text>
 
       <rect class="box" x="750" y="184" width="410" height="250" rx="10"/>
       <text class="t" x="766" y="208">live / replacement</text>
-      <text class="s" x="766" y="228">Stage: persist_source_ops only</text>
-      <text class="s" x="766" y="244">Append: project_source_ops (keep ordinals)</text>
-      <text class="s" x="766" y="260">Activate: persist, set_active, activate_cursor</text>
-      <text class="s" x="766" y="276">  sweep old via src_cursor, project staged</text>
+      <text class="s" x="766" y="228">Stage: retain replacement ops in process RAM</text>
+      <text class="s" x="766" y="244">Append: project resolved ops (keep ordinals)</text>
+      <text class="s" x="766" y="260">Activate: set_active, project RAM-staged generation</text>
+      <text class="s" x="766" y="276">  sweep old via src_cursor, then project replacement</text>
       <text class="s" x="766" y="292">  renumber_session, rebuild buckets</text>
-      <text class="s" x="766" y="308">Abandon: persist drift, discard staged</text>
+      <text class="s" x="766" y="308">Abandon: persist drift, discard RAM accumulator</text>
       <text class="s" x="766" y="332">guard: cannot Stage already-active</text>
       <text class="s" x="766" y="348">cannot Append a non-active gen</text>
       <text class="s" x="766" y="364">cannot replace below highest</text>
     </svg>
     </div>
-    <figcaption>First generation in an unpublished database projects directly. Later rewrites always stage, then activate or abandon. <code>source_op</code> is empty in steady state.</figcaption>
+    <figcaption>First generation in an unpublished database projects directly. Later rewrites stage
+    only in process RAM, then activate or abandon; SQLite contains resolved canonical rows and
+    provenance watermarks, never normalized-op or pending-merge journals.</figcaption>
   </figure>
 
   <details class="tree">
@@ -1008,9 +1015,9 @@
     <div class="fn" id="fn-apply">
       <div><span class="s">apply_op</span> → <span class="s">note_touch</span> then match IngestOp</div>
       <div class="indent"><span class="s">apply_runtime</span> · <span class="s">apply_project</span> · <span class="s">apply_session</span> · <span class="s">apply_session_title</span></div>
-      <div class="indent"><span class="s">apply_message</span>  load_old_by_timeline · fts_delete/insert (live) · touch_session · apply_pending_for_message</div>
-      <div class="indent"><span class="s">apply_tool_result</span> / <span class="s">apply_usage</span>  miss → <span class="s">queue_pending</span> (pending_merge)</div>
-      <div class="indent"><span class="s">PendingGate</span>  target-aware: skip SQL when this session cannot match</div>
+      <div class="indent"><span class="s">RamReconciliationBuffer</span> closes tool updates, late usage, and replacement generations before projection</div>
+      <div class="indent"><span class="s">apply_message</span>  load_old_by_timeline · typed canonical row · touch_session; detached search records one dirty session key</div>
+      <div class="indent"><span class="s">apply_tool_updates</span> / <span class="s">apply_usage</span> merge only into an existing resolved target</div>
       <div class="indent"><span class="s">apply_session_usage</span> · file_edit · plan · task · git_commit · drift</div>
       <div class="indent"><span class="s">rebuild_bucket</span> after the batch, once per dirty (session, hour, model)</div>
       <div class="indent"><span class="s">renumber_session</span> / <span class="s">renumber_all_sessions</span>  presentation order = path · offset · insert</div>
@@ -1029,8 +1036,7 @@
         <tr><td class="cm">source_audit</td><td>stream</td><td>rotating audit cursor</td></tr>
         <tr><td class="cm">project · session</td><td>meta</td><td><code>session.cwd</code> and project ownership settle from bounded adapter metadata; ranked meta_title retained as fallback</td></tr>
         <tr><td class="cm">ingest_cursor</td><td>stream</td><td>opaque PipeCheckpoint blob + generations</td></tr>
-        <tr><td class="cm">source_op</td><td>replacement</td><td>staging only, pruned at activate</td></tr>
-        <tr><td class="cm">pending_merge</td><td>stream</td><td>tool-result / usage arriving early</td></tr>
+        <tr><td class="cm">RAM only (no table)</td><td>reconciliation</td><td>replacement ops, tool patches, correlation evidence, and early usage disappear after resolution</td></tr>
         <tr><td class="cm">message · file_edit · git_commit · plan · task</td><td>stream</td><td>src_cursor provenance</td></tr>
         <tr><td class="cm">session_usage · usage_bucket</td><td>stream</td><td>rollups, analyzer-disposable</td></tr>
         <tr><td class="cm">drift_agg · drift_seen</td><td>any</td><td>aggregated drift</td></tr>
@@ -1040,14 +1046,17 @@
 
   <h3>Store open modes</h3>
   <div class="grid-3">
-    <div class="card"><h3>Store::open</h3><p>Live. Interrupted progressive without <code>canonical_ready</code> fails closed — resume through ingest/watch/serve.</p></div>
-    <div class="card"><h3>open_progressive</h3><p>Public first run. Cold direct-first-generation until <code>finish_progressive_load</code> (indexes, validate, mark ready).</p></div>
-    <div class="card"><h3>open_for_rebuild / open_for_backfill</h3><p>Empty file only. Deferred indexes. <code>finish_bulk_load</code> refuses if any generation was abandoned.</p></div>
+    <div class="card"><h3>open / open_progressive</h3><p>Live completed file, or explicit disk-progressive audit/resume. The app archives an incomplete artifact set before fast restart.</p></div>
+    <div class="card"><h3>open_shared_in_memory_for_rebuild</h3><p>Normal fresh app. Exact canonical schema in named RAM, metadata/timelines readable through <code>ProjectionReader</code>, aggregates gated.</p></div>
+    <div class="card"><h3>open_for_rebuild / open_for_backfill</h3><p>Empty file only. Deferred indexes. Finalization refuses if any generation was abandoned.</p></div>
   </div>
 
   <!-- ============================================================ -->
   <h2 id="ledger">Ledger protocol</h2>
-  <p class="note">Self-describing size-rotated segments. Default root <code>&lt;projection&gt;.ledger/&lt;agent&gt;</code>. A missing projection beside an existing ledger fails closed to <code>rebuild</code> so generations cannot collide.</p>
+  <p class="note">Self-describing size-rotated segments. Default root
+  <code>&lt;projection&gt;.ledger/&lt;agent&gt;</code>. A missing projection beside an existing ledger normally
+  fails closed to <code>rebuild</code> so generations cannot collide; the app's explicit
+  <code>--restart-incomplete</code> policy first archives the orphan set intact, then starts fresh.</p>
 
   <details class="tree" open>
     <summary><span class="crate b-capture">capture</span> ledger.rs + <span class="crate b-rosettad">rosettad</span> ColdLedgerStage</summary>
@@ -1122,38 +1131,42 @@
   </figure>
 
   <!-- ============================================================ -->
-  <h2 id="serve">Progressive serve</h2>
-  <p class="note">The listener and an empty public projection exist first. Consent precedes all reads. Interrupted commits resume in place.</p>
+  <h2 id="serve">Fresh RAM serve</h2>
+  <p class="note">The listener exists first and consent precedes source reads. Canonical metadata and
+  closed timelines are progressive in named shared memory; the ledger and validated SQLite file are
+  the only durable publication. Global aggregates and detached search wait for that publication.</p>
 
   <details class="tree" open>
     <summary><span class="crate b-rosettad">rosettad</span> serve.rs · cmd_serve</summary>
     <div class="fn" id="fn-serve">
       <div><span class="k">cmd_serve</span></div>
-      <div class="indent"><span class="k">projection_lock</span> · <span class="k">open_progressive_backfill</span></div>
-      <div class="indent">Hub::new + Hub::warm · ConsentGate · BoostLedger · Fts5SearchWorker::start</div>
+      <div class="indent"><span class="k">projection_lock</span> · optional <span class="k">restart_incomplete_projection</span></div>
+      <div class="i2">marker + fsynced manifest move DB/WAL/ledger/assets/search to recovery/incomplete-*; keep enrollment; never move complete DB</div>
+      <div class="indent"><span class="k">fresh_fast</span> → Store::open_shared_in_memory_for_rebuild_with_assets · ProjectionReader::shared_memory</div>
+      <div class="indent">Hub::new + Hub::warm · ConsentGate · BoostLedger · Fts5SearchWorker::start_paused</div>
       <div class="indent">bind listener, spawn axum::serve  <span class="c">room is up before any ingest</span></div>
-      <div class="indent">rewarm task: Hub::rewarm every interval from a read-only connection</div>
       <div class="indent"><span class="p">discover</span> · persist enabled ∩ installed · arm ConsentGate if empty</div>
-      <div class="indent"><span class="c">phase 1 — skim every enrolled runtime before any transcript</span></div>
-      <div class="i2">NotifyEvents::watch(root)  <span class="c">watch-before-scan</span></div>
-      <div class="i2"><span class="p">meta_ingest_into</span> → BackfillRuntime { roster, ledger, events }</div>
-      <div class="indent"><span class="c">phase 2 — BackfillSchedule</span></div>
-      <div class="i2">order_runtime_roster newest-first · bootstrap canonical-list top session</div>
-      <div class="i2">round-robin pop_next · boost.drain() jumps the rotation, never durability</div>
-      <div class="i2"><span class="p">stream_backfill_into</span>(one file, audit_files_per_run=0) · worker.wake · ack</div>
-      <div class="indent"><span class="c">phase 3 — audit pass</span> full roster with default audit lane, once per runtime</div>
-      <div class="indent">ledger.flush · stop rewarm (must not pin WAL) · <span class="s">finish_progressive_load</span></div>
-      <div class="i2">renumber_all + usage_bucket + indexes + ANALYZE + WAL checkpoint, then a <em>tiny</em> tx sets canonical_ready=1</div>
-      <div class="indent"><span class="v">await_initial_search</span>  <span class="c">full_build sidecar on a clean I/O window; lists already public</span></div>
-      <div class="indent"><span class="p">LiveRunner::resume_from_roster</span> · observe_effects · Hub::rewarm + drain_effects (discard cold mutations)</div>
+      <div class="indent"><span class="c">phase 1 — watch + bounded metadata, adapter by adapter</span></div>
+      <div class="i2">NotifyEvents::watch(root) → plan_parallel_cold_runtime → apply source-free Runtime/Project/SessionMeta → Hub::absorb_meta</div>
+      <div class="indent"><span class="c">phase 2 — capture and close runtimes in parallel</span></div>
+      <div class="i2">finish_parallel_cold_runtime → raw staged ledger + parsed/normalized ops + RAM tool/usage/replacement reconciliation</div>
+      <div class="i2">apply_captured_cold_runtime → sole writer, complete runtime, precomputed final ordinals → watched-session resync</div>
+      <div class="indent"><span class="c">phase 3 — one global finalization and publication</span></div>
+      <div class="i2">finish_bulk_load: usage_bucket + indexes + ANALYZE + quick_check + foreign keys + canonical_ready</div>
+      <div class="i2">backup RAM → private file · finish asset writes · ledger.flush/publish · install SQLite · ProjectionReader::publish_file</div>
+      <div class="indent"><span class="v">await_initial_search</span>  <span class="c">resume detached worker only after RAM → disk switch</span></div>
+      <div class="indent"><span class="p">LiveRunner::resume_from_roster</span> · observe_effects · drain effects into Hub</div>
       <div class="indent">loop: tick each runtime · wake search · drain_effects → Hub::absorb</div>
-      <div class="c" style="padding-top:8px">Watch differs: sequential meta+stream per runtime, then LiveRunner::start_with_ledger (re-skims meta). No Hub, no Effects.</div>
+      <div class="c" style="padding-top:8px">Existing complete projections, explicit CLI resume, and --stop-after-meta use open_progressive_backfill + ColdEngine (live ▸ boost ▸ starter ▸ completion). Watch remains sequential and has no Hub.</div>
     </div>
   </details>
 
   <div class="callout teal">
-    <b>Private vs public.</b> Finite <code>ingest</code> uses <code>open_for_backfill</code>: a brand-new target is a sibling tempfile, bulk-finalized, then
-    <code>install_rebuilt_projection</code> after the ledger tree is promoted. <code>serve</code> commits per file with WAL durability from process start.
+    <b>Read boundary.</b> <code>/api/projects</code>, <code>/api/sessions</code>, session lookup, and
+    timeline reads may use canonical RAM. Heatmap, usage, and contribution call
+    <code>require_canonical_aggregates</code> and return protocol-v6 <code>not_ready</code> until
+    <code>ProjectionReader::publish_file</code>. Search reports Building. The renderer then hydrates
+    aggregates with four workers instead of unbounded <code>Promise.all</code>.
   </div>
 
   <!-- ============================================================ -->
@@ -1238,8 +1251,10 @@
     </div>
     <div class="card">
       <div class="kicker">server::hub</div>
-      <h3>Hub::absorb · warm · rewarm</h3>
-      <p>Session topics get the mutation log; <code>/ws/meta</code> gets mirror diffs. <code>ConsentGate</code> and <code>BoostLedger</code> sit on the HTTP side: enable/boost never weaken per-file CAS.</p>
+      <h3>Hub::absorb · absorb_meta · warm</h3>
+      <p>Session topics get the mutation log; <code>/ws/meta</code> gets precise metadata diffs from
+      the writer. <code>rewarm</code> is a recovery/equivalence operation, not a timed cold poll.
+      <code>ConsentGate</code> and <code>BoostLedger</code> sit on the HTTP side.</p>
     </div>
   </div>
 
@@ -1344,8 +1359,10 @@
       <div>cmd_ingest · cmd_watch · cmd_rebuild · rebuild_adapters</div>
       <div>publish_private_projection · install_rebuilt_projection · make_single_file · sidecar · projection_parent</div>
       <div>acknowledge_search · build_search_wait · synchronize_search_wait · record_backfill_failures · print_agent_profile</div>
-      <div>serve::cmd_serve · BackfillSchedule::{new, order_runtime_roster, pending, promote, bootstrap, pop_next}</div>
-      <div>StreamMeter · fold_stream · await_initial_search · counter_source</div>
+      <div>plan_parallel_cold_runtime · finish_parallel_cold_runtime · apply_captured_cold_runtime</div>
+      <div>serve::{cmd_serve, run_fresh_fast_serve, publish_fresh_ram_projection, await_initial_search, counter_source}</div>
+      <div>recovery::restart_incomplete_projection · RecoveryPlan marker/manifest helpers</div>
+      <div>engine::ColdEngine · StreamMeter · fold_stream</div>
       <div>bench::{cmd_discover, cmd_sources, cmd_streams, cmd_meta, emit, emit_profile, emit_stage_profile, projection_snapshot}</div>
     </div>
   </details>
@@ -1381,12 +1398,12 @@
   <details class="tree" open>
     <summary><span class="crate b-store">store</span></summary>
     <div class="fn" id="cat-store">
-      <div>Store::{open, open_progressive, open_for_rebuild, apply, finish_bulk_load, finish_progressive_load}</div>
+      <div>Store::{open, open_progressive, open_for_rebuild, open_shared_in_memory_for_rebuild_with_assets, apply, finish_bulk_load, finish_progressive_load}</div>
       <div>set_session_stream_state · acknowledge_search · observe_effects · drain_effects · set_audit_path</div>
-      <div>apply_batch · apply_op · apply_checkpoint · persist_source_ops · project_source_ops · staged_ops</div>
+      <div>apply_batch · apply_op · apply_checkpoint · project_source_ops · RamReconciliationBuffer · BulkReconciliationBuffer</div>
       <div>activate_cursor · abandon_cursor · set_active_generation · remove_cursor_projection</div>
-      <div>apply_message · apply_tool_result · apply_usage · queue_pending · PendingGate · rebuild_bucket · touch_session</div>
-      <div>apply_runtime · apply_project · apply_session · apply_session_title · refresh_session_title</div>
+      <div>apply_message · apply_tool_updates · apply_usage · apply_reconciled_tool_message · rebuild_bucket · touch_session</div>
+      <div>apply_runtime · apply_project · apply_session · apply_session_title · select_session_title</div>
       <div>bulk::{prepare, prepare_progressive, finalize, validate, validate_complete, restore_live_pragmas, checkpoint_progressive}</div>
       <div>search_sync::{before_batch, record_batch, mark_canonical_ready, acknowledge}</div>
       <div>queries::{cursor_state, audit_path, session, session_list, projection_state, search_repairs, visit_search_documents, …}</div>
@@ -1402,7 +1419,7 @@
       <div>TextQuery::parse · fts5_expression</div>
       <div>ids::{runtime_id, project_id, session_id, timeline_id, task_id, usage_id, normalize_root, shape_hash}</div>
       <div>fold::{snapshot_delta, bucket_apply, CumulativeUsage, hour_bucket, split_inclusive_input}</div>
-      <div>Hub::{new, warm, rewarm, absorb} · ConsentGate · BoostLedger · router</div>
+      <div>Hub::{new, warm, rewarm, absorb, absorb_meta} · ConsentGate · BoostLedger · ProjectionReader · require_canonical_aggregates · router</div>
     </div>
   </details>
 

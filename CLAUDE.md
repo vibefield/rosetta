@@ -86,8 +86,12 @@ RAM, drains and fsyncs the staged raw ledger, backs the canonical database up to
 same-filesystem private file, syncs and atomically installs it, then switches the read router
 from RAM to disk before releasing the RAM generation. Detached search remains explicitly
 Building and does not start until that switch. Watchers are armed before metadata, and their
-queued suffixes flow into the ordinary live runner after publication. `--stop-after-meta` and
-an existing/resumable projection retain the disk-progressive `ColdEngine` path: its four lanes
+queued suffixes flow into the ordinary live runner after publication. Cross-session aggregates
+(heatmap, usage decomposition, and contribution) return protocol-v6 `not_ready` while the reader
+targets shared RAM; this prevents presentation scans from contending with the sole canonical
+writer. The renderer waits for `canonical_ready` and hydrates project aggregates with bounded
+concurrency after publication. `--stop-after-meta`, an existing complete projection, and explicit
+CLI resume retain the disk-progressive `ColdEngine` path: its four lanes
 (live ▸ boost ▸ starter ▸ completion), slice budget, boost queue, and scoped row effects remain
 the recovery/audit topology. Finite `ingest` and explicit `rebuild` remain private, validated,
 atomic publication paths and never slice. An idle daemon
@@ -102,7 +106,7 @@ audit sweep. The resumable disk cold phase is one named unit
 (`rosettad::engine::ColdEngine`) built over an `IngestPlan` — meta's
 settled projects → sessions → sources as a RAM value, unproven ownership honestly
 unassigned — and a `ProgressBoard` that folds pass outcomes per project onto
-`/api/status` (`ingest.projects`, protocol v5); plan, board, and schedule are RAM only
+`/api/status` (`ingest.projects`, protocol v6); plan, board, and schedule are RAM only
 and rebuilt from a skim, while durable progress stays cursors, generations, and
 `stream_state`.
 Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,
@@ -116,14 +120,19 @@ falls back to whole-file handling. Dirty sources converge on live-growth semanti
 every cold path: a dirty FIRST generation activates its parseable rows with the session
 held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
 replacements still abandon. `milestone:` stdout lines feed the sweep harness.
-Interrupted disk-progressive work is durable and resumable. Interrupted fresh RAM work is
-discarded and retried from the unchanged sources; no incomplete canonical database is installed.
+Interrupted disk-progressive work is durable and resumable from the explicit CLI path. Interrupted
+fresh RAM work never installs an incomplete canonical database. The app always passes
+`--restart-incomplete`: any legacy/incomplete projection, WAL sidecars, ledger, canonical assets,
+and search sidecar are moved by a marker-driven, fsynced recovery transaction into
+`<projection-parent>/recovery/incomplete-*`; enrolled agent kinds are reused and the fresh RAM path
+starts again. A complete projection is never moved. `pnpm dev` builds `rosettad --release` and
+passes that exact binary to Electron; mtime-based debug/release selection is forbidden.
 
 Projection schema 12 keeps user-facing canonical rows, rollups, and joins in SQLite while
 production FTS5 lives in a disposable detached sidecar. The asynchronous
 worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
 revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
-Verified inline image bytes are decoded once into immutable `<projection>.images/` members;
+Verified inline image bytes are decoded once into immutable `<projection>.assets/` members;
 SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the raw ledger
 remains lossless.
 Each session now carries exactly one adapter-selected primary cwd and one optional project link

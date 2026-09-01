@@ -185,7 +185,7 @@
     crate seam per stage, and measurement infrastructure designed in from day one — every phase and
     every hot component owns a fixture and a bench, so each can be optimized in isolation.
     Companion to <a href="canonical-model.html">canonical-model.html</a>, which defines what gets stored.</p>
-    <div class="callout"><b>Implementation checkpoint · 2026-08-30.</b> All nine captured-agent
+    <div class="callout"><b>Implementation checkpoint · 2026-08-31.</b> All nine captured-agent
       adapters are registered. Backfill, bounded discovery/meta reads, JSONL tailing, bounded
       rewrite-in-place document snapshots, consistent SQLite snapshots, serializable adapter
       checkpoints, authoritative virtual-session membership, whole-source deletion,
@@ -196,8 +196,15 @@
       in-process subscription hub, axum HTTP/WebSocket transport, backend-neutral protocol,
       generated TypeScript package, and the <code>SearchBackend</code> seam are implemented.
       Production FTS5 is a detached SQLite sidecar with an asynchronous full-build/repair worker,
-      atomic generation publication, and independent readiness. Fresh serve progressively commits
-      the public canonical projection; finite ingest and rebuild remain private and atomic. A
+      atomic generation publication, and independent readiness. A normal fresh serve publishes
+      metadata from a canonical named shared-memory generation, captures and reconciles runtimes in
+      parallel RAM, admits only closed runtimes through one writer, validates globally, fsyncs and
+      promotes the staged ledger, installs one disk projection, and atomically retargets readers.
+      Lists and bounded timelines are progressive; global aggregates return protocol-v6
+      <code>not_ready</code> and search remains Building until disk publication. The app builds and
+      launches the exact release daemon. Its <code>--restart-incomplete</code> policy durably archives
+      interrupted projection artifacts and retained enrollment before restarting the RAM path.
+      Finite ingest and rebuild remain private and atomic. A
       feature-gated Tantivy prototype has frozen build/query evidence but is deliberately not a
       production backend. Consumer migrations, the dedicated metrics stream, and explicitly open
       performance promises below remain design targets. Organic Claude
@@ -427,9 +434,11 @@ trait <b>AgentAdapter</b>: Send + Sync {
       search-repair keys in the same transaction), <code>queries.rs</code> (typed functions for
       heatmap / contribution / timeline — consumers never hand-write SQL), <code>hot.rs</code> (the in-process tier
       below: metadata mirror + result caches, mutated only by the writer thread). The writer has two
-      finite modes, <b>live</b> and <b>bulk</b>, plus a resumable <b>progressive</b> serve mode.
-      Bulk projects each source's first generation into a private database; progressive publishes
-      canonical readiness after finalization. Both defer detached search construction to its worker.
+      primary modes, <b>live</b> and <b>bulk</b>, plus an explicit disk-progressive audit/resume mode.
+      Bulk projects each source's first generation into an unpublished file or the fresh serve's
+      canonical shared-memory database; progressive publishes canonical readiness after finalization.
+      Replacement generations and early tool/usage relations stage in RAM, never SQLite tables.
+      All modes defer detached search construction to its worker.
       Selected relational indexes are built and canonical state validated before publication.</p>
       <div class="seams"><b>Benches:</b> writer rows/sec across batch sizes; query latency on a
       generated multi-million-row DB.</div>
@@ -743,6 +752,46 @@ trait <b>AgentAdapter</b>: Send + Sync {
     the search artifact.
   </div>
 
+  <h3 id="fresh-ram-publication" class="spec">Fresh RAM publication and read isolation — current 2026-08-31
+    <span class="badge b-io">C</span><span class="badge b-pure">T</span><span class="badge b-bench">M</span></h3>
+  <p>The normal app path is no longer the historical per-file public-WAL build measured below. It
+  binds the listener, runs consent and bounded metadata into a canonical named shared-memory SQLite
+  generation, and publishes project/session mirror effects immediately. Per-runtime workers then
+  capture raw frames into one staged ledger, parse/normalize in parallel, and close cross-file
+  reconciliation in RAM. The sole writer receives complete runtimes with precomputed ordinals. A
+  global finalize validates that same generation; publication backs it to a private file, drains and
+  fsyncs/promotes the ledger, atomically installs SQLite, and retargets the read router. Only
+  then may the detached search worker build.</p>
+  <p>The public surface is deliberately split. Project/session lists, session lookup, timeline pages,
+  and watched-session resyncs are bounded and useful during the build. Heatmap, usage decomposition,
+  and contribution are cross-session scans, so the server answers HTTP 503 plus
+  <code>ErrorCode::NotReady</code> until the reader targets disk. The renderer keys that boundary off
+  exact <code>canonical_ready</code>, then hydrates projects with four workers and a five-minute stable
+  refresh. Contribution first selects the requested project's root/session tree and aggregates only
+  that scope.</p>
+  <p>An interrupted RAM build installs no canonical file. For older disk-progressive artifacts, the
+  app invokes <code>serve --restart-incomplete</code>. Under the projection lock, a durable marker names
+  the projection, WAL/SHM/journal, ledger, <code>.assets</code>, and search sidecar before any rename;
+  partial moves resume, a permanent manifest is fsynced, enabled agent kinds are retained, and a
+  complete projection is never moved. Separately, <code>pnpm dev</code> always builds release
+  <code>rosettad</code> and supplies its exact path to Electron.</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>organic visual diagnostic</th><th>result</th><th>interpretation</th></tr></thead>
+    <tbody>
+      <tr><td class="cm">pre-fix canonical ready</td><td class="metric">225.02 s</td><td>Correct release/RAM path, but the renderer launched roughly 270 aggregate requests every five seconds and starved the shared-cache writer.</td></tr>
+      <tr><td class="cm">post-fix metadata → canonical</td><td class="metric">52.36 s</td><td>Directly observed after manual consent; combining it with the prior 9.35 s automatic metadata phase gives a 61.71 s diagnostic cold-work estimate.</td></tr>
+      <tr><td class="cm">direct visual process elapsed</td><td class="metric">77.64 s</td><td>Includes human consent delay; do not compare this wall directly with an automatic run.</td></tr>
+      <tr><td class="cm">contribution query, same project</td><td class="metric">0.46 → 0.03 s</td><td>Old and new SQL returned the same value; about 15× for this one organic query.</td></tr>
+      <tr><td class="cm">final projection</td><td class="metric">134 projects · 6,553 sessions · 569,004 messages</td><td><code>canonical_ready=1</code>, <code>quick_check=ok</code>, no foreign-key rows; exact-window Electron inspection showed projects, sessions, figures, and transcript with no stale/warming overlay.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="spec-note">This is product-path diagnosis on changing organic sources, not the frozen
+  before/after pair required for a performance claim. It proves the contention mechanism, API gate,
+  recovery behavior, integrity, and visual result; it does not authorize calling the branch a
+  formally measured 3.65× optimization or claiming the under-60-second target.</p>
+
   <h3 class="spec">Evidence classes and reproducibility limits</h3>
   <div class="tbl-scroll">
   <table>
@@ -856,7 +905,8 @@ trait <b>AgentAdapter</b>: Send + Sync {
   the original batch boundaries, syncs every touched segment and child-to-parent directory entry,
   finalizes and validates SQLite, atomically renames the ledger tree, syncs its parent, and then
   installs SQLite. At that revision, <code>ingest</code>, <code>watch</code>, and <code>serve</code> all used
-  this protocol for a first projection; current fresh <code>serve</code> is the progressive path above.
+  this protocol for a first projection; current fresh <code>serve</code> is the named-RAM path specified
+  above, while the historical progressive path remains available for explicit disk resume/audit.
   An absent projection beside an existing ledger fails closed to
   <code>rebuild</code>, preventing generation-number collisions after a crash. Existing/live
   projections keep per-batch ledger-sync-before-visible-SQLite ordering.</p>
@@ -1308,12 +1358,17 @@ raw ledger ──normalize/replay──▶ SQLite rows + buckets + revisions ─
   <ol class="order">
     <li><b>Finalize canonical.</b> Verify no staged/incomplete generation; build usage buckets and
     relational indexes; run <code>ANALYZE</code>, <code>quick_check</code>, and foreign-key validation.</li>
-    <li><b>Publish canonical.</b> Private finite commands atomically replace SQLite; progressive
-    serve validates/checkpoints in place and commits <code>canonical_ready</code> last.</li>
+    <li><b>Publish canonical.</b> Private finite commands atomically replace SQLite. Normal fresh
+    serve backs its validated named-RAM generation into a same-filesystem private file, drains and
+    fsyncs the staged ledger, installs SQLite atomically, and retargets the read router RAM → disk.
+    The explicit disk-progressive path validates/checkpoints in place and commits
+    <code>canonical_ready</code> last.</li>
     <li><b>Build search from a SQLite snapshot.</b> Capture its epoch/revision, scan canonical
     messages, commit a private search generation, then drain repairs newer than the snapshot.</li>
-    <li><b>Expose readiness.</b> Session/observe/metrics endpoints continue serving. Search reports
-    building/catching-up until its generation is current.</li>
+    <li><b>Expose readiness.</b> Project/session lists and bounded timelines serve from canonical RAM.
+    Global heatmap/usage/contribution return <code>not_ready</code> until disk publication, then hydrate
+    under bounded renderer concurrency. Search reports building/catching-up until its generation is
+    current.</li>
   </ol>
   <p><code>rosettad serve</code> owns the long-running asynchronous worker and remains available from
   process start. Finite <code>ingest</code> waits for its detached generation before exit so its artifact
@@ -1569,6 +1624,7 @@ seal all sources → fsync every staged file + child/parent directory entries
   <table>
     <thead><tr><th>milestone</th><th>measured arithmetic / estimate</th><th>status</th></tr></thead>
     <tbody>
+      <tr><td class="cm">current fresh-app diagnostic</td><td class="metric">61.71 s estimated automatic cold work</td><td>Organic product-path evidence from 9.35 s automatic metadata plus 52.36 s post-consent cold work; integrity and visual gates passed, but this is not a frozen performance pair and remains 1.71 s above the target.</td></tr>
       <tr><td class="cm">decoupled canonical-ready, cold</td><td class="metric">101.23 − 33.85 = 67.38 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
       <tr><td class="cm">decoupled canonical-ready, rebuild</td><td class="metric">79.53 − 24.83 = 54.70 s</td><td>Arithmetic forecast from a measured phase, not an observed wall time; search still building.</td></tr>
       <tr><td class="cm">earlier retained mixed canonical-ready, cold</td><td class="metric">709.00 − 87.00 ≈ 622 s</td><td>Historical arithmetic forecast from the pre-optimization campaign; superseded for current cold planning by the frozen-source row below.</td></tr>
@@ -1582,7 +1638,7 @@ seal all sources → fsync every staged file + child/parent directory entries
       <tr><td class="cm">frozen ledger rebuild, search-ready</td><td class="metric">253.54 s observed</td><td>Exact logical/ranked equivalence and 623 MB RSS; no split profile was requested, so do not infer a canonical-ready time.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, cold</td><td class="metric">historical Codex: about 50–60 s</td><td>Do not extrapolate to the retained mixed corpus; replace after split counters and sequential pairs.</td></tr>
       <tr><td class="cm">decoupled + ledger/apply candidates, rebuild</td><td class="metric">historical Codex: about 40–48 s</td><td>Do not extrapolate to the 511.24 s retained replay; excludes search-ready time.</td></tr>
-      <tr><td class="cm">accepted progressive publication</td><td class="metric">538.11 s canonical / 704.74 s search</td><td>Detached FTS5 is shipped. The latest frozen diagnostic mix measured broad-ranked p95 at 271–380 ms and selective-ranked p95 at 26.5–35.4 ms; replacing the backend still requires relevance, traffic-mix, storage, lag, and crash evidence.</td></tr>
+      <tr><td class="cm">historical accepted disk-progressive publication</td><td class="metric">538.11 s canonical / 704.74 s search</td><td>Superseded as the normal fresh-app topology but retained as frozen evidence for detached FTS5 and the explicit disk-progressive path. The diagnostic mix measured broad-ranked p95 at 271–380 ms and selective-ranked p95 at 26.5–35.4 ms.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1642,6 +1698,9 @@ seal all sources → fsync every staged file + child/parent directory entries
   <table>
     <thead><tr><th>claim</th><th>current evidence</th></tr></thead>
     <tbody>
+      <tr><td>Fresh serve publishes metadata from canonical RAM, then atomically retargets readers</td><td><a href="../crates/rosettad/src/serve.rs"><code>serve.rs::run_fresh_fast_serve</code></a> captures closed runtimes and <code>publish_fresh_ram_projection</code> performs the ledger/file barrier; <a href="../crates/server/src/http.rs"><code>http.rs::ProjectionReader::publish_file</code></a> owns the one-way RAM → disk switch. <a href="../crates/rosettad/tests/fresh_serve.rs"><code>fresh_serve.rs</code></a> exercises the product path.</td></tr>
+      <tr><td>Global aggregate reads cannot contend with the cold RAM writer</td><td><a href="../crates/server/src/http.rs"><code>http.rs::require_canonical_aggregates</code></a> gates heatmap, usage, and contribution; <a href="../crates/server/tests/http.rs"><code>server/tests/http.rs</code></a> pins 503/<code>not_ready</code> before publication and success afterward. The renderer waits for exact readiness and bounds hydration in <a href="../clients/app/renderer/src/lib/hooks.ts"><code>hooks.ts::useProjectStats</code></a>.</td></tr>
+      <tr><td>Interrupted app projections are preserved before fast restart</td><td><a href="../crates/rosettad/src/recovery.rs"><code>recovery.rs::restart_incomplete_projection</code></a> implements marker-driven resumable archival, manifest/directory sync, complete-projection refusal, and enrollment retention; unit and <a href="../crates/rosettad/tests/fresh_serve.rs"><code>fresh_serve</code></a> integration tests cover the crash seams.</td></tr>
       <tr><td>Canonical and search publication are separate gates</td><td><a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a> validates canonical state; <a href="../crates/search/src/worker.rs"><code>search/src/worker.rs</code></a> builds, repairs, and publishes the disposable FTS5 generation afterward.</td></tr>
       <tr><td>Search write coupling is revision-scoped</td><td><a href="../crates/store/src/search_sync.rs"><code>store/src/search_sync.rs</code></a> records same-transaction dirty keys and owns acknowledgements; <a href="../crates/search/src/worker.rs"><code>search/src/worker.rs</code></a> consumes them from a canonical snapshot without putting FTS writes in canonical transactions.</td></tr>
       <tr><td>Search readiness and execution are backend-neutral</td><td><a href="../crates/search/src/lib.rs"><code>search/src/lib.rs</code></a> owns the atomic state-plus-results contract; <a href="../crates/search/src/sidecar.rs"><code>search/src/sidecar.rs</code></a> supplies the detached SQLite FTS5 implementation, and <a href="../crates/server/src/http.rs"><code>server/src/http.rs</code></a> delegates status and query execution through it.</td></tr>
@@ -1732,7 +1791,7 @@ seal all sources → fsync every staged file + child/parent directory entries
 
   <footer class="note">
     Companion to <a href="canonical-model.html">canonical-model.html</a> (what gets stored) and
-    ARCHITECTURE.md §4–§7 (the layer contracts). Crate names match the workspace as of 2026-08-26:
+    ARCHITECTURE.md §4–§7 (the layer contracts). Crate names match the workspace as of 2026-08-31:
     core · adapter-support · adapters/&lt;agent&gt; ×9 · capture · pipeline · store · protocol ·
     server · rosettad, plus the proposed bench-corpus.
   </footer>

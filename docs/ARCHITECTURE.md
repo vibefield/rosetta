@@ -12,7 +12,7 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
-> **Implementation checkpoint (2026-08-30).** Nine ground-truth/runtime-adapter packs are
+> **Implementation checkpoint (2026-08-31).** Nine ground-truth/runtime-adapter packs are
 > registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,
 > and SQLite snapshots; virtual membership/deletion, generation reconciliation, deterministic
 > checkpoints, polling/audits, and the checksummed raw ledger are implemented. Replacement
@@ -60,9 +60,27 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > for cosmetically finer progress is forbidden. A future session-partitioned plan must first prove
 > that every correlation and replacement boundary is closed inside the partition.
 >
-> The following disk-progressive path remains current for an existing/resumable projection and
-> for `--stop-after-meta`, but is superseded for a normal fresh app launch. Its listener and public
-> projection exist first, consent
+> The progressive read contract is intentionally asymmetric. Project and top-level-session lists,
+> bounded session lookups, and timelines may read the canonical shared-memory generation. Global
+> heatmap, usage, and contribution endpoints return HTTP 503 with protocol-v6 `not_ready` until the
+> reader switches to the published file; search stays explicitly Building. This is a correctness
+> and scheduling boundary, not a loading effect: an earlier renderer launched two aggregate queries
+> for each of 135 projects every five seconds, and those shared-cache readers starved the sole cold
+> writer. After publication the renderer hydrates project figures with four workers and a quiet
+> refresh cadence. Contribution SQL constrains the project session tree before aggregating instead
+> of re-grouping the whole corpus for every project.
+>
+> The app also owns first-run recovery and binary selection. `pnpm dev` builds release `rosettad`
+> and passes that exact path to Electron. Electron starts `serve --restart-incomplete`; while holding
+> the projection lock, the daemon leaves a complete projection untouched but durably moves an
+> incomplete projection, SQLite sidecars, ledger, canonical assets, and search sidecar into a named
+> `recovery/incomplete-*` directory. A restart marker makes partial moves resumable, and retained
+> enrollment lets the fast RAM path restart without silently losing consent. Recovery never deletes
+> evidence and never treats RAM as durable state.
+>
+> The following disk-progressive path remains current for an existing complete projection, explicit
+> CLI resume, and `--stop-after-meta`, but is superseded for a normal fresh app launch. Its listener
+> and public projection exist first, consent
 > precedes all reads, and every runtime is skimmed before streaming. Cold streaming then runs
 > through a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, round-robin across runtimes
 > inside the cold lanes). Watcher hints drain into the live lane DURING the backfill, but only to
@@ -83,7 +101,7 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > `rosettad::engine::ColdEngine`: it settles an `IngestPlan` (projects → sessions → sources with
 > census bytes, from the skims' committed ownership; unproven ownership stays honestly unassigned;
 > a multi-session source is ONE planned pass) and folds pass outcomes through a `ProgressBoard`
-> onto `/api/status` as per-project rows (`ingest.projects`, protocol v5) — sessions done/total
+> onto `/api/status` as per-project rows (`ingest.projects`, protocol v6) — sessions done/total
 > and bytes streamed/total per project, refreshed between passes and kept current through
 > mid-cold admissions. Plan, board, and schedule are RAM only, rebuilt from a skim on every run;
 > durable progress remains cursors, generations, and `stream_state`. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
@@ -120,7 +138,8 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > slice. Watchers are armed before scan; the initial search build gets a clean I/O window, then
 > the live lane reuses the existing roster rather than re-skimming it.
 >
-> The accepted six-adapter frozen pair below measured that predecessor disk-progressive path. It
+> The accepted six-adapter frozen pair below measured that historical predecessor disk-progressive
+> path, not the current normal fresh-app path. It
 > used 38,998 matched files, 6,063 skims, 6,419 sessions,
 > and 774,219 final messages with zero hard errors. Private atomic wall was 522.54 s. Progressive
 > milestones were listener 1.19 s, lists 5.82 s, first readable 13.86 s, canonical ready 538.11 s,
@@ -130,6 +149,17 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > broad-ranked p95 was 271–380 ms versus selective-ranked p95 26.5–35.4 ms; this supports continued
 > Tantivy evaluation but not adoption without relevance and product-mix evidence. Private paths,
 > fingerprints, and query text remain unrecorded by policy.
+>
+> A 2026-08-31 visual product-path diagnostic on the current nine-runtime organic corpus found the
+> renderer/shared-cache contention above: the same release/RAM path reached canonical readiness in
+> 225.02 s before read isolation. After the gate, bounded hydration, and project-first contribution
+> query, metadata-to-canonical took 52.36 s; combining that with the earlier 9.35 s automatic metadata
+> phase gives a 61.71 s diagnostic cold-work estimate. The direct visual run was 77.64 s because it
+> included manual consent. The final projection passed quick/FK checks with 134 projects, 6,553
+> sessions, and 569,004 messages. These are organic measurements, not a frozen before/after pair and
+> therefore not merge-admissible performance evidence; they establish the reproduced contention
+> mechanism and visual/integrity gate only. Detailed measurements live in
+> `docs/COLD_INGEST_IO_FLOOR.md`.
 
 ---
 
@@ -613,7 +643,7 @@ ingestion.
   invariant rather than an adapter convention.
 - **Content-addressed image members** are part of the one canonical projection, not a third
   representation. An adapter may recognize and decode a verified native inline image, but only
-  the store writes it to `<projection>.images/<blake3>.<ext>`. Live ingestion makes the immutable
+  the store writes it to `<projection>.assets/<blake3>.<ext>`. Live ingestion makes the immutable
   file durable before committing its `/api/assets/<blake3>.<ext>` URL. Private builds sync all new
   members before database publication; monotonic content-addressed additions let the final
   SQLite file remain the only atomic swap. The raw ledger keeps the original inline form.
@@ -624,7 +654,7 @@ ingestion.
   rebuild. The disposable Tantivy prototype clears latency/build/filter/determinism gates
   but not relevance, product-mix, or storage acceptance, so it is not production.
 - **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite file +
-  optional canonical `<projection>.images/` members; `--ledger` can relocate the segment root.
+  optional canonical `<projection>.assets/` members; `--ledger` can relocate the segment root.
   An adopted search backend owns a disposable `<projection>.search/`. Ledger is precious; the
   canonical projection and search index are rebuildable.
 - Keep the schema compact rather than chasing a numeric table target. Entities, rollups,
@@ -818,14 +848,19 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   precompute presentation order, and feed closed runtimes to one canonical writer. Fresh serve
   places that canonical schema in named shared memory: metadata is immediately public and each
   completed runtime becomes transactionally readable before the global set-based gate. It then
-  installs one validated disk copy and atomically retargets readers. Existing/resumable serve keeps
-  the per-file WAL path. FTS is always a detached generation. Live batches and replacement swaps
-  remain transactionally canonical and rebuild each distinct affected usage bucket once.
+  installs one validated disk copy and atomically retargets readers. Cross-session aggregates are
+  unavailable until that retarget, and the app bounds their post-publication fan-out. Existing
+  complete projections and explicit disk-progressive CLI resume keep the per-file WAL path; the app
+  archives incomplete artifacts and restarts fast. FTS is always a detached generation. Live batches
+  and replacement swaps remain transactionally canonical and rebuild each distinct affected usage
+  bucket once.
 - A first cold projection now requires both the projection and ledger destination to be
   absent. It buffer-flushes into a same-filesystem private ledger tree, syncs every staged
   segment plus child-to-parent directory entries, atomically promotes the whole tree,
   syncs its parent, and only then installs the validated SQLite file. A missing projection
-  beside an existing ledger fails closed to `rebuild`, preventing generation collisions.
+  beside an existing ledger normally fails closed to `rebuild`, preventing generation collisions.
+  The app's explicit `--restart-incomplete` policy instead archives that orphan/incomplete artifact
+  set under the projection lock before beginning a new first projection.
   Existing/live projections retain ledger-sync-before-visible-SQLite ordering. The frozen
   pair measured segment syncs at 7,435 → 66 and ledger time at 96.64 s → 18.02 s; twelve
   directory barriers cost 0.0005 s. Search is independently disposable and may never
@@ -930,6 +965,6 @@ layer's design is frozen.
 | FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
-| Image-member retention | keep immutable content-addressed members (no GC yet) | `.images/` growth justifies a ledger-derived mark/sweep under the projection lock |
+| Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
