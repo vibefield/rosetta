@@ -49,7 +49,7 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > record, parser state, candidate value, or reconciliation map enters the read target.
 >
 > After every runtime closes, set-based indexes/rollups, `ANALYZE`, quick/FK checks, and projection
-> validation run against that RAM generation. The staged raw ledger is then drained and fsynced;
+> validation run against that RAM generation. The named `<ledger>.staged` raw generation is then drained and fsynced;
 > the canonical database is backed up to a same-filesystem private file, synced, installed by
 > atomic rename, and the read router switches RAM → disk before the RAM keeper is released.
 > Detached search stays explicitly Building and its worker remains paused until this switch.
@@ -71,15 +71,20 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > of re-grouping the whole corpus for every project.
 >
 > The app also owns first-run recovery and binary selection. `pnpm dev` builds release `rosettad`
-> and passes that exact path to Electron. Electron starts `serve --restart-incomplete`; while holding
-> the projection lock, the daemon leaves a complete projection untouched but durably moves an
-> incomplete projection, SQLite sidecars, ledger, canonical assets, and search sidecar into a named
-> `recovery/incomplete-*` directory. A restart marker makes partial moves resumable, and retained
-> enrollment lets the fast RAM path restart without silently losing consent. Recovery never deletes
-> evidence and never treats RAM as durable state.
+> and passes that exact path to Electron. Electron starts plain `serve`. Before any payload capture,
+> a fsynced `.cold-generation.json` inside `<ledger>.staged` binds the projection/ledger names,
+> enrollment, and runtime roots. An exit discards only canonical RAM. The next launch reconstructs
+> it from sealed staged-ledger generations, treats a raw-only tail as unfinished, reserves that
+> generation in RAM, and rereads the source strictly above it. A crash after ledger promotion but
+> before SQLite installation remains resumable because the marker moves with the ledger; successful
+> SQLite installation removes it last. `--restart-incomplete` remains an explicit legacy
+> archive/restart command, not app startup policy. Recovery never treats RAM as durable state.
 >
-> The following disk-progressive path remains current for an existing complete projection, explicit
-> CLI resume, and `--stop-after-meta`, but is superseded for a normal fresh app launch. Its listener
+> A complete projection no longer re-enters the following disk-progressive scheduler. It is marked
+> Live before serving, arms watchers before a bounded current-inventory skim, then performs one
+> non-blocking queued-hint drain plus forced cursor-relative stat poll. Only changed/new sources
+> stream, and the same effect drain feeds HTTP/WebSocket subscribers. The disk-progressive path
+> remains for legacy incomplete projection resume and `--stop-after-meta`, but is superseded for a normal fresh app launch. Its listener
 > and public projection exist first, consent
 > precedes all reads, and every runtime is skimmed before streaming. Cold streaming then runs
 > through a four-lane scheduler (live ▸ boost ▸ starter ▸ completion, round-robin across runtimes
@@ -850,17 +855,20 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   completed runtime becomes transactionally readable before the global set-based gate. It then
   installs one validated disk copy and atomically retargets readers. Cross-session aggregates are
   unavailable until that retarget, and the app bounds their post-publication fan-out. Existing
-  complete projections and explicit disk-progressive CLI resume keep the per-file WAL path; the app
-  archives incomplete artifacts and restarts fast. FTS is always a detached generation. Live batches
+  complete projections enter live maintenance immediately and run only bounded metadata plus forced
+  cursor-relative catch-up; legacy incomplete disk projections keep the per-file WAL resume path.
+  FTS is always a detached generation. Live batches
   and replacement swaps remain transactionally canonical and rebuild each distinct affected usage
   bucket once.
 - A first cold projection now requires both the projection and ledger destination to be
-  absent. It buffer-flushes into a same-filesystem private ledger tree, syncs every staged
-  segment plus child-to-parent directory entries, atomically promotes the whole tree,
+  absent. It buffer-flushes into a same-filesystem named `<ledger>.staged` tree whose durable
+  manifest preserves enrollment/root binding across process exits, syncs every staged segment
+  plus child-to-parent directory entries, atomically promotes the whole tree,
   syncs its parent, and only then installs the validated SQLite file. A missing projection
-  beside an existing ledger normally fails closed to `rebuild`, preventing generation collisions.
-  The app's explicit `--restart-incomplete` policy instead archives that orphan/incomplete artifact
-  set under the projection lock before beginning a new first projection.
+  beside an unmarked existing ledger normally fails closed to `rebuild`, preventing generation
+  collisions. A marked staged/public cold generation instead replays sealed evidence into RAM and
+  finishes raw-only sources at a strictly newer generation. `--restart-incomplete` archives only
+  explicit legacy artifact sets under the projection lock.
   Existing/live projections retain ledger-sync-before-visible-SQLite ordering. The frozen
   pair measured segment syncs at 7,435 → 66 and ledger time at 96.64 s → 18.02 s; twelve
   directory barriers cost 0.0005 s. Search is independently disposable and may never

@@ -202,8 +202,10 @@
       promotes the staged ledger, installs one disk projection, and atomically retargets readers.
       Lists and bounded timelines are progressive; global aggregates return protocol-v6
       <code>not_ready</code> and search remains Building until disk publication. The app builds and
-      launches the exact release daemon. Its <code>--restart-incomplete</code> policy durably archives
-      interrupted projection artifacts and retained enrollment before restarting the RAM path.
+      launches the exact release daemon with plain <code>serve</code>. A named staged-ledger manifest
+      retains enrollment/root binding across exits; the next launch replays sealed evidence into RAM,
+      fences raw-only generations, and finishes from current sources. Completed projections enter
+      live incremental catch-up immediately. <code>--restart-incomplete</code> is legacy explicit policy.
       Finite ingest and rebuild remain private and atomic. A
       feature-gated Tantivy prototype has frozen build/query evidence but is deliberately not a
       production backend. Consumer migrations, the dedicated metrics stream, and explicitly open
@@ -769,11 +771,14 @@ trait <b>AgentAdapter</b>: Send + Sync {
   exact <code>canonical_ready</code>, then hydrates projects with four workers and a five-minute stable
   refresh. Contribution first selects the requested project's root/session tree and aggregates only
   that scope.</p>
-  <p>An interrupted RAM build installs no canonical file. For older disk-progressive artifacts, the
-  app invokes <code>serve --restart-incomplete</code>. Under the projection lock, a durable marker names
-  the projection, WAL/SHM/journal, ledger, <code>.assets</code>, and search sidecar before any rename;
-  partial moves resume, a permanent manifest is fsynced, enabled agent kinds are retained, and a
-  complete projection is never moved. Separately, <code>pnpm dev</code> always builds release
+  <p>An interrupted RAM build installs no canonical file. Before payload capture, a durable
+  <code>.cold-generation.json</code> binds the named <code>&lt;ledger&gt;.staged</code> tree to the projection,
+  enrollment, and runtime roots. The next plain <code>serve</code> replays sealed generations into fresh
+  RAM; a raw-only source is generation-fenced in RAM and reread strictly above it. The marker moves
+  with ledger publication and is removed only after SQLite installation. A complete second boot is
+  marked Live before serving, watches before its bounded inventory skim, and forces one cursor-relative
+  catch-up before ordinary ticks. For older artifact sets, <code>--restart-incomplete</code> remains an
+  explicit marker-driven archive/restart command. Separately, <code>pnpm dev</code> always builds release
   <code>rosettad</code> and supplies its exact path to Electron.</p>
   <div class="tbl-scroll">
   <table>
@@ -1468,22 +1473,25 @@ append raw → buffer-flush/rotate run-scoped staged segments → private SQLite
 seal all sources → fsync every staged file + child/parent directory entries
                  → finalize/validate/sync SQLite
                  → rename whole ledger tree + fsync target parent → publish SQLite</pre>
-  <p>The optimization applies only when both the projection and ledger destination are absent. A
-  same-filesystem sibling holds the complete multi-runtime ledger tree, so one atomic rename exposes
+  <p>The optimization applies only when both the projection and ledger destination are absent. Finite
+  ingest uses a run-scoped private sibling; normal fresh <code>serve</code> uses the stable named
+  <code>&lt;ledger&gt;.staged</code> sibling plus its fsynced recovery manifest. The sibling holds the
+  multi-runtime ledger tree, so one atomic rename exposes
   either no committed ledger or the whole sealed tree; RLG1 and the scanner layout do not change.
   Every rotation explicitly flushes and retains its path, and the final barrier syncs <em>all</em>
   segments touched by the run rather than only the current writer. An absent projection beside an
-  existing ledger fails closed with instructions to rebuild, so a retry cannot reuse generation
-  numbers against an orphan ledger. <code>watch</code> and <code>serve</code> retain watch-before-scan
+  unmarked existing ledger fails closed with instructions to rebuild, so a retry cannot reuse generation
+  numbers against an orphan ledger. A marked serve generation instead replays sealed sources and
+  reserves any raw-only generation before retrying the live source. <code>watch</code> and <code>serve</code> retain watch-before-scan
   notifications, but open live runners against the promoted ledger only after publication.</p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>cold-build crash point</th><th>required recovery</th></tr></thead>
     <tbody>
-      <tr><td>Before staged-ledger barrier</td><td>The installed projection and committed ledger destination are unchanged. Graceful failure removes the private tree; a crash artifact remains outside the scanner namespace.</td></tr>
+      <tr><td>Before staged-ledger barrier</td><td>The installed projection and committed ledger destination are unchanged. Finite ingest may discard its run-scoped tree; fresh serve retains the named manifested tree and resumes it.</td></tr>
       <tr><td>After barrier, during whole-tree rename</td><td>SQLite is still unpublished. Same-filesystem rename exposes either no ledger or the complete sealed tree; syncing the target parent makes that choice durable.</td></tr>
-      <tr><td>After ledger promotion, before SQLite publication</td><td>The complete ledger is replayable. A new ingest/watch/serve fails closed because the projection is absent and the ledger exists; <code>rebuild</code> is the recovery path.</td></tr>
-      <tr><td>After SQLite publication</td><td>Every referenced raw record was already behind a file and directory durability barrier.</td></tr>
+      <tr><td>After ledger promotion, before SQLite publication</td><td>The recovery marker moved with the complete ledger. Plain <code>serve</code> replays it and completes the missing SQLite publication; unmarked ledgers still fail closed to explicit <code>rebuild</code>.</td></tr>
+      <tr><td>After SQLite publication</td><td>Every referenced raw record was already behind a file and directory durability barrier; the recovery marker is removed last.</td></tr>
     </tbody>
   </table>
   </div>
@@ -1700,14 +1708,15 @@ seal all sources → fsync every staged file + child/parent directory entries
     <tbody>
       <tr><td>Fresh serve publishes metadata from canonical RAM, then atomically retargets readers</td><td><a href="../crates/rosettad/src/serve.rs"><code>serve.rs::run_fresh_fast_serve</code></a> captures closed runtimes and <code>publish_fresh_ram_projection</code> performs the ledger/file barrier; <a href="../crates/server/src/http.rs"><code>http.rs::ProjectionReader::publish_file</code></a> owns the one-way RAM → disk switch. <a href="../crates/rosettad/tests/fresh_serve.rs"><code>fresh_serve.rs</code></a> exercises the product path.</td></tr>
       <tr><td>Global aggregate reads cannot contend with the cold RAM writer</td><td><a href="../crates/server/src/http.rs"><code>http.rs::require_canonical_aggregates</code></a> gates heatmap, usage, and contribution; <a href="../crates/server/tests/http.rs"><code>server/tests/http.rs</code></a> pins 503/<code>not_ready</code> before publication and success afterward. The renderer waits for exact readiness and bounds hydration in <a href="../clients/app/renderer/src/lib/hooks.ts"><code>hooks.ts::useProjectStats</code></a>.</td></tr>
-      <tr><td>Interrupted app projections are preserved before fast restart</td><td><a href="../crates/rosettad/src/recovery.rs"><code>recovery.rs::restart_incomplete_projection</code></a> implements marker-driven resumable archival, manifest/directory sync, complete-projection refusal, and enrollment retention; unit and <a href="../crates/rosettad/tests/fresh_serve.rs"><code>fresh_serve</code></a> integration tests cover the crash seams.</td></tr>
+      <tr><td>Interrupted fresh serve resumes the same raw generation</td><td><a href="../crates/rosettad/src/cold_stage.rs"><code>ServeColdStage</code></a> owns the durable generation manifest and two-step ledger/SQLite publication; <a href="../crates/pipeline/src/replay.rs"><code>rebuild_runtime_with_options</code></a> elects sealed evidence and reports raw-only tails; <a href="../crates/pipeline/src/stream.rs"><code>reserve_unsealed_generation</code></a> fences retries. Unit and <a href="../crates/rosettad/tests/fresh_serve.rs"><code>fresh_serve</code></a> integration tests cover both staged and already-promoted ledger recovery.</td></tr>
+      <tr><td>Warm boot and live append stay incremental</td><td><a href="../crates/rosettad/src/serve.rs"><code>run_warm_live_serve</code></a> watches before the bounded inventory skim and enters the shared live driver; <a href="../crates/pipeline/src/live.rs"><code>LiveRunner::catch_up</code></a> forces one no-sleep cursor-relative poll. Integration evidence carries one append through the raw ledger, canonical SQLite, Hub, and an actual WebSocket frame.</td></tr>
       <tr><td>Canonical and search publication are separate gates</td><td><a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a> validates canonical state; <a href="../crates/search/src/worker.rs"><code>search/src/worker.rs</code></a> builds, repairs, and publishes the disposable FTS5 generation afterward.</td></tr>
       <tr><td>Search write coupling is revision-scoped</td><td><a href="../crates/store/src/search_sync.rs"><code>store/src/search_sync.rs</code></a> records same-transaction dirty keys and owns acknowledgements; <a href="../crates/search/src/worker.rs"><code>search/src/worker.rs</code></a> consumes them from a canonical snapshot without putting FTS writes in canonical transactions.</td></tr>
       <tr><td>Search readiness and execution are backend-neutral</td><td><a href="../crates/search/src/lib.rs"><code>search/src/lib.rs</code></a> owns the atomic state-plus-results contract; <a href="../crates/search/src/sidecar.rs"><code>search/src/sidecar.rs</code></a> supplies the detached SQLite FTS5 implementation, and <a href="../crates/server/src/http.rs"><code>server/src/http.rs</code></a> delegates status and query execution through it.</td></tr>
       <tr><td>Frozen FTS p50/p95/p99 is executable and fail-closed</td><td><a href="../crates/search-bench/README.md"><code>search-bench</code></a> fingerprints permission-read-only ledgers and databases, checks projection/result equivalence, runs shared/fresh lanes, and rejects incompatible before/after reports.</td></tr>
       <tr><td>Tantivy evidence is frozen, disposable, and deterministic</td><td><a href="../crates/search-bench/src/tantivy_proto/index.rs"><code>tantivy_proto/index.rs</code></a> builds and seals the candidate from canonical rows; <a href="../crates/search-bench/src/tantivy_proto/runner.rs"><code>tantivy_proto/runner.rs</code></a> enforces structured filters, BM25-plus-identity ordering, artifact verification, and the insertion-order-independent tie regression.</td></tr>
       <tr><td>Live ledger sync is per stream batch</td><td><a href="../crates/pipeline/src/stream.rs"><code>pipeline/src/stream.rs::ingest_file</code></a> calls <code>ledger.checkpoint()</code> before store apply; the default/live ledger makes that checkpoint durable.</td></tr>
-      <tr><td>Cold barrier is durable and atomically published</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> syncs every touched segment and changed directory entry; <a href="../crates/rosettad/src/main.rs"><code>rosettad::ColdLedgerStage</code></a> promotes the whole tree and syncs its parent inside SQLite publication.</td></tr>
+      <tr><td>Cold barrier is durable and atomically published</td><td><a href="../crates/capture/src/ledger.rs"><code>capture/src/ledger.rs::Ledger::flush</code></a> syncs every touched segment and changed directory entry; finite commands use <a href="../crates/rosettad/src/main.rs"><code>ColdLedgerStage</code></a>, while app serve uses <a href="../crates/rosettad/src/cold_stage.rs"><code>ServeColdStage</code></a> so the staged tree remains restartable.</td></tr>
       <tr><td>Rebuild reads twice</td><td><a href="../crates/pipeline/src/replay.rs"><code>pipeline/src/replay.rs::rebuild_runtime</code></a> elects survivors, then replays in a second visit.</td></tr>
       <tr><td>Private cold ordinals finalize once; live ordinals remain transactional</td><td><a href="../crates/store/src/apply.rs"><code>store/src/apply.rs::renumber_all_sessions</code></a>, <a href="../crates/store/src/bulk.rs"><code>store/src/bulk.rs::finalize</code></a>, and the multi-source finalization regression in <a href="../crates/store/tests/sqlite_maintenance.rs"><code>sqlite_maintenance.rs</code></a>.</td></tr>
       <tr><td>Pending reconciliation is transaction-local and target-aware</td><td><a href="../crates/store/src/apply/rows.rs"><code>store/src/apply/rows.rs::PendingGate</code></a> loads primary-key-backed targets by session and updates them on queue/drain; isolation and ordering regressions live in <a href="../crates/store/tests/roundtrip.rs"><code>roundtrip.rs</code></a>.</td></tr>

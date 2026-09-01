@@ -26,12 +26,16 @@ Existing/live `ingest`, `watch`, and `serve` append source records to a checksum
 ledger durably before visible projection commits. A normal fresh `serve` binds HTTP/WS first,
 publishes bounded project/session metadata from the canonical shared-memory SQLite generation,
 then captures and reconciles runtimes in parallel RAM. Only closed runtimes enter that generation;
-the final handoff fsyncs and promotes the staged ledger first, then atomically installs the validated
-SQLite file. Project/session/timeline reads remain progressive, while global heatmap, usage, and
+the final handoff fsyncs and promotes the named staged ledger first, then atomically installs the validated
+SQLite file. If the process exits first, a durable generation manifest retains enrollment and root
+binding; the next launch replays sealed ledger evidence into fresh RAM, fences any unsealed source
+generation, and finishes from the current source tree. Project/session/timeline reads remain progressive, while global heatmap, usage, and
 contribution queries return `not_ready` until canonical publication; detached search starts after
 that gate. Finite `ingest` and `rebuild` retain the same private-build/atomic-publication contract.
-The app starts `serve --restart-incomplete`: an interrupted noncanonical artifact set is moved
-intact under `recovery/incomplete-*`, its enrollment is retained, and the fast fresh path restarts.
+The app starts plain `serve`: a complete projection is immediately live, arms watchers before its
+bounded current-inventory skim, and performs one forced cursor-relative catch-up without presenting
+another cold/backfill state. `--restart-incomplete` remains an explicit legacy archive/restart tool;
+it is not the app's normal recovery path.
 Ordinary opens still fail closed on schema mismatch.
 
 The in-process hot tier, subscription hub, localhost HTTP/WebSocket surface, generated

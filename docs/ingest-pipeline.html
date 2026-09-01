@@ -1046,7 +1046,7 @@
 
   <h3>Store open modes</h3>
   <div class="grid-3">
-    <div class="card"><h3>open / open_progressive</h3><p>Live completed file, or explicit disk-progressive audit/resume. The app archives an incomplete artifact set before fast restart.</p></div>
+    <div class="card"><h3>open / open_progressive</h3><p>Live completed file, or legacy disk-progressive audit/resume. A completed app boot stays live and performs only incremental catch-up.</p></div>
     <div class="card"><h3>open_shared_in_memory_for_rebuild</h3><p>Normal fresh app. Exact canonical schema in named RAM, metadata/timelines readable through <code>ProjectionReader</code>, aggregates gated.</p></div>
     <div class="card"><h3>open_for_rebuild / open_for_backfill</h3><p>Empty file only. Deferred indexes. Finalization refuses if any generation was abandoned.</p></div>
   </div>
@@ -1054,9 +1054,9 @@
   <!-- ============================================================ -->
   <h2 id="ledger">Ledger protocol</h2>
   <p class="note">Self-describing size-rotated segments. Default root
-  <code>&lt;projection&gt;.ledger/&lt;agent&gt;</code>. A missing projection beside an existing ledger normally
-  fails closed to <code>rebuild</code> so generations cannot collide; the app's explicit
-  <code>--restart-incomplete</code> policy first archives the orphan set intact, then starts fresh.</p>
+  <code>&lt;projection&gt;.ledger/&lt;agent&gt;</code>. A missing projection beside an unmarked existing ledger normally
+  fails closed to <code>rebuild</code> so generations cannot collide. Fresh app serve instead owns a named
+  <code>&lt;ledger&gt;.staged</code> tree with a durable manifest and resumes that generation automatically.</p>
 
   <details class="tree" open>
     <summary><span class="crate b-capture">capture</span> ledger.rs + <span class="crate b-rosettad">rosettad</span> ColdLedgerStage</summary>
@@ -1064,7 +1064,7 @@
       <div><span class="q">Ledger::open</span> · <span class="q">with_max_segment_bytes</span> · <span class="q">defer_sync_until_flush</span></div>
       <div class="indent"><span class="q">append_raw</span>(source, generation, [(offset, bytes)])</div>
       <div class="indent"><span class="q">complete_generation</span>(source, generation, normalizer_version, clean)</div>
-      <div class="indent"><span class="q">append_meta</span>(schema_version, ops_json)</div>
+      <div class="indent"><span class="q">append_meta</span>(schema_version, ops_json) · <span class="q">append_meta_checkpoint_if_changed</span> (warm semantic head)</div>
       <div class="indent"><span class="q">checkpoint</span> · <span class="q">flush</span> · rotate_if_needed · define · frame</div>
       <div class="indent"><span class="q">scan</span> / <span class="q">visit</span>  torn tail is harmless; prior entries survive</div>
       <div style="padding-top:8px"><span class="k">ColdLedgerStage::new</span>(destination)  temp dir beside parent, refuse if destination exists</div>
@@ -1122,7 +1122,7 @@
       <rect class="box" x="20" y="214" width="1140" height="120" rx="10"/>
       <text class="t" x="36" y="240">construction</text>
       <text class="s" x="36" y="260">start / start_with_ledger: watch already armed, then meta_ingest_into, then tickable</text>
-      <text class="s" x="36" y="276">resume_from_roster: serve’s cold/live boundary — do not re-skim; queued hints cover the gap</text>
+      <text class="s" x="36" y="276">resume_from_roster + catch_up: queued hints plus one forced cursor-relative poll close the handoff/offline gap</text>
       <text class="s" x="36" y="292">stream_live: test/smoke wrapper around start + N ticks</text>
       <text class="s" x="36" y="316">claimed() = layout stream AND stream_driver is Some · snapshot_hint strips -wal/-shm/-journal</text>
     </svg>
@@ -1140,8 +1140,8 @@
     <summary><span class="crate b-rosettad">rosettad</span> serve.rs · cmd_serve</summary>
     <div class="fn" id="fn-serve">
       <div><span class="k">cmd_serve</span></div>
-      <div class="indent"><span class="k">projection_lock</span> · optional <span class="k">restart_incomplete_projection</span></div>
-      <div class="i2">marker + fsynced manifest move DB/WAL/ledger/assets/search to recovery/incomplete-*; keep enrollment; never move complete DB</div>
+      <div class="indent"><span class="k">projection_lock</span> · <span class="k">ServeColdStage::inspect/open</span> · optional legacy <span class="k">restart_incomplete_projection</span></div>
+      <div class="i2">.cold-generation.json binds projection/ledger/enrollment/runtime roots; sealed replay + in-RAM generation fence resumes raw-only tails</div>
       <div class="indent"><span class="k">fresh_fast</span> → Store::open_shared_in_memory_for_rebuild_with_assets · ProjectionReader::shared_memory</div>
       <div class="indent">Hub::new + Hub::warm · ConsentGate · BoostLedger · Fts5SearchWorker::start_paused</div>
       <div class="indent">bind listener, spawn axum::serve  <span class="c">room is up before any ingest</span></div>
@@ -1155,9 +1155,9 @@
       <div class="i2">finish_bulk_load: usage_bucket + indexes + ANALYZE + quick_check + foreign keys + canonical_ready</div>
       <div class="i2">backup RAM → private file · finish asset writes · ledger.flush/publish · install SQLite · ProjectionReader::publish_file</div>
       <div class="indent"><span class="v">await_initial_search</span>  <span class="c">resume detached worker only after RAM → disk switch</span></div>
-      <div class="indent"><span class="p">LiveRunner::resume_from_roster</span> · observe_effects · drain effects into Hub</div>
+      <div class="indent"><span class="p">LiveRunner::resume_from_roster</span> · <span class="p">catch_up</span> (queued hints + forced stat poll) · observe_effects · drain into Hub</div>
       <div class="indent">loop: tick each runtime · wake search · drain_effects → Hub::absorb</div>
-      <div class="c" style="padding-top:8px">Existing complete projections, explicit CLI resume, and --stop-after-meta use open_progressive_backfill + ColdEngine (live ▸ boost ▸ starter ▸ completion). Watch remains sequential and has no Hub.</div>
+      <div class="c" style="padding-top:8px">Existing complete projections are Live immediately: watch → bounded current inventory/meta → forced incremental catch-up → ordinary ticks. Only legacy incomplete disk projections and --stop-after-meta use ColdEngine (live ▸ boost ▸ starter ▸ completion). Watch remains sequential and has no Hub.</div>
     </div>
   </details>
 

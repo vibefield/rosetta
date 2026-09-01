@@ -197,10 +197,10 @@ The accepted correctness fix establishes three boundaries:
 2. The renderer waits for exact `canonical_ready`, then hydrates project figures with four workers;
    stable refresh is five minutes. Contribution selects the requested project's root/session tree
    before aggregating messages, usage, commits, and edits.
-3. `pnpm dev` builds release `rosettad` and passes the exact artifact to Electron. Electron starts
-   `serve --restart-incomplete`; a marker-driven filesystem transaction preserves an incomplete DB,
-   WAL sidecars, ledger, `.assets`, search sidecar, and enrollment under `recovery/incomplete-*`
-   before a fresh RAM restart. Complete projections are never moved.
+3. `pnpm dev` builds release `rosettad` and passes the exact artifact to Electron. Electron now starts
+   plain `serve`: fresh RAM work owns a named manifested staged ledger and resumes sealed evidence on
+   the next launch; a complete projection is Live immediately and runs only bounded metadata plus
+   cursor-relative catch-up. `--restart-incomplete` remains an explicit legacy archive/restart tool.
 
 The post-fix exact-window visual run used
 `SamsungRed/rosetta-agent-tests/runs/app-visual-gate-v2`:

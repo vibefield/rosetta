@@ -90,8 +90,10 @@ queued suffixes flow into the ordinary live runner after publication. Cross-sess
 (heatmap, usage decomposition, and contribution) return protocol-v6 `not_ready` while the reader
 targets shared RAM; this prevents presentation scans from contending with the sole canonical
 writer. The renderer waits for `canonical_ready` and hydrates project aggregates with bounded
-concurrency after publication. `--stop-after-meta`, an existing complete projection, and explicit
-CLI resume retain the disk-progressive `ColdEngine` path: its four lanes
+concurrency after publication. An existing complete projection is live immediately: watchers arm
+before one bounded current-inventory skim, then `LiveRunner::catch_up` drains queued hints and forces
+one cursor-relative stat poll before the ordinary cadence. It does not re-enter cold/backfill state.
+`--stop-after-meta` and legacy incomplete disk projections retain the disk-progressive `ColdEngine` path: its four lanes
 (live ▸ boost ▸ starter ▸ completion), slice budget, boost queue, and scoped row effects remain
 the recovery/audit topology. Finite `ingest` and explicit `rebuild` remain private, validated,
 atomic publication paths and never slice. An idle daemon
@@ -120,12 +122,15 @@ falls back to whole-file handling. Dirty sources converge on live-growth semanti
 every cold path: a dirty FIRST generation activates its parseable rows with the session
 held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
 replacements still abandon. `milestone:` stdout lines feed the sweep harness.
-Interrupted disk-progressive work is durable and resumable from the explicit CLI path. Interrupted
-fresh RAM work never installs an incomplete canonical database. The app always passes
-`--restart-incomplete`: any legacy/incomplete projection, WAL sidecars, ledger, canonical assets,
-and search sidecar are moved by a marker-driven, fsynced recovery transaction into
-`<projection-parent>/recovery/incomplete-*`; enrolled agent kinds are reused and the fresh RAM path
-starts again. A complete projection is never moved. `pnpm dev` builds `rosettad --release` and
+Interrupted disk-progressive work is durable and resumable. Interrupted fresh RAM work never
+installs an incomplete canonical database; it retains a named `<ledger>.staged` generation with a
+fsynced manifest binding projection, ledger, enrollment, and runtime roots. The next plain `serve`
+replays sealed evidence into fresh canonical RAM, ignores raw-only tails, reserves their generation
+in RAM so source retries allocate strictly above it, finishes from the current source inventory, and
+publishes the same generation. The recovery marker survives ledger promotion and is removed only
+after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
+explicit legacy archive/restart operation for old incomplete projection sets. A complete projection
+is never moved. `pnpm dev` builds `rosettad --release` and
 passes that exact binary to Electron; mtime-based debug/release selection is forbidden.
 
 Projection schema 12 keeps user-facing canonical rows, rollups, and joins in SQLite while
