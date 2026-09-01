@@ -324,6 +324,8 @@ export default function App() {
               sessionPaths={sessionPaths}
               currentTimestamp={nowMs}
               onReceipt={showReceipt}
+              requestError={worktree.error}
+              onRetry={worktree.retry}
             />
             <TranscriptColumn
               session={session}

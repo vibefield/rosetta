@@ -22,8 +22,12 @@ export interface WorktreeGuest {
   readonly available: boolean;
   /** Whether the column is currently open. */
   readonly visible: boolean;
+  /** A shell-level refusal before a process generation could start. */
+  readonly error: string | null;
   /** Open a closed column, close an open one. */
   toggle(): void;
+  /** Explicitly start a fresh generation, even for the same root. */
+  retry(): void;
 }
 
 function useFrameWiderThan(minimumWidth: number): boolean {
@@ -46,6 +50,10 @@ export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
   // An explicit choice outranks the automatic close: once the reader has
   // pressed the toggle, the width heuristic stops speaking for them.
   const [chosen, setChosen] = useState(false);
+  const [retryRevision, setRetryRevision] = useState(0);
+  const [failure, setFailure] = useState<{ root: string; message: string } | null>(null);
+  const openedRoot = useRef<string | null>(null);
+  const requestId = useRef(0);
   const frameWide = useFrameWiderThan(GUEST_MIN_FRAME_WIDTH);
 
   // A wide room keeps the guest's empty state visible before a project is
@@ -63,16 +71,46 @@ export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
     setChosen(true);
   };
 
+  const retry = () => {
+    openedRoot.current = null;
+    setFailure(null);
+    setRetryRevision((revision) => revision + 1);
+  };
+
   // Point the engine at the selected project's root. Killing and re-forking
   // the walker is the shell's concern, so this only speaks when the root
   // actually changes — a re-render is not news.
-  const openedRoot = useRef<string | null>(null);
   useEffect(() => {
     if (!visible || projectRoot === null) return;
     if (openedRoot.current === projectRoot) return;
+    const host = desktopHost();
+    if (host === null) return;
+    const id = (requestId.current += 1);
     openedRoot.current = projectRoot;
-    void desktopHost()?.openWorktree(projectRoot);
-  }, [visible, projectRoot]);
+    setFailure(null);
+    void host
+      .openWorktree(projectRoot)
+      .then((result) => {
+        if (requestId.current !== id) return;
+        if (result.ok) return;
+        openedRoot.current = null;
+        setFailure({ root: projectRoot, message: result.error });
+      })
+      .catch((reason: unknown) => {
+        if (requestId.current !== id) return;
+        openedRoot.current = null;
+        setFailure({
+          root: projectRoot,
+          message: reason instanceof Error ? reason.message : "Could not open the worktree.",
+        });
+      });
+  }, [visible, projectRoot, retryRevision]);
 
-  return { available, visible, toggle };
+  return {
+    available,
+    visible,
+    error: failure?.root === projectRoot ? failure.message : null,
+    toggle,
+    retry,
+  };
 }

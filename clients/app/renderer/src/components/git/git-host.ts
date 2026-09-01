@@ -1,9 +1,7 @@
-// The renderer's half of the git channel.
-//
-// Same shape as `worktree-host`, and for the same reason: the port arrives
-// through `window.postMessage` (a MessagePort cannot survive contextBridge)
-// and may land before the first effect runs, so the subscription is set up at
-// module load and outside React.
+// The renderer's git client over the git half of a paired worktree
+// connection. Port ownership and generation arbitration live in
+// `worktree-host`; this module only turns one already-accepted port into a
+// disposable request/response client.
 
 import { useCallback, useEffect, useState } from "react";
 import type { GitClient } from "./types";
@@ -13,58 +11,58 @@ import type { GitClient } from "./types";
  * reader that must not turn into a poller. */
 const POLL_MS = 4_000;
 
-interface GitPortMessage {
-  readonly port: MessagePort;
-  readonly root: string;
-}
-
-type PortListener = (message: GitPortMessage) => void;
-
-const listeners = new Set<PortListener>();
-let pending: GitPortMessage | null = null;
-
-window.addEventListener("message", (event: MessageEvent) => {
-  const data = event.data as { type?: string; root?: string } | undefined;
-  if (data?.type !== "ah-git-port" || event.ports.length === 0 || !data.root) return;
-  pending = { port: event.ports[0], root: data.root };
-  for (const listener of listeners) listener(pending);
-});
-
-function onGitPort(listener: PortListener): () => void {
-  listeners.add(listener);
-  if (pending !== null) listener(pending);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
 /** A `GitClient` over one port. Requests are correlated by id; the port has a
  * single consumer, so the id space is local and monotonic. */
-function connect(port: MessagePort): GitClient {
+function connect(port: MessagePort): { readonly client: GitClient; dispose(): void } {
   let nextId = 0;
-  const waiting = new Map<number, (result: { ok: boolean; value?: unknown; error?: string }) => void>();
+  let disposed = false;
+  const waiting = new Map<
+    number,
+    {
+      readonly resolve: (value: unknown) => void;
+      readonly reject: (error: Error) => void;
+    }
+  >();
 
-  port.addEventListener("message", (event: MessageEvent) => {
+  const onMessage = (event: MessageEvent) => {
     const reply = event.data as { id?: number; ok?: boolean; value?: unknown; error?: string };
     if (typeof reply?.id !== "number") return;
     const settle = waiting.get(reply.id);
     if (settle === undefined) return;
     waiting.delete(reply.id);
-    settle({ ok: reply.ok === true, value: reply.value, error: reply.error });
-  });
+    if (reply.ok === true) settle.resolve(reply.value);
+    else settle.reject(new Error(reply.error ?? "the git command failed"));
+  };
+  const rejectWaiting = (message: string) => {
+    const error = new Error(message);
+    for (const request of waiting.values()) request.reject(error);
+    waiting.clear();
+  };
+  const onMessageError = () => rejectWaiting("the git connection closed");
+  port.addEventListener("message", onMessage);
+  port.addEventListener("messageerror", onMessageError);
   port.start();
 
   const call = <T,>(op: string, args?: unknown): Promise<T> =>
     new Promise<T>((resolve, reject) => {
+      if (disposed) {
+        reject(new Error("the git connection closed"));
+        return;
+      }
       const id = (nextId += 1);
-      waiting.set(id, (result) => {
-        if (result.ok) resolve(result.value as T);
-        else reject(new Error(result.error ?? "the git command failed"));
+      waiting.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
       });
-      port.postMessage({ id, op, args });
+      try {
+        port.postMessage({ id, op, args });
+      } catch (error) {
+        waiting.delete(id);
+        reject(error instanceof Error ? error : new Error("the git connection closed"));
+      }
     });
 
-  return {
+  const client: GitClient = {
     branch: () => call("branch"),
     status: () => call("status"),
     log: () => call("log"),
@@ -74,26 +72,42 @@ function connect(port: MessagePort): GitClient {
     unstage: (paths) => call("unstage", paths),
     discard: (paths) => call("discard", paths),
   };
+
+  return {
+    client,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      port.removeEventListener("message", onMessage);
+      port.removeEventListener("messageerror", onMessageError);
+      rejectWaiting("the git connection closed");
+      port.close();
+    },
+  };
 }
 
 export interface GitConnection {
   readonly client: GitClient;
   /** The root the process behind this client is serving. */
   readonly root: string;
+  readonly generation: number;
+  dispose(): void;
 }
 
-/** The one live git connection, swapped whenever a project switch forks a
- * fresh engine. `null` outside the desktop shell, and until the first port. */
-export function useGitClient(): GitConnection | null {
-  const [connection, setConnection] = useState<GitConnection | null>(null);
-  useEffect(
-    () =>
-      onGitPort((message) => {
-        setConnection({ client: connect(message.port), root: message.root });
-      }),
-    [],
-  );
-  return connection;
+/** Connect the git half only after `worktree-host` has accepted the paired
+ * generation. Disposal closes the port and rejects every pending request. */
+export function connectGitClient(
+  port: MessagePort,
+  root: string,
+  generation: number,
+): GitConnection {
+  const connected = connect(port);
+  return {
+    client: connected.client,
+    root,
+    generation,
+    dispose: connected.dispose,
+  };
 }
 
 export type Refresh = () => void;

@@ -25,11 +25,10 @@ import {
   diffHandle,
   GitChanges,
   GitHistory,
-  useGitClient,
   useGitRead,
 } from "../git";
 import type { Commit, CommitFile, GitClient } from "../git";
-import { useGitFacts, useWorktreeEngine } from "./worktree-host";
+import { useGitFacts, useWorktreeConnection } from "./worktree-host";
 import { createWorktreeFileSource, handleFor, isOpenable } from "./worktree-file-source";
 import { WorktreeFileTree } from "./WorktreeFileTree";
 import { WorktreeHeader } from "./WorktreeHeader";
@@ -47,6 +46,8 @@ export interface WorktreeColumnProps {
   readonly currentTimestamp: number;
   /** The room's receipt line, so an act is never silent. */
   readonly onReceipt: (text: string) => void;
+  readonly requestError: string | null;
+  readonly onRetry: () => void;
 }
 
 const TABS = [
@@ -73,13 +74,22 @@ export function WorktreeColumn({
   sessionPaths,
   currentTimestamp,
   onReceipt,
+  requestError,
+  onRetry,
 }: WorktreeColumnProps) {
-  const engine = useWorktreeEngine();
+  const lifecycle = useWorktreeConnection();
+  const live = lifecycle.status === "ready" ? lifecycle.connection : null;
+  const engine = live?.engine ?? null;
   // The engine follows the selection with a lag (kill, re-fork, walk), so the
   // head names what the column is actually showing, never what was asked for.
-  const shownRoot = engine?.root ?? null;
-  const facts = useGitFacts(shownRoot);
-  const connection = useGitClient();
+  const shownRoot =
+    lifecycle.status === "ready"
+      ? lifecycle.connection.root
+      : lifecycle.status === "idle"
+        ? projectRoot
+        : lifecycle.root;
+  const facts = useGitFacts(live?.root ?? null, live?.generation ?? null);
+  const connection = live?.git ?? null;
   const client = connection?.client ?? null;
 
   const [tab, setTab] = useState<RepoTab>("files");
@@ -105,6 +115,10 @@ export function WorktreeColumn({
   const hasShell = desktopHost() !== null;
   const stale = projectRoot !== null && shownRoot !== null && shownRoot !== projectRoot;
   const hasSiblingWorktrees = facts !== null && facts.worktrees.length > 1;
+  const lifecycleError =
+    lifecycle.status === "error" && lifecycle.root === projectRoot
+      ? lifecycle.message
+      : requestError;
 
   const [open, setOpen] = useState<OpenTarget | null>(null);
   const [selection, setSelection] = useState<{ path: string; staged: boolean } | null>(null);
@@ -219,6 +233,23 @@ export function WorktreeColumn({
           title="No project selected"
           description="Pick a project to browse its worktree."
         />
+      ) : lifecycleError !== null ? (
+        <EmptyState title="Worktree unavailable" description={lifecycleError}>
+          <button
+            type="button"
+            onClick={onRetry}
+            style={{
+              border: "1px solid var(--vf-border)",
+              borderRadius: 6,
+              padding: "4px 9px",
+              color: "var(--vf-text-secondary)",
+              background: "var(--vf-surface-raised)",
+              cursor: "pointer",
+            }}
+          >
+            Try again
+          </button>
+        </EmptyState>
       ) : tab === "files" ? (
         engine === null || fileSource === null ? (
           <EmptyState

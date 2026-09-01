@@ -106,7 +106,7 @@ export function WorktreeFileTree({
 }: WorktreeFileTreeProps) {
   // Read-only: the registry is empty, so no command can reach a file.
   const commands = useMemo(() => createCommandRegistry([]), []);
-  const content = useContentHeight(engine.root);
+  const content = useContentHeight(`${engine.generation}:${engine.root}`);
 
   return (
     <div
@@ -121,7 +121,11 @@ export function WorktreeFileTree({
       data-stale={stale ? "" : undefined}
       style={content.height !== null ? { height: content.height } : undefined}
     >
-      <FileTreeProvider fx={asTreeEngine(engine)} commands={commands}>
+      <FileTreeProvider
+        key={engine.generation}
+        fx={asTreeEngine(engine)}
+        commands={commands}
+      >
         <FileTree
           ariaLabel="Project worktree"
           iconTheme={vibefieldIconTheme}

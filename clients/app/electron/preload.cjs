@@ -10,11 +10,21 @@ const os = require("node:os");
 // MessagePort cannot pass through contextBridge (the prototype is stripped);
 // forwarding through window.postMessage keeps the port object intact — the
 // pattern mille's embedding guide prescribes.
-for (const channel of ["ah-worktree-port", "ah-git-port"]) {
-  ipcRenderer.on(channel, (event, payload) => {
-    window.postMessage({ type: channel, root: payload.root }, "*", event.ports);
-  });
-}
+ipcRenderer.on("ah-worktree-ports", (event, payload) => {
+  window.postMessage(
+    {
+      type: "ah-worktree-ports",
+      root: payload.root,
+      generation: payload.generation,
+    },
+    "*",
+    event.ports,
+  );
+});
+
+ipcRenderer.on("ah-worktree-status", (_event, payload) => {
+  window.postMessage({ ...payload, type: "ah-worktree-status" }, "*");
+});
 
 contextBridge.exposeInMainWorld("agentHistoryHost", {
   /** The user's home directory, so paths can set as `~/…` the way the design
@@ -24,7 +34,8 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
   /** Point the worktree column's engine at a project root. */
   openWorktree: (root) => ipcRenderer.invoke("ah-worktree-open", root),
   /** Branch · dirty count · worktrees for the open worktree root, or null. */
-  gitFacts: (root) => ipcRenderer.invoke("ah-worktree-git-facts", root),
+  gitFacts: (root, generation) =>
+    ipcRenderer.invoke("ah-worktree-git-facts", root, generation),
   /** Open one HTML file from the open worktree in the default browser.
    * Resolves false whenever main refuses — a wrong extension, a path outside
    * the root, a file that has since gone. */

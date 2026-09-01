@@ -171,7 +171,9 @@ function withDaemonParam(url, origin) {
  * questions for. IPC never trusts a renderer-supplied path beyond equality
  * with this. */
 let worktreeRoot = null;
-let fxProcess = null;
+let worktreeGeneration = 0;
+let fxSession = null;
+const WORKTREE_READY_TIMEOUT_MS = 10_000;
 
 function forkFxHost(root) {
   const proc = utilityProcess.fork(path.join(here, "fx-host.mjs"), [], {
@@ -184,36 +186,129 @@ function forkFxHost(root) {
   return proc;
 }
 
-/** Start (or restart) the engine against `root` and hand the window a fresh
- * port. The old utility dies first so its watchers release; the port only
- * transfers after the utility's `ready`, or Node's parent-channel delivery
- * can drop it. */
-function openWorktree(win, root) {
-  if (fxProcess !== null) {
-    try {
-      fxProcess.kill();
-    } catch {
-      /* already dead */
-    }
-    fxProcess = null;
+function postWorktreeStatus(contents, payload) {
+  if (!contents.isDestroyed()) contents.send("ah-worktree-status", payload);
+}
+
+function stopFxSession(session) {
+  if (session === null) return;
+  session.stopping = true;
+  clearTimeout(session.readyTimer);
+  if (session.onContentsDestroyed !== null) {
+    session.contents.off("destroyed", session.onContentsDestroyed);
+    session.onContentsDestroyed = null;
   }
+  try {
+    session.proc.kill();
+  } catch {
+    /* already dead */
+  }
+}
+
+function failFxSession(session, message) {
+  if (session !== fxSession) return;
+  fxSession = null;
+  worktreeRoot = null;
+  stopFxSession(session);
+  postWorktreeStatus(session.contents, {
+    root: session.root,
+    generation: session.generation,
+    state: "error",
+    message,
+  });
+}
+
+/** Start (or restart) the engine against `root` and hand the requesting
+ * renderer one generation-tagged pair of ports. The old utility dies first
+ * so its watchers release; neither half is published before both exist. */
+function openWorktree(contents, root) {
+  const previous = fxSession;
+  fxSession = null;
+  stopFxSession(previous);
+
+  const generation = (worktreeGeneration += 1);
   worktreeRoot = root;
-  const proc = forkFxHost(root);
-  fxProcess = proc;
+  postWorktreeStatus(contents, { root, generation, state: "starting" });
+
+  let proc;
+  try {
+    proc = forkFxHost(root);
+  } catch (error) {
+    worktreeRoot = null;
+    postWorktreeStatus(contents, {
+      root,
+      generation,
+      state: "error",
+      message: error instanceof Error ? error.message : "Could not start the worktree process.",
+    });
+    return generation;
+  }
+
+  const session = {
+    proc,
+    root,
+    generation,
+    contents,
+    stopping: false,
+    ready: false,
+    readyTimer: null,
+    onContentsDestroyed: null,
+  };
+  fxSession = session;
+  session.onContentsDestroyed = () => {
+    if (session !== fxSession) return;
+    fxSession = null;
+    worktreeRoot = null;
+    stopFxSession(session);
+  };
+  contents.once("destroyed", session.onContentsDestroyed);
+
   const onMessage = (msg) => {
     if (msg?.type !== "ready") return;
     proc.off("message", onMessage);
-    if (proc !== fxProcess) return; // superseded by a newer switch
-    const tree = new MessageChannelMain();
-    proc.postMessage({ type: "attach" }, [tree.port1]);
-    win.webContents.postMessage("ah-worktree-port", { root }, [tree.port2]);
-    // Column ⑤ talks to the same process over its own channel: the tree's
-    // port carries mille's framed protocol and is not ours to share.
-    const scm = new MessageChannelMain();
-    proc.postMessage({ type: "attach-git" }, [scm.port1]);
-    win.webContents.postMessage("ah-git-port", { root }, [scm.port2]);
+    if (session !== fxSession) return;
+    clearTimeout(session.readyTimer);
+    session.ready = true;
+    try {
+      const tree = new MessageChannelMain();
+      const git = new MessageChannelMain();
+      proc.postMessage({ type: "attach" }, [tree.port1]);
+      proc.postMessage({ type: "attach-git" }, [git.port1]);
+      if (contents.isDestroyed()) {
+        tree.port2.close();
+        git.port2.close();
+        failFxSession(session, "The worktree window closed before it connected.");
+        return;
+      }
+      contents.postMessage(
+        "ah-worktree-ports",
+        { root, generation },
+        [tree.port2, git.port2],
+      );
+    } catch (error) {
+      failFxSession(
+        session,
+        error instanceof Error ? error.message : "Could not attach to the worktree process.",
+      );
+    }
   };
   proc.on("message", onMessage);
+  proc.on("error", (error) => {
+    failFxSession(session, `Worktree process failed: ${error.message}`);
+  });
+  proc.on("exit", (code) => {
+    if (session !== fxSession || session.stopping) return;
+    failFxSession(
+      session,
+      session.ready
+        ? `Worktree process exited unexpectedly${code === null ? "." : ` (code ${code}).`}`
+        : `Worktree process exited before it was ready${code === null ? "." : ` (code ${code}).`}`,
+    );
+  });
+  session.readyTimer = setTimeout(() => {
+    failFxSession(session, "Worktree process did not become ready in time.");
+  }, WORKTREE_READY_TIMEOUT_MS);
+  return generation;
 }
 
 function git(root, args) {
@@ -322,19 +417,34 @@ app.whenReady().then(async () => {
   // The renderer names the project root it is reading (learned from
   // rosettad); this process validates it is a real directory before any
   // walker or git call sees it.
-  ipcMain.handle("ah-worktree-open", (_evt, raw) => {
-    if (typeof raw !== "string" || raw.length === 0) return false;
-    try {
-      if (!statSync(raw).isDirectory()) return false;
-    } catch {
-      return false;
+  ipcMain.handle("ah-worktree-open", (event, raw) => {
+    if (typeof raw !== "string" || raw.length === 0) {
+      return { ok: false, error: "The project has no worktree path." };
     }
-    openWorktree(win, raw);
-    return true;
+    try {
+      if (!statSync(raw).isDirectory()) {
+        return { ok: false, error: "The project worktree is not a directory." };
+      }
+    } catch {
+      return { ok: false, error: "The project worktree is no longer available." };
+    }
+    // Route back to the caller rather than the window created above. On
+    // macOS an activated app can create a replacement window while these
+    // process-global handlers remain installed.
+    const generation = openWorktree(event.sender, raw);
+    return { ok: true, generation };
   });
 
-  ipcMain.handle("ah-worktree-git-facts", async (_evt, raw) => {
-    if (typeof raw !== "string" || raw !== worktreeRoot) return null;
+  ipcMain.handle("ah-worktree-git-facts", async (_event, raw, generation) => {
+    if (
+      typeof raw !== "string" ||
+      raw !== worktreeRoot ||
+      !Number.isSafeInteger(generation) ||
+      fxSession === null ||
+      generation !== fxSession.generation
+    ) {
+      return null;
+    }
     return gitFacts(raw);
   });
 
@@ -385,13 +495,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  if (fxProcess !== null) {
-    try {
-      fxProcess.kill();
-    } catch {
-      /* already dead */
-    }
-    fxProcess = null;
-  }
+  const session = fxSession;
+  fxSession = null;
+  worktreeRoot = null;
+  stopFxSession(session);
   stopDaemon();
 });

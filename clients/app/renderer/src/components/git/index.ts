@@ -6,7 +6,7 @@ export { ChangeTree } from "./ChangeTree";
 export { creditedAgents } from "./co-author";
 export { CommitViewer } from "./CommitViewer";
 export { createGitFileSource, diffHandle } from "./git-file-source";
-export { useGitClient, useGitRead } from "./git-host";
+export { useGitRead } from "./git-host";
 export { changeShapeOf, GitChanges } from "./GitChanges";
 export { GitHistory } from "./GitHistory";
 export { buildPathTree, filesUnder } from "./path-tree";

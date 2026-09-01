@@ -25,15 +25,20 @@ export interface GitFacts {
   readonly worktrees: readonly GitWorktree[];
 }
 
+/** An accepted request to start a new worktree utility-process generation. */
+export type WorktreeOpenResult =
+  | { readonly ok: true; readonly generation: number }
+  | { readonly ok: false; readonly error: string };
+
 export interface DesktopHost {
   /** The user's home directory, for writing paths as `~/…`. */
   readonly homeDir?: string;
-  /** Point the worktree engine at a project root. Resolves false if the
-   * path is not a directory the shell will open. */
-  openWorktree(root: string): Promise<boolean>;
+  /** Point the worktree engine at a project root. Each accepted request gets
+   * a fresh generation, including an explicit retry of the same root. */
+  openWorktree(root: string): Promise<WorktreeOpenResult>;
   /** Branch · dirty count · worktrees for the open root, or null when the
    * folder is not a repository. */
-  gitFacts(root: string): Promise<GitFacts | null>;
+  gitFacts(root: string, generation: number): Promise<GitFacts | null>;
   /**
    * Hand a file in the open worktree to the OS — for the one file kind this
    * room will not render itself, HTML.

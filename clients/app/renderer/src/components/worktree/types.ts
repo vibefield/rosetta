@@ -16,5 +16,7 @@ export type RepoTab = "files" | "changes" | "history";
 export interface WorktreeEngine {
   readonly fx: PortFileExplorer;
   readonly root: string;
+  /** Utility-process generation. Entry ids are scoped to this identity. */
+  readonly generation: number;
   dispose(): void;
 }
