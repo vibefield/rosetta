@@ -18,7 +18,9 @@ use rosetta_core::{
     CanonicalText, CorrelationDerivation, IngestOp, NativeToolRef, ProjectionAsset, StatusBasis,
     ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
-use rosetta_protocol::{SearchResponse, SessionsResponse, StatusResponse, TimelinePage};
+use rosetta_protocol::{
+    ApiError, ErrorCode, SearchResponse, SessionsResponse, StatusResponse, TimelinePage,
+};
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
     SearchState, synchronize_fts5_once,
@@ -390,6 +392,28 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
     assert_eq!(search.state.readiness, SearchReadiness::Building);
     assert!(search.hits.is_empty());
 
+    for endpoint in [
+        "/api/projects/p1/heatmap",
+        "/api/projects/p1/usage",
+        "/api/projects/p1/contribution",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(endpoint)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let error: ApiError = serde_json::from_value(envelope["error"].clone()).unwrap();
+        assert_eq!(error.code, ErrorCode::NotReady);
+    }
+
     let response = app
         .clone()
         .oneshot(
@@ -459,6 +483,18 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
     })
     .unwrap();
     projection.publish_file(db);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/projects/p1/contribution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
         .oneshot(

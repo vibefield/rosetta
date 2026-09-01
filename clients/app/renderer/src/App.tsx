@@ -50,7 +50,7 @@ function useNow(): number {
 export default function App() {
   const nowMs = useNow();
   const { meta, status: metaStatus } = useMeta();
-  const { searchReadiness: readiness, ingest } = useDaemonStatus();
+  const { canonicalReady, searchReadiness: readiness, ingest } = useDaemonStatus();
   const ingestActive = isIngestActive(ingest);
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
@@ -65,9 +65,10 @@ export default function App() {
   const searching = search.query !== "";
 
   const projectIds = useMemo(() => (meta?.projects ?? []).map((p) => p.id).sort(), [meta]);
-  // While the backfill runs the figures poll fast — they are visibly
-  // growing under the veils, and that motion is the progress animation.
-  const stats = useProjectStats(projectIds, ingestActive);
+  // Cross-session figures wait for canonical publication. Metadata and
+  // completed timelines remain progressive; aggregate scans never compete
+  // with the sole cold writer for the shared RAM projection.
+  const stats = useProjectStats(projectIds, canonicalReady === true);
 
   const projectRows = useMemo(() => {
     const rows = [...(meta?.projects ?? [])];
@@ -170,7 +171,7 @@ export default function App() {
   const feed = useTimeline(sessionId);
   const usage = useProjectUsage(
     projectId === UNASSIGNED_PROJECT_ID ? null : projectId,
-    ingestActive,
+    canonicalReady === true,
   );
 
   const projectRoot = useMemo(() => {

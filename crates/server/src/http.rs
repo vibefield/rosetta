@@ -308,6 +308,16 @@ impl Failure {
         )
     }
 
+    fn not_ready(message: impl Into<String>) -> Self {
+        Self(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ApiError {
+                code: ErrorCode::NotReady,
+                message: message.into(),
+            },
+        )
+    }
+
     fn cursor_expired() -> Self {
         Self(
             StatusCode::GONE,
@@ -349,6 +359,21 @@ where
 
 fn store_err(error: StoreError) -> Failure {
     Failure::internal(format!("{error}"))
+}
+
+/// Global aggregates are deliberately outside the progressive RAM surface.
+/// A project/session/timeline read is bounded and useful while cold ingest
+/// advances; a heatmap or contribution fold scans cross-session derived data
+/// and can starve the sole shared-cache writer. Canonical publication is the
+/// exact seam where these reads become both stable and safe.
+fn require_canonical_aggregates(projection: &ProjectionReader) -> Result<(), Failure> {
+    if projection.is_published() {
+        Ok(())
+    } else {
+        Err(Failure::not_ready(
+            "global aggregates are available after canonical publication",
+        ))
+    }
 }
 
 async fn asset(
@@ -696,6 +721,7 @@ async fn heatmap(
     UrlPath(id): UrlPath<String>,
     Query(query): Query<HeatmapQuery>,
 ) -> Result<Json<HeatmapResponse>, Failure> {
+    require_canonical_aggregates(&state.projection)?;
     let response = with_read(state.projection.clone(), move |conn| {
         let days = queries::heatmap_days_in_timezone(
             conn,
@@ -718,6 +744,7 @@ async fn usage(
     UrlPath(id): UrlPath<String>,
     Query(query): Query<HeatmapQuery>,
 ) -> Result<Json<UsageResponse>, Failure> {
+    require_canonical_aggregates(&state.projection)?;
     let response = with_read(state.projection.clone(), move |conn| {
         let since_ms = query.since_ms.unwrap_or(0);
         let offset_minutes = query.offset_minutes.unwrap_or(0);
@@ -735,6 +762,7 @@ async fn contribution(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<ContributionResponse>, Failure> {
+    require_canonical_aggregates(&state.projection)?;
     let response = with_read(state.projection.clone(), move |conn| {
         let rows = queries::contribution(conn, &id).map_err(store_err)?;
         Ok(ContributionResponse { rows })

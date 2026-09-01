@@ -304,6 +304,7 @@ fn exemplars() -> serde_json::Value {
         "error_codes": [
             ErrorCode::NotFound,
             ErrorCode::BadRequest,
+            ErrorCode::NotReady,
             ErrorCode::CursorExpired,
             ErrorCode::Internal,
         ],

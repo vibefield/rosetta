@@ -44,13 +44,14 @@
   "error_codes": [
     "not_found",
     "bad_request",
+    "not_ready",
     "cursor_expired",
     "internal"
   ],
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 5,
+      "protocol_version": 6,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -408,7 +409,7 @@
       }
     ]
   },
-  "protocol_version": 5,
+  "protocol_version": 6,
   "runtimes": {
     "runtimes": [
       {
@@ -560,7 +561,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 5,
+    "protocol_version": 6,
     "schema_version": 9,
     "search": {
       "projection_epoch": "epoch-1",

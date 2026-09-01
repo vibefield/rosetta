@@ -25,7 +25,7 @@ pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -364,6 +364,8 @@ pub struct UsageResponse {
 pub enum ErrorCode {
     NotFound,
     BadRequest,
+    /// The requested derived surface is unavailable until canonical publish.
+    NotReady,
     /// The pagination watermark no longer matches: refetch from the head.
     CursorExpired,
     Internal,

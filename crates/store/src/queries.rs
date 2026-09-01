@@ -611,21 +611,57 @@ pub fn hour_profile_in_timezone(
 }
 
 /// Sessions ranked by what they added to a project. Subagent trees fold into
-/// their root session (the `session_contribution` view).
+/// their root session. Every aggregate is constrained through the project's
+/// roots first: the presentation layer asks this once per project, so an
+/// uncorrelated whole-corpus GROUP BY here becomes an accidental O(projects ×
+/// corpus) cold-start tax.
 pub fn contribution(
     conn: &Connection,
     project_id: &str,
 ) -> Result<Vec<ContributionRow>, StoreError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT c.session_id, c.project_id, c.tokens, c.commits, c.edits, c.loc,
-                COALESCE(m.messages, 0) AS messages
-         FROM session_contribution c
-         JOIN session ready ON ready.id = c.session_id AND ready.stream_state != 'pending'
-         LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) messages
-                    FROM message msg JOIN session s ON s.id = msg.session_id
-                    GROUP BY rid) m ON m.rid = c.session_id
-         WHERE c.project_id = ?1
-         ORDER BY c.tokens DESC",
+        "WITH roots AS (
+             SELECT id, project_id
+             FROM session
+             WHERE project_id = ?1 AND id = root_session_id
+               AND stream_state != 'pending'
+         ),
+         tree_sessions AS (
+             SELECT s.root_session_id AS rid, s.id AS session_id
+             FROM session s JOIN roots r ON r.id = s.root_session_id
+         ),
+         usage AS (
+             SELECT t.rid,
+                    SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
+                        + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
+                        + COALESCE(b.think_tokens,0)) AS tokens
+             FROM tree_sessions t JOIN usage_bucket b ON b.session_id = t.session_id
+             GROUP BY t.rid
+         ),
+         commits AS (
+             SELECT t.rid, COUNT(*) AS commits
+             FROM tree_sessions t JOIN git_commit g ON g.session_id = t.session_id
+             GROUP BY t.rid
+         ),
+         edits AS (
+             SELECT t.rid, COUNT(*) AS edits,
+                    SUM(COALESCE(f.lines_added, 0) + COALESCE(f.lines_removed, 0)) AS loc
+             FROM tree_sessions t JOIN file_edit f ON f.session_id = t.session_id
+             GROUP BY t.rid
+         ),
+         messages AS (
+             SELECT t.rid, COUNT(*) AS messages
+             FROM tree_sessions t JOIN message msg ON msg.session_id = t.session_id
+             GROUP BY t.rid
+         )
+         SELECT r.id, r.project_id, COALESCE(u.tokens, 0), COALESCE(c.commits, 0),
+                COALESCE(e.edits, 0), COALESCE(e.loc, 0), COALESCE(m.messages, 0)
+         FROM roots r
+         LEFT JOIN usage u ON u.rid = r.id
+         LEFT JOIN commits c ON c.rid = r.id
+         LEFT JOIN edits e ON e.rid = r.id
+         LEFT JOIN messages m ON m.rid = r.id
+         ORDER BY COALESCE(u.tokens, 0) DESC",
     )?;
     let rows = stmt.query_map(params![project_id], |row| {
         Ok(ContributionRow {

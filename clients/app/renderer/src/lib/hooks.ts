@@ -41,6 +41,8 @@ export function useMeta(): MetaFeed {
 }
 
 export interface DaemonStatusFeed {
+  /** The exact durable-publication gate for global derived reads. */
+  readonly canonicalReady: boolean | null;
   /** null until the first answer, and after the daemon stops answering. */
   readonly searchReadiness: SearchReadiness | null;
   /** The cold-start block; null on a daemon too old to carry it. */
@@ -53,6 +55,7 @@ export interface DaemonStatusFeed {
  * are moving), quietly once the phase is live. */
 export function useDaemonStatus(): DaemonStatusFeed {
   const [feed, setFeed] = useState<DaemonStatusFeed>({
+    canonicalReady: null,
     searchReadiness: null,
     ingest: null,
   });
@@ -66,12 +69,14 @@ export function useDaemonStatus(): DaemonStatusFeed {
         .then((status) => {
           if (cancelled) return;
           setFeed({
+            canonicalReady: status.canonical_ready,
             searchReadiness: status.search.readiness,
             ingest: status.daemon?.ingest ?? null,
           });
         })
         .catch(() => {
-          if (!cancelled) setFeed({ searchReadiness: null, ingest: null });
+          if (!cancelled)
+            setFeed({ canonicalReady: null, searchReadiness: null, ingest: null });
         })
         .finally(() => {
           if (cancelled) return;
@@ -88,13 +93,13 @@ export function useDaemonStatus(): DaemonStatusFeed {
   return feed;
 }
 
-/** Per-project heatmaps (the calendar heatmap's 53-week window — the ledger's 30-day
- * figures are its tail) and contributions, refreshed when the project set
- * changes and on a quiet interval afterwards. `fast` (a running backfill)
- * tightens the quiet interval so figures visibly grow under the veils. */
+/** Per-project heatmaps and contributions. These are global derived reads,
+ * so they begin only after the daemon's canonical publication gate. Four
+ * workers hydrate the list progressively; unbounded Promise.all here once
+ * launched two full-corpus queries per project and starved cold ingestion. */
 export function useProjectStats(
   projectIds: string[],
-  fast = false,
+  ready = false,
 ): Map<string, ProjectStats> {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
   const key = projectIds.join("\n");
@@ -102,37 +107,51 @@ export function useProjectStats(
     let cancelled = false;
     let timer: number | undefined;
     const ids = key === "" ? [] : key.split("\n");
+    if (!ready || ids.length === 0) {
+      setStats(new Map());
+      return () => {
+        cancelled = true;
+      };
+    }
     async function loadAll() {
       const sinceMs = getActivityGridStartTimestamp(Date.now());
       const offsetMinutes = getViewerUtcOffsetMinutes();
-      const next = new Map<string, ProjectStats>();
+      const queue = [...ids];
       let failed = false;
-      await Promise.all(
-        ids.map(async (id) => {
+      async function worker() {
+        while (!cancelled) {
+          const id = queue.shift();
+          if (id === undefined) return;
           try {
             const [heat, contribution] = await Promise.all([
               client.heatmap(id, { sinceMs, offsetMinutes }),
               client.contribution(id),
             ]);
-            next.set(id, { heat: heat.days, contribution: contribution.rows });
+            if (!cancelled) {
+              setStats((current) => {
+                const next = new Map(current);
+                next.set(id, { heat: heat.days, contribution: contribution.rows });
+                return next;
+              });
+            }
           } catch {
             // an unfigured project degrades honestly — and earns a retry
             failed = true;
           }
-        }),
-      );
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(4, ids.length) }, () => worker()));
       if (cancelled) return;
-      setStats(next);
       // A failed figure (a daemon mid-restart, a dropped socket) retries in
-      // seconds, not at the next quiet refresh a minute out.
-      timer = window.setTimeout(loadAll, failed ? 8_000 : fast ? 5_000 : 60_000);
+      // seconds. Stable canonical figures need only a quiet periodic refresh.
+      timer = window.setTimeout(loadAll, failed ? 8_000 : 5 * 60_000);
     }
     loadAll();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [key, fast]);
+  }, [key, ready]);
   return stats;
 }
 
@@ -140,12 +159,12 @@ export function useProjectStats(
  * hour-of-day profile, over the same 53-week window the heatmap draws. */
 export function useProjectUsage(
   projectId: string | null,
-  fast = false,
+  ready = false,
 ): UsageResponse | null {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   useEffect(() => {
     setUsage(null);
-    if (projectId === null) return;
+    if (projectId === null || !ready) return;
     let cancelled = false;
     const load = () => {
       client
@@ -161,12 +180,12 @@ export function useProjectUsage(
         });
     };
     load();
-    const timer = setInterval(load, fast ? 5_000 : 60_000);
+    const timer = setInterval(load, 60_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [projectId, fast]);
+  }, [projectId, ready]);
   return usage;
 }
 
