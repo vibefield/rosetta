@@ -9,16 +9,14 @@
 //! connection. Consent gates all reading: discovery fills the roll-call
 //! board, and a runtime is ingested only if it was enrolled on an earlier
 //! run (the projection's `enabled` flags), named on the command line, or
-//! chosen in the app while the daemon waits. Metadata effects are observed
-//! from process start — ids only, cheap on the cold paths — and the writer
-//! thread drains them into the mirror between passes, fanning precise
-//! `/ws/meta` diffs with no polling cadence. The cold scheduler pops one
-//! budgeted pass at a time so the boost ledger and the live lane's watcher
-//! hints can jump ahead of the rotation. Row-effects observation runs
-//! scoped during the backfill — armed per pass with the sessions readers
-//! hold open, so an open transcript streams in while everything unwatched
-//! still pays no per-row mutation log — and widens to every session at the
-//! live handoff.
+//! chosen in the app while the daemon waits. On a normal first run,
+//! source-free metadata enters a named canonical RAM projection immediately;
+//! closed reconciled runtimes follow in completion order, and the read router
+//! switches to the validated disk copy at the durability barrier.
+//! Existing/resumable projections and metadata-audit mode retain the sliced
+//! `ColdEngine`: metadata effects drain between passes, watcher hints and
+//! boosts can reorder its lanes, and scoped row effects serve only sessions
+//! readers currently hold open.
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -34,7 +32,7 @@ use rosetta_pipeline::{
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
-    IngestCounterSource, IngestCounters, RuntimeTick, router,
+    IngestCounterSource, IngestCounters, ProjectionReader, RuntimeTick, router,
 };
 use rosetta_store::{Store, queries};
 
@@ -42,7 +40,10 @@ use crate::engine::{
     BackfillRuntime, ColdCx, ColdEngine, StreamMeter, absorb_effects, acknowledge_search, now_ms,
 };
 use crate::{
-    ledger_root, open_ledger, open_progressive_backfill, parse_flags, projection_lock, selected,
+    ColdCaptureRequest, ColdLedgerStage, Flags, apply_captured_cold_runtime,
+    finish_parallel_cold_runtime, install_rebuilt_projection, ledger_root, make_single_file,
+    open_ledger, open_progressive_backfill, parse_flags, plan_parallel_cold_runtime,
+    projection_lock, projection_parent, record_backfill_failures, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
@@ -119,10 +120,39 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
-    // Serve is the progressive first-run owner: the installed projection is
-    // public from its first committed skim. `rebuild` and finite `ingest`
-    // retain their private atomic path.
-    let mut store = open_progressive_backfill(&db)?;
+    // A normal fresh app launch keeps canonical construction in RAM and lets
+    // HTTP/WS read that same canonical shape progressively. Metadata is the
+    // first public layer; closed reconciled runtimes follow. The validated
+    // durable projection replaces the read target atomically at the end.
+    // Metadata-audit mode deliberately retains the old disk-progressive seam
+    // because its purpose is to leave that durable intermediate inspectable.
+    let fresh_fast = !db.exists() && !flags.stop_after_meta;
+    let (mut store, cold_temp, projection_reader) = if fresh_fast {
+        let parent = projection_parent(&db);
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+        let named = tempfile::Builder::new()
+            .prefix(".rosetta-backfill-")
+            .suffix(".sqlite")
+            .tempfile_in(parent)
+            .map_err(|error| format!("creating private projection: {error}"))?;
+        let temp = named.into_temp_path();
+        let uri = format!(
+            "file:rosetta-cold-{}-{}?mode=memory&cache=shared",
+            std::process::id(),
+            now_ms()
+        );
+        let store = Store::open_shared_in_memory_for_rebuild_with_assets(&uri, &db)
+            .map_err(|error| format!("opening canonical RAM projection: {error}"))?;
+        let reader = Arc::new(ProjectionReader::shared_memory(&uri)?);
+        (store, Some(temp), reader)
+    } else {
+        (
+            open_progressive_backfill(&db)?,
+            None,
+            Arc::new(ProjectionReader::file(db.clone())),
+        )
+    };
     let progressive = store.is_progressive();
     let public_ledgers = ledger_root(&flags, &db);
 
@@ -135,7 +165,11 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let boost = Arc::new(BoostLedger::new());
     let warmed = hub.warm(store.conn()).map_err(|error| error.to_string())?;
     let search = Fts5SidecarSearch::new(db.clone());
-    let search_worker = Fts5SearchWorker::start(search.clone());
+    let search_worker = if fresh_fast {
+        Fts5SearchWorker::start_paused(search.clone())
+    } else {
+        Fts5SearchWorker::start(search.clone())
+    };
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -165,6 +199,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         });
     }
     let state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
+        .with_projection(projection_reader.clone())
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
         .with_boost(boost.clone());
@@ -261,6 +296,44 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 discovery.streamable_bytes,
             );
         }
+    }
+
+    if fresh_fast {
+        let temp = cold_temp.expect("fresh fast serve owns a private projection file");
+        let ledger_stage = ColdLedgerStage::new(&public_ledgers)?;
+        let (mut store, absorbed) = run_fresh_fast_serve(
+            &flags,
+            &db,
+            &adapters,
+            &discoveries,
+            &consented,
+            &opts,
+            &live,
+            &instrument,
+            store,
+            temp,
+            ledger_stage,
+            &projection_reader,
+            &health,
+            &hub,
+            &search_worker,
+            &stop,
+            started,
+        )?;
+
+        let _ = shutdown_tx.send(true);
+        match tokio_runtime.block_on(server) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("server: {error}")),
+            Err(error) => return Err(format!("server task: {error}")),
+        }
+        acknowledge_search(&mut store, &search_worker)?;
+        search_worker.stop();
+        println!("hub: {absorbed} live items fanned out");
+        if flags.profile {
+            println!("\n== profile ==\n{}", instrument.report());
+        }
+        return Ok(());
     }
 
     // Phase one: skim every enrolled runtime before reading any transcript.
@@ -552,4 +625,310 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         println!("\n== profile ==\n{}", instrument.report());
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_fresh_fast_serve(
+    flags: &Flags,
+    db: &std::path::Path,
+    adapters: &[&'static dyn rosetta_adapter_support::AgentAdapter],
+    discoveries: &[rosetta_pipeline::Discovery],
+    consented: &BTreeSet<String>,
+    opts: &IngestOptions,
+    live: &LiveOptions,
+    instrument: &Arc<Instrument>,
+    mut store: Store,
+    temp: tempfile::TempPath,
+    ledger_stage: ColdLedgerStage,
+    projection_reader: &Arc<ProjectionReader>,
+    health: &Arc<DaemonHealth>,
+    hub: &Arc<Hub>,
+    search_worker: &Fts5SearchWorker,
+    stop: &Arc<AtomicBool>,
+    started: Instant,
+) -> Result<(Store, u64), String> {
+    store
+        .use_precomputed_bulk_ordinals()
+        .map_err(|error| format!("enabling precomputed cold ordinals: {error}"))?;
+    store.observe_meta_effects();
+
+    // Watch before the first skim. Source changes during the RAM build queue
+    // as hints and are replayed by the live runner after durable publication.
+    let mut events = std::collections::BTreeMap::new();
+    let mut planned = Vec::new();
+    let cold_opts = IngestOptions {
+        cancel: Some(stop.clone()),
+        ..opts.clone()
+    };
+    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
+        if !discovery.installed || !consented.contains(adapter.kind()) {
+            continue;
+        }
+        if stop.load(Ordering::SeqCst) {
+            return Err("stopped before cold metadata completed".into());
+        }
+        let watcher = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let worker_instrument = Arc::new(Instrument::new());
+        let skim_baseline = worker_instrument.snapshot();
+        health.ingest_skim(
+            adapter.kind(),
+            counter_source(&worker_instrument, skim_baseline),
+        );
+        let plan = plan_parallel_cold_runtime(ColdCaptureRequest {
+            adapter,
+            runtime: discovery.runtime.clone(),
+            root: discovery.root.clone(),
+            inventory: discovery.inventory.clone(),
+            discovery_truncated: discovery.walk_truncated,
+            ledger_root: ledger_stage.path().to_path_buf(),
+            opts: cold_opts.clone(),
+            write_raw_ledger: true,
+            async_raw_ledger: true,
+            instrument: worker_instrument,
+        })?;
+
+        // This is the immediate-public seam: only source-free canonical
+        // identity rows cross it. The planner keeps all payload/source state
+        // in RAM until the runtime closes.
+        for batch in plan
+            .planner
+            .planned_metadata_batches()
+            .map_err(|error| format!("reading {} metadata plan: {error}", adapter.kind()))?
+        {
+            instrument
+                .apply(&mut store, &batch)
+                .map_err(|error| format!("publishing {} metadata: {error}", adapter.kind()))?;
+        }
+        absorb_effects(&mut store, hub)?;
+        health.ingest_skim_done(
+            adapter.kind(),
+            plan.meta.sessions as u64,
+            plan.meta.files_skimmed as u64,
+        );
+        println!(
+            "{}: metadata public — {} sessions, {} projects, {} streamable files",
+            adapter.kind(),
+            plan.meta.sessions,
+            plan.meta.projects,
+            plan.files.len(),
+        );
+        events.insert(adapter.kind().to_string(), watcher);
+        planned.push(plan);
+    }
+    if planned.is_empty() {
+        return Err("nothing to serve: no enrolled runtimes".to_string());
+    }
+    health.ingest_metadata_ready();
+    println!(
+        "milestone: metadata-ready elapsed_s={:.2}",
+        started.elapsed().as_secs_f64()
+    );
+
+    // Every producer owns one planner and ledger. The consumer is the only
+    // canonical writer and admits completion-order results, so small agents
+    // become browseable while a large agent is still parsing.
+    for plan in &planned {
+        let baseline = plan.instrument.snapshot();
+        health.ingest_stream(
+            plan.adapter.kind(),
+            counter_source(&plan.instrument, baseline),
+        );
+    }
+    let mut failures = Vec::new();
+    let mut applied = std::thread::scope(|scope| {
+        let worker_count = planned.len();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut handles = Vec::with_capacity(worker_count);
+        for plan in planned {
+            let sender = sender.clone();
+            handles.push(scope.spawn(move || {
+                let result = finish_parallel_cold_runtime(plan);
+                sender
+                    .send(result)
+                    .map_err(|_| "fresh cold consumer stopped".to_string())
+            }));
+        }
+        drop(sender);
+
+        let mut outputs = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let mut captured = receiver
+                .recv()
+                .map_err(|_| "fresh cold capture channel closed".to_string())??;
+            let mut runtime_failures = Vec::new();
+            record_backfill_failures(
+                captured.adapter.kind(),
+                captured.discovery_truncated,
+                &captured.meta,
+                &captured.stream,
+                &mut runtime_failures,
+            );
+            if !runtime_failures.is_empty() {
+                failures.extend(runtime_failures);
+                continue;
+            }
+            let kind = captured.adapter.kind().to_string();
+            let payload_bytes = captured.stream.payload_bytes;
+            let records = captured.stream.records;
+            captured.prepared.mark_metadata_preapplied();
+            let output = apply_captured_cold_runtime(
+                flags,
+                captured,
+                &mut store,
+                instrument,
+                &mut failures,
+            )?;
+            absorb_effects(&mut store, hub)?;
+            let session_ids = queries::session_list(store.conn(), None, i64::MAX)
+                .map_err(|error| format!("reading {kind} sessions after cold apply: {error}"))?
+                .into_iter()
+                .filter(|session| session.runtime_id == output.runtime.id)
+                .map(|session| session.id)
+                .collect::<Vec<_>>();
+            hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
+            health.ingest_done(&kind, payload_bytes, records);
+            println!(
+                "{kind}: canonical RAM public — {records} records, {} sessions",
+                session_ids.len()
+            );
+            outputs.push(output);
+        }
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| "fresh cold capture worker panicked".to_string())??;
+        }
+        Ok::<_, String>(outputs)
+    })?;
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+
+    // Async ledger workers have overlapped almost all payload IO. One
+    // pre-publication barrier now drains and fsyncs each runtime, after which
+    // no staged writer survives the directory rename.
+    for output in &mut applied {
+        if let Some(ledger) = output.ledger.as_mut() {
+            instrument
+                .ledger_write(ledger, |ledger| ledger.flush())
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    instrument
+        .flush_bulk_reconciliation(&mut store)
+        .map_err(|error| format!("reconciling whole projection: {error}"))?;
+    for output in &mut applied {
+        drop(output.ledger.take());
+    }
+
+    let mut store =
+        publish_fresh_ram_projection(store, temp, db, ledger_stage, projection_reader, instrument)?;
+    println!(
+        "milestone: canonical-ready elapsed_s={:.2}",
+        started.elapsed().as_secs_f64()
+    );
+
+    // Reattach live ledger handles at their public paths. Watchers and
+    // rosters were armed before capture, so no source write can disappear in
+    // the RAM-to-disk handoff.
+    let public_ledgers = ledger_root(flags, db);
+    let mut runners = Vec::with_capacity(applied.len());
+    for output in applied {
+        let watcher = events
+            .remove(output.adapter.kind())
+            .ok_or_else(|| format!("lost {} cold watcher", output.adapter.kind()))?;
+        let ledger = open_ledger(&public_ledgers, output.adapter.kind())?;
+        let runner = LiveRunner::resume_from_roster(
+            output.adapter,
+            output.runtime,
+            output.root,
+            Box::new(watcher),
+            output.roster,
+            opts.clone(),
+            live.clone(),
+            Some(ledger),
+        );
+        runners.push((output.adapter.kind(), runner));
+    }
+    store.observe_meta_effects();
+    store.observe_effects();
+    health.ingest_live();
+    search_worker.wake();
+
+    let mut absorbed = 0_u64;
+    let mut remaining = flags.ticks;
+    while !stop.load(Ordering::SeqCst) {
+        match &mut remaining {
+            Some(0) => break,
+            Some(count) => *count -= 1,
+            None => {}
+        }
+        for (kind, runner) in &mut runners {
+            runner
+                .tick(&mut store, instrument)
+                .map_err(|error| error.to_string())?;
+            let report = runner.report();
+            health.update(
+                kind,
+                RuntimeTick {
+                    ticks: report.ticks,
+                    events: report.events,
+                    polls: report.polls,
+                    rescans: report.rescans,
+                    admissions: report.admissions,
+                    live_rows: report.stream.stats.messages_inserted
+                        + report.stream.stats.messages_updated,
+                },
+                now_ms(),
+            );
+        }
+        search_worker.wake();
+        acknowledge_search(&mut store, search_worker)?;
+        absorbed += absorb_effects(&mut store, hub)? as u64;
+    }
+    for (kind, runner) in &runners {
+        let report = runner.report();
+        println!(
+            "{kind}: {} ticks — {} events, {} polls, {} rows live",
+            report.ticks, report.events, report.polls, report.stream.stats.messages_inserted,
+        );
+    }
+    Ok((store, absorbed))
+}
+
+fn publish_fresh_ram_projection(
+    mut store: Store,
+    temp: tempfile::TempPath,
+    db: &std::path::Path,
+    ledger_stage: ColdLedgerStage,
+    projection_reader: &ProjectionReader,
+    instrument: &Instrument,
+) -> Result<Store, String> {
+    instrument
+        .finish_bulk_load(&mut store)
+        .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
+    instrument.time(Metric::PublishNanos, || {
+        store
+            .conn()
+            .backup(rusqlite::DatabaseName::Main, &*temp, None)
+            .map_err(|error| format!("backing up canonical RAM projection: {error}"))?;
+        let finished = rusqlite::Connection::open(&*temp)
+            .map_err(|error| format!("opening staged durable projection: {error}"))?;
+        make_single_file(&finished, "staged durable projection")?;
+        drop(finished);
+        std::fs::File::open(&*temp)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| format!("syncing staged durable projection: {error}"))?;
+
+        ledger_stage.publish()?;
+        install_rebuilt_projection(db, temp.as_ref())?;
+        let _installed = temp.keep();
+
+        // The switch precedes dropping the writer. Any request that captured
+        // the old target owns its RAM keeper; every later request opens disk.
+        projection_reader.publish_file(db.to_path_buf());
+        Ok::<(), String>(())
+    })?;
+    drop(store);
+    Store::open(db).map_err(|error| format!("opening published projection: {error}"))
 }

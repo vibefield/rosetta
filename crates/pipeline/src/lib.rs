@@ -45,6 +45,9 @@ pub use stream::{StreamReport, stream_backfill, stream_backfill_into};
 /// session and removes streamed workspace observations from the projection.
 pub const LEDGER_META_SCHEMA_VERSION: u32 = 2;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rosetta_capture::{CaptureError, TailConfig};
 use rosetta_store::StoreError;
 
@@ -53,6 +56,7 @@ pub enum PipelineError {
     Capture(CaptureError),
     Store(StoreError),
     Config(String),
+    Cancelled,
 }
 
 impl From<CaptureError> for PipelineError {
@@ -73,6 +77,7 @@ impl std::fmt::Display for PipelineError {
             Self::Capture(error) => write!(formatter, "{error}"),
             Self::Store(error) => write!(formatter, "store error: {error:?}"),
             Self::Config(message) => write!(formatter, "pipeline config: {message}"),
+            Self::Cancelled => write!(formatter, "ingest cancelled"),
         }
     }
 }
@@ -137,6 +142,24 @@ pub struct IngestOptions {
     /// EOF. Snapshot-driver sources (SQLite/document) always stream whole:
     /// their revision identity is a whole-content hash.
     pub starter_budget: Option<SliceBudget>,
+    /// Process-local cooperative cancellation. It is deliberately not a
+    /// checkpoint or canonical fact; cold workers check it at bounded record
+    /// batches so app shutdown can discard the private build cleanly.
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl IngestOptions {
+    pub(crate) fn check_cancelled(&self) -> Result<(), PipelineError> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+        {
+            Err(PipelineError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Default for IngestOptions {
@@ -151,6 +174,7 @@ impl Default for IngestOptions {
             max_retries: 3,
             audit_files_per_run: 1,
             starter_budget: None,
+            cancel: None,
         }
     }
 }

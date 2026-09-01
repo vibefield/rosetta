@@ -23,7 +23,7 @@ use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
     SearchState, synchronize_fts5_once,
 };
-use rosetta_server::{AppState, Hub, HubConfig, router};
+use rosetta_server::{AppState, Hub, HubConfig, ProjectionReader, router};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
 use tempfile::TempDir;
 
@@ -310,6 +310,170 @@ async fn progressive_projection_lists_are_visible_before_canonical_or_search_rea
     let sessions: SessionsResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(sessions.sessions.len(), 1);
     assert_eq!(sessions.sessions[0].id, "s1");
+}
+
+#[tokio::test]
+async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("projection.sqlite");
+    let uri = format!(
+        "file:rosetta-http-test-{}?mode=memory&cache=shared",
+        std::process::id()
+    );
+    let mut store = Store::open_shared_in_memory_for_rebuild_with_assets(&uri, &db).unwrap();
+    let mut cold_session = session("s1");
+    cold_session.stream_state = StreamState::Pending;
+    let mut ops = vec![
+        IngestOp::Runtime(RuntimeRow {
+            id: "rt1".into(),
+            kind: "claude-code".into(),
+            data_root: "~/.claude".into(),
+            enabled: true,
+            account: None,
+            config: None,
+            skills: None,
+            versions_seen: None,
+            discovered_at: 1,
+        }),
+        IngestOp::Project(ProjectRow {
+            id: "p1".into(),
+            name: "project".into(),
+            root_paths: vec!["/w/rosetta".into()],
+            git_repo: None,
+        }),
+        IngestOp::SessionMeta(cold_session),
+    ];
+    ops.extend(IngestOp::project_message(message(
+        "ram-message",
+        MessageKind::Agent,
+        "from RAM",
+    )));
+    store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+    let hub = Arc::new(Hub::new(HubConfig::default(), 1));
+    hub.warm(store.conn()).unwrap();
+    let projection = Arc::new(ProjectionReader::shared_memory(&uri).unwrap());
+    let app = router(AppState::new(hub, db.clone()).with_projection(projection.clone()));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let status: StatusResponse = serde_json::from_slice(&body).unwrap();
+    assert!(!status.canonical_ready);
+    assert_eq!(status.search.readiness, SearchReadiness::Building);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/search?q=from")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let search: SearchResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(search.state.readiness, SearchReadiness::Building);
+    assert!(search.hits.is_empty());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/s1/timeline")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let timeline: TimelinePage = serde_json::from_slice(&body).unwrap();
+    assert!(
+        timeline.entries.is_empty(),
+        "source commits stay hidden while RAM reconciliation is pending"
+    );
+
+    store
+        .set_session_stream_state("s1", StreamState::Indexed)
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/s1/timeline")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let timeline: TimelinePage = serde_json::from_slice(&body).unwrap();
+    assert_eq!(timeline.entries.len(), 1);
+    assert_eq!(timeline.entries[0].timeline_id, "ram-message");
+
+    let mut disk = Store::open(&db).unwrap();
+    let mut disk_ops = vec![
+        IngestOp::Runtime(RuntimeRow {
+            id: "rt1".into(),
+            kind: "claude-code".into(),
+            data_root: "~/.claude".into(),
+            enabled: true,
+            account: None,
+            config: None,
+            skills: None,
+            versions_seen: None,
+            discovered_at: 1,
+        }),
+        IngestOp::Project(ProjectRow {
+            id: "p1".into(),
+            name: "project".into(),
+            root_paths: vec!["/w/rosetta".into()],
+            git_repo: None,
+        }),
+        IngestOp::SessionMeta(session("s1")),
+    ];
+    disk_ops.extend(IngestOp::project_message(message(
+        "disk-message",
+        MessageKind::Agent,
+        "from disk",
+    )));
+    disk.apply(&Batch {
+        ops: disk_ops,
+        ..Batch::default()
+    })
+    .unwrap();
+    projection.publish_file(db);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/s1/timeline")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let timeline: TimelinePage = serde_json::from_slice(&body).unwrap();
+    assert_eq!(timeline.entries.len(), 1);
+    assert_eq!(timeline.entries[0].timeline_id, "disk-message");
 }
 
 #[derive(Clone)]

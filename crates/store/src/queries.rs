@@ -530,7 +530,7 @@ pub fn heatmap_days_in_timezone(
                     + COALESCE(b.think_tokens,0)) AS tokens
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
-         WHERE s.project_id = ?1 AND b.hour_ts >= ?2
+         WHERE s.project_id = ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
          GROUP BY day ORDER BY day",
     )?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
@@ -562,7 +562,7 @@ pub fn model_days_in_timezone(
                     + COALESCE(b.think_tokens,0)) AS tokens
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
-         WHERE s.project_id = ?1 AND b.hour_ts >= ?2
+         WHERE s.project_id = ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
          GROUP BY day, b.model ORDER BY day, b.model",
     )?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
@@ -594,7 +594,7 @@ pub fn hour_profile_in_timezone(
                     + COALESCE(b.think_tokens,0)) AS tokens
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
-         WHERE s.project_id = ?1 AND b.hour_ts >= ?2
+         WHERE s.project_id = ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
          GROUP BY hour ORDER BY hour",
     )?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
@@ -620,6 +620,7 @@ pub fn contribution(
         "SELECT c.session_id, c.project_id, c.tokens, c.commits, c.edits, c.loc,
                 COALESCE(m.messages, 0) AS messages
          FROM session_contribution c
+         JOIN session ready ON ready.id = c.session_id AND ready.stream_state != 'pending'
          LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) messages
                     FROM message msg JOIN session s ON s.id = msg.session_id
                     GROUP BY rid) m ON m.rid = c.session_id

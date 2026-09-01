@@ -227,6 +227,17 @@ fn lagging_subscriber_hits_the_barrier_and_resyncs() {
 }
 
 #[test]
+fn cold_runtime_publication_resyncs_only_watched_sessions() {
+    let h = harness(HubConfig::default());
+    let (watched, old) = h.hub.subscribe_session("s1", 0);
+
+    assert_eq!(h.hub.invalidate_sessions(["s1", "not-watched"], 1), 1);
+    assert_eq!(watched.recv_timeout(TICK), Some(HubItem::Resync));
+    let fresh = h.hub.resync(&watched, 2).unwrap();
+    assert_ne!(fresh.epoch, old.epoch);
+}
+
+#[test]
 fn generation_swap_forces_a_replacement_snapshot() {
     let mut h = harness(HubConfig::default());
     let (sub, stamp) = h.hub.subscribe_session("s1", 0);

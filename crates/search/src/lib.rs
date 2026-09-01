@@ -191,6 +191,14 @@ pub struct SearchState {
 }
 
 impl SearchState {
+    pub fn building() -> Self {
+        Self {
+            readiness: SearchReadiness::Building,
+            projection_epoch: None,
+            revision: None,
+        }
+    }
+
     pub fn synchronous() -> Self {
         Self {
             readiness: SearchReadiness::Ready,

@@ -1,16 +1,16 @@
 //! The REST surface: axum over `store::queries` for canonical row reads, the
 //! search backend boundary for ranked retrieval, and the hub's resident
 //! mirror for list/browse (which therefore never touch the DB).
-//! Every SQLite read opens its own read-only connection against the
-//! published projection file inside `spawn_blocking` — the single writer
-//! owns its connection exclusively, and WAL keeps readers unblocked.
+//! Every SQLite read opens its own connection inside `spawn_blocking`. A
+//! fresh daemon attaches to the named canonical RAM projection; after its
+//! atomic publication the same router opens the durable file read-only.
 //!
 //! Pagination follows the exact-watermark rule: the timeline cursor binds
 //! `queries::session_watermark` at first page and answers HTTP 410
 //! (`cursor_expired`) on any mismatch — never a silent rebase.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::Router;
 use axum::body::Body;
@@ -42,8 +42,13 @@ const MAX_LIMIT: i64 = 1_000;
 #[derive(Clone)]
 pub struct AppState {
     pub hub: Arc<Hub>,
-    /// The published projection file; readers open their own connections.
+    /// Stable projection location for content-addressed assets and the
+    /// detached search sidecar.
     pub db: Arc<PathBuf>,
+    /// Canonical read target. A fresh daemon initially points this at its
+    /// named in-memory cold projection, then atomically switches to `db`
+    /// after the validated durable copy is installed.
+    pub projection: Arc<ProjectionReader>,
     /// Search is deliberately independent from canonical row reads. The
     /// shipped backend points at `db`; a detached backend can report its own
     /// readiness and answer without changing this transport contract.
@@ -64,6 +69,7 @@ impl AppState {
         let search = Arc::new(Fts5SidecarSearch::new(db.clone()));
         Self {
             hub,
+            projection: Arc::new(ProjectionReader::file(db.clone())),
             db: Arc::new(db),
             search,
             health: None,
@@ -77,6 +83,7 @@ impl AppState {
     pub fn with_search(hub: Arc<Hub>, db: PathBuf, search: Arc<dyn SearchBackend>) -> Self {
         Self {
             hub,
+            projection: Arc::new(ProjectionReader::file(db.clone())),
             db: Arc::new(db),
             search,
             health: None,
@@ -102,6 +109,92 @@ impl AppState {
         self.boost = Some(boost);
         self
     }
+
+    /// Override the canonical read target without changing where durable
+    /// assets and detached search live. Used only by fresh cold serve.
+    pub fn with_projection(mut self, projection: Arc<ProjectionReader>) -> Self {
+        self.projection = projection;
+        self
+    }
+}
+
+#[derive(Clone)]
+enum ProjectionTarget {
+    File(Arc<PathBuf>),
+    SharedMemory(Arc<SharedMemoryTarget>),
+}
+
+/// Keeps a named in-memory SQLite database alive for every reader that
+/// captured the old generation while publication switches future reads to
+/// disk. The keeper is never queried; its lifetime closes the handoff race.
+struct SharedMemoryTarget {
+    uri: Arc<str>,
+    _keeper: Mutex<Connection>,
+}
+
+/// Atomic canonical read router. It changes location, never schema: both
+/// targets expose the same canonical tables and queries.
+pub struct ProjectionReader {
+    target: RwLock<ProjectionTarget>,
+}
+
+impl ProjectionReader {
+    pub fn file(path: PathBuf) -> Self {
+        Self {
+            target: RwLock::new(ProjectionTarget::File(Arc::new(path))),
+        }
+    }
+
+    /// Attach to a named SQLite memory URI already owned by the cold writer.
+    /// A keeper connection makes the target safe to clone across an atomic
+    /// switch even if the writer is dropped immediately afterwards.
+    pub fn shared_memory(uri: &str) -> Result<Self, String> {
+        let keeper = open_shared_memory(uri)
+            .map_err(|error| format!("attaching canonical RAM reader: {error}"))?;
+        Ok(Self {
+            target: RwLock::new(ProjectionTarget::SharedMemory(Arc::new(
+                SharedMemoryTarget {
+                    uri: Arc::from(uri),
+                    _keeper: Mutex::new(keeper),
+                },
+            ))),
+        })
+    }
+
+    /// Future requests open the installed durable projection. Requests that
+    /// already captured the RAM target retain its keeper and finish against
+    /// the old, identical generation.
+    pub fn publish_file(&self, path: PathBuf) {
+        *self.target.write().expect("projection reader poisoned") =
+            ProjectionTarget::File(Arc::new(path));
+    }
+
+    pub(crate) fn is_published(&self) -> bool {
+        matches!(
+            &*self.target.read().expect("projection reader poisoned"),
+            ProjectionTarget::File(_)
+        )
+    }
+
+    fn open(&self) -> Result<Connection, Failure> {
+        let target = self
+            .target
+            .read()
+            .expect("projection reader poisoned")
+            .clone();
+        match target {
+            ProjectionTarget::File(path) => open_read(&path),
+            ProjectionTarget::SharedMemory(memory) => open_shared_memory(&memory.uri)
+                .map_err(|error| Failure::internal(format!("opening canonical RAM view: {error}"))),
+        }
+    }
+}
+
+fn open_shared_memory(uri: &str) -> rusqlite::Result<Connection> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI;
+    let conn = Connection::open_with_flags(uri, flags)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(conn)
 }
 
 pub fn router(state: AppState) -> Router {
@@ -238,13 +331,16 @@ pub(crate) fn open_read(db: &Path) -> Result<Connection, Failure> {
 }
 
 /// Run one read against a fresh read-only connection on the blocking pool.
-pub(crate) async fn with_read<T, F>(db: Arc<PathBuf>, read: F) -> Result<T, Failure>
+pub(crate) async fn with_read<T, F>(
+    projection: Arc<ProjectionReader>,
+    read: F,
+) -> Result<T, Failure>
 where
     T: Send + 'static,
     F: FnOnce(&Connection) -> Result<T, Failure> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
-        let conn = open_read(&db)?;
+        let conn = projection.open()?;
         read(&conn)
     })
     .await
@@ -334,7 +430,16 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         .health
         .as_ref()
         .map(|health| health.snapshot(&state.hub, now_ms()));
-    let projection = with_read(state.db.clone(), |conn| {
+    if !state.projection.is_published() {
+        return Json(StatusResponse {
+            protocol_version: PROTOCOL_VERSION,
+            schema_version: schema::SCHEMA_VERSION,
+            canonical_ready: false,
+            search: SearchState::building(),
+            daemon,
+        });
+    }
+    let projection = with_read(state.projection.clone(), |conn| {
         let schema_version = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| Failure::internal(format!("{error}")))?;
@@ -352,7 +457,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         Ok((schema_version, canonical_ready)) => StatusResponse {
             protocol_version: PROTOCOL_VERSION,
             schema_version,
-            canonical_ready,
+            canonical_ready: canonical_ready && state.projection.is_published(),
             search: if schema_version == schema::SCHEMA_VERSION {
                 search_state
             } else {
@@ -490,9 +595,20 @@ async fn timeline(
     Query(query): Query<TimelineQuery>,
 ) -> Result<Json<TimelinePage>, Failure> {
     let limit = clamp_limit(query.limit, DEFAULT_LIST_LIMIT);
-    let page = with_read(state.db.clone(), move |conn| {
-        if queries::session(conn, &id).map_err(store_err)?.is_none() {
+    let hide_pending = !state.projection.is_published();
+    let page = with_read(state.projection.clone(), move |conn| {
+        let Some(session) = queries::session(conn, &id).map_err(store_err)? else {
             return Err(Failure::not_found(format!("no session {id}")));
+        };
+        // A fresh runtime's source batches and RAM reconciliation use
+        // separate physical commits. Metadata remains immediately public,
+        // but its payload is admitted only when the final readiness commit
+        // changes Pending to Streaming/Indexed.
+        if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+            return Ok(TimelinePage {
+                entries: Vec::new(),
+                cursor: None,
+            });
         }
         let watermark = queries::session_watermark(conn, &id).map_err(store_err)?;
         let before = match &query.cursor {
@@ -547,6 +663,12 @@ async fn search(
         SearchError::InvalidQuery(message) => Failure::bad_request(message),
         SearchError::Backend(_) => unreachable!("validation cannot produce a backend error"),
     })?;
+    if !state.projection.is_published() {
+        return Ok(Json(SearchResponse {
+            state: SearchState::building(),
+            hits: Vec::new(),
+        }));
+    }
     let backend = state.search.clone();
     let output = tokio::task::spawn_blocking(move || backend.search(query))
         .await
@@ -574,7 +696,7 @@ async fn heatmap(
     UrlPath(id): UrlPath<String>,
     Query(query): Query<HeatmapQuery>,
 ) -> Result<Json<HeatmapResponse>, Failure> {
-    let response = with_read(state.db.clone(), move |conn| {
+    let response = with_read(state.projection.clone(), move |conn| {
         let days = queries::heatmap_days_in_timezone(
             conn,
             &id,
@@ -596,7 +718,7 @@ async fn usage(
     UrlPath(id): UrlPath<String>,
     Query(query): Query<HeatmapQuery>,
 ) -> Result<Json<UsageResponse>, Failure> {
-    let response = with_read(state.db.clone(), move |conn| {
+    let response = with_read(state.projection.clone(), move |conn| {
         let since_ms = query.since_ms.unwrap_or(0);
         let offset_minutes = query.offset_minutes.unwrap_or(0);
         let models = queries::model_days_in_timezone(conn, &id, since_ms, offset_minutes)
@@ -613,7 +735,7 @@ async fn contribution(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<ContributionResponse>, Failure> {
-    let response = with_read(state.db.clone(), move |conn| {
+    let response = with_read(state.projection.clone(), move |conn| {
         let rows = queries::contribution(conn, &id).map_err(store_err)?;
         Ok(ContributionResponse { rows })
     })

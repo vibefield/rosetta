@@ -55,6 +55,7 @@ pub(crate) fn stream_snapshot_sources(
     }
 
     for (db_relative, group) in by_db {
+        opts.check_cancelled()?;
         report.files += group.len();
         let mark = |file: &SessionFile,
                     complete: bool,
@@ -71,6 +72,7 @@ pub(crate) fn stream_snapshot_sources(
             report.files_missing += group.len() as u64 as usize;
             if group.iter().all(|file| file.source_missing) {
                 for file in &group {
+                    opts.check_cancelled()?;
                     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
                     let complete = apply_snapshot_records(
                         adapter,
@@ -80,6 +82,7 @@ pub(crate) fn stream_snapshot_sources(
                         &cursor,
                         &[],
                         "missing",
+                        opts,
                         ledger,
                         instrument,
                         report,
@@ -99,6 +102,7 @@ pub(crate) fn stream_snapshot_sources(
         // hashes the adapter's declared rows.
         let mut cursors = Vec::with_capacity(group.len());
         for file in &group {
+            opts.check_cancelled()?;
             cursors.push(cursor_row(adapter, store, runtime, file, instrument)?);
         }
 
@@ -156,6 +160,7 @@ pub(crate) fn stream_snapshot_sources(
         // One stable copy per database per pass, shared by all its sessions.
         let mut retries = 0_u32;
         let snapshot = loop {
+            opts.check_cancelled()?;
             match instrument.time(Metric::ReadNanos, || rosetta_capture::snapshot_db(&db_path))? {
                 rosetta_capture::SnapshotOutcome::Ready(snapshot) => break Some(snapshot),
                 rosetta_capture::SnapshotOutcome::Missing => break None,
@@ -177,8 +182,10 @@ pub(crate) fn stream_snapshot_sources(
         let stamp = snapshot.stamp().clone();
 
         for (file, cursor) in group.iter().zip(cursors) {
+            opts.check_cancelled()?;
             let mut records = Vec::new();
             for query in &plan.record_queries {
+                opts.check_cancelled()?;
                 let name = serde_json::to_string(&query.name).expect("string encodes");
                 for row in instrument.time(Metric::ReadNanos, || {
                     snapshot.query_rows(&query.sql, Some(&file.native_session_id))
@@ -194,6 +201,7 @@ pub(crate) fn stream_snapshot_sources(
                 &cursor,
                 &records,
                 stamp.as_str(),
+                opts,
                 ledger,
                 instrument,
                 report,
@@ -216,12 +224,14 @@ pub(crate) fn apply_snapshot_records(
     cursor: &queries::CursorState,
     records: &[Vec<u8>],
     stamp: &str,
+    opts: &IngestOptions,
     ledger: &mut Option<&mut rosetta_capture::Ledger>,
     instrument: &Instrument,
     report: &mut StreamReport,
 ) -> Result<bool, PipelineError> {
     let mut hasher = blake3::Hasher::new();
     for record in records {
+        opts.check_cancelled()?;
         hasher.update(record);
         hasher.update(b"\n");
         instrument.add(Metric::BytesRead, record.len() as u64 + 1);
@@ -318,6 +328,7 @@ pub(crate) fn apply_snapshot_records(
     let mut ops: Vec<IngestOp> = Vec::new();
     let mut conflicted = false;
     for (index, record) in records.iter().enumerate() {
+        opts.check_cancelled()?;
         report.records += 1;
         report.payload_bytes += record.len() as u64;
         instrument.add(Metric::RecordsFramed, 1);

@@ -294,6 +294,33 @@ impl Hub {
         state.rings.replay_after(session_id, stamp, now)
     }
 
+    /// A cold runtime became atomically readable without producing one hot
+    /// mutation per historical row. Invalidate only subscribers watching its
+    /// sessions so they replace their earlier (usually empty) RAM snapshot.
+    /// Unwatched sessions cost nothing and will read the complete timeline on
+    /// first open.
+    pub fn invalidate_sessions<'a>(
+        &self,
+        session_ids: impl IntoIterator<Item = &'a str>,
+        now: Ms,
+    ) -> u64 {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        state
+            .subs
+            .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
+        let mut resyncs = 0_u64;
+        for session_id in session_ids {
+            state.rings.invalidate(session_id, now);
+            for entry in state.subs.values() {
+                if matches!(&entry.topic, Topic::Session(topic) if topic == session_id) {
+                    resyncs += u64::from(raise_barrier(&entry.shared));
+                }
+            }
+        }
+        state.totals.resyncs += resyncs;
+        resyncs
+    }
+
     /// Mirror reads — list/browse never touches the DB.
     pub fn sessions(&self) -> Vec<SessionRow> {
         let state = self.state.lock().expect("hub state poisoned");

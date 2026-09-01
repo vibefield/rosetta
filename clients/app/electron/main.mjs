@@ -131,8 +131,9 @@ function startDaemon(bin, dbPath) {
   });
 }
 
-/** SIGINT lands between files and committed progress survives for resume, so
- * a graceful stop is cheap; the hard kill is only for a wedged process. */
+/** SIGINT cooperatively cancels a fresh private RAM build (or stops an
+ * existing resumable writer at a bounded seam). Give Rust time to join its
+ * workers; the hard kill is only for a wedged process. */
 function stopDaemon() {
   if (daemonProcess === null) return;
   const proc = daemonProcess;
@@ -148,7 +149,7 @@ function stopDaemon() {
     } catch {
       /* already gone */
     }
-  }, 3000);
+  }, 10000);
   proc.on("exit", () => clearTimeout(hardKill));
 }
 

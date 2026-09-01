@@ -19,7 +19,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rosetta_core::rows::StreamState;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
 pub use hot::{
@@ -137,6 +137,10 @@ impl From<std::io::Error> for StoreError {
 /// exclusively — reads for serving go through their own connections.
 pub struct Store {
     conn: Connection,
+    /// Whether the connection is a process-local SQLite database. Named
+    /// shared-memory projections have a URI in `Connection::path()`, so the
+    /// path alone cannot distinguish them from durable files at publish.
+    transient_memory: bool,
     assets: assets::AssetStore,
     mode: StoreMode,
     /// Relational lifecycle fragments for an unpublished cold projection.
@@ -199,6 +203,7 @@ impl Store {
         }
         Ok(Self {
             conn,
+            transient_memory: false,
             assets: assets::AssetStore::for_projection(path),
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
@@ -220,6 +225,7 @@ impl Store {
         )?;
         Ok(Self {
             conn,
+            transient_memory: true,
             assets: assets::AssetStore::in_memory(),
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
@@ -247,6 +253,7 @@ impl Store {
         }
         Ok(Self {
             conn,
+            transient_memory: false,
             assets: assets::AssetStore::for_projection(path),
             mode: if state.canonical_ready {
                 StoreMode::Live
@@ -270,7 +277,11 @@ impl Store {
     /// temporarily inconsistent.
     pub fn open_for_rebuild(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path)?;
-        Self::from_empty_connection_for_rebuild(conn, assets::AssetStore::for_projection(path))
+        Self::from_empty_connection_for_rebuild(
+            conn,
+            assets::AssetStore::for_projection(path),
+            false,
+        )
     }
 
     /// Open a private SQLite sibling whose projection members belong to the final
@@ -284,6 +295,7 @@ impl Store {
         Self::from_empty_connection_for_rebuild(
             conn,
             assets::AssetStore::for_projection(projection),
+            false,
         )
     }
 
@@ -293,6 +305,7 @@ impl Store {
         Self::from_empty_connection_for_rebuild(
             Connection::open_in_memory()?,
             assets::AssetStore::in_memory(),
+            true,
         )
     }
 
@@ -303,6 +316,27 @@ impl Store {
         Self::from_empty_connection_for_rebuild(
             Connection::open_in_memory()?,
             assets::AssetStore::for_projection(projection),
+            true,
+        )
+    }
+
+    /// A private canonical projection held in named process-local memory.
+    /// Other daemon connections may attach to `uri` and read committed rows
+    /// while the sole writer continues the cold build. The URI must use
+    /// SQLite's `mode=memory&cache=shared`; it is never persisted in the
+    /// canonical model or used as a recovery source.
+    pub fn open_shared_in_memory_for_rebuild_with_assets(
+        uri: &str,
+        projection: &Path,
+    ) -> Result<Self, StoreError> {
+        // `cache=shared` in the URI is the scope switch. Match SQLite's
+        // documented/rusqlite-tested shared-memory flags exactly.
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI;
+        let conn = Connection::open_with_flags(uri, flags)?;
+        Self::from_empty_connection_for_rebuild(
+            conn,
+            assets::AssetStore::for_projection(projection),
+            true,
         )
     }
 
@@ -324,9 +358,29 @@ impl Store {
             })
     }
 
+    /// Clone the canonical metadata batches captured so far without closing
+    /// the planner. Fresh serve publishes these rows to its RAM projection
+    /// immediately, then lets the same planner continue streaming. Source
+    /// control batches and payload batches stay private until the runtime is
+    /// closed and reconciled.
+    pub fn planned_metadata_batches(&self) -> Result<Vec<Batch>, StoreError> {
+        let planned = self
+            .planned_batches
+            .as_ref()
+            .ok_or_else(|| StoreError::BulkLoadState {
+                message: "store is not a cold-capture planner".to_string(),
+            })?;
+        Ok(planned
+            .iter()
+            .filter(|batch| batch.source.is_none() && !batch.ops.is_empty())
+            .cloned()
+            .collect())
+    }
+
     fn from_empty_connection_for_rebuild(
         conn: Connection,
         assets: assets::AssetStore,
+        transient_memory: bool,
     ) -> Result<Self, StoreError> {
         let objects: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -342,6 +396,7 @@ impl Store {
         bulk::prepare(&conn)?;
         Ok(Self {
             conn,
+            transient_memory,
             assets,
             mode: StoreMode::Bulk,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
@@ -867,5 +922,11 @@ impl Store {
     /// own read connections against the same file).
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// True for anonymous and named process-local projections. Publication
+    /// must back these pages up to the staged durable file before install.
+    pub fn is_transient_memory(&self) -> bool {
+        self.transient_memory
     }
 }

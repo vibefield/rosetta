@@ -9,7 +9,6 @@
 //! stream loops are generic over [`FrameSink`] so tests drive them without
 //! sockets — the axum upgrade handlers are thin glue.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +22,7 @@ use rosetta_protocol::{PROTOCOL_VERSION, ServerFrame, Stamp};
 use rosetta_store::hot::Replay;
 use rosetta_store::queries;
 
-use crate::http::{AppState, Failure, origin_allowed, with_read};
+use crate::http::{AppState, Failure, ProjectionReader, origin_allowed, with_read};
 use crate::hub::{Hub, HubItem, Subscription};
 
 /// Messages in the initial timeline snapshot; older history pages via REST.
@@ -170,13 +169,23 @@ pub(crate) async fn meta(State(state): State<AppState>, upgrade: WebSocketUpgrad
 }
 
 async fn timeline_snapshot(
-    db: Arc<PathBuf>,
+    projection: Arc<ProjectionReader>,
     session_id: String,
     stamp: Stamp,
 ) -> Result<ServerFrame, Failure> {
-    with_read(db, move |conn| {
-        let entries = queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
+    let hide_pending = !projection.is_published();
+    with_read(projection, move |conn| {
+        let session = queries::session(conn, &session_id)
             .map_err(|error| Failure::internal(format!("{error}")))?;
+        let entries = if hide_pending
+            && session
+                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending)
+        {
+            Vec::new()
+        } else {
+            queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
+                .map_err(|error| Failure::internal(format!("{error}")))?
+        };
         Ok(ServerFrame::TimelineSnapshot { stamp, entries })
     })
     .await
@@ -222,7 +231,7 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
         replayed = true;
     }
     if !replayed {
-        match timeline_snapshot(state.db.clone(), session_id.clone(), stamp).await {
+        match timeline_snapshot(state.projection.clone(), session_id.clone(), stamp).await {
             Ok(frame) => {
                 if sink.send(frame).await.is_err() {
                     return;
@@ -265,7 +274,7 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
                 let Some(stamp) = state.hub.resync(&sub, now_ms()) else {
                     return;
                 };
-                match timeline_snapshot(state.db.clone(), session_id.clone(), stamp).await {
+                match timeline_snapshot(state.projection.clone(), session_id.clone(), stamp).await {
                     Ok(frame) => {
                         if sink.send(frame).await.is_err() {
                             return;

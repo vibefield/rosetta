@@ -4,6 +4,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
@@ -57,6 +59,42 @@ fn harness(adapter: &dyn AgentAdapter, agent: Agent, sessions: u64, lines: u64) 
         opts,
         instrument,
     }
+}
+
+#[test]
+fn cancelled_cold_stream_stops_before_publishing_payload_rows() {
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = harness(adapter, Agent::ClaudeCode, 2, 50);
+    let (_, files) = meta_ingest(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+    )
+    .unwrap();
+    let opts = IngestOptions {
+        cancel: Some(Arc::new(AtomicBool::new(true))),
+        ..h.opts.clone()
+    };
+    let error = stream_backfill(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &opts,
+        &h.instrument,
+    )
+    .unwrap_err();
+    assert!(matches!(error, rosetta_pipeline::PipelineError::Cancelled));
+    let messages: i64 = h
+        .store
+        .conn()
+        .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(messages, 0);
 }
 
 #[test]

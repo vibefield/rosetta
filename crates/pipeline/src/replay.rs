@@ -488,6 +488,10 @@ pub struct PreparedRuntime {
     meta_ops: Vec<Vec<IngestOp>>,
     files: Vec<PreparedFile>,
     session_health: BTreeMap<String, bool>,
+    /// Fresh serve already exposed the identical metadata batches through
+    /// its canonical RAM view. Keep them for session identity/stub planning,
+    /// but do not write them a second time with the closed source payloads.
+    metadata_preapplied: bool,
 }
 
 impl PreparedRuntime {
@@ -495,6 +499,10 @@ impl PreparedRuntime {
     /// writer. The payload itself stays opaque outside the pipeline crate.
     pub fn report(&self) -> &RebuildReport {
         &self.report
+    }
+
+    pub fn mark_metadata_preapplied(&mut self) {
+        self.metadata_preapplied = true;
     }
 }
 
@@ -1157,6 +1165,7 @@ pub fn prepare_runtime(
         meta_ops,
         files: prepared_files,
         session_health,
+        metadata_preapplied: false,
     })
 }
 
@@ -1347,6 +1356,7 @@ pub fn prepare_captured_runtime(
         meta_ops,
         files: prepared_files,
         session_health,
+        metadata_preapplied: false,
     })
 }
 
@@ -1380,7 +1390,9 @@ pub fn apply_prepared_runtime(
                 sessions_seen.insert(row.id.clone());
             }
         }
-        setup_ops.extend(ops);
+        if !prepared.metadata_preapplied {
+            setup_ops.extend(ops);
+        }
     }
 
     for file in &prepared.files {
@@ -1491,6 +1503,17 @@ pub fn apply_prepared_runtime(
             )
         })
         .collect::<Vec<_>>();
+
+    // Fresh serve has already exposed these sessions through its canonical
+    // RAM metadata view. Source application above may commit in more than
+    // one physical transaction, so keep every session Pending until the
+    // runtime's cross-file relations are fully folded. The server treats
+    // Pending as an admission barrier and the state flip below is the first
+    // point at which its timeline can become public.
+    if prepared.metadata_preapplied {
+        let reconciled = instrument.flush_bulk_reconciliation(store)?;
+        merge_stats(&mut prepared.report.stats, &reconciled);
+    }
     store.set_session_stream_states(&stream_states)?;
     Ok(prepared.report)
 }

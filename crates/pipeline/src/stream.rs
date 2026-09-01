@@ -140,6 +140,7 @@ pub fn stream_backfill_into(
     // Caller order is the schedule: meta hands rosters newest-session-first,
     // and the daemon's cold scheduler passes exactly one file per call.
     for file in tail_files.iter().copied() {
+        opts.check_cancelled()?;
         report.files += 1;
         let restarts_before = report.generations_restarted;
         // An audited file VERIFIES its committed content chain by re-reading
@@ -187,6 +188,7 @@ pub fn stream_backfill_into(
     // other files re-derives those merges; deterministic ids make it cheap
     // noise for everything already present.
     for file in &tail_files {
+        opts.check_cancelled()?;
         if !restarted_sessions.contains(&file.session_id)
             || restarted_files.contains(&file.relative_path)
         {
@@ -218,6 +220,7 @@ pub fn stream_backfill_into(
         }
     }
 
+    opts.check_cancelled()?;
     crate::document::stream_document_sources(
         adapter,
         runtime,
@@ -232,6 +235,7 @@ pub fn stream_backfill_into(
         &mut session_health,
     )?;
 
+    opts.check_cancelled()?;
     crate::snapshot::stream_snapshot_sources(
         adapter,
         runtime,
@@ -548,6 +552,7 @@ fn ingest_file(
         }
     }
     loop {
+        opts.check_cancelled()?;
         // Chosen per iteration: a mid-pass rewrite that disables the budget
         // must also stop paying its batch shape for the replacement replay.
         let read_tailer = match (&budget, &budget_tailer) {
@@ -607,6 +612,7 @@ fn ingest_file(
 
         let mut ops: Vec<IngestOp> = Vec::with_capacity(batch.items.len());
         for item in &batch.items {
+            opts.check_cancelled()?;
             match item {
                 TailItem::Record(record) => {
                     report.records += 1;

@@ -13,6 +13,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rosetta_adapter_antigravity::AntigravityAdapter;
@@ -620,14 +621,16 @@ pub(crate) fn record_backfill_failures(
     }
 }
 
-struct CapturedColdRuntime {
-    adapter: &'static dyn AgentAdapter,
-    runtime: rosetta_core::rows::RuntimeRow,
-    discovery_truncated: bool,
-    meta: MetaReport,
-    stream: StreamReport,
-    prepared: PreparedRuntime,
-    ledger: Option<Ledger>,
+pub(crate) struct CapturedColdRuntime {
+    pub(crate) adapter: &'static dyn AgentAdapter,
+    pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) root: PathBuf,
+    pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
+    pub(crate) discovery_truncated: bool,
+    pub(crate) meta: MetaReport,
+    pub(crate) stream: StreamReport,
+    pub(crate) prepared: PreparedRuntime,
+    pub(crate) ledger: Option<Ledger>,
     meta_profile: InstrumentSnapshot,
     stream_profile: InstrumentSnapshot,
     profile: InstrumentSnapshot,
@@ -636,21 +639,38 @@ struct CapturedColdRuntime {
     wall_ms: f64,
 }
 
-struct ColdCaptureRequest {
-    adapter: &'static dyn AgentAdapter,
-    runtime: rosetta_core::rows::RuntimeRow,
-    root: PathBuf,
-    inventory: Vec<rosetta_capture::ScannedFile>,
-    discovery_truncated: bool,
-    ledger_root: PathBuf,
-    opts: IngestOptions,
-    write_raw_ledger: bool,
-    async_raw_ledger: bool,
+pub(crate) struct ColdCaptureRequest {
+    pub(crate) adapter: &'static dyn AgentAdapter,
+    pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) root: PathBuf,
+    pub(crate) inventory: Vec<rosetta_capture::ScannedFile>,
+    pub(crate) discovery_truncated: bool,
+    pub(crate) ledger_root: PathBuf,
+    pub(crate) opts: IngestOptions,
+    pub(crate) write_raw_ledger: bool,
+    pub(crate) async_raw_ledger: bool,
+    pub(crate) instrument: Arc<Instrument>,
 }
 
-fn capture_parallel_cold_runtime(
+pub(crate) struct PlannedColdRuntime {
+    pub(crate) adapter: &'static dyn AgentAdapter,
+    pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) root: PathBuf,
+    pub(crate) files: Vec<rosetta_pipeline::SessionFile>,
+    pub(crate) discovery_truncated: bool,
+    pub(crate) meta: MetaReport,
+    pub(crate) planner: Store,
+    pub(crate) ledger: Option<Ledger>,
+    pub(crate) instrument: Arc<Instrument>,
+    opts: IngestOptions,
+    meta_profile: InstrumentSnapshot,
+    meta_wall_ms: f64,
+    capture_started: Instant,
+}
+
+pub(crate) fn plan_parallel_cold_runtime(
     request: ColdCaptureRequest,
-) -> Result<CapturedColdRuntime, String> {
+) -> Result<PlannedColdRuntime, String> {
     let ColdCaptureRequest {
         adapter,
         mut runtime,
@@ -661,9 +681,9 @@ fn capture_parallel_cold_runtime(
         opts,
         write_raw_ledger,
         async_raw_ledger,
+        instrument,
     } = request;
     runtime.enabled = true;
-    let instrument = Instrument::new();
     let capture_started = Instant::now();
     let mut planner = Store::open_in_memory_for_cold_planning()
         .map_err(|error| format!("opening {} cold planner: {error}", adapter.kind()))?;
@@ -696,6 +716,42 @@ fn capture_parallel_cold_runtime(
     let meta_wall_ms = meta_started.elapsed().as_secs_f64() * 1_000.0;
     let meta_profile = instrument.snapshot().delta_since(&meta_before);
 
+    Ok(PlannedColdRuntime {
+        adapter,
+        runtime,
+        root,
+        files,
+        discovery_truncated,
+        meta,
+        planner,
+        ledger,
+        instrument,
+        opts,
+        meta_profile,
+        meta_wall_ms,
+        capture_started,
+    })
+}
+
+pub(crate) fn finish_parallel_cold_runtime(
+    planned: PlannedColdRuntime,
+) -> Result<CapturedColdRuntime, String> {
+    let PlannedColdRuntime {
+        adapter,
+        runtime,
+        root,
+        files,
+        discovery_truncated,
+        meta,
+        mut planner,
+        mut ledger,
+        instrument,
+        opts,
+        meta_profile,
+        meta_wall_ms,
+        capture_started,
+    } = planned;
+
     let stream_before = instrument.snapshot();
     let stream_started = Instant::now();
     let stream = stream_backfill_into(
@@ -717,6 +773,8 @@ fn capture_parallel_cold_runtime(
     Ok(CapturedColdRuntime {
         adapter,
         runtime,
+        root,
+        roster: files,
         discovery_truncated,
         meta,
         stream,
@@ -731,13 +789,27 @@ fn capture_parallel_cold_runtime(
     })
 }
 
-fn apply_captured_cold_runtime(
+fn capture_parallel_cold_runtime(
+    request: ColdCaptureRequest,
+) -> Result<CapturedColdRuntime, String> {
+    finish_parallel_cold_runtime(plan_parallel_cold_runtime(request)?)
+}
+
+pub(crate) struct AppliedColdRuntime {
+    pub(crate) adapter: &'static dyn AgentAdapter,
+    pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) root: PathBuf,
+    pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
+    pub(crate) ledger: Option<Ledger>,
+}
+
+pub(crate) fn apply_captured_cold_runtime(
     flags: &Flags,
     captured: CapturedColdRuntime,
     store: &mut Store,
     instrument: &Instrument,
     failures: &mut Vec<String>,
-) -> Result<Option<Ledger>, String> {
+) -> Result<AppliedColdRuntime, String> {
     instrument.merge_snapshot(&captured.profile);
     if flags.json && flags.profile {
         bench::emit(&serde_json::json!({
@@ -828,7 +900,13 @@ fn apply_captured_cold_runtime(
     instrument
         .flush_bulk_reconciliation(store)
         .map_err(|error| format!("reconciling {}: {error}", captured.adapter.kind()))?;
-    Ok(captured.ledger)
+    Ok(AppliedColdRuntime {
+        adapter: captured.adapter,
+        runtime: captured.runtime,
+        root: captured.root,
+        roster: captured.roster,
+        ledger: captured.ledger,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -925,6 +1003,7 @@ fn ingest_parallel_cold(
                         opts,
                         write_raw_ledger,
                         async_raw_ledger,
+                        instrument: Arc::new(Instrument::new()),
                     });
                     sender
                         .send(result)
@@ -942,7 +1021,9 @@ fn ingest_parallel_cold(
                     &mut store,
                     instrument,
                     &mut failures,
-                )? {
+                )?
+                .ledger
+                {
                     ledgers.push(ledger);
                 }
             }
@@ -969,6 +1050,7 @@ fn ingest_parallel_cold(
                         opts,
                         write_raw_ledger,
                         async_raw_ledger,
+                        instrument: Arc::new(Instrument::new()),
                     })
                 }));
             }
@@ -983,7 +1065,9 @@ fn ingest_parallel_cold(
                     &mut store,
                     instrument,
                     &mut failures,
-                )? {
+                )?
+                .ledger
+                {
                     ledgers.push(ledger);
                 }
             }
@@ -1708,7 +1792,7 @@ fn publish_private_projection(
         .map_err(|error| format!("finalizing private projection: {error}"))?;
     after_finalize(&store)?;
     instrument.time(Metric::PublishNanos, || {
-        if store.conn().path().is_none_or(str::is_empty) {
+        if store.is_transient_memory() {
             store
                 .conn()
                 .backup(rusqlite::DatabaseName::Main, &*temp, None)

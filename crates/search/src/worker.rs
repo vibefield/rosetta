@@ -416,6 +416,18 @@ pub struct Fts5SearchWorker {
 
 impl Fts5SearchWorker {
     pub fn start(search: Fts5SidecarSearch) -> Self {
+        Self::start_inner(search, false)
+    }
+
+    /// Construct the detached worker without touching the canonical path
+    /// until [`Fts5SearchWorker::wake`]. Fresh serve binds before its durable
+    /// projection exists; probing that path every 200 ms would turn an
+    /// expected cold state into a misleading search failure.
+    pub fn start_paused(search: Fts5SidecarSearch) -> Self {
+        Self::start_inner(search, true)
+    }
+
+    fn start_inner(search: Fts5SidecarSearch, paused: bool) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (wake, commands) = std::sync::mpsc::sync_channel(1);
         let (acknowledgements_tx, acknowledgements) = std::sync::mpsc::sync_channel(8);
@@ -424,6 +436,9 @@ impl Fts5SearchWorker {
             .name("rosetta-search".into())
             .spawn(move || {
                 let mut last_ack = None;
+                if paused {
+                    let _ = commands.recv();
+                }
                 while !thread_stop.load(Ordering::SeqCst) {
                     match synchronize_fts5_once(&search, &thread_stop) {
                         Ok(ack) => {

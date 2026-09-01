@@ -1,8 +1,7 @@
-// The first run's honest room: the daemon is answering (status carries the
-// meters) but the projection is still a private file, so there are no lists
-// to veil yet. One centered panel, per-runtime meters, no fiction. The
-// moment the projection publishes, meta arrives over the WS feed and the
-// real room replaces this whole state.
+// The first run's honest room before the first canonical metadata batch has
+// reached the daemon's RAM read view. As soon as one project exists the real
+// room replaces this shell and fills progressively, while status continues
+// to carry the per-runtime meters until durable publication.
 import type { IngestProgress, RuntimeBackfill } from "@rosetta/protocol";
 
 function formatBytes(bytes: number): string {

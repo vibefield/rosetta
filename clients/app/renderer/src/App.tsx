@@ -244,9 +244,9 @@ export default function App() {
   const disconnected = meta === null;
   // The roll call: discovery is on the board and nothing has been read.
   const awaitingConsent = ingest?.phase === "awaiting_consent";
-  // The first run: the daemon answers (its meters are moving) but the
-  // projection is still a private file, so there are no lists yet. Only
-  // the ready may claim emptiness — this is the honest room instead.
+  // The first run before its first metadata batch: the daemon answers and
+  // meters move, but there is not yet a canonical project to render. Once
+  // RAM metadata arrives the ordinary room takes over progressively.
   const coldStarting =
     !disconnected && projectRows.length === 0 && ingestActive && ingest !== null;
 

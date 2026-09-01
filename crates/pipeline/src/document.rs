@@ -46,6 +46,7 @@ pub(crate) fn stream_document_sources(
     }
 
     for (relative_path, group) in by_document {
+        opts.check_cancelled()?;
         report.files += group.len();
         let mark = |file: &SessionFile,
                     complete: bool,
@@ -62,6 +63,7 @@ pub(crate) fn stream_document_sources(
             adapter.document_size_limit(&group[0].stream_id, opts.tail.max_record_bytes);
         let mut retries = 0_u32;
         let snapshot = loop {
+            opts.check_cancelled()?;
             match instrument.time(Metric::ReadNanos, || {
                 rosetta_capture::snapshot_document(&path, document_limit)
             })? {
@@ -86,6 +88,7 @@ pub(crate) fn stream_document_sources(
         let Some(snapshot) = snapshot else {
             if group.iter().all(|file| file.source_missing) {
                 for file in &group {
+                    opts.check_cancelled()?;
                     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
                     let complete = apply_snapshot_records(
                         adapter,
@@ -95,6 +98,7 @@ pub(crate) fn stream_document_sources(
                         &cursor,
                         &[],
                         "missing",
+                        opts,
                         ledger,
                         instrument,
                         report,
@@ -110,6 +114,7 @@ pub(crate) fn stream_document_sources(
         };
 
         for file in group {
+            opts.check_cancelled()?;
             let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
             let records = adapter.document_records(
                 &file.stream_id,
@@ -124,6 +129,7 @@ pub(crate) fn stream_document_sources(
                 &cursor,
                 &records,
                 snapshot.stamp(),
+                opts,
                 ledger,
                 instrument,
                 report,
