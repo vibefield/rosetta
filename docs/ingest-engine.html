@@ -200,7 +200,7 @@
       metadata from a canonical named shared-memory generation, captures and reconciles runtimes in
       parallel RAM, admits only closed runtimes through one writer, validates globally, fsyncs and
       promotes the staged ledger, installs one disk projection, and atomically retargets readers.
-      Lists and bounded timelines are progressive; global aggregates return protocol-v6
+      Lists and bounded timelines are progressive; global aggregates return protocol-v7
       <code>not_ready</code> and search remains Building until disk publication. The app builds and
       launches the exact release daemon with plain <code>serve</code>. A named staged-ledger manifest
       retains enrollment/root binding across exits; the next launch replays sealed evidence into RAM,

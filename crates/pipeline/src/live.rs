@@ -418,19 +418,27 @@ impl<'a> LiveRunner<'a> {
                 .find(|file| file.relative_path == walked.relative_path)
             {
                 Some(known) => {
-                    let ingested_len = rosetta_store::queries::cursor_state(
+                    let checkpoint = rosetta_store::queries::cursor_state(
                         store.conn(),
                         &self.runtime.id,
                         &walked.relative_path,
                     )?
                     .and_then(|cursor| {
                         crate::checkpoint::PipeCheckpoint::decode(&cursor.checkpoint)
-                    })
-                    .and_then(|checkpoint| checkpoint.tail_checkpoint())
-                    .map(|tail| tail.observed_len);
+                    });
+                    // An adapter semantic change must replay quiet files too.
+                    // Otherwise an installed projection would retain the old
+                    // interpretation until this source happened to grow or
+                    // the rotating audit eventually reached it.
+                    let normalizer_stale = checkpoint.as_ref().is_some_and(|checkpoint| {
+                        checkpoint.normalizer_version != self.adapter.normalizer_version()
+                    });
+                    let ingested_len = checkpoint
+                        .and_then(|checkpoint| checkpoint.tail_checkpoint())
+                        .map(|tail| tail.observed_len);
                     let behind_cursor = ingested_len != Some(walked.size);
                     let touched = known.modified_ms != walked.modified_ms;
-                    if behind_cursor || touched {
+                    if normalizer_stale || behind_cursor || touched {
                         known.size = walked.size;
                         known.modified_ms = walked.modified_ms;
                         changed.insert(known.relative_path.clone());

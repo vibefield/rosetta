@@ -51,7 +51,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 6,
+      "protocol_version": 7,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -296,6 +296,47 @@
     },
     {
       "at": 3700000,
+      "block_index": null,
+      "body": {
+        "notice": {
+          "output": {
+            "text": "Set model to Fable 5.1",
+            "type": "inline"
+          },
+          "type": "command_output"
+        },
+        "type": "notice"
+      },
+      "effort": null,
+      "group": {
+        "derivation": "native",
+        "id": "command-cycle",
+        "kind": "system_cycle"
+      },
+      "model": null,
+      "native_id": "command-output-1",
+      "ordinal": 8,
+      "parent_native_id": "command-1",
+      "parent_tool_native_id": null,
+      "provenance": {
+        "agent_version": "2.1.240",
+        "src_cursor": 4,
+        "src_offset": 2048
+      },
+      "response": null,
+      "session_id": "s1",
+      "timeline_id": "t-command-output",
+      "type": "message",
+      "usage": {
+        "cache_read": null,
+        "cache_write": null,
+        "input": null,
+        "output": null,
+        "thinking": null
+      }
+    },
+    {
+      "at": 3700000,
       "session_id": "s1",
       "timeline_id": "t1",
       "tool": {
@@ -409,7 +450,7 @@
       }
     ]
   },
-  "protocol_version": 6,
+  "protocol_version": 7,
   "runtimes": {
     "runtimes": [
       {
@@ -561,7 +602,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 6,
+    "protocol_version": 7,
     "schema_version": 9,
     "search": {
       "projection_epoch": "epoch-1",

@@ -632,6 +632,9 @@ pub enum Notice {
         to_session_id: Option<String>,
         to_agent: Option<String>,
     },
+    CommandOutput {
+        output: CanonicalText,
+    },
     RuntimeError {
         kind: RuntimeErrorKind,
         summary: String,
@@ -665,6 +668,7 @@ impl Notice {
                 bounded_option("handoff session id", to_session_id.as_deref(), ID_MAX_BYTES)?;
                 bounded_option("handoff agent", to_agent.as_deref(), ID_MAX_BYTES)?;
             }
+            Self::CommandOutput { output } => output.validate()?,
             Self::RuntimeError { summary, .. } => {
                 required_bounded("runtime error summary", summary, FAILURE_SUMMARY_MAX_BYTES)?;
             }
@@ -3538,6 +3542,9 @@ impl TimelineEntry {
             TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
                 lanes.push_text(SearchLane::Prose, text);
             }
+            TimelineBody::Notice {
+                notice: Notice::CommandOutput { output },
+            } => lanes.push_text(SearchLane::Prose, output),
             TimelineBody::Notice { .. } => {}
             TimelineBody::ToolUse { tool } => {
                 let tool_lanes = tool.search_lanes();
@@ -4498,6 +4505,21 @@ mod tests {
         assert_eq!(lanes.target, "/repo");
         assert_eq!(lanes.tool, "shell");
         assert!(lanes.change.is_empty());
+    }
+
+    #[test]
+    fn command_output_is_searchable_as_prose() {
+        let row = base(TimelineBody::Notice {
+            notice: Notice::CommandOutput {
+                output: CanonicalText::inline("Set model to Fable 5.1").unwrap(),
+            },
+        });
+        let lanes = row.search_lanes();
+        assert_eq!(lanes.prose, "Set model to Fable 5.1");
+        assert!(lanes.target.is_empty());
+        assert!(lanes.intent.is_empty());
+        assert!(lanes.change.is_empty());
+        assert!(lanes.tool.is_empty());
     }
 
     #[test]

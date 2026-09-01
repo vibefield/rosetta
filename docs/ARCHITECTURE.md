@@ -65,7 +65,7 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 >
 > The progressive read contract is intentionally asymmetric. Project and top-level-session lists,
 > bounded session lookups, and timelines may read the canonical shared-memory generation. Global
-> heatmap, usage, and contribution endpoints return HTTP 503 with protocol-v6 `not_ready` until the
+> heatmap, usage, and contribution endpoints return HTTP 503 with protocol-v7 `not_ready` until the
 > reader switches to the published file; search stays explicitly Building. This is a correctness
 > and scheduling boundary, not a loading effect: an earlier renderer launched two aggregate queries
 > for each of 135 projects every five seconds, and those shared-cache readers starved the sole cold
@@ -109,7 +109,7 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > `rosettad::engine::ColdEngine`: it settles an `IngestPlan` (projects → sessions → sources with
 > census bytes, from the skims' committed ownership; unproven ownership stays honestly unassigned;
 > a multi-session source is ONE planned pass) and folds pass outcomes through a `ProgressBoard`
-> onto `/api/status` as per-project rows (`ingest.projects`, protocol v6) — sessions done/total
+> onto `/api/status` as per-project rows (`ingest.projects`, protocol v7) — sessions done/total
 > and bytes streamed/total per project, refreshed between passes and kept current through
 > mid-cold admissions. Plan, board, and schedule are RAM only, rebuilt from a skim on every run;
 > durable progress remains cursors, generations, and `stream_state`. Starter AND completion passes carry a byte-governed slice budget (`--slice-budget`,
@@ -465,8 +465,9 @@ user-facing semantic projection. These are deliberately different jobs:
   signature-only, and empty thinking remains ledger-only; response usage/model/timing facts
   reattach instead of disappearing with a dropped wrapper.
 - Lifecycle records become a closed `Notice` union (compaction, truncation, model/mode change,
-  permission request/decision, handoff, runtime error), not arbitrary system
-  text. Generated/custom titles refine `session.title`, not the timeline.
+  permission request/decision, handoff, local-command output, runtime error), not arbitrary system
+  text. Adapter normalizer versions invalidate old projections when native transport wrappers gain
+  a new semantic projection. Generated/custom titles refine `session.title`, not the timeline.
 - Attachments are typed image/document/audio/video/file references, while citations remain
   distinct bounded source/span references. Inline bytes become immutable content-addressed
   projection members; the database retains relocatable refs. Attachment-only prose rows are

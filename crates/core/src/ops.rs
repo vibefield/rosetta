@@ -232,6 +232,11 @@ fn summary_purpose(subtype: Option<&str>) -> SummaryPurpose {
 /// strings—including injected prompts and environment context—stay ledger-only.
 fn legacy_notice(subtype: Option<&str>, content: Option<&crate::CanonicalText>) -> Option<Notice> {
     let subtype = subtype?.to_ascii_lowercase();
+    if subtype == "command_output" {
+        return content
+            .cloned()
+            .map(|output| Notice::CommandOutput { output });
+    }
     if subtype.contains("compact") {
         return Some(Notice::Compaction { reason: None });
     }
@@ -480,5 +485,24 @@ mod tests {
         });
         let ops = IngestOp::project_message(context);
         assert!(matches!(ops.as_slice(), [IngestOp::SessionUsage(_)]));
+    }
+
+    #[test]
+    fn command_output_becomes_a_typed_notice() {
+        let mut output = message(MessageKind::System, Some("Set model to Fable 5.1".into()));
+        output.subtype = Some("command_output".into());
+
+        let ops = IngestOp::project_message(output);
+        let [IngestOp::Message(entry)] = ops.as_slice() else {
+            panic!("expected one command-output notice");
+        };
+        let TimelineBody::Notice {
+            notice: crate::timeline::Notice::CommandOutput { output },
+        } = &entry.body
+        else {
+            panic!("expected typed command output, got {:?}", entry.body);
+        };
+        assert_eq!(output.as_preview(), "Set model to Fable 5.1");
+        assert!(entry.validate().is_ok());
     }
 }

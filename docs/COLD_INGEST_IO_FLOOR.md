@@ -191,7 +191,7 @@ sole canonical writer.
 
 The accepted correctness fix establishes three boundaries:
 
-1. The server returns HTTP 503 plus protocol-v6 `not_ready` for heatmap, usage, and contribution
+1. The server returns HTTP 503 plus protocol-v7 `not_ready` for heatmap, usage, and contribution
    while `ProjectionReader` targets shared RAM. Project/session lists and bounded timelines remain
    progressive.
 2. The renderer waits for exact `canonical_ready`, then hydrates project figures with four workers;

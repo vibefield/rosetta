@@ -229,7 +229,7 @@ function roleName(row: TimelineEntry): string {
     case "summary":
       return `${row.body.purpose[0].toUpperCase()}${row.body.purpose.slice(1)} summary`;
     case "notice":
-      return "System";
+      return row.body.notice.type === "command_output" ? "Command output" : "System";
     case "tool_use":
       return row.model ?? "Agent";
   }

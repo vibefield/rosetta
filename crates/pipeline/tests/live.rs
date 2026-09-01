@@ -13,8 +13,8 @@ use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
 use rosetta_capture::ScriptedEvents;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, LiveOptions, LiveRunner, discover, expand_data_root, meta_ingest,
-    stream_backfill,
+    IngestOptions, Instrument, LiveOptions, LiveRunner, PipeCheckpoint, discover, expand_data_root,
+    meta_ingest, stream_backfill,
 };
 use rosetta_store::{Store, queries};
 use tempfile::TempDir;
@@ -182,6 +182,36 @@ fn startup_catch_up_forces_one_silent_cursor_relative_poll() {
     runner.catch_up(&mut h.store, &h.instrument).unwrap();
     assert_eq!(runner.report().polls, 1);
     assert_eq!(runner.report().stream.stats.messages_inserted, 1);
+}
+
+#[test]
+fn startup_catch_up_replays_a_stale_normalizer_projection() {
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = backfilled_harness();
+    let target = h.files[0].clone();
+    let before = queries::cursor_state(h.store.conn(), &h.runtime.id, &target.relative_path)
+        .unwrap()
+        .unwrap();
+    let mut checkpoint = PipeCheckpoint::decode(&before.checkpoint).unwrap();
+    checkpoint.normalizer_version = adapter.normalizer_version() - 1;
+    h.store
+        .conn()
+        .execute(
+            "UPDATE ingest_cursor SET checkpoint = ?1 WHERE id = ?2",
+            rusqlite::params![checkpoint.encode(), before.id],
+        )
+        .unwrap();
+
+    let mut runner = resumed_runner(&h, adapter, ScriptedEvents::default(), hot_live());
+    runner.catch_up(&mut h.store, &h.instrument).unwrap();
+
+    let after = queries::cursor_state(h.store.conn(), &h.runtime.id, &target.relative_path)
+        .unwrap()
+        .unwrap();
+    let checkpoint = PipeCheckpoint::decode(&after.checkpoint).unwrap();
+    assert_eq!(checkpoint.normalizer_version, adapter.normalizer_version());
+    assert!(after.active_generation > before.active_generation);
+    assert_eq!(runner.report().stream.files, 1);
 }
 
 #[test]

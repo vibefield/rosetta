@@ -90,7 +90,7 @@ same-filesystem private file, syncs and atomically installs it, then switches th
 from RAM to disk before releasing the RAM generation. Detached search remains explicitly
 Building and does not start until that switch. Watchers are armed before metadata, and their
 queued suffixes flow into the ordinary live runner after publication. Cross-session aggregates
-(heatmap, usage decomposition, and contribution) return protocol-v6 `not_ready` while the reader
+(heatmap, usage decomposition, and contribution) return protocol-v7 `not_ready` while the reader
 targets shared RAM; this prevents presentation scans from contending with the sole canonical
 writer. The renderer waits for `canonical_ready` and hydrates project aggregates with bounded
 concurrency after publication. An existing complete projection is live immediately: watchers arm
@@ -111,7 +111,7 @@ audit sweep. The resumable disk cold phase is one named unit
 (`rosettad::engine::ColdEngine`) built over an `IngestPlan` — meta's
 settled projects → sessions → sources as a RAM value, unproven ownership honestly
 unassigned — and a `ProgressBoard` that folds pass outcomes per project onto
-`/api/status` (`ingest.projects`, protocol v6); plan, board, and schedule are RAM only
+`/api/status` (`ingest.projects`, protocol v7); plan, board, and schedule are RAM only
 and rebuilt from a skim, while durable progress stays cursors, generations, and
 `stream_state`.
 Starter and completion passes carry a byte-governed slice budget (`--slice-budget`,

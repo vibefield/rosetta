@@ -237,7 +237,15 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
     let mut assets = Vec::new();
     let mut has_other_block = false;
     match &line.message.content {
-        UserContent::Text(prompt) => text.push_str(prompt),
+        UserContent::Text(prompt) => match local_command_artifact(prompt) {
+            LocalCommandArtifact::Caveat | LocalCommandArtifact::EmptyOutput => return,
+            LocalCommandArtifact::Invocation(command) => text.push_str(&command),
+            LocalCommandArtifact::Output(output) => {
+                push_command_output(emit, &seed, &line.uuid, output);
+                return;
+            }
+            LocalCommandArtifact::None => text.push_str(prompt),
+        },
         UserContent::Blocks(blocks) => {
             for block in blocks {
                 match block {
@@ -495,6 +503,32 @@ fn system_line(emit: &mut Emit, line: &SystemLine) {
         model: None,
         effort: None,
     };
+    if line.subtype == "local_command" {
+        let Some(content) = line.content.as_deref() else {
+            return;
+        };
+        match local_command_artifact(content) {
+            LocalCommandArtifact::Caveat | LocalCommandArtifact::EmptyOutput => return,
+            LocalCommandArtifact::Invocation(command) => {
+                let mut row = emit.row(&seed, MessageKind::User, &line.uuid);
+                row.content = Some(command);
+                row.group = Some(TimelineGroup {
+                    id: line.uuid.clone(),
+                    kind: GroupKind::HumanTurn,
+                    derivation: GroupDerivation::Native,
+                });
+                emit.push_row(row);
+            }
+            LocalCommandArtifact::Output(output) => {
+                push_command_output(emit, &seed, &line.uuid, output);
+            }
+            LocalCommandArtifact::None => {
+                push_command_output(emit, &seed, &line.uuid, content.to_owned());
+            }
+        }
+        return;
+    }
+
     let mut row = emit.row(&seed, MessageKind::System, &line.uuid);
     row.subtype = Some(line.subtype.clone());
     row.content = line.content.clone();
@@ -988,4 +1022,102 @@ fn push_text(buffer: &mut String, text: &str) {
         buffer.push('\n');
     }
     buffer.push_str(text);
+}
+
+enum LocalCommandArtifact {
+    None,
+    Caveat,
+    Invocation(String),
+    Output(String),
+    EmptyOutput,
+}
+
+fn local_command_artifact(text: &str) -> LocalCommandArtifact {
+    let trimmed = text.trim();
+    if tagged_value(trimmed, "local-command-caveat").is_some() {
+        return LocalCommandArtifact::Caveat;
+    }
+    if let Some(output) = tagged_value(trimmed, "local-command-stdout") {
+        let output = plain_terminal_text(output);
+        return if output.is_empty() || output == "(no content)" {
+            LocalCommandArtifact::EmptyOutput
+        } else {
+            LocalCommandArtifact::Output(output)
+        };
+    }
+    if trimmed.starts_with("<command-name>") || trimmed.starts_with("<command-message>") {
+        let name = tagged_value(trimmed, "command-name")
+            .or_else(|| tagged_value(trimmed, "command-message"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let args = tagged_value(trimmed, "command-args")
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(name) = name {
+            let mut command = if name.starts_with('/') {
+                name.to_owned()
+            } else {
+                format!("/{name}")
+            };
+            if let Some(args) = args {
+                command.push(' ');
+                command.push_str(args);
+            }
+            return LocalCommandArtifact::Invocation(command);
+        }
+    }
+    LocalCommandArtifact::None
+}
+
+fn tagged_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&close)? + start;
+    Some(&text[start..end])
+}
+
+fn plain_terminal_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            if ch != '\r' {
+                plain.push(ch);
+            }
+            continue;
+        }
+
+        match chars.next() {
+            // Control Sequence Introducer: consume through its final byte.
+            Some('[') => {
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            // Operating System Command: BEL or String Terminator closes it.
+            Some(']') => {
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                    if next == '\u{1b}' && chars.next_if_eq(&'\\').is_some() {
+                        break;
+                    }
+                }
+            }
+            // Other two-byte escape sequences end at their second byte.
+            Some(_) | None => {}
+        }
+    }
+    plain.trim().to_owned()
+}
+
+fn push_command_output(emit: &mut Emit, seed: &Seed<'_>, discriminator: &str, output: String) {
+    let mut row = emit.row(seed, MessageKind::System, discriminator);
+    row.subtype = Some("command_output".to_owned());
+    row.content = Some(output);
+    emit.push_row(row);
 }

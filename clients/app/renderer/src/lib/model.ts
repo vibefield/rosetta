@@ -288,6 +288,8 @@ export function noticeText(notice: Notice): string {
       return notice.scope ? `Permission ${notice.decision} · ${notice.scope}` : `Permission ${notice.decision}`;
     case "handoff":
       return `Handed off to ${notice.to_agent ?? notice.to_session_id ?? "another agent"}`;
+    case "command_output":
+      return canonicalText(notice.output);
     case "runtime_error":
       return `${notice.kind.replaceAll("_", " ")} · ${notice.summary}`;
   }

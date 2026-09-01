@@ -788,6 +788,93 @@ fn valid_authored_image_becomes_a_typed_content_addressed_attachment() {
 }
 
 #[test]
+fn synthetic_user_local_commands_drop_boilerplate_and_keep_semantics() {
+    let (caveat_ops, _) = run(&[user(
+        json!(
+            "<local-command-caveat>Caveat: local command messages follow.</local-command-caveat>"
+        ),
+        json!({"isMeta": true}),
+    )]);
+    assert!(messages(&caveat_ops).is_empty());
+
+    let (command_ops, _) = run(&[user(
+        json!(
+            "<command-name>/model</command-name>\n\
+             <command-message>model</command-message>\n\
+             <command-args>fable --default</command-args>"
+        ),
+        json!({}),
+    )]);
+    let command_rows = messages(&command_ops);
+    assert_eq!(command_rows.len(), 1);
+    assert_eq!(body_kind(command_rows[0]), "user");
+    assert_eq!(text(command_rows[0]), Some("/model fable --default"));
+
+    let (output_ops, _) = run(&[user(
+        json!(
+            "<local-command-stdout>Set model to \u{1b}[1mFable 5.1\u{1b}[22m and saved as default</local-command-stdout>"
+        ),
+        json!({}),
+    )]);
+    let output_rows = messages(&output_ops);
+    assert_eq!(output_rows.len(), 1);
+    assert!(matches!(
+        &output_rows[0].body,
+        TimelineBody::Notice {
+            notice: Notice::CommandOutput { output }
+        } if output.as_preview() == "Set model to Fable 5.1 and saved as default"
+    ));
+
+    let (empty_ops, _) = run(&[user(
+        json!("<local-command-stdout>(no content)</local-command-stdout>"),
+        json!({}),
+    )]);
+    assert!(messages(&empty_ops).is_empty());
+}
+
+#[test]
+fn system_local_commands_share_the_clean_projection() {
+    let system = |uuid: &str, content: &str| {
+        json!({
+            "type": "system",
+            "subtype": "local_command",
+            "parentUuid": UUID,
+            "isSidechain": false,
+            "content": content,
+            "uuid": uuid,
+            "timestamp": "2026-08-25T02:35:20.000Z",
+            "sessionId": "session-under-test",
+            "version": "2.1.241",
+            "cwd": CWD,
+            "gitBranch": "main",
+            "userType": "external",
+            "isMeta": false,
+            "level": "info",
+        })
+    };
+    let (ops, _) = run(&[
+        system(
+            "33333333-3333-3333-3333-333333333333",
+            "<command-name>/usage</command-name>\n<command-message>usage</command-message>\n<command-args></command-args>",
+        ),
+        system(
+            "44444444-4444-4444-4444-444444444444",
+            "<local-command-stdout>Status dialog dismissed</local-command-stdout>",
+        ),
+    ]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(body_kind(rows[0]), "user");
+    assert_eq!(text(rows[0]), Some("/usage"));
+    assert!(matches!(
+        &rows[1].body,
+        TimelineBody::Notice {
+            notice: Notice::CommandOutput { output }
+        } if output.as_preview() == "Status dialog dismissed"
+    ));
+}
+
+#[test]
 fn system_compaction_becomes_a_closed_notice() {
     let (ops, _) = run(&[json!({
         "type": "system",

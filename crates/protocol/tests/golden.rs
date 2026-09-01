@@ -6,9 +6,9 @@
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
 use rosetta_core::timeline::{
-    CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind, NativeToolRef, Provenance,
-    ResponseGroup, ShellOutcome, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup,
-    ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind, NativeToolRef, Notice,
+    Provenance, ResponseGroup, ShellOutcome, StatusBasis, TimelineBody, TimelineEntry,
+    TimelineGroup, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, ContributionResponse, ContributionRow,
@@ -135,6 +135,38 @@ fn timeline_entry() -> TimelineEntry {
     }
 }
 
+fn command_output_entry() -> TimelineEntry {
+    TimelineEntry {
+        timeline_id: "t-command-output".into(),
+        session_id: "s1".into(),
+        ordinal: 8,
+        group: TimelineGroup {
+            id: "command-cycle".into(),
+            kind: GroupKind::SystemCycle,
+            derivation: GroupDerivation::Native,
+        },
+        response: None,
+        block_index: None,
+        native_id: Some("command-output-1".into()),
+        parent_native_id: Some("command-1".into()),
+        at: Some(3_700_000),
+        model: None,
+        effort: None,
+        body: TimelineBody::Notice {
+            notice: Notice::CommandOutput {
+                output: CanonicalText::inline("Set model to Fable 5.1").unwrap(),
+            },
+        },
+        parent_tool_native_id: None,
+        usage: TokenSnapshot::default(),
+        provenance: Provenance {
+            agent_version: Some("2.1.240".into()),
+            src_cursor: Some(4),
+            src_offset: Some(2048),
+        },
+    }
+}
+
 fn search_state() -> SearchState {
     SearchState {
         readiness: SearchReadiness::CatchingUp,
@@ -208,6 +240,7 @@ fn exemplars() -> serde_json::Value {
     };
     let mutations = vec![
         Mutation::Message(Box::new(timeline_entry())),
+        Mutation::Message(Box::new(command_output_entry())),
         Mutation::ToolUpdated {
             session_id: "s1".into(),
             timeline_id: "t1".into(),

@@ -1164,7 +1164,7 @@
   <div class="callout teal">
     <b>Read boundary.</b> <code>/api/projects</code>, <code>/api/sessions</code>, session lookup, and
     timeline reads may use canonical RAM. Heatmap, usage, and contribution call
-    <code>require_canonical_aggregates</code> and return protocol-v6 <code>not_ready</code> until
+    <code>require_canonical_aggregates</code> and return protocol-v7 <code>not_ready</code> until
     <code>ProjectionReader::publish_file</code>. Search reports Building. The renderer then hydrates
     aggregates with four workers instead of unbounded <code>Promise.all</code>.
   </div>
