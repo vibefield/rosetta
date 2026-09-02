@@ -12,7 +12,19 @@ import { desktopHost } from "../../lib/desktop-host";
 import type { GitFacts } from "../../lib/desktop-host";
 import type { WorktreeEngine } from "./types";
 
-/** How much of the tree a port client mirrors before it starts evicting. */
+/**
+ * Fallback wire window before Mille's virtualizer publishes the rail's
+ * measured viewport. This is deliberately independent from the native
+ * directory page size: the host can keep walking while the renderer receives
+ * only the rows it can use.
+ */
+const PORT_PREFETCH_ROWS = 200;
+
+/**
+ * How much of the tree a port client caches before evicting cold entries.
+ * This is not a project or directory-size limit; wide folders rehydrate from
+ * the host as the viewport moves.
+ */
 const MIRROR_CAP = 20_000;
 
 /** How often the column re-reads branch and dirty count. Slow on purpose:
@@ -181,7 +193,10 @@ function acceptPorts(message: WorktreePortsMessage): void {
   const attempt = (handshakeAttempt += 1);
   const git = connectGitClient(message.gitPort, message.root, message.generation);
   pendingHandshake = { attempt, treePort: message.treePort, git };
-  void connectFileExplorer(message.treePort, { mirrorCap: MIRROR_CAP })
+  void connectFileExplorer(message.treePort, {
+    prefetchRows: PORT_PREFETCH_ROWS,
+    mirrorCap: MIRROR_CAP,
+  })
     .then((fx) => {
       if (pendingHandshake?.attempt === attempt) pendingHandshake = null;
       if (attempt !== handshakeAttempt || message.generation !== latestGeneration) {

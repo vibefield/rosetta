@@ -11,6 +11,7 @@ import { createFileExplorerHost } from "@vibecook/mille/host";
 import { registerGitDecorations } from "@vibecook/mille-ui/git";
 import { createShellGitClient } from "@vibecook/mille-ui/git/node";
 import { createGitService } from "./git-service.mjs";
+import { createWorktreeExplorerOptions } from "./worktree-explorer-config.mjs";
 
 /** Electron's MessagePortMain has worker_threads-adjacent but not identical
  * semantics; normalize the two quirks mille's adapter does not expect
@@ -72,22 +73,7 @@ async function bootstrap() {
   const root = process.env.AH_WORKTREE_ROOT;
   if (!root) throw new Error("AH_WORKTREE_ROOT not set");
 
-  host = await createFileExplorerHost({
-    roots: [root],
-    respectIgnore: true,
-    followSymlinks: "smart",
-    watchDebounceMs: 75,
-    // Lazy expansion: seed the root, prefetch children on expand. A history
-    // room's worktree column must never walk a monorepo upfront.
-    initialWalk: "roots-only",
-    // One row is one directory. mille's default collapses a single-child
-    // chain into `clients/app/electron`, which is an IDE convenience that
-    // trades a path for a name — and the design record's rail (§8) names
-    // one folder per row. It is also the honest reading under lazy
-    // expansion: "only one child" is a claim about what has been walked,
-    // not about the directory.
-    compactFolders: false,
-  });
+  host = await createFileExplorerHost(createWorktreeExplorerOptions(root));
 
   // Attach handler installs before anything slow so the renderer's
   // handshake is never blocked behind a walk.
