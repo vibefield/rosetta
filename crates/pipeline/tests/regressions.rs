@@ -10,6 +10,7 @@ use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
 use rosetta_capture::Ledger;
 use rosetta_core::ids;
 use rosetta_core::rows::{RuntimeRow, SessionRole, StreamState};
+use rosetta_core::timeline::TimelineBody;
 use rosetta_pipeline::{
     IngestOptions, Instrument, Metric, meta_ingest, meta_ingest_into, rebuild_runtime,
     stream_backfill, stream_backfill_into,
@@ -1740,4 +1741,223 @@ fn codex_split_resume_matches_one_shot_projection() {
 
     // Keep the source path used above live until all reads are complete.
     assert!(one_path.exists());
+}
+
+/// One assistant `tool_use` opener plus its `tool_result`, stamped with an
+/// explicit writer version.
+fn claude_bash_round(session: &str, version: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "parentUuid": null,
+            "isSidechain": false,
+            "message": {
+                "content": [{
+                    "id": "msg_line_0001_tool",
+                    "input": {"command": "echo rosetta-line"},
+                    "name": "Bash",
+                    "type": "tool_use"
+                }],
+                "id": "msg_line_0001",
+                "model": "claude-opus-5",
+                "role": "assistant",
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "type": "message"
+            },
+            "type": "assistant",
+            "uuid": "741ae4e4-7d74-4293-859d-a8d892fd4001",
+            "timestamp": "2026-08-25T02:35:19.072Z",
+            "userType": "external",
+            "cwd": "/w/project",
+            "sessionId": session,
+            "version": version,
+            "gitBranch": "main"
+        }),
+        json!({
+            "parentUuid": "741ae4e4-7d74-4293-859d-a8d892fd4001",
+            "isSidechain": false,
+            "type": "user",
+            "message": {"role": "user", "content": [{
+                "tool_use_id": "msg_line_0001_tool",
+                "type": "tool_result",
+                "content": "rosetta-line",
+                "is_error": false
+            }]},
+            "uuid": "54b4d4ef-7e2f-4b5c-bf99-3eac2383701a",
+            "timestamp": "2026-08-25T02:35:19.141Z",
+            "toolUseResult": {"stdout": "rosetta-line", "stderr": "", "interrupted": false},
+            "userType": "external",
+            "cwd": "/w/project",
+            "sessionId": session,
+            "version": version,
+            "gitBranch": "main"
+        }),
+    ]
+}
+
+/// A Codex rollout whose session meta declares an explicit CLI version, then
+/// runs one shell call to completion.
+fn codex_exec_round(native: &str, cli_version: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "timestamp": "2026-08-25T02:35:03.577Z",
+            "type": "session_meta",
+            "payload": {
+                "id": native,
+                "timestamp": "2026-08-25T02:35:03.577Z",
+                "cwd": "/w/project",
+                "originator": "codex_exec",
+                "cli_version": cli_version,
+                "source": "exec",
+                "model_provider": "openai"
+            }
+        }),
+        json!({
+            "timestamp": "2026-08-25T02:35:04.102Z",
+            "ordinal": 8,
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "id": "fc_line_0001",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"echo rosetta-line\"}",
+                "call_id": "call_line_0001"
+            }
+        }),
+        json!({
+            "timestamp": "2026-08-25T02:35:04.177Z",
+            "ordinal": 9,
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "thread_id": native,
+                "item": {
+                    "type": "CommandExecution",
+                    "id": "call_line_0001",
+                    "command": ["/bin/zsh", "-lc", "echo rosetta-line"],
+                    "cwd": "file:///w/project",
+                    "status": "completed",
+                    "exit_code": 0
+                },
+                "started_at_ms": 1_787_625_304_176_i64,
+                "completed_at_ms": 1_787_625_304_177_i64
+            }
+        }),
+    ]
+}
+
+/// The single tool action kind a projected session published, plus the number
+/// of `projection_unregistered` drift facts the run recorded.
+fn published_tool_kind(store: &Store, session_id: &str) -> (String, i64) {
+    let entry = queries::timeline_page(store.conn(), session_id, None, 100)
+        .unwrap()
+        .into_iter()
+        .find(|entry| matches!(entry.body, TimelineBody::ToolUse { .. }))
+        .expect("the session must publish a tool entry");
+    let TimelineBody::ToolUse { tool } = entry.body else {
+        unreachable!("filtered above")
+    };
+    let unregistered: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COALESCE(SUM(count), 0) FROM drift_agg
+             WHERE error_code = 'projection_unregistered'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    (tool.action.kind().as_str().to_owned(), unregistered)
+}
+
+/// Typed tool actions were lost to a writer-version gate, not to reconciliation.
+/// The projector registry accepted only the release its fixtures were farmed
+/// from, so every transcript written by any other patch release published
+/// `unknown` with a `projection_unregistered` drift fact — 131 of 131 tool rows
+/// in one observed Claude Code session, 82 of 82 in one Codex session. The whole
+/// release line must stay typed end to end; the next line must still fail closed.
+#[test]
+fn claude_tool_actions_stay_typed_across_the_writer_release_line() {
+    for (version, kind, unregistered) in [
+        ("2.1.37", "shell", 0),  // census floor
+        ("2.1.241", "shell", 0), // the pinned fixture writer
+        ("2.1.258", "shell", 0), // a later patch of the same line
+        ("2.2.0", "unknown", 1), // a new line still fails closed
+    ] {
+        let root = TempDir::new().unwrap();
+        write_lines(
+            &root.path().join("projects/p/session-line.jsonl"),
+            &claude_bash_round("session-line", version),
+        );
+        let runtime = runtime(&ClaudeCodeAdapter);
+        let mut store = Store::open_in_memory().unwrap();
+        let (_, files) = meta_ingest(
+            &ClaudeCodeAdapter,
+            &runtime,
+            root.path(),
+            &mut store,
+            &opts(),
+            &Instrument::new(),
+        )
+        .unwrap();
+        stream_backfill(
+            &ClaudeCodeAdapter,
+            &runtime,
+            root.path(),
+            &mut store,
+            &files,
+            &opts(),
+            &Instrument::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            published_tool_kind(&store, &files[0].session_id),
+            (kind.to_owned(), unregistered),
+            "claude-code writer {version}"
+        );
+    }
+}
+
+#[test]
+fn codex_tool_actions_stay_typed_across_the_writer_release_line() {
+    let native = "01a036c5-6e18-73f3-8c07-d4430763840b";
+    for (version, kind, unregistered) in [
+        ("0.144.6", "shell", 0), // oldest writer with this vocabulary
+        ("0.149.1", "shell", 0), // the pinned fixture writer
+        ("0.152.0", "shell", 0), // a later release of the same line
+        ("1.0.0", "unknown", 1), // a new line still fails closed
+    ] {
+        let root = TempDir::new().unwrap();
+        write_lines(
+            &root
+                .path()
+                .join("sessions/2026/08/25/rollout-session-line.jsonl"),
+            &codex_exec_round(native, version),
+        );
+        let runtime = runtime(&CodexAdapter);
+        let mut store = Store::open_in_memory().unwrap();
+        let (_, files) = meta_ingest(
+            &CodexAdapter,
+            &runtime,
+            root.path(),
+            &mut store,
+            &opts(),
+            &Instrument::new(),
+        )
+        .unwrap();
+        stream_backfill(
+            &CodexAdapter,
+            &runtime,
+            root.path(),
+            &mut store,
+            &files,
+            &opts(),
+            &Instrument::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            published_tool_kind(&store, &files[0].session_id),
+            (kind.to_owned(), unregistered),
+            "codex writer {version}"
+        );
+    }
 }

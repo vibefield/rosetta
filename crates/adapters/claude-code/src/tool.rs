@@ -1,8 +1,18 @@
 //! Versioned Claude Code tool request projection.
 //!
-//! The pinned writer is intentionally the upper bound.  A newer Claude
-//! version does not silently inherit these mappings; release drift must first
-//! refresh the canonical ground-truth pack.
+//! Coverage is declared per release LINE, not per release. `groundtruth/claude-code`
+//! pins fixtures at 2.1.241, and the census committed beside them
+//! (`census/2026-08-24-local-structure.json`) spans 2.1.37..=2.1.241 — 40 patch
+//! releases whose aggregated `tool_use_names` are one stable vocabulary, the one
+//! registered below. Claude Code ships patches near-daily, so pinning a single
+//! patch release erases the typed vocabulary for every transcript written by any
+//! other one; the range covers the whole 2.1 line instead.
+//!
+//! Failing closed is preserved where it carries evidence. A 2.2 (or later) writer
+//! is a new vocabulary claim and still projects `unknown` until the pack is
+//! re-farmed; an unregistered name still projects `unknown`; and a changed input
+//! shape inside the line still fails closed, because `project_request` returns
+//! `MissingField`/`InvalidField` and the caller records a drift fact.
 
 use rosetta_adapter_support::tool::{
     NativeToolSelector, ProjectionError, ProjectorRegistration, SearchPolicy, StatusPolicy,
@@ -19,12 +29,20 @@ use rosetta_core::timeline::{
 use serde_json::Value;
 
 pub const AGENT: &str = "claude-code";
+/// Writer the committed fixtures were farmed from (`watch.toml` `pinned`).
 pub const PINNED_WRITER_VERSION: &str = "2.1.241";
+/// Oldest writer in the committed census — the floor of the proven vocabulary.
+pub const EARLIEST_WRITER_VERSION: &str = "2.1.37";
+/// Ceiling of the 2.1 release line. `2.2.0` and later fail closed to `unknown`.
+pub const WRITER_LINE_CEILING: &str = "2.1.99999";
 
 const fn registration(name: &'static str, action_kind: ToolActionKind) -> ProjectorRegistration {
     ProjectorRegistration {
         agent: AGENT,
-        writer_versions: VersionRange::exact(PINNED_WRITER_VERSION),
+        writer_versions: VersionRange {
+            min_inclusive: EARLIEST_WRITER_VERSION,
+            max_inclusive: WRITER_LINE_CEILING,
+        },
         accepts_unversioned: false,
         native: NativeToolSelector {
             namespace: None,
@@ -495,20 +513,69 @@ mod tests {
         assert!(matches!(tool.action, ToolAction::Shell { .. }));
     }
 
+    /// Replaces `newer_writer_does_not_silently_inherit_the_mapping`, which
+    /// pinned the vocabulary to the single patch release the fixtures were
+    /// farmed from. Claude Code ships patches near-daily, so that pin made a
+    /// live projection lose every typed tool action the day 2.1.246 shipped.
+    /// The census committed with the pack spans 2.1.37..=2.1.241 with one
+    /// vocabulary, so the release line — not the patch — is the evidence
+    /// boundary, and the next line still fails closed.
     #[test]
-    fn newer_writer_does_not_silently_inherit_the_mapping() {
-        assert!(
-            project_request(
-                Some("2.1.251"),
+    fn the_release_line_projects_and_the_next_line_fails_closed() {
+        for version in [
+            EARLIEST_WRITER_VERSION,
+            PINNED_WRITER_VERSION,
+            "2.1.246",
+            "2.1.258",
+            WRITER_LINE_CEILING,
+        ] {
+            let tool = project_request(
+                Some(version),
                 "Bash",
-                &json!({"command":"echo unsafe"}),
+                &json!({"command":"echo in-line"}),
                 None,
                 "x",
                 Some("x"),
-                None
+                None,
             )
-            .is_err()
-        );
+            .unwrap_or_else(|error| panic!("{version} must project: {error:?}"));
+            assert!(matches!(tool.action, ToolAction::Shell { .. }), "{version}");
+        }
+        for version in ["2.0.99", "2.2.0", "3.0.0"] {
+            assert!(
+                matches!(
+                    project_request(
+                        Some(version),
+                        "Bash",
+                        &json!({"command":"echo out of line"}),
+                        None,
+                        "x",
+                        Some("x"),
+                        None,
+                    ),
+                    Err(ProjectionError::Unregistered { .. })
+                ),
+                "{version} must fail closed",
+            );
+        }
+    }
+
+    /// Widening the version range must not widen the name vocabulary:
+    /// `StructuredOutput` is in the committed census and has no projector.
+    #[test]
+    fn an_unregistered_name_inside_the_line_still_fails_closed() {
+        assert!(matches!(
+            project_request(
+                Some("2.1.258"),
+                "StructuredOutput",
+                &json!({"document":"{}"}),
+                None,
+                "x",
+                Some("x"),
+                None,
+            ),
+            Err(ProjectionError::Unregistered { .. })
+        ));
     }
 
     #[test]

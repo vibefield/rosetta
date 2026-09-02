@@ -35,7 +35,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        7
+        8
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

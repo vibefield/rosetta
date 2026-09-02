@@ -1,4 +1,18 @@
 //! Versioned Codex CLI tool request projection.
+//!
+//! Coverage is declared per release LINE, not per release. `groundtruth/codex`
+//! pins fixtures at 0.149.1 and surveyed 0.150.1; Codex ships a new minor every
+//! few days, and the persisted rollout tool vocabulary registered below is the
+//! same one from 0.144.6 through 0.152.0 (privacy-safe name census of the local
+//! rollout corpus, 2026-09-01). A two-release window therefore erased the typed
+//! vocabulary for nearly every rollout on disk, so the range covers the 0.x line.
+//!
+//! Failing closed is preserved where it carries evidence. A 1.x writer is a new
+//! vocabulary claim and still projects `unknown` until the pack is re-surveyed;
+//! a name added by a later release is unregistered and still projects `unknown`;
+//! and a changed input shape inside the line still fails closed, because
+//! `project_request` returns `MissingField`/`InvalidField` and the caller records
+//! a drift fact.
 
 use rosetta_adapter_support::tool::{
     NativeToolSelector, ProjectionError, ProjectorRegistration, SearchPolicy, StatusPolicy,
@@ -13,8 +27,14 @@ use rosetta_core::timeline::{
 use serde_json::Value;
 
 pub const AGENT: &str = "codex";
+/// Writer the committed fixtures were farmed from (`watch.toml` `pinned`).
 pub const FIXTURE_WRITER_VERSION: &str = "0.149.1";
+/// Newest writer surveyed on the release channel (`watch.toml` `surveyed`).
 pub const CURRENT_WRITER_VERSION: &str = "0.150.1";
+/// Oldest writer observed to persist this rollout tool vocabulary.
+pub const EARLIEST_WRITER_VERSION: &str = "0.144.6";
+/// Ceiling of the 0.x release line. `1.0.0` and later fail closed to `unknown`.
+pub const WRITER_LINE_CEILING: &str = "0.99999.0";
 
 const fn registration(
     namespace: Option<&'static str>,
@@ -24,8 +44,8 @@ const fn registration(
     ProjectorRegistration {
         agent: AGENT,
         writer_versions: VersionRange {
-            min_inclusive: FIXTURE_WRITER_VERSION,
-            max_inclusive: CURRENT_WRITER_VERSION,
+            min_inclusive: EARLIEST_WRITER_VERSION,
+            max_inclusive: WRITER_LINE_CEILING,
         },
         accepts_unversioned: false,
         native: NativeToolSelector { namespace, name },
@@ -339,6 +359,50 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool.action, ToolAction::Shell { .. }));
+    }
+
+    /// The pack's two-release window (0.149.1..=0.150.1) left every rollout
+    /// written by any other Codex build with `unknown` actions, even though
+    /// 0.144.6 through 0.152.0 persist the same tool names. The 0.x line is the
+    /// evidence boundary; a 1.x writer still fails closed.
+    #[test]
+    fn the_release_line_projects_and_the_next_line_fails_closed() {
+        for version in [
+            EARLIEST_WRITER_VERSION,
+            FIXTURE_WRITER_VERSION,
+            CURRENT_WRITER_VERSION,
+            "0.152.0",
+            WRITER_LINE_CEILING,
+        ] {
+            let tool = project_request(
+                Some(version),
+                "exec_command",
+                &json!({"cmd":"echo in-line"}),
+                None,
+                "call-1",
+                Some("call-1"),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{version} must project: {error:?}"));
+            assert!(matches!(tool.action, ToolAction::Shell { .. }), "{version}");
+        }
+        for version in ["0.100.0", "1.0.0"] {
+            assert!(
+                matches!(
+                    project_request(
+                        Some(version),
+                        "exec_command",
+                        &json!({"cmd":"echo out of line"}),
+                        None,
+                        "call-1",
+                        Some("call-1"),
+                        None,
+                    ),
+                    Err(ProjectionError::Unregistered { .. })
+                ),
+                "{version} must fail closed",
+            );
+        }
     }
 
     #[test]
