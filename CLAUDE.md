@@ -185,7 +185,8 @@ crates/                    all Rust crates
 clients/                   TypeScript consumers                       [Phase 4]
   ts/                      generated protocol types + RosettaClient SDK
   app/                     agent-history app — Electron + React History room,
-                           design source: protos/agent-history-proto
+                           design source: protos/agent-history-proto; the locked
+                           transcript record ships in clients/app/design/
 ```
 
 ## Conventions
