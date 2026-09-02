@@ -338,6 +338,8 @@ export default function App() {
               onReceipt={showReceipt}
               searchResults={searchResults}
               onOpenHit={openHit}
+              getRuntimeKind={kindOf}
+              homeDirectory={home}
             />
           </div>
         )}

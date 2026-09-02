@@ -1,0 +1,494 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE TRANSCRIPT — the locked record (protos/agent-history-proto/transcript),
+   ported to this app's tokens.
+
+   Rules prefixed `tr-` are the record's own, transcribed rather than
+   redesigned: it was written against these same `--vf-` names, so the port is
+   a transcription and any drift between the two is a bug in this file. Where
+   the record used an inline style (an anchor's offset, a chosen option's ink)
+   the rule is written here instead, marked WRITTEN, because a component
+   cannot carry a stylesheet's job.
+
+   The claim it draws: the prompt is the only container, the reply is bare, the
+   machinery is a ledger you can read without opening, and hue is spent only on
+   what did not complete or is still happening.
+
+   Two neighbours own their own files and are NOT duplicated here:
+   `transcript-head.css` (§08's head line, receipt and top fade) and
+   `favicon.css` (a source's own icon).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The measure is a CONTAINER: the anchor's margin appears and disappears with
+   the rail, not with the window, so the query has to ask the column. */
+.tr-col { container-type: inline-size; container-name: measure; }
+.tr {
+  position: relative; max-width: 68ch; margin: 0 auto; padding: 22px 28px 30px;
+  font-size: 14px; line-height: 1.55; color: var(--vf-text-primary);
+}
+.tr p { margin: 0; }
+
+/* the turn — one human prompt and everything that answered it */
+.tr-turn { position: relative; }
+.tr-turn + .tr-turn { margin-top: 30px; }
+
+/* T-4 — every segment can be pointed at: the anchor lives in the margin when
+   the column has one, and on hover otherwise (decided Q3 A). */
+.tr-seg { position: relative; }
+.tr-seg + .tr-seg { margin-top: 12px; }
+.tr-anchor {
+  position: absolute; top: 3px; right: 100%; margin-right: 18px; padding: 0 3px;
+  border-radius: 4px; color: var(--vf-text-faint);
+  font-family: var(--vf-font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums;
+  line-height: 16px; white-space: nowrap; opacity: 0; cursor: copy;
+  transition: opacity 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+/* WRITTEN — the record drew a span; this room needs a real act, so the
+   button is reset back to the span the record specified. */
+button.tr-anchor { border: 0; background: none; font-weight: 400; }
+.tr-anchor:hover { background: var(--vf-fill); color: var(--vf-text-secondary); }
+.tr-seg:hover > .tr-anchor, .tr-seg:focus-within > .tr-anchor { opacity: 1; }
+@container measure (min-width: 760px) { .tr-anchor { opacity: 1; } }
+/* WRITTEN — the record carried these two offsets as inline styles on the
+   specimen's markup. A panel's first line sits lower than a paragraph's. */
+.tr-seg[data-prompt] > .tr-anchor { top: 12px; }
+.tr-seg[data-command] > .tr-anchor { top: 5px; }
+/* WRITTEN — the record reveals the anchor on hover when the column has no
+   gutter, but only ever drew it against frames wide enough to have one. In
+   this room's three-column 1120px layout the transcript's 28px padding cannot
+   hold a 57px time, and a time hanging past the column's edge was clipped to
+   its last digit. Under 760px the transcript keeps a 60px gutter on the left
+   for exactly this: the column already caps the measure below 68ch here, so
+   the gutter costs about 24px of line, and the revealed anchor — one size
+   down, closer in — sits wholly inside the column, never over the words. */
+@container measure (max-width: 759.98px) {
+  .tr { padding-left: 60px; }
+  .tr-anchor { margin-right: 4px; font-size: 10px; }
+}
+
+/* ── T-1 — the prompt: the one container in the document ──────────────────── */
+.tr-prompt {
+  display: inline-block; max-width: 100%; padding: 11px 15px 12px;
+  border-radius: 10px; background: var(--vf-fill); color: var(--vf-text-primary);
+  /* WRITTEN — the record's specimen held prose; a real prompt holds pasted
+     urls and injected tags, and one unbreakable token must not push the
+     panel past the measure it is content-hugging inside. */
+  overflow-wrap: anywhere;
+}
+.tr-prompt p + p { margin-top: 8px; }
+.tr-prompt code { font-family: var(--vf-font-mono); font-size: 12.5px; }
+.tr-att { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.tr-att figure { margin: 0; display: grid; gap: 4px; }
+.tr-att__tile {
+  width: 176px; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--vf-hairline-strong); background: var(--vf-chrome-solid);
+  cursor: zoom-in;
+}
+/* WRITTEN — the record's tile held a canvas; a real attachment is an image
+   inside a link, and it must cover the tile rather than stretch. */
+.tr-att__tile { display: block; }
+.tr-att__tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tr-att__tile--missing {
+  display: grid; place-items: center; box-shadow: none;
+  border: 1px dashed var(--vf-hairline-strong); background: transparent;
+  color: var(--vf-text-faint); font-size: 11px; cursor: default;
+  padding: 0 8px; text-align: center; overflow: hidden;
+}
+.tr-att figcaption {
+  color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+
+/* §03 H — a prompt that is a command wears a pill, its output beside it */
+.tr-cmd { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.tr-cmd code {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; height: 26px; padding: 0 10px;
+  border-radius: 999px; background: var(--vf-fill); color: var(--vf-text-primary);
+  font-family: var(--vf-font-mono); font-size: 11.5px; white-space: nowrap;
+}
+.tr-cmd span {
+  /* WRITTEN — a flex child will not shrink below its content without this,
+     and a command's output is one long line by nature. */
+  min-width: 0;
+  color: var(--vf-text-tertiary); font-size: 12.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── T-4 — one head per response ──────────────────────────────────────────── */
+.tr-resp { margin-top: 16px; }
+.tr-head {
+  display: flex; align-items: center; gap: 8px; height: 22px; margin-bottom: 6px;
+  color: var(--vf-text-tertiary); font-size: 10.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.tr-head .mark { display: inline-flex; width: 14px; height: 14px; color: var(--vf-text-secondary); }
+.tr-head .mark svg { width: 14px; height: 14px; }
+/* WRITTEN — the room's own `AgentMark` draws a 12px span; the head's slot is
+   14, and one rule sizes the wrapper and the drawing together. */
+.tr-head .mark .ah-agent { width: 14px; height: 14px; color: inherit; }
+.tr-head .model { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--vf-text-faint); }
+.tr-head .facts {
+  margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--vf-text-faint); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tr-head .facts b { font-weight: 400; color: var(--vf-text-tertiary); }
+
+/* ── prose — primary ink: it is the primary content ───────────────────────── */
+.tr-prose { color: var(--vf-text-primary); overflow-wrap: anywhere; }
+.tr-prose p + p, .tr-prose p + ul, .tr-prose p + ol,
+.tr-prose ul + p, .tr-prose ol + p { margin-top: 12px; }
+.tr-prose h3 { margin: 22px 0 8px; font-size: 14.5px; font-weight: 600; }
+.tr-prose ul, .tr-prose ol { margin: 0; padding-left: 22px; }
+.tr-prose li { margin-bottom: 5px; }
+.tr-prose li::marker { color: var(--vf-text-tertiary); }
+.tr-prose strong { font-weight: 600; }
+.tr-prose em { color: var(--vf-text-primary); }
+.tr-prose code {
+  padding: 1px 4px; border-radius: 4px; background: var(--vf-fill);
+  font-family: var(--vf-font-mono); font-size: 12px;
+}
+/* WRITTEN — the elements the record's specimen never happened to contain.
+   The transcript does not borrow `.ah-markdown`: two stylesheets setting the
+   same paragraph's margin is a rule with a race in it. */
+.tr-prose h1, .tr-prose h2, .tr-prose h4, .tr-prose h5, .tr-prose h6 {
+  margin: 22px 0 8px; font-weight: 600; line-height: 1.3;
+}
+.tr-prose h1 { font-size: 17px; }
+.tr-prose h2 { font-size: 15.5px; }
+.tr-prose h4, .tr-prose h5, .tr-prose h6 { font-size: 13.5px; color: var(--vf-text-secondary); }
+.tr-prose > :first-child { margin-top: 0; }
+.tr-prose a { color: var(--vf-cyan); text-decoration: none; }
+.tr-prose a:hover { text-decoration: underline; }
+.tr-prose s { color: var(--vf-text-faint); }
+.tr-prose blockquote {
+  margin: 12px 0; padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--vf-hairline-strong); color: var(--vf-text-secondary);
+}
+.tr-prose hr { margin: 18px 0; border: 0; border-top: 1px solid var(--vf-hairline); }
+.tr-prose li > ul, .tr-prose li > ol { margin-top: 5px; }
+.tr-prose [data-tight] li > p { margin: 0; }
+.tr-prose .ah-md__image, .tr-prose .ah-md__deadlink {
+  color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 11.5px;
+}
+/* A wide table scrolls inside its own box; the measure is not the table's to
+   widen — the same rule the markdown view already states. */
+.tr-prose .ah-md__tablebox { margin: 12px 0; overflow-x: auto; }
+.tr-prose table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.tr-prose th, .tr-prose td {
+  padding: 5px 10px 5px 0; border-bottom: 1px solid var(--vf-hairline);
+  text-align: left; vertical-align: top;
+}
+.tr-prose th { color: var(--vf-text-primary); font-weight: 500; white-space: nowrap; }
+/* WRITTEN — a citation is a fact about a paragraph, on the caption ramp. */
+.tr-cites {
+  margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px;
+  color: var(--vf-text-faint); font-size: 10.5px;
+}
+
+/* the code bar — the fence's language, and a copy act */
+.tr-code { margin: 12px 0 0; border-radius: 10px; background: var(--vf-fill); overflow: hidden; }
+.tr-code__bar {
+  display: flex; align-items: center; height: 24px; padding: 0 12px;
+  border-bottom: 1px solid var(--vf-hairline); color: var(--vf-text-tertiary); font-size: 10.5px;
+}
+.tr-code__bar button {
+  margin-left: auto; border: 0; background: none; color: var(--vf-text-tertiary);
+  font-size: 10.5px; cursor: pointer; padding: 0;
+}
+.tr-code__bar button:hover { color: var(--vf-text-primary); }
+.tr-code pre {
+  margin: 0; padding: 10px 12px; overflow-x: auto; color: var(--vf-text-secondary);
+  font-family: var(--vf-font-mono); font-size: 12px; line-height: 1.5;
+}
+/* WRITTEN — a fence inside the one filled container cannot use that
+   container's own fill as its ground: a fill on a fill is no boundary at all.
+   The panel supplies the ground, so the block takes the hairline instead. */
+.tr-prompt .tr-code { background: var(--vf-chrome-solid); box-shadow: inset 0 0 0 1px var(--vf-hairline); }
+
+/* the hover acts — copy is the one act this room actually has */
+.tr-acts {
+  position: absolute; top: -6px; right: 0; display: flex; gap: 5px;
+  opacity: 0; transition: opacity 160ms ease;
+}
+.tr-seg:hover > .tr-acts, .tr-seg:focus-within > .tr-acts { opacity: 1; }
+.tr-acts button {
+  height: 24px; padding: 0 9px; border: 1px solid var(--vf-hairline); border-radius: 999px;
+  background: var(--vf-chrome-solid); color: var(--vf-text-secondary); font-size: 10.5px;
+  cursor: pointer; transition: transform 140ms ease, background-color 160ms ease;
+}
+.tr-acts button:hover { background: var(--vf-fill); color: var(--vf-text-primary); }
+.tr-acts button:active { transform: scale(0.94); }
+
+/* ── T-2 / T-3 — THE ACTIVITY LEDGER ──────────────────────────────────────
+   A contiguous run of machinery is one object (H-1). Its closed state is a
+   ledger you can read: verb · object · result, one line per act, on the tree's
+   indent guide at the tree's row pitch. Looking folds; acts stay. */
+.tr-ledger { margin: 10px 0 12px 1px; padding-left: 13px; border-left: 1px solid var(--vf-hairline-strong); }
+.tr-line {
+  display: grid; grid-template-columns: 16px minmax(72px, max-content) minmax(0, 1fr) auto;
+  column-gap: 10px; align-items: center; min-height: var(--vf-tree-row-height);
+  margin: 0 -8px; padding: 0 8px; border-radius: 6px;
+  color: var(--vf-text-secondary); font-size: 12.5px;
+  transition: background-color 120ms ease;
+}
+.tr-line[role="button"] { cursor: pointer; }
+.tr-line[role="button"]:hover { background: var(--vf-fill); }
+.tr-line:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.tr-line__g { display: inline-flex; width: 14px; height: 14px; color: var(--vf-text-tertiary); }
+.tr-line__g svg { width: 14px; height: 14px; }
+.tr-line__v { color: var(--vf-text-secondary); white-space: nowrap; }
+.tr-line__o {
+  font-family: var(--vf-font-mono); font-size: 11.5px; color: var(--vf-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.tr-line__o .dir { color: var(--vf-text-tertiary); }
+.tr-line__o .q { color: var(--vf-text-primary); }
+.tr-line__o .in { color: var(--vf-text-tertiary); font-family: var(--vf-font-sans); font-size: 12px; }
+.tr-line__r {
+  display: flex; gap: 12px; align-items: center; color: var(--vf-text-tertiary);
+  font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tr-line__r .t { color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10.5px; }
+.tr-line__r .tr-fav { vertical-align: middle; }
+.tr-line__r .ttl { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+@container measure (max-width: 640px) { .tr-line__r .t { display: none; } }
+/* T-5 — hue only for what did not complete, or is still happening. */
+.tr-line[data-state="failed"] .tr-line__g,
+.tr-line[data-state="failed"] .tr-line__r .why { color: var(--vf-red); }
+.tr-line[data-state="running"] .tr-line__g { color: var(--vf-green); }
+.tr-line[data-state="running"] .tr-line__r .why { color: var(--vf-green); }
+.tr-line[data-state="muted"] .tr-line__v,
+.tr-line[data-state="muted"] .tr-line__o { color: var(--vf-text-tertiary); }
+.tr-line[data-state="muted"] .tr-line__o { font-style: italic; }
+.tr-dot {
+  width: 7px; height: 7px; margin: 3.5px; border-radius: 999px; background: currentColor;
+  animation: tr-breathe 1.6s ease-in-out infinite;
+}
+@keyframes tr-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.tr-line .chev {
+  display: inline-flex; width: 12px; height: 12px; color: var(--vf-text-faint);
+  transition: transform 180ms var(--vf-ease-island);
+}
+.tr-line .chev svg { width: 12px; height: 12px; }
+.tr-line[aria-expanded="true"] .chev { transform: rotate(90deg); }
+/* WRITTEN — a search hit landing on a line borrows the room's own ring. */
+.tr-line[data-hit="true"], .tr-prompt[data-hit="true"], .tr-seg[data-hit="true"] {
+  animation: ah-land 1400ms ease;
+}
+
+/* the fold — a run past the threshold closes to one sentence of nouns */
+.tr-fold { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.tr-fold .tr-line__v {
+  color: var(--vf-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tr-fold .tr-line__v b { font-weight: 500; color: var(--vf-red); }
+.tr-fold .chev { color: var(--vf-text-tertiary); }
+.tr-fold[aria-expanded="false"] + .tr-ladder { display: none; }
+.tr-ladder { margin-left: 2px; padding-left: 12px; border-left: 1px solid var(--vf-hairline); }
+/* §05 — the room's activity act, in one switch: no React state walks the
+   document, and a run the reader opened by hand keeps its own state. */
+[data-fold="off"] .tr-fold { display: none; }
+[data-fold="off"] .tr-fold[aria-expanded="false"] + .tr-ladder { display: block; }
+
+/* the detail — opens in place, inset under its line */
+.tr-detail {
+  margin: 2px 0 8px 26px; border: 1px solid var(--vf-hairline-strong); border-radius: 8px;
+  overflow: hidden; font-size: 11.5px;
+}
+.tr-detail__bar {
+  display: flex; align-items: center; gap: 12px; height: 26px; padding: 0 10px;
+  border-bottom: 1px solid var(--vf-hairline); color: var(--vf-text-tertiary);
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+.tr-detail__bar .path {
+  flex: 1; min-width: 0; font-family: var(--vf-font-mono); color: var(--vf-text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tr-detail__bar > span:not(.path) { flex: none; white-space: nowrap; }
+.tr-diff { font-family: var(--vf-font-mono); font-size: 11.5px; line-height: 1.55; overflow-x: auto; }
+.tr-diff div { display: grid; grid-template-columns: 34px 14px 1fr; white-space: pre; }
+.tr-diff div > span:first-child {
+  color: var(--vf-text-faint); text-align: right; padding-right: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.tr-diff div > span:nth-child(2) { color: var(--vf-text-tertiary); }
+.tr-diff .ctx { color: var(--vf-text-secondary); }
+/* §2.5's own words: positive delta, negative delta — at 11%. */
+.tr-diff .add { background: color-mix(in srgb, var(--vf-green) 11%, transparent); color: var(--vf-text-primary); }
+.tr-diff .del { background: color-mix(in srgb, var(--vf-red) 10%, transparent); color: var(--vf-text-primary); }
+.tr-diff .more {
+  padding: 4px 10px; color: var(--vf-text-faint);
+  font-family: var(--vf-font-sans); font-size: 10.5px; white-space: normal;
+}
+.tr-diag {
+  margin: 0; padding: 8px 10px; background: var(--vf-fill); color: var(--vf-text-secondary);
+  font-family: var(--vf-font-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap;
+  max-height: 260px; overflow: auto;
+}
+.tr-paths {
+  margin: 0; padding: 5px 10px; list-style: none; font-family: var(--vf-font-mono);
+  font-size: 11.5px; line-height: 1.9; color: var(--vf-text-secondary);
+  white-space: nowrap; overflow-x: auto;
+}
+.tr-paths .dir { color: var(--vf-text-tertiary); }
+.tr-paths .n { color: var(--vf-text-faint); font-variant-numeric: tabular-nums; margin-left: 10px; }
+.tr-kv { display: grid; grid-template-columns: 90px 1fr; gap: 3px 12px; padding: 7px 10px; font-size: 11.5px; margin: 0; }
+.tr-kv dt { margin: 0; color: var(--vf-text-tertiary); }
+.tr-kv dd { margin: 0; color: var(--vf-text-secondary); font-family: var(--vf-font-mono); word-break: break-word; }
+/* WRITTEN — the record's specimen carried these three as inline styles: a
+   pair that must stay on one grid row, a prose value that is not an id, and
+   the chosen option in primary ink. */
+.tr-kv__pair { display: contents; }
+.tr-kv dd[data-prose] { font-family: var(--vf-font-sans); line-height: 1.5; }
+.tr-kv dd b { color: var(--vf-text-primary); font-weight: 500; }
+/* WRITTEN — a bounded list says so, and a detail that is prose reads as prose. */
+.tr-more { color: var(--vf-text-faint); font-family: var(--vf-font-sans); font-size: 10.5px; }
+.tr-text {
+  margin: 0; padding: 7px 10px; color: var(--vf-text-secondary);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+}
+.tr-quiet { color: var(--vf-text-faint); font-style: italic; }
+.tr-dtable { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.tr-dtable caption { padding: 6px 10px 2px; color: var(--vf-text-tertiary); text-align: left; }
+.tr-dtable th, .tr-dtable td {
+  padding: 4px 10px; border-bottom: 1px solid var(--vf-hairline);
+  text-align: left; vertical-align: top; color: var(--vf-text-secondary);
+}
+.tr-dtable th { color: var(--vf-text-tertiary); font-weight: 500; white-space: nowrap; }
+/* the folded commands, one per line */
+.tr-cmds {
+  margin: 0; padding: 5px 10px; list-style: none; font-family: var(--vf-font-mono);
+  font-size: 11.5px; line-height: 1.9; color: var(--vf-text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.tr-cmds li::before { content: ">_ "; color: var(--vf-text-faint); }
+.tr-cmds li.tr-more::before { content: ""; }
+/* the sources — a site's icon is content, so it keeps its colour */
+.tr-src { list-style: none; margin: 0; padding: 4px 6px; }
+.tr-src li {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  height: 26px; padding: 0 6px; border-radius: 6px; font-size: 12px;
+}
+.tr-src li:hover { background: var(--vf-fill); }
+.tr-src .title {
+  color: var(--vf-text-primary); text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tr-src .title:hover { text-decoration: underline; }
+.tr-src .dom { color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10.5px; }
+
+/* Q4 C — reasoning is muted, clamped prose in the measure; no box, no rail */
+.tr-think { color: var(--vf-text-tertiary); font-size: 13px; line-height: 1.5; }
+.tr-think__text {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tr-think__text p + p { margin-top: 8px; }
+.tr-think[data-open="true"] .tr-think__text {
+  display: block; -webkit-line-clamp: unset; overflow: visible;
+}
+.tr-think__more {
+  margin-top: 3px; padding: 0; border: 0; border-bottom: 1px dotted var(--vf-hairline-strong);
+  background: none; color: var(--vf-text-tertiary); font-family: inherit; font-size: 11px;
+  font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.tr-think__more:hover { color: var(--vf-text-primary); }
+
+/* ── §03 F — the child run: part of the calling document ──────────────────── */
+.tr-sub { margin: 2px 0 10px 26px; padding-left: 12px; border-left: 1px solid var(--vf-hairline-strong); }
+.tr-sub__head {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center;
+  height: 26px; color: var(--vf-text-secondary); font-size: 11.5px;
+}
+.tr-sub__head .mark { display: inline-flex; width: 13px; height: 13px; color: var(--vf-text-tertiary); }
+.tr-sub__head .mark svg { width: 13px; height: 13px; }
+.tr-sub__head .mark .ah-agent { width: 13px; height: 13px; color: inherit; }
+.tr-sub__head .when { color: var(--vf-text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* WRITTEN — the record's head named one subagent; a real one needs to
+   truncate, and its role is a caption beside the name rather than part of it. */
+.tr-sub__name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+/* WRITTEN — the head is a disclosure for a run nothing pressed open. */
+button.tr-sub__head {
+  width: 100%; border: 0; background: none; padding: 0; font: inherit;
+  color: var(--vf-text-secondary); cursor: pointer; text-align: left;
+}
+button.tr-sub__head:hover { color: var(--vf-text-primary); }
+.tr-sub__role { color: var(--vf-text-faint); }
+.tr-sub .tr { padding: 4px 0 0; font-size: 13px; }
+.tr-sub .tr-prompt { padding: 8px 12px 9px; font-size: 13px; }
+.tr-sub .tr-turn + .tr-turn { margin-top: 18px; }
+/* A child run has no margin of its own to put an anchor in. */
+.tr-sub .tr-anchor { display: none; }
+
+/* ── §03 G — markers: the system's own lines ──────────────────────────────── */
+.tr-mark {
+  display: flex; align-items: center; gap: 10px; margin: 18px 0;
+  color: var(--vf-text-faint); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.07em; font-variant-numeric: tabular-nums; text-align: center;
+}
+.tr-mark::before, .tr-mark::after { content: ""; flex: 1; height: 1px; background: var(--vf-hairline-strong); }
+.tr-mark--live { color: var(--vf-green); }
+.tr-mark--live::before, .tr-mark--live::after { background: color-mix(in srgb, var(--vf-green) 38%, transparent); }
+.tr-mark--error { color: var(--vf-red); }
+.tr-mark--gap::before, .tr-mark--gap::after {
+  background: repeating-linear-gradient(90deg, var(--vf-hairline-strong) 0 4px, transparent 4px 8px);
+}
+button.tr-mark { width: 100%; border: 0; background: none; padding: 0; cursor: pointer; font-family: inherit; }
+button.tr-mark:hover { color: var(--vf-text-tertiary); }
+
+/* the session summary — a footnote at the end, not a state */
+.tr-summary {
+  margin: 18px 0 0; padding: 2px 0 2px 14px; border-left: 2px solid var(--vf-hairline-strong);
+  color: var(--vf-text-tertiary); font-size: 13px;
+}
+/* WRITTEN — the record's `.eyebrow` is its page's chrome; scoped here it is
+   the summary's own label and nothing else's. */
+.tr-summary .eyebrow {
+  display: block; margin-bottom: 4px; color: var(--vf-text-tertiary);
+  font-size: 10.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;
+}
+
+/* ── §07 — time: the pill is the one marker that is an object ─────────────── */
+.tr-day {
+  position: sticky; top: 6px; z-index: 4; display: flex; align-items: center; gap: 10px;
+  margin: 20px 0 16px; pointer-events: none;
+}
+.tr-day::before, .tr-day::after { content: ""; flex: 1; height: 1px; background: var(--vf-hairline-strong); }
+.tr-day__pill {
+  pointer-events: auto; display: inline-flex; align-items: center; gap: 7px; height: 22px;
+  padding: 0 10px; border: 0; border-radius: 999px; background: var(--vf-chrome-solid);
+  box-shadow: 0 0 0 1px var(--vf-hairline-strong); color: var(--vf-text-secondary);
+  font-family: inherit; font-size: 10.5px; font-weight: 500; font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em; cursor: pointer;
+  transition: background-color 120ms ease, box-shadow 160ms ease;
+}
+.tr-day__pill:hover { background: var(--vf-fill); }
+.tr-day__pill .after { font-weight: 400; color: var(--vf-text-tertiary); }
+.tr-day__pill .after::before { content: "·"; margin-right: 7px; color: var(--vf-text-faint); }
+.tr-day--first { margin-top: 4px; }
+/* pinned: the column stamps this while a pill is stuck, so it floats as chrome */
+.tr-day[data-stuck="true"] .tr-day__pill { box-shadow: var(--vf-shadow-island), 0 0 0 1px var(--vf-hairline-strong); }
+.tr-day[data-stuck="true"]::before, .tr-day[data-stuck="true"]::after { opacity: 0; }
+/* a sitting is a section: the sticky pill's containing block, so the next pill
+   pushes it OUT instead of stacking on it */
+.tr-sitting { position: relative; }
+.tr-day + .tr-turn { margin-top: 0; }
+/* clustered prompts — consecutive prompts inside five minutes stack as one */
+.tr-cluster { display: grid; gap: 4px; justify-items: start; }
+.tr-cluster .tr-prompt { border-radius: 10px; }
+.tr-cluster .tr-prompt + .tr-prompt { border-top-left-radius: 4px; }
+.tr-cluster .tr-prompt:has(+ .tr-prompt) { border-bottom-left-radius: 4px; }
+/* the day list the pill opens into */
+.tr-daymenu {
+  position: absolute; left: 50%; transform: translateX(-50%); z-index: 12;
+  min-width: 200px; padding: 6px; border-radius: 12px; background: var(--vf-chrome-surface);
+  backdrop-filter: blur(20px); box-shadow: var(--vf-shadow-island), 0 0 0 1px var(--vf-hairline);
+}
+.tr-daymenu button {
+  display: grid; grid-template-columns: 1fr auto; gap: 14px; width: 100%; height: 26px;
+  padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--vf-text-primary);
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.tr-daymenu button:hover { background: var(--vf-fill); }
+.tr-daymenu button span { color: var(--vf-text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.tr-daymenu button[aria-current="true"] { background: var(--vf-fill); }
+
+/* the landing ring — a day jump lands the way a search hit does */
+.tr-prompt.is-landed { box-shadow: inset 0 0 0 1.5px var(--vf-select); }

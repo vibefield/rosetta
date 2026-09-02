@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles/tokens.css";
 import "./styles/room.css";
+import "./styles/transcript.css";
 // Column ③'s tree: mille's token surface plus the shipped VibeField theme,
 // which reads this app's --vf-* tokens live (its published fallbacks only
 // carry a host that has none).
