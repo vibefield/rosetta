@@ -40,4 +40,7 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
    * Resolves false whenever main refuses — a wrong extension, a path outside
    * the root, a file that has since gone. */
   openInBrowser: (path) => ipcRenderer.invoke("ah-file-open-external", path),
+  /** One site's own icon as a `data:` URL, or null. Main validates the host
+   * and fetches from the site itself — never a favicon service. */
+  favicon: (host) => ipcRenderer.invoke("ah-favicon", host),
 });

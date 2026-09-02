@@ -51,6 +51,21 @@ export interface DesktopHost {
    * swallowing.
    */
   openInBrowser(path: string): Promise<boolean>;
+  /**
+   * One site's own icon, for a web line in the transcript.
+   *
+   * The same bargain as `openInBrowser`: the renderer ASKS with a host it
+   * read out of somebody's transcript, and the shell decides whether that
+   * host is dialled at all. It fetches `https://<host>/favicon.ico` from the
+   * SITE — never Google's or DuckDuckGo's favicon service, which would be
+   * handed the user's whole agentic past one host at a time — caches the
+   * answer per host, and resolves a `data:` URL.
+   *
+   * Resolves null for every honest no: a host it refuses, a site with no
+   * icon, a 404, a timeout, a body that was not an image. The room draws the
+   * globe for all of them, because to a reader they are one fact.
+   */
+  favicon(host: string): Promise<string | null>;
 }
 
 interface HostWindow {

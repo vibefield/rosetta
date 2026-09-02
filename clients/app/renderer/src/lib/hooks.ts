@@ -1,6 +1,6 @@
 // The room's data spine: one meta subscription for who/what exists, REST for
 // figures, and one session subscription for the transcript being read.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
   IngestProgress,
@@ -15,6 +15,22 @@ import { CursorExpiredError } from "@rosetta/protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
 import { client } from "./rosetta";
+import type {
+  EarlierAction,
+  EarlierContext,
+  EarlierLanding,
+  EarlierModel,
+  EarlierNotice,
+  EarlierState,
+} from "./transcript/head-state";
+import {
+  EARLIER_FAILED_MESSAGE,
+  EARLIER_PAGE_SIZE,
+  earlierAboveOf,
+  earlierState,
+  initialEarlierModel,
+  reduceEarlier,
+} from "./transcript/head-state";
 
 export interface MetaFeed {
   meta: MetaState | null;
@@ -195,26 +211,70 @@ export interface TimelineFeed {
   status: SubscriptionStatus;
   /** Rows with ordinal > watermark arrived after you did (D33's line). */
   watermark: number | null;
-  /** Null = no more history; string = next page back; undefined = untried. */
+  /** §08 — what the head of the document offers the reader right now. */
+  earlier: EarlierState;
+  /** The 410 sentence, surfaced once after the paged history is dropped. */
+  earlierNotice: EarlierNotice | null;
+  /** Rows still above the loaded document, or null when no total is known. */
+  earlierAbove: number | null;
+  /** The last landing — the receipt's figure and the scroll fix-up's key. */
+  landed: EarlierLanding | null;
+  /** Fetch the page above and keep it aside. No-op unless idle or failed. */
+  holdEarlier: () => void;
+  /** Spend the bar: prepend a held page now, or land the fetch on arrival. */
+  revealEarlier: () => void;
+  /** Try again after `earlier.kind === "failed"`. */
+  retryEarlier: () => void;
+  /** Drop the 410 sentence once it has been read. */
+  dismissEarlierNotice: () => void;
+  /** @deprecated §08 replaced the load-earlier button with the head line.
+   *  Read `earlier.kind !== "none"` instead. */
   canLoadEarlier: boolean;
+  /** @deprecated §08 fetches on approach and inserts on the pull. This fetches
+   *  AND inserts in one act, for the anchor search that still pages blindly.
+   *  Use `holdEarlier()` then `revealEarlier()`. */
   loadEarlier: () => void;
 }
 
 export function useTimeline(sessionId: string | null): TimelineFeed {
   const [tail, setTail] = useState<TimelineEntry[]>([]);
-  const [older, setOlder] = useState<TimelineEntry[]>([]);
-  const [cursor, setCursor] = useState<string | null | undefined>(undefined);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [watermark, setWatermark] = useState<number | null>(null);
   const sawSnapshot = useRef(false);
 
+  // The head of the document is a state machine, not a boolean: it holds a
+  // page beside the document until the reader pulls (§08, Q7 B). The ref is
+  // the authority so a listener firing between commits reduces against the
+  // current model; the state mirrors it for rendering.
+  const modelRef = useRef<EarlierModel>(initialEarlierModel());
+  const [model, setModel] = useState<EarlierModel>(modelRef.current);
+
+  const ctx = useMemo<EarlierContext>(
+    () => ({
+      tailIds: new Set(tail.map((row) => row.timeline_id)),
+      pageSize: EARLIER_PAGE_SIZE,
+    }),
+    [tail],
+  );
+  // A pure mirror, so holdEarlier() called from a scroll frame reduces against
+  // the tail the reader can actually see.
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+
+  const apply = useCallback((action: EarlierAction) => {
+    const next = reduceEarlier(modelRef.current, action, ctxRef.current);
+    if (next === modelRef.current) return;
+    modelRef.current = next;
+    setModel(next);
+  }, []);
+
   useEffect(() => {
     setTail([]);
-    setOlder([]);
-    setCursor(undefined);
     setWatermark(null);
     setStatus("connecting");
     sawSnapshot.current = false;
+    // A held page belongs to the session it was fetched for.
+    apply({ type: "reset" });
     if (sessionId === null) return;
     const sub = client.subscribeSession(sessionId, {
       onChange: (entries) => {
@@ -228,39 +288,89 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
       onStatus: setStatus,
     });
     return () => sub.close();
-  }, [sessionId]);
+  }, [sessionId, apply]);
 
-  const loadEarlier = useMemo(() => {
-    return () => {
-      if (sessionId === null || cursor === null) return;
-      client
-        .timeline(sessionId, cursor === undefined ? { limit: 200 } : { limit: 200, cursor })
-        .then((page) => {
-          setOlder((current) => [...page.entries, ...current]);
-          setCursor(page.cursor);
-        })
-        .catch((error) => {
-          if (error instanceof CursorExpiredError) {
-            // The projection rewrote underneath: drop paged history and
-            // start again from the head rather than silently rebasing.
-            setOlder([]);
-            setCursor(undefined);
-          }
+  /** One fetch of the page above, held rather than inserted. */
+  const startFetch = useCallback(() => {
+    if (sessionId === null) return;
+    const before = modelRef.current.fetchSeq;
+    apply({ type: "hold" });
+    const started = modelRef.current;
+    if (started.phase !== "fetching" || started.fetchSeq === before) return;
+    const seq = started.fetchSeq;
+    // The reducer only enters `fetching` when there is provably history above,
+    // so a settled null cursor cannot get here.
+    const from: string | undefined = started.cursor ?? undefined;
+    void (async () => {
+      try {
+        const head = await client.timeline(
+          sessionId,
+          from === undefined
+            ? { limit: EARLIER_PAGE_SIZE }
+            : { limit: EARLIER_PAGE_SIZE, cursor: from },
+        );
+        if (from !== undefined || head.cursor === null) {
+          apply({ type: "page", seq, entries: head.entries, cursor: head.cursor });
+          return;
+        }
+        // The first page repeats the snapshot the subscription already
+        // delivered; it exists to mint the cursor. Take the page ABOVE it in
+        // the same breath, so the reader's pull is instant rather than a
+        // press that visibly does nothing.
+        const above = await client.timeline(sessionId, {
+          limit: EARLIER_PAGE_SIZE,
+          cursor: head.cursor,
         });
-    };
-  }, [sessionId, cursor]);
+        apply({
+          type: "page",
+          seq,
+          entries: [...above.entries, ...head.entries],
+          cursor: above.cursor,
+        });
+      } catch (error) {
+        if (error instanceof CursorExpiredError) apply({ type: "expired", seq });
+        else apply({ type: "fail", seq, message: EARLIER_FAILED_MESSAGE });
+      }
+    })();
+  }, [sessionId, apply]);
+
+  const revealEarlier = useCallback(() => apply({ type: "reveal" }), [apply]);
+  const dismissEarlierNotice = useCallback(() => apply({ type: "clearNotice" }), [apply]);
+  const loadEarlier = useCallback(() => {
+    startFetch();
+    apply({ type: "reveal" });
+  }, [startFetch, apply]);
 
   const rows = useMemo(() => {
     const seen = new Map<string, TimelineEntry>();
-    for (const row of older) seen.set(row.timeline_id, row);
+    for (const row of model.older) seen.set(row.timeline_id, row);
     for (const row of tail) seen.set(row.timeline_id, row);
     return [...seen.values()].sort((a, b) => a.ordinal - b.ordinal);
-  }, [older, tail]);
+  }, [model.older, tail]);
 
-  // Untried paging is only on offer when the snapshot may be truncated —
-  // a 200-row snapshot that came back short IS the whole history.
-  const canLoadEarlier = cursor === undefined ? tail.length >= 200 : cursor !== null;
-  return { rows, status, watermark, canLoadEarlier, loadEarlier };
+  const earlier = useMemo(() => earlierState(model, ctx), [model, ctx]);
+
+  // Nothing in the protocol carries a per-session entry total — SessionRow has
+  // no count and TimelinePage returns only entries and a cursor — so the head
+  // line says the word without the number (§08: "when it is not, the word
+  // stands alone"). The arithmetic waits here for the day a total lands.
+  const earlierAbove = earlierAboveOf(null, rows.length);
+
+  return {
+    rows,
+    status,
+    watermark,
+    earlier,
+    earlierNotice: model.notice,
+    earlierAbove,
+    landed: model.landing,
+    holdEarlier: startFetch,
+    revealEarlier,
+    retryEarlier: startFetch,
+    dismissEarlierNotice,
+    canLoadEarlier: earlier.kind !== "none",
+    loadEarlier,
+  };
 }
 
 export interface SearchFeed {

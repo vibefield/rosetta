@@ -1,0 +1,73 @@
+/* SITE ICONS — the design record's `.fav` rules, ported to this app's tokens
+   and kept under the transcript's `tr-` prefix.
+
+   A search's sources are the one place identity should carry colour: a site's
+   own icon is content, like a widget's committed surface, and it is the
+   fastest way to tell GitHub from MDN from a blog. So the icon keeps its
+   colour — but it lives in the detail and in a small stack at the line's
+   edge, NEVER in the glyph slot, which stays monoline. State and identity do
+   not share a place.
+
+   A site whose icon was not fetched — refused, 404, setting off, no bridge —
+   wears the globe: no ring, no plate, on the tertiary ramp, because the globe
+   is a glyph and not a site's mark. */
+
+.tr-fav {
+  --tr-fav-size: 14px;
+  display: inline-flex;
+  flex: none;
+  width: var(--tr-fav-size);
+  height: var(--tr-fav-size);
+  border-radius: 4px;
+  overflow: hidden;
+  /* A hairline RING rather than a border: it costs no layout box, so a 14px
+     icon stays 14px in a row whose height is already spoken for. */
+  box-shadow: 0 0 0 1px var(--vf-hairline);
+  background: var(--vf-chrome-solid);
+}
+
+.tr-fav > svg,
+.tr-fav > img {
+  display: block;
+  width: var(--tr-fav-size);
+  height: var(--tr-fav-size);
+  /* Icons arrive at whatever size the site drew them; letterboxing a
+     non-square one is honest, cropping it is not. */
+  object-fit: contain;
+}
+
+/* The globe is a glyph, so it obeys the glyph rules: no plate, no ring, and
+   the tertiary ramp — never hue. */
+.tr-fav--globe {
+  box-shadow: none;
+  background: none;
+  color: var(--vf-text-tertiary);
+}
+
+/* While the shell is being asked, the plate is the whole state: a ring and an
+   empty surface. Nothing spins — a 14px spinner for a 2KB icon is machinery
+   louder than what it is waiting for. */
+.tr-fav--loading {
+  background: var(--vf-fill);
+  box-shadow: 0 0 0 1px var(--vf-hairline);
+}
+
+/* THE STACK — the first three sites of a search, at the line's right edge.
+   They overlap by 4px, and each carries a ring in the SURFACE colour rather
+   than the hairline so the overlap reads as depth instead of as a smudge. */
+.tr-favs {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tr-favs .tr-fav {
+  box-shadow: 0 0 0 1.5px var(--vf-sheet-surface);
+}
+
+.tr-favs .tr-fav--globe {
+  box-shadow: none;
+}
+
+.tr-favs .tr-fav + .tr-fav {
+  margin-left: -4px;
+}

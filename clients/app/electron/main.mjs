@@ -21,7 +21,8 @@ import { execFile, spawn } from "node:child_process";
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, MessageChannelMain, app, ipcMain, shell, utilityProcess } from "electron";
+import { BrowserWindow, MessageChannelMain, app, ipcMain, net, shell, utilityProcess } from "electron";
+import { createFaviconService } from "./favicon-service.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -478,6 +479,30 @@ app.whenReady().then(async () => {
       return false;
     }
   });
+
+  // A web line's site icon. The renderer names a host it read out of a
+  // transcript and asks; this side decides whether that host is dialled at
+  // all, fetches `https://<host>/favicon.ico` from the SITE — never a favicon
+  // service, which would learn every site the user's agents ever read — and
+  // answers with a `data:` URL or null. Null is every honest no: a host this
+  // process refuses, a 404, a timeout, a body that was not an image. The room
+  // draws the globe for all of them.
+  //
+  // `net.fetch` rather than Node's: it goes through Chromium's stack, so the
+  // user's proxy and system certificates apply, as they do for every other
+  // request this app makes. The cache lives beside the archive under
+  // userData, and NOT under `cache/` — see `resolveDbPath`.
+  //
+  // `bypassCustomProtocolHandlers` because `net.fetch` will otherwise dial
+  // custom protocols AND `file:`. The service only ever builds an `https:`
+  // URL, so this is belt over braces rather than the load-bearing gate — but
+  // an icon fetch is the last request that should be able to reach a
+  // protocol handler this app registers later.
+  const favicons = createFaviconService({
+    cacheDir: path.join(app.getPath("userData"), "favicons"),
+    fetch: (input, init) => net.fetch(input, { ...init, bypassCustomProtocolHandlers: true }),
+  });
+  ipcMain.handle("ah-favicon", (_evt, host) => favicons.get(host));
 
   const smokeAt = process.argv.indexOf("--smoke");
   if (smokeAt !== -1) {

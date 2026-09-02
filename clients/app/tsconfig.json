@@ -12,6 +12,10 @@
     "skipLibCheck": true,
     "noEmit": true,
     "isolatedModules": true,
+    // `lib/transcript/*` carries explicit `.ts` extensions on its relative
+    // imports so node's type stripping can run those modules directly under
+    // `node --test`. Legal here because nothing is emitted.
+    "allowImportingTsExtensions": true,
     "useDefineForClassFields": true,
     "paths": {
       "@rosetta/protocol": ["../ts/index.ts"]
