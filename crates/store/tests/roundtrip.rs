@@ -127,6 +127,7 @@ fn shell_tool(key: &str, command: &str) -> ToolInteraction {
         "Bash",
         ToolAction::Shell {
             command: CanonicalText::inline(command).unwrap(),
+            source_truncated: false,
             cwd: None,
             timeout_ms: None,
             background: false,
@@ -1804,6 +1805,55 @@ fn contribution_folds_subagents_into_their_root() {
     assert_eq!(rows[0].tokens, 15);
     assert_eq!(rows[0].edits, 1);
     assert_eq!(rows[0].loc, 5);
+}
+
+#[test]
+fn unassigned_sessions_are_a_first_class_aggregate_scope() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut batch = base_batch();
+    let mut orphan = session("orphan");
+    orphan.project_id = None;
+    orphan.cwd = None;
+    batch.ops.push(IngestOp::SessionMeta(orphan));
+    store.apply(&batch).unwrap();
+
+    let mut orphan_message = message("orphan-message", 0, MessageKind::Agent);
+    orphan_message.session_id = "orphan".into();
+    orphan_message.usage = Some(TokenSnapshot {
+        input: Some(11),
+        output: Some(7),
+        ..Default::default()
+    });
+    store
+        .apply(&Batch {
+            ops: IngestOp::project_message(orphan_message),
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let rows = queries::contribution_for_scope(store.conn(), None).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].session_id, "orphan");
+    assert_eq!(rows[0].messages, 1);
+    assert_eq!(rows[0].tokens, 18);
+
+    let days = queries::heatmap_days_in_timezone_for_scope(store.conn(), None, 0, 0).unwrap();
+    assert_eq!(days.len(), 1);
+    assert_eq!(days[0].tokens, 18);
+    let models = queries::model_days_in_timezone_for_scope(store.conn(), None, 0, 0).unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].tokens, 18);
+    let hours = queries::hour_profile_in_timezone_for_scope(store.conn(), None, 0, 0).unwrap();
+    assert_eq!(hours.len(), 1);
+    assert_eq!(hours[0].tokens, 18);
+
+    assert!(
+        queries::contribution(store.conn(), "p1")
+            .unwrap()
+            .iter()
+            .all(|row| row.session_id != "orphan"),
+        "the unassigned scope must not leak into a persisted project"
+    );
 }
 
 #[test]

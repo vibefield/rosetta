@@ -33,7 +33,7 @@ impl AgentAdapter for AntigravityAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        4
+        7
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

@@ -104,6 +104,7 @@ fn tool_message() -> MessageRow {
         },
         action: ToolAction::Shell {
             command: CanonicalText::inline("semanticcommandsentinel").unwrap(),
+            source_truncated: false,
             cwd: None,
             timeout_ms: None,
             background: false,
@@ -339,7 +340,7 @@ fn sidecar_resolves_full_committed_prose_members_not_only_the_preview() {
 }
 
 #[test]
-fn sidecar_resolves_full_tool_intent_members_not_only_the_preview() {
+fn sidecar_indexes_only_the_bounded_tool_preview() {
     let dir = tempfile::TempDir::new().unwrap();
     let (path, mut store) = canonical(&dir);
     let command = format!(
@@ -358,6 +359,7 @@ fn sidecar_resolves_full_tool_intent_members_not_only_the_preview() {
         command: CanonicalText::Inline {
             text: command.clone(),
         },
+        source_truncated: false,
         cwd: None,
         timeout_ms: None,
         background: false,
@@ -378,7 +380,7 @@ fn sidecar_resolves_full_tool_intent_members_not_only_the_preview() {
     queries::visit_session_search_documents(store.conn(), "s1", |document| {
         if document.timeline_id == "tool-member" {
             assert!(
-                document
+                !document
                     .members
                     .iter()
                     .any(|member| member.lane == SearchLane::Intent)
@@ -394,8 +396,7 @@ fn sidecar_resolves_full_tool_intent_members_not_only_the_preview() {
         .unwrap()
         .unwrap();
     let hits = search.search(query("deeptoolintentsentinel")).unwrap().hits;
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].timeline_id, "tool-member");
+    assert!(hits.is_empty());
 }
 
 #[test]

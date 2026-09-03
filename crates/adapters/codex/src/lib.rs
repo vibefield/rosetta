@@ -14,6 +14,7 @@
 //!   need it; it belongs in `core`.
 
 pub mod adapter;
+mod exec_program;
 pub mod normalize;
 pub mod raw;
 pub mod spec;

@@ -334,7 +334,9 @@ pub(crate) fn apply_snapshot_records(
         instrument.add(Metric::RecordsFramed, 1);
         ctx.src_offset = Some(index as i64);
         let outcome = instrument.time(Metric::NormalizeNanos, || {
-            adapter.ingest_line(&mut ctx, &file.stream_id, record)
+            adapter
+                .ingest_line(&mut ctx, &file.stream_id, record)
+                .into_projection()
         });
         match &outcome.status {
             LineStatus::Parsed => {

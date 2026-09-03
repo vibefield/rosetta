@@ -6,7 +6,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
-use rosetta_core::timeline::SearchMember;
+use rosetta_core::timeline::{ResourceRef, SearchMember};
 use rosetta_core::{TimelineBody, TimelineEntry};
 
 use crate::{StoreError, message_codec};
@@ -121,6 +121,140 @@ pub struct SearchDocument {
     pub intent: String,
     pub change: String,
     pub tool: String,
+}
+
+/// Minimal raw-ledger address for one shell/code timeline row. The exact
+/// command is intentionally absent: callers hand this anchor to the ingest
+/// engine, which reuses the owning adapter to recover it on demand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandSource {
+    pub cursor_id: i64,
+    pub runtime_id: String,
+    pub agent_kind: String,
+    pub relative_path: String,
+    pub session_id: String,
+    pub generation: u64,
+    pub offset: u64,
+    pub timeline_id: String,
+    pub correlation_key: String,
+}
+
+/// The live file named by one canonical `file_read` target.
+///
+/// The transport addresses this by session, timeline row and target index;
+/// callers never submit a path of their own. `cwd` is retained only so a
+/// relative target can be resolved exactly where the recorded read happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileReadTarget {
+    pub path: String,
+    pub cwd: Option<String>,
+}
+
+pub fn file_read_target(
+    conn: &Connection,
+    session_id: &str,
+    timeline_id: &str,
+    target_index: usize,
+) -> Result<Option<FileReadTarget>, StoreError> {
+    let raw = conn
+        .prepare_cached(
+            "SELECT m.*, s.cwd AS file_read_cwd
+             FROM message m
+             JOIN session s ON s.id = m.session_id
+             WHERE m.session_id = ?1 AND m.timeline_id = ?2
+               AND m.type = 'tool_use'",
+        )?
+        .query_row(params![session_id, timeline_id], |row| {
+            Ok((
+                message_codec::decode(row)?,
+                row.get::<_, Option<String>>("file_read_cwd")?,
+            ))
+        })
+        .optional()?;
+
+    let Some((entry, cwd)) = raw else {
+        return Ok(None);
+    };
+    let TimelineBody::ToolUse { tool } = entry.body else {
+        return Ok(None);
+    };
+    let rosetta_core::ToolAction::FileRead { targets, .. } = tool.action else {
+        return Ok(None);
+    };
+    let Some(target) = targets.get(target_index) else {
+        return Ok(None);
+    };
+    let ResourceRef::File { path, .. } = &target.resource else {
+        return Ok(None);
+    };
+    Ok(Some(FileReadTarget {
+        path: path.clone(),
+        cwd,
+    }))
+}
+
+pub fn command_source(
+    conn: &Connection,
+    session_id: &str,
+    timeline_id: &str,
+) -> Result<Option<CommandSource>, StoreError> {
+    let raw = conn
+        .prepare_cached(
+            "SELECT c.id, c.runtime_id, r.kind, c.path, c.session_id,
+                    c.active_generation, m.src_offset, m.tool_correlation_key
+             FROM message m
+             JOIN ingest_cursor c ON c.id = m.src_cursor
+             JOIN agent_runtime r ON r.id = c.runtime_id
+             WHERE m.session_id = ?1 AND m.timeline_id = ?2
+               AND m.type = 'tool_use'
+               AND m.tool_kind IN ('shell', 'code_execute')",
+        )?
+        .query_row(params![session_id, timeline_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })
+        .optional()?;
+    raw.map(
+        |(
+            cursor_id,
+            runtime_id,
+            agent_kind,
+            relative_path,
+            source_session_id,
+            generation,
+            offset,
+            correlation_key,
+        )| {
+            let generation = u64::try_from(generation).map_err(|_| StoreError::SourceState {
+                cursor_id,
+                message: "active generation is negative".to_string(),
+            })?;
+            let offset = u64::try_from(offset).map_err(|_| StoreError::SourceState {
+                cursor_id,
+                message: "command source offset is negative".to_string(),
+            })?;
+            Ok(CommandSource {
+                cursor_id,
+                runtime_id,
+                agent_kind,
+                relative_path,
+                session_id: source_session_id,
+                generation,
+                offset,
+                timeline_id: timeline_id.to_owned(),
+                correlation_key,
+            })
+        },
+    )
+    .transpose()
 }
 
 pub fn projection_state(conn: &Connection) -> Result<ProjectionState, StoreError> {
@@ -523,6 +657,19 @@ pub fn heatmap_days_in_timezone(
     since_ms: Ms,
     offset_minutes: i32,
 ) -> Result<Vec<HeatmapDay>, StoreError> {
+    heatmap_days_in_timezone_for_scope(conn, Some(project_id), since_ms, offset_minutes)
+}
+
+/// Daily totals for either one persisted project (`Some(id)`) or the
+/// intentionally project-less session bucket (`None`). `IS` preserves the
+/// ordinary indexed equality lookup while also giving SQL NULL an explicit,
+/// queryable meaning; no fake project row has to enter the canonical model.
+pub fn heatmap_days_in_timezone_for_scope(
+    conn: &Connection,
+    project_id: Option<&str>,
+    since_ms: Ms,
+    offset_minutes: i32,
+) -> Result<Vec<HeatmapDay>, StoreError> {
     let mut stmt = conn.prepare_cached(
         "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
@@ -530,7 +677,7 @@ pub fn heatmap_days_in_timezone(
                     + COALESCE(b.think_tokens,0)) AS tokens
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
-         WHERE s.project_id = ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
+         WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
          GROUP BY day ORDER BY day",
     )?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
@@ -555,6 +702,16 @@ pub fn model_days_in_timezone(
     since_ms: Ms,
     offset_minutes: i32,
 ) -> Result<Vec<ModelDay>, StoreError> {
+    model_days_in_timezone_for_scope(conn, Some(project_id), since_ms, offset_minutes)
+}
+
+/// Per-model daily totals for a real project or the project-less bucket.
+pub fn model_days_in_timezone_for_scope(
+    conn: &Connection,
+    project_id: Option<&str>,
+    since_ms: Ms,
+    offset_minutes: i32,
+) -> Result<Vec<ModelDay>, StoreError> {
     let mut stmt = conn.prepare_cached(
         "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day, b.model,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
@@ -562,7 +719,7 @@ pub fn model_days_in_timezone(
                     + COALESCE(b.think_tokens,0)) AS tokens
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
-         WHERE s.project_id = ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
+         WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
          GROUP BY day, b.model ORDER BY day, b.model",
     )?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
@@ -587,6 +744,16 @@ pub fn hour_profile_in_timezone(
     since_ms: Ms,
     offset_minutes: i32,
 ) -> Result<Vec<HourTotal>, StoreError> {
+    hour_profile_in_timezone_for_scope(conn, Some(project_id), since_ms, offset_minutes)
+}
+
+/// Hour-of-day totals for a real project or the project-less bucket.
+pub fn hour_profile_in_timezone_for_scope(
+    conn: &Connection,
+    project_id: Option<&str>,
+    since_ms: Ms,
+    offset_minutes: i32,
+) -> Result<Vec<HourTotal>, StoreError> {
     let mut stmt = conn.prepare_cached(
         "SELECT CAST(strftime('%H', (b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
@@ -594,7 +761,7 @@ pub fn hour_profile_in_timezone(
                     + COALESCE(b.think_tokens,0)) AS tokens
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
-         WHERE s.project_id = ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
+         WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
          GROUP BY hour ORDER BY hour",
     )?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
@@ -619,11 +786,19 @@ pub fn contribution(
     conn: &Connection,
     project_id: &str,
 ) -> Result<Vec<ContributionRow>, StoreError> {
+    contribution_for_scope(conn, Some(project_id))
+}
+
+/// Root-session contribution for a real project or the project-less bucket.
+pub fn contribution_for_scope(
+    conn: &Connection,
+    project_id: Option<&str>,
+) -> Result<Vec<ContributionRow>, StoreError> {
     let mut stmt = conn.prepare_cached(
         "WITH roots AS (
              SELECT id, project_id
              FROM session
-             WHERE project_id = ?1 AND id = root_session_id
+             WHERE project_id IS ?1 AND id = root_session_id
                AND stream_state != 'pending'
          ),
          tree_sessions AS (

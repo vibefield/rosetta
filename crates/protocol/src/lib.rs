@@ -25,7 +25,7 @@ pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -281,6 +281,14 @@ pub struct TimelinePage {
     /// the timeline. Expires (HTTP 410, [`ErrorCode::CursorExpired`]) when
     /// the session's projection was rewritten under it.
     pub cursor: Option<String>,
+}
+
+/// Exact shell/code source recovered from the raw ledger only after an
+/// explicit disclosure. Timeline pages never carry this payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CommandResponse {
+    pub command: String,
 }
 
 /// Internals of the opaque timeline cursor. Serialized as JSON inside the

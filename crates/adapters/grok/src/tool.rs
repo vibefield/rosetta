@@ -135,6 +135,7 @@ pub fn project_request(
                 .ok_or(ProjectionError::MissingField("command"))?;
             ToolAction::Shell {
                 command: canonical_text(command)?,
+                source_truncated: false,
                 cwd: first_string(input, &["current_dir", "cwd"])
                     .or(cwd)
                     .map(|path| lexical_resource(path, cwd, true))

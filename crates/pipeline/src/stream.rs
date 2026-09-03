@@ -665,7 +665,9 @@ fn ingest_file(
                     ctx.src_offset = Some(record.start_offset as i64);
                     ctx.source_generation = source_generation;
                     let outcome = instrument.time(Metric::NormalizeNanos, || {
-                        adapter.ingest_line(&mut ctx, &file.stream_id, &record.payload)
+                        adapter
+                            .ingest_line(&mut ctx, &file.stream_id, &record.payload)
+                            .into_projection()
                     });
                     match &outcome.status {
                         LineStatus::Parsed => {

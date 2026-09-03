@@ -530,6 +530,70 @@ fn edit_and_write_calls_also_produce_file_edits() {
         None,
     )]);
     assert!(edits(&ops).is_empty());
+
+    let (ops, _) = run(&[assistant(
+        json!([{"type": "tool_use", "id": "notebook", "name": "NotebookEdit",
+                "input": {"notebook_path": "/tmp/project/report.ipynb",
+                          "new_source": "first\nsecond", "edit_mode": "replace"}}]),
+        None,
+    )]);
+    let notebook = edits(&ops);
+    assert_eq!(notebook.len(), 1);
+    assert_eq!(notebook[0].path, "/tmp/project/report.ipynb");
+    assert_eq!(notebook[0].lines_added, Some(2));
+    assert_eq!(notebook[0].lines_removed, None);
+}
+
+#[test]
+fn successful_edit_result_enriches_its_call_with_the_applied_contextual_diff() {
+    let (ops, _) = run(&[
+        assistant(
+            json!([{"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": {
+                "file_path": "/tmp/project/src/main.rs",
+                "old_string": "before();",
+                "new_string": "after();",
+                "replace_all": false}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_edit",
+                    "content": "updated"}]),
+            json!({"toolUseResult": {
+                "filePath": "/tmp/project/src/main.rs",
+                "oldString": "before();",
+                "newString": "after();",
+                "originalFile": null,
+                "structuredPatch": [{
+                    "oldStart": 12,
+                    "oldLines": 3,
+                    "newStart": 12,
+                    "newLines": 3,
+                    "lines": [" context();", "-before();", "+after();"]
+                }],
+                "userModified": false,
+                "replaceAll": false
+            }}),
+        ),
+    ]);
+
+    let update = ops.iter().find_map(|op| match op {
+        IngestOp::ToolUpdate { patch, .. } => patch.request.as_ref(),
+        _ => None,
+    });
+    let Some(request) = update else {
+        panic!("successful file result must enrich the opener")
+    };
+    let ToolAction::FileChange { changes } = &request.action else {
+        panic!("result correction must stay in the file-change family")
+    };
+    assert_eq!(changes[0].lines_added, Some(1));
+    assert_eq!(changes[0].lines_removed, Some(1));
+    assert_eq!(
+        changes[0].diff.as_ref().map(|diff| diff.as_preview()),
+        Some(
+            "--- /tmp/project/src/main.rs\n+++ /tmp/project/src/main.rs\n@@ -12,3 +12,3 @@\n context();\n-before();\n+after();"
+        )
+    );
 }
 
 #[test]
@@ -791,6 +855,54 @@ fn valid_authored_image_becomes_a_typed_content_addressed_attachment() {
 }
 
 #[test]
+fn a_stored_image_keeps_claudes_numbered_reference_in_the_authored_text() {
+    let (ops, _) = run(&[user(
+        json!([
+            {
+                "type": "text",
+                "text": "let me show you a draft [Image #1], then refine the outline"
+            },
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"
+            }}
+        ]),
+        json!({}),
+    )]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    let TimelineBody::User { text, attachments } = &rows[0].body else {
+        panic!("authored media must remain a user turn")
+    };
+    assert_eq!(
+        text.as_ref().map(|text| text.as_preview()),
+        Some("let me show you a draft [Image #1], then refine the outline")
+    );
+    assert_eq!(attachments.len(), 1);
+}
+
+#[test]
+fn injected_turn_companions_never_become_human_turns() {
+    let (image_ops, image_statuses) = run(&[user(
+        json!([{
+            "type": "text",
+            "text": "[Image: original 3000x1816, displayed at 2000x1211. Multiply coordinates by 1.50 to map to original image.]"
+        }]),
+        json!({"isMeta": true, "turnCompanion": true}),
+    )]);
+    assert_eq!(image_statuses, [LineStatus::Parsed]);
+    assert!(messages(&image_ops).is_empty());
+
+    // The discriminator is native provenance, not an image-string heuristic:
+    // Claude uses the same companion records for skill and retry context.
+    let (context_ops, context_statuses) = run(&[user(
+        json!("Base directory for this skill: /tmp/claude-skill"),
+        json!({"isMeta": true, "turnCompanion": true}),
+    )]);
+    assert_eq!(context_statuses, [LineStatus::Parsed]);
+    assert!(messages(&context_ops).is_empty());
+}
+
+#[test]
 fn synthetic_user_local_commands_drop_boilerplate_and_keep_semantics() {
     let (caveat_ops, _) = run(&[user(
         json!(
@@ -815,7 +927,7 @@ fn synthetic_user_local_commands_drop_boilerplate_and_keep_semantics() {
 
     let (output_ops, _) = run(&[user(
         json!(
-            "<local-command-stdout>Set model to \u{1b}[1mFable 5.1\u{1b}[22m and saved as default</local-command-stdout>"
+            "<local-command-stdout>Set model to \u{1b}[1m`Fable 5.1`\u{1b}[22m and saved as your default for new sessions</local-command-stdout>"
         ),
         json!({}),
     )]);
@@ -825,7 +937,35 @@ fn synthetic_user_local_commands_drop_boilerplate_and_keep_semantics() {
         &output_rows[0].body,
         TimelineBody::Notice {
             notice: Notice::CommandOutput { output }
-        } if output.as_preview() == "Set model to Fable 5.1 and saved as default"
+        } if output.as_preview() == "Fable 5.1"
+    ));
+
+    let (effort_ops, _) = run(&[user(
+        json!(
+            "<local-command-stdout>Set effort level to max (this session only): Maximum capability with deepest reasoning.</local-command-stdout>"
+        ),
+        json!({}),
+    )]);
+    let effort_rows = messages(&effort_ops);
+    assert!(matches!(
+        &effort_rows[0].body,
+        TimelineBody::Notice {
+            notice: Notice::CommandOutput { output }
+        } if output.as_preview() == "max"
+    ));
+
+    let (failure_ops, _) = run(&[user(
+        json!(
+            "<local-command-stdout>Invalid argument: maxc. Valid options are: low, medium, high</local-command-stdout>"
+        ),
+        json!({}),
+    )]);
+    let failure_rows = messages(&failure_ops);
+    assert!(matches!(
+        &failure_rows[0].body,
+        TimelineBody::Notice {
+            notice: Notice::CommandOutput { output }
+        } if output.as_preview() == "Invalid argument: maxc. Valid options are: low, medium, high"
     ));
 
     let (empty_ops, _) = run(&[user(

@@ -94,6 +94,7 @@ pub fn project_request(
                 .ok_or(ProjectionError::MissingField("command"))?;
             ToolAction::Shell {
                 command: canonical_text(command)?,
+                source_truncated: false,
                 cwd: cwd
                     .map(|path| lexical_resource(path, None, true))
                     .transpose()?,

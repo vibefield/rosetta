@@ -9,6 +9,8 @@
 //! blake3 over the session and the envelope `ordinal` (or the source byte
 //! offset for legacy writers), so replaying a file produces byte-identical ops.
 
+use std::collections::BTreeMap;
+
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_adapter_support::tool::{
@@ -17,7 +19,10 @@ use rosetta_adapter_support::tool::{
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TokenSnapshot,
 };
-use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
+use rosetta_core::timeline::{
+    CorrelationDerivation, FileChangeOp, ShellOutcome, StatusBasis, ToolAction, ToolOutcomePatch,
+    ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
+};
 use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,11 +34,31 @@ use crate::raw::rollout::{
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
 use crate::time::rfc3339_ms;
+use crate::tool::TransportCall;
 
-/// The only tool whose arguments carry a patch body. Everything else — the
-/// canonical declares `exec_command` and nothing more — projects as a plain
-/// tool call.
-const APPLY_PATCH: &str = "apply_patch";
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CanonicalCall {
+    correlation_key: String,
+    action: ToolAction,
+    started_at: Option<Ms>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PendingCall {
+    Canonical { call: CanonicalCall },
+    CanonicalBatch { calls: Vec<CanonicalCall> },
+    PollProcesses { process_ids: Vec<String> },
+    WaitCell { cell_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CellRoute {
+    Canonical { call: CanonicalCall },
+    CanonicalBatch { calls: Vec<CanonicalCall> },
+    PollProcesses { process_ids: Vec<String> },
+}
 
 /// Per-file adapter state ([`NormalizeCtx::state`]).
 ///
@@ -51,6 +76,19 @@ pub struct CodexState {
     response: Option<String>,
     /// Running per-response total, in deltas absorbed from the session counters.
     response_total: TokenSnapshot,
+    /// One-record-lived tool requests, plus the rare outer executor cell that
+    /// yielded before its real result was ready. These maps are adapter state,
+    /// never canonical data; they disappear as soon as the matching output is
+    /// reduced.
+    #[serde(default)]
+    pending_calls: BTreeMap<String, PendingCall>,
+    #[serde(default)]
+    yielded_cells: BTreeMap<String, CellRoute>,
+    /// Unified exec sessions point back to the command that created them. Poll
+    /// calls can therefore update that command's lifecycle without becoming
+    /// hundreds of meaningless transcript rows themselves.
+    #[serde(default)]
+    running_processes: BTreeMap<String, CanonicalCall>,
 }
 
 /// Ingest one rollout line. `stream_id` names the layout stream for drift
@@ -310,6 +348,67 @@ fn response_item(
             let Some(tool_id) = item.call_id.clone() else {
                 return hard_into(ctx, stream_id, record_kind, "missing_call_id", ts, ops);
             };
+
+            // `functions.exec` can yield its own cell, and an empty
+            // `write_stdin` is merely a poll of a command already represented
+            // by its original shell row. Keep those routing addresses only in
+            // adapter state. Their outputs will update the original command;
+            // neither layer deserves another transcript row.
+            if let Some(transport) = crate::tool::transport_call(&name, &input) {
+                let pending = match transport {
+                    TransportCall::WaitCell(cell_id) => PendingCall::WaitCell { cell_id },
+                    TransportCall::PollProcesses(process_ids) => {
+                        PendingCall::PollProcesses { process_ids }
+                    }
+                };
+                state.pending_calls.insert(tool_id, pending);
+                return LineStatus::Parsed;
+            }
+
+            if name == "exec"
+                && let Some(children) =
+                    crate::tool::project_exec_batch(&input, state.tool_cwd.as_deref(), &tool_id)
+            {
+                let mut calls = Vec::with_capacity(children.len());
+                let mut last_timeline_id = None;
+                for (index, tool) in children.into_iter().enumerate() {
+                    let child_discriminator = format!("{discriminator}/child#{index}");
+                    let mut child = row(ctx, &child_discriminator, MessageKind::ToolUse, ts);
+                    child.uuid = item.id.clone();
+                    stamp_model(&mut child, state);
+                    let correlation_key = tool.correlation.key.clone();
+                    calls.push(CanonicalCall {
+                        correlation_key,
+                        action: tool.action.clone(),
+                        started_at: ts,
+                    });
+                    let file_edits = projected_file_edits(&tool.action);
+                    child.tool = Some(tool);
+                    let timeline_id = child.timeline_id.clone();
+                    last_timeline_id = Some(timeline_id.clone());
+                    IngestOp::push_message(ops, child);
+                    for edit in file_edits {
+                        ops.push(IngestOp::FileEdit(FileEditRow {
+                            session_id: ctx.session_id.clone(),
+                            message_timeline_id: Some(timeline_id.clone()),
+                            path: edit.path,
+                            kind: edit.kind,
+                            snapshot_ref: None,
+                            lines_added: edit.added,
+                            lines_removed: edit.removed,
+                            at: ts,
+                        }));
+                    }
+                }
+                state
+                    .pending_calls
+                    .insert(tool_id, PendingCall::CanonicalBatch { calls });
+                if let Some(timeline_id) = last_timeline_id {
+                    begin_response(state, &timeline_id);
+                }
+                return LineStatus::Parsed;
+            }
+
             let mut row = row(ctx, discriminator, MessageKind::ToolUse, ts);
             row.uuid = item.id.clone();
             stamp_model(&mut row, state);
@@ -343,16 +442,30 @@ fn response_item(
                     )
                 }
             });
+            let file_edits = row
+                .tool
+                .as_ref()
+                .map(|tool| projected_file_edits(&tool.action))
+                .unwrap_or_default();
+            if let Some(tool) = row.tool.as_ref() {
+                state.pending_calls.insert(
+                    tool_id.clone(),
+                    PendingCall::Canonical {
+                        call: CanonicalCall {
+                            correlation_key: tool_id,
+                            action: tool.action.clone(),
+                            started_at: ts,
+                        },
+                    },
+                );
+            }
             // A tool call IS a response: the model produced it, and the
             // token_count that follows belongs to it.
             begin_response(state, &row.timeline_id);
             let timeline_id = row.timeline_id.clone();
             IngestOp::push_message(ops, row);
 
-            for edit in patch_body(&name, &input)
-                .map(patch_edits)
-                .unwrap_or_default()
-            {
+            for edit in file_edits {
                 ops.push(IngestOp::FileEdit(FileEditRow {
                     session_id: ctx.session_id.clone(),
                     message_timeline_id: Some(timeline_id.clone()),
@@ -372,26 +485,7 @@ fn response_item(
                 // Without the correlation id the result can never reach its call.
                 return hard_into(ctx, stream_id, &record_kind, "missing_call_id", ts, ops);
             };
-            let is_error = status_error(item.status.as_deref());
-            let output = is_error
-                .is_some_and(|value| value)
-                .then(|| tool_output_text(item.output.as_ref()))
-                .flatten();
-            ops.push(IngestOp::ToolUpdate {
-                session_id: ctx.session_id.clone(),
-                correlation_key: tool_id,
-                evidence: ctx.evidence(0),
-                // The record declares no status field — success stays UNKNOWN
-                // rather than being sniffed out of its text.
-                patch: Box::new(terminal_update(
-                    is_error,
-                    false,
-                    StatusBasis::NativeTerminalRecord,
-                    ts,
-                    output.as_deref(),
-                )),
-                at: ts,
-            });
+            reduce_tool_output(ctx, state, item, &tool_id, ts, ops);
             LineStatus::Parsed
         }
         "tool_search_call" => {
@@ -545,6 +639,384 @@ fn response_item(
             ts,
             ops,
         ),
+    }
+}
+
+/// Reduce Codex's two execution layers into the semantic call the transcript
+/// already owns. A yielded outer cell and an empty process poll are routing,
+/// not actions; structured unified-exec results are the native evidence that
+/// can enrich the original shell row with its process id and final exit code.
+fn reduce_tool_output(
+    ctx: &NormalizeCtx,
+    state: &mut CodexState,
+    item: &ResponseItem,
+    tool_id: &str,
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let route = match state.pending_calls.remove(tool_id) {
+        Some(PendingCall::Canonical { call }) => Some(CellRoute::Canonical { call }),
+        Some(PendingCall::CanonicalBatch { calls }) => Some(CellRoute::CanonicalBatch { calls }),
+        Some(PendingCall::PollProcesses { process_ids }) => {
+            Some(CellRoute::PollProcesses { process_ids })
+        }
+        Some(PendingCall::WaitCell { cell_id }) => state.yielded_cells.remove(&cell_id),
+        None => None,
+    };
+
+    let Some(route) = route else {
+        // A partial source can begin at an output record. Preserve the old
+        // correlation behavior in that case; a transport output with no
+        // opener simply remains an orphan and never becomes a message.
+        push_update(ctx, tool_id, terminal_patch(item, ts), ts, ops);
+        return;
+    };
+
+    if let Some(cell_id) = yielded_cell_id(item.output.as_ref()) {
+        state.yielded_cells.insert(cell_id, route);
+        return;
+    }
+
+    let execution = execution_results(item.output.as_ref());
+    match route {
+        CellRoute::Canonical { call } => {
+            reduce_canonical_output(ctx, state, item, call, &execution, ts, ops)
+        }
+        CellRoute::CanonicalBatch { calls } => {
+            reduce_canonical_batch(ctx, state, item, calls, &execution, ts, ops)
+        }
+        CellRoute::PollProcesses { process_ids } => {
+            reduce_process_poll(ctx, state, item, &process_ids, &execution, ts, ops)
+        }
+    }
+}
+
+fn reduce_canonical_batch(
+    ctx: &NormalizeCtx,
+    state: &mut CodexState,
+    item: &ResponseItem,
+    calls: Vec<CanonicalCall>,
+    execution: &[ExecutionResult],
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let aligned = execution.len() == calls.len();
+    for (index, call) in calls.into_iter().enumerate() {
+        let result = aligned.then(|| execution.get(index)).flatten();
+        reduce_canonical_output(
+            ctx,
+            state,
+            item,
+            call,
+            result.map(std::slice::from_ref).unwrap_or_default(),
+            ts,
+            ops,
+        );
+    }
+}
+
+fn reduce_canonical_output(
+    ctx: &NormalizeCtx,
+    state: &mut CodexState,
+    item: &ResponseItem,
+    call: CanonicalCall,
+    execution: &[ExecutionResult],
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    if matches!(
+        call.action,
+        ToolAction::Shell { .. } | ToolAction::CodeExecute { .. }
+    ) && let Some(result) = execution.first()
+    {
+        if result.exit_code.is_some() || result.signal.is_some() {
+            let patch = completed_command_patch(&call, result, None, ts);
+            push_update(ctx, &call.correlation_key, patch, ts, ops);
+            return;
+        }
+        if let Some(process_id) = result.process_id.as_ref() {
+            state
+                .running_processes
+                .insert(process_id.clone(), call.clone());
+            let patch = running_command_patch(&call, process_id);
+            push_update(ctx, &call.correlation_key, patch, ts, ops);
+            return;
+        }
+    }
+
+    push_update(
+        ctx,
+        &call.correlation_key,
+        terminal_patch(item, ts),
+        ts,
+        ops,
+    );
+}
+
+fn reduce_process_poll(
+    ctx: &NormalizeCtx,
+    state: &mut CodexState,
+    item: &ResponseItem,
+    process_ids: &[String],
+    execution: &[ExecutionResult],
+    ts: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let failed_without_result = status_error(item.status.as_deref()) == Some(true);
+    for (index, process_id) in process_ids.iter().enumerate() {
+        let result = execution
+            .iter()
+            .find(|result| result.process_id.as_deref() == Some(process_id))
+            .or_else(|| (execution.len() == process_ids.len()).then(|| &execution[index]))
+            .or_else(|| {
+                (process_ids.len() == 1)
+                    .then(|| execution.first())
+                    .flatten()
+            });
+        let finished = result
+            .is_some_and(|result| result.exit_code.is_some() || result.signal.is_some())
+            || failed_without_result;
+        if !finished {
+            continue;
+        }
+        let Some(call) = state.running_processes.remove(process_id) else {
+            continue;
+        };
+        let fallback;
+        let result = match result {
+            Some(result) => result,
+            None => {
+                fallback = ExecutionResult {
+                    process_id: Some(process_id.clone()),
+                    exit_code: Some(1),
+                    signal: None,
+                    diagnostic: tool_output_text(item.output.as_ref()),
+                };
+                &fallback
+            }
+        };
+        let patch = completed_command_patch(&call, result, Some(process_id), ts);
+        push_update(ctx, &call.correlation_key, patch, ts, ops);
+    }
+}
+
+fn push_update(
+    ctx: &NormalizeCtx,
+    correlation_key: &str,
+    patch: ToolUpdatePatch,
+    at: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    ops.push(IngestOp::ToolUpdate {
+        session_id: ctx.session_id.clone(),
+        correlation_key: correlation_key.to_owned(),
+        evidence: ctx.evidence(0),
+        patch: Box::new(patch),
+        at,
+    });
+}
+
+fn terminal_patch(item: &ResponseItem, at: Option<Ms>) -> ToolUpdatePatch {
+    let is_error = status_error(item.status.as_deref());
+    let output = is_error
+        .is_some_and(|value| value)
+        .then(|| tool_output_text(item.output.as_ref()))
+        .flatten();
+    terminal_update(
+        is_error,
+        false,
+        StatusBasis::NativeTerminalRecord,
+        at,
+        output.as_deref(),
+    )
+}
+
+fn running_command_patch(call: &CanonicalCall, process_id: &str) -> ToolUpdatePatch {
+    let outcome = ShellOutcome {
+        exit_code: None,
+        signal: None,
+        process_id: Some(process_id.to_owned()),
+    };
+    ToolUpdatePatch {
+        outcome: outcome_action(&call.action, outcome).map(|action| ToolOutcomePatch { action }),
+        status: Some(ToolStatusFact {
+            value: ToolStatus::Running,
+            basis: StatusBasis::NativeState,
+        }),
+        timing: call.started_at.map(|started_at| ToolTiming {
+            started_at: Some(started_at),
+            completed_at: None,
+            duration_ms: None,
+        }),
+        ..ToolUpdatePatch::default()
+    }
+}
+
+fn completed_command_patch(
+    call: &CanonicalCall,
+    result: &ExecutionResult,
+    routed_process_id: Option<&str>,
+    at: Option<Ms>,
+) -> ToolUpdatePatch {
+    let failed = result.exit_code.is_some_and(|code| code != 0) || result.signal.is_some();
+    let process_id = routed_process_id
+        .map(str::to_owned)
+        .or_else(|| result.process_id.clone());
+    let outcome = ShellOutcome {
+        exit_code: result.exit_code,
+        signal: result.signal.clone(),
+        process_id,
+    };
+    let mut patch = terminal_update(
+        Some(failed),
+        false,
+        StatusBasis::NativeState,
+        at,
+        failed.then_some(result.diagnostic.as_deref()).flatten(),
+    );
+    patch.outcome = outcome_action(&call.action, outcome).map(|action| ToolOutcomePatch { action });
+    complete_timing(&mut patch, call.started_at, at);
+    patch
+}
+
+fn outcome_action(action: &ToolAction, outcome_value: ShellOutcome) -> Option<ToolAction> {
+    let mut action = action.clone();
+    match &mut action {
+        ToolAction::Shell { outcome, .. } | ToolAction::CodeExecute { outcome, .. } => {
+            *outcome = Some(outcome_value);
+            Some(action)
+        }
+        _ => None,
+    }
+}
+
+fn complete_timing(patch: &mut ToolUpdatePatch, started_at: Option<Ms>, completed_at: Option<Ms>) {
+    let duration_ms = started_at.zip(completed_at).and_then(|(start, end)| {
+        end.checked_sub(start)
+            .and_then(|duration| u64::try_from(duration).ok())
+    });
+    patch.timing = Some(ToolTiming {
+        started_at,
+        completed_at,
+        duration_ms,
+    });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExecutionResult {
+    process_id: Option<String>,
+    exit_code: Option<i32>,
+    signal: Option<String>,
+    diagnostic: Option<String>,
+}
+
+fn yielded_cell_id(output: Option<&Value>) -> Option<String> {
+    let mut found = None;
+    visit_output_text(output?, &mut |text| {
+        if found.is_some() {
+            return;
+        }
+        let Some(rest) = text.split("Script running with cell ID ").nth(1) else {
+            return;
+        };
+        found = rest
+            .split_whitespace()
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+    });
+    found
+}
+
+fn execution_results(output: Option<&Value>) -> Vec<ExecutionResult> {
+    let mut results = Vec::new();
+    let Some(output) = output else {
+        return results;
+    };
+    visit_execution_values(output, &mut results);
+    results
+}
+
+fn visit_execution_values(value: &Value, results: &mut Vec<ExecutionResult>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                visit_execution_values(value, results);
+            }
+        }
+        Value::Object(map) => {
+            let process_id = map.get("session_id").and_then(value_id);
+            let exit_code = map
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok());
+            let signal = map
+                .get("signal")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let is_unified_result = (map.contains_key("chunk_id")
+                || map.contains_key("wall_time_seconds")
+                || map.contains_key("original_token_count"))
+                && (process_id.is_some() || exit_code.is_some() || signal.is_some());
+            if is_unified_result {
+                results.push(ExecutionResult {
+                    process_id,
+                    exit_code,
+                    signal,
+                    diagnostic: map
+                        .get("output")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned),
+                });
+                return;
+            }
+            if let Some(text) = map.get("text").and_then(Value::as_str) {
+                visit_embedded_json(text, results);
+            }
+        }
+        Value::String(text) => visit_embedded_json(text, results),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn visit_embedded_json(text: &str, results: &mut Vec<ExecutionResult>) {
+    let trimmed = text.trim();
+    let start = trimmed
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '{' | '[').then_some(index));
+    let Some(start) = start else {
+        return;
+    };
+    let mut values = serde_json::Deserializer::from_str(&trimmed[start..]).into_iter::<Value>();
+    if let Some(Ok(value)) = values.next() {
+        visit_execution_values(&value, results);
+    }
+}
+
+fn value_id(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value.as_i64().map(|value| value.to_string()))
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
+}
+
+fn visit_output_text<'a>(value: &'a Value, visit: &mut impl FnMut(&'a str)) {
+    match value {
+        Value::String(text) => visit(text),
+        Value::Array(values) => {
+            for value in values {
+                visit_output_text(value, visit);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(Value::as_str) {
+                visit(text);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
@@ -932,7 +1404,7 @@ fn number(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
 }
 
-// ————— apply_patch → file edits ——————————————————————————————————————
+// ————— canonical file changes → file-edit activity ——————————————————
 
 struct PatchEdit {
     path: String,
@@ -941,102 +1413,23 @@ struct PatchEdit {
     removed: Option<i64>,
 }
 
-/// The patch body of an edit-shaped call, if the arguments carry one.
-///
-/// NOT fixture-backed at 0.149.1: the canonical's `tool-call-arguments` facet
-/// declares `exec_command` and nothing else, so this stays deliberately narrow —
-/// one tool name, and no rows at all unless an explicit patch header is present.
-fn patch_body<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
-    if name != APPLY_PATCH {
-        return None;
-    }
-    let body = input
-        .get("input")
-        .or_else(|| input.get("patch"))
-        .and_then(Value::as_str)
-        .or_else(|| input.as_str())?;
-    body.contains("*** ").then_some(body)
-}
-
-/// Count added/removed lines per file in an apply_patch body. Files whose
-/// content the patch does not carry (a delete) report unknown counts rather
-/// than zero.
-fn patch_edits(patch: &str) -> Vec<PatchEdit> {
-    let mut edits = Vec::new();
-    let mut open: Option<OpenFile> = None;
-    for line in patch.lines() {
-        if let Some(header) = line.strip_prefix("*** ") {
-            // A rename header does not open a new file — the hunks that follow
-            // still belong to the section above it.
-            if header.starts_with("Move to:") {
-                continue;
-            }
-            if let Some(file) = open.take() {
-                edits.push(file.finish());
-            }
-            open = OpenFile::start(header);
-            continue;
-        }
-        let Some(file) = open.as_mut() else {
-            continue;
-        };
-        if let Some(text) = line.strip_prefix('+') {
-            file.added.push(text);
-        } else if let Some(text) = line.strip_prefix('-') {
-            file.removed.push(text);
-        }
-    }
-    if let Some(file) = open.take() {
-        edits.push(file.finish());
-    }
-    edits
-}
-
-struct OpenFile<'a> {
-    path: String,
-    kind: EditKind,
-    /// Whether the patch carries the file's lines at all.
-    counted: bool,
-    added: Vec<&'a str>,
-    removed: Vec<&'a str>,
-}
-
-impl<'a> OpenFile<'a> {
-    fn start(header: &str) -> Option<Self> {
-        let (verb, path) = header.split_once(": ")?;
-        let (kind, counted) = match verb {
-            "Add File" => (EditKind::Write, true),
-            "Update File" => (EditKind::Edit, true),
-            "Delete File" => (EditKind::Edit, false),
-            // "Begin Patch" / "End Patch" carry no colon and never reach here.
-            _ => return None,
-        };
-        Some(Self {
-            path: path.trim().to_owned(),
-            kind,
-            counted,
-            added: Vec::new(),
-            removed: Vec::new(),
+fn projected_file_edits(action: &ToolAction) -> Vec<PatchEdit> {
+    let ToolAction::FileChange { changes } = action else {
+        return Vec::new();
+    };
+    changes
+        .iter()
+        .map(|change| PatchEdit {
+            path: change.path.display_value().to_owned(),
+            kind: if change.operation == Some(FileChangeOp::Create) {
+                EditKind::Write
+            } else {
+                EditKind::Edit
+            },
+            added: change.lines_added.and_then(|value| value.try_into().ok()),
+            removed: change.lines_removed.and_then(|value| value.try_into().ok()),
         })
-    }
-
-    fn finish(self) -> PatchEdit {
-        let added = self.added.join("\n");
-        let (lines_added, lines_removed) = if !self.counted {
-            (None, None)
-        } else if self.kind == EditKind::Write {
-            // A whole-file add: everything is new, nothing is known to be gone.
-            fold::line_delta(None, &added)
-        } else {
-            fold::line_delta(Some(&self.removed.join("\n")), &added)
-        };
-        PatchEdit {
-            path: self.path,
-            kind: self.kind,
-            added: lines_added,
-            removed: lines_removed,
-        }
-    }
+        .collect()
 }
 
 // ————— drift bookkeeping ————————————————————————————————————————————
@@ -1167,20 +1560,8 @@ fn keys(value: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{APPLY_PATCH, patch_body, patch_edits, tool_input, tool_output_text};
-    use rosetta_core::rows::EditKind;
+    use super::{tool_input, tool_output_text};
     use serde_json::{Value, json};
-
-    const PATCH: &str = "*** Begin Patch\n\
-        *** Update File: src/main.rs\n\
-        @@ fn main() {\n\
-        -    println!(\"old\");\n\
-        +    println!(\"new\");\n\
-        +    println!(\"and more\");\n\
-        *** Add File: src/added.rs\n\
-        +fn added() {}\n\
-        *** Delete File: src/gone.rs\n\
-        *** End Patch";
 
     #[test]
     fn tool_arguments_are_decoded_json_strings() {
@@ -1211,47 +1592,5 @@ mod tests {
             tool_output_text(Some(&json!({"error": "boom"}))).as_deref(),
             Some("boom")
         );
-    }
-
-    #[test]
-    fn patch_bodies_are_recognized_narrowly() {
-        let args = json!({"input": PATCH});
-        assert!(patch_body(APPLY_PATCH, &args).is_some());
-        // Another tool's arguments are never read as a patch...
-        assert!(patch_body("exec_command", &args).is_none());
-        // ...and neither is an apply_patch call with no patch header.
-        assert!(patch_body(APPLY_PATCH, &json!({"input": "nope"})).is_none());
-    }
-
-    #[test]
-    fn patch_line_counts_are_per_file() {
-        let edits = patch_edits(PATCH);
-        assert_eq!(edits.len(), 3);
-
-        assert_eq!(edits[0].path, "src/main.rs");
-        assert_eq!(edits[0].kind, EditKind::Edit);
-        assert_eq!((edits[0].added, edits[0].removed), (Some(2), Some(1)));
-
-        assert_eq!(edits[1].path, "src/added.rs");
-        assert_eq!(edits[1].kind, EditKind::Write);
-        // A whole-file add: nothing is KNOWN to have been removed.
-        assert_eq!((edits[1].added, edits[1].removed), (Some(1), None));
-
-        assert_eq!(edits[2].path, "src/gone.rs");
-        assert_eq!((edits[2].added, edits[2].removed), (None, None));
-    }
-
-    #[test]
-    fn rename_headers_keep_their_hunks() {
-        let edits = patch_edits(
-            "*** Begin Patch\n\
-             *** Update File: a.rs\n\
-             *** Move to: b.rs\n\
-             -gone\n\
-             +kept\n\
-             *** End Patch",
-        );
-        assert_eq!(edits.len(), 1);
-        assert_eq!((edits[0].added, edits[0].removed), (Some(1), Some(1)));
     }
 }

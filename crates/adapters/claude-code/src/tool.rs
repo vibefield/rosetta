@@ -22,9 +22,9 @@ use rosetta_adapter_support::tool::{
 use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
     ArtifactKind, ArtifactOp, CodeLookupOp, CollaborationOp, CorrelationDerivation, ExecutionMode,
-    FileDelta, FileSearchMode, ModeOp, ProcessOp, QuestionOption, RangeUnit, ReadTarget,
-    ScheduleOp, SearchFilter, SearchFilterKind, SourceRange, TaskOp, ToolAction, ToolActionKind,
-    ToolInteraction, UserQuestion,
+    FileChangeOp, FileDelta, FileSearchMode, ModeOp, ProcessOp, QuestionOption, RangeUnit,
+    ReadTarget, ScheduleOp, SearchFilter, SearchFilterKind, SourceRange, TaskOp, ToolAction,
+    ToolActionKind, ToolInteraction, UserQuestion,
 };
 use serde_json::Value;
 
@@ -115,7 +115,7 @@ pub fn project_request(
     let action = match registration.action_kind {
         ToolActionKind::FileRead => project_read(input, cwd)?,
         ToolActionKind::FileSearch => project_search(name, input, cwd)?,
-        ToolActionKind::FileChange => project_change(input, cwd)?,
+        ToolActionKind::FileChange => project_change(name, input, cwd)?,
         ToolActionKind::Shell => project_shell(input, cwd)?,
         ToolActionKind::Process => {
             let process_id = first_string(input, &["shell_id", "process_id", "task_id"])
@@ -279,19 +279,200 @@ fn project_search(
     })
 }
 
-fn project_change(input: &Value, cwd: Option<&str>) -> Result<ToolAction, ProjectionError> {
-    let path = first_string(input, &["file_path", "notebook_path", "path"])
+fn project_change(
+    name: &str,
+    input: &Value,
+    cwd: Option<&str>,
+) -> Result<ToolAction, ProjectionError> {
+    let source_path = first_string(input, &["file_path", "notebook_path", "path"])
         .ok_or(ProjectionError::MissingField("path"))?;
+    let (operation, diff, lines_added, lines_removed) = match name {
+        "Edit" => {
+            let old = first_string(input, &["old_string"]);
+            let new = first_string(input, &["new_string"]);
+            let diff = old.zip(new).and_then(|(old, new)| {
+                (old != new)
+                    .then(|| replacement_diff(source_path, source_path, Some(old), new, None))
+            });
+            let (added, removed) = replacement_counts(old, new);
+            (Some(FileChangeOp::Update), diff, added, removed)
+        }
+        "Write" => {
+            let content = first_string(input, &["content"]);
+            (
+                None,
+                content
+                    .map(|content| replacement_diff(source_path, source_path, None, content, None)),
+                content.map(line_count),
+                None,
+            )
+        }
+        "NotebookEdit" => {
+            let source = first_string(input, &["new_source"]);
+            (
+                Some(FileChangeOp::Update),
+                source.map(|source| replacement_diff(source_path, source_path, None, source, None)),
+                source.map(line_count),
+                None,
+            )
+        }
+        _ => (None, None, None, None),
+    };
     Ok(ToolAction::FileChange {
         changes: vec![FileDelta {
-            operation: None,
-            path: lexical_resource(path, cwd, false)?,
+            operation,
+            path: lexical_resource(source_path, cwd, false)?,
             destination: None,
-            diff: None,
-            lines_added: None,
-            lines_removed: None,
+            diff: diff.map(canonical_text).transpose()?,
+            lines_added,
+            lines_removed,
         }],
     })
+}
+
+/// Claude's successful Edit/Write result carries the applied patch, including
+/// context and real hunk coordinates. It is better evidence than the request's
+/// old/new fragment, so the result record can enrich the already-open tool.
+/// The raw field intentionally remains `Value`; narrowing is confined to this
+/// optional projection so a new result shape can never make a line unparseable.
+pub fn project_change_result(
+    result: &Value,
+    cwd: Option<&str>,
+) -> Result<Option<ToolAction>, ProjectionError> {
+    let Some(source_path) = first_string(result, &["filePath", "file_path"]) else {
+        return Ok(None);
+    };
+    let operation = match first_string(result, &["type"]) {
+        Some("create") => Some(FileChangeOp::Create),
+        Some("update") => Some(FileChangeOp::Update),
+        Some("delete") => Some(FileChangeOp::Delete),
+        _ if result
+            .get("structuredPatch")
+            .and_then(Value::as_array)
+            .is_some_and(|hunks| !hunks.is_empty()) =>
+        {
+            Some(FileChangeOp::Update)
+        }
+        _ => None,
+    };
+
+    let projected = structured_patch_diff(source_path, result, operation).or_else(|| {
+        let old = first_string(result, &["originalFile", "oldString"]);
+        let new = first_string(result, &["content", "newString"])?;
+        let old_path = if operation == Some(FileChangeOp::Create) {
+            "/dev/null"
+        } else {
+            source_path
+        };
+        let (added, removed) = replacement_counts(old, Some(new));
+        Some((
+            replacement_diff(
+                old_path,
+                source_path,
+                old,
+                new,
+                positioned_whole_file(old, new),
+            ),
+            added.unwrap_or(0),
+            removed,
+        ))
+    });
+    let Some((diff, lines_added, lines_removed)) = projected else {
+        return Ok(None);
+    };
+
+    Ok(Some(ToolAction::FileChange {
+        changes: vec![FileDelta {
+            operation,
+            path: lexical_resource(source_path, cwd, false)?,
+            destination: None,
+            diff: Some(canonical_text(diff)?),
+            lines_added: Some(lines_added),
+            lines_removed,
+        }],
+    }))
+}
+
+fn structured_patch_diff(
+    path: &str,
+    result: &Value,
+    operation: Option<FileChangeOp>,
+) -> Option<(String, u64, Option<u64>)> {
+    let hunks = result.get("structuredPatch")?.as_array()?;
+    if hunks.is_empty() {
+        return None;
+    }
+
+    let old_path = if operation == Some(FileChangeOp::Create) {
+        "/dev/null"
+    } else {
+        path
+    };
+    let mut diff = vec![format!("--- {old_path}"), format!("+++ {path}")];
+    let mut added = 0_u64;
+    let mut removed = 0_u64;
+    let mut projected_hunks = 0_u64;
+    for hunk in hunks {
+        let lines = hunk.get("lines").and_then(Value::as_array)?;
+        let old_start = hunk.get("oldStart").and_then(Value::as_u64);
+        let old_lines = hunk.get("oldLines").and_then(Value::as_u64);
+        let new_start = hunk.get("newStart").and_then(Value::as_u64);
+        let new_lines = hunk.get("newLines").and_then(Value::as_u64);
+        match (old_start, old_lines, new_start, new_lines) {
+            (Some(old_start), Some(old_lines), Some(new_start), Some(new_lines)) => diff.push(
+                format!("@@ -{old_start},{old_lines} +{new_start},{new_lines} @@"),
+            ),
+            _ => diff.push("@@".to_owned()),
+        }
+        for line in lines {
+            let line = line.as_str()?;
+            if line.starts_with('+') {
+                added += 1;
+            } else if line.starts_with('-') {
+                removed += 1;
+            }
+            diff.push(line.to_owned());
+        }
+        projected_hunks += 1;
+    }
+    (projected_hunks > 0).then_some((diff.join("\n"), added, Some(removed)))
+}
+
+fn replacement_counts(old: Option<&str>, new: Option<&str>) -> (Option<u64>, Option<u64>) {
+    (new.map(line_count), old.map(line_count))
+}
+
+fn positioned_whole_file(old: Option<&str>, new: &str) -> Option<(u64, u64, u64, u64)> {
+    Some((1, old.map_or(0, line_count), 1, line_count(new)))
+}
+
+fn replacement_diff(
+    old_path: &str,
+    new_path: &str,
+    old: Option<&str>,
+    new: &str,
+    position: Option<(u64, u64, u64, u64)>,
+) -> String {
+    let mut diff = vec![format!("--- {old_path}"), format!("+++ {new_path}")];
+    diff.push(match position {
+        Some((old_start, old_lines, new_start, new_lines)) => {
+            format!("@@ -{old_start},{old_lines} +{new_start},{new_lines} @@")
+        }
+        None => "@@".to_owned(),
+    });
+    if let Some(old) = old {
+        diff.extend(old.lines().map(|line| format!("-{line}")));
+    }
+    diff.extend(new.lines().map(|line| format!("+{line}")));
+    diff.join("\n")
+}
+
+fn line_count(text: &str) -> u64 {
+    if text.is_empty() {
+        0
+    } else {
+        text.lines().count() as u64
+    }
 }
 
 fn project_shell(input: &Value, cwd: Option<&str>) -> Result<ToolAction, ProjectionError> {
@@ -299,6 +480,7 @@ fn project_shell(input: &Value, cwd: Option<&str>) -> Result<ToolAction, Project
         first_string(input, &["command"]).ok_or(ProjectionError::MissingField("command"))?;
     Ok(ToolAction::Shell {
         command: canonical_text(command)?,
+        source_truncated: false,
         cwd: first_string(input, &["cwd"])
             .or(cwd)
             .map(|path| lexical_resource(path, cwd, true))
@@ -579,11 +761,36 @@ mod tests {
     }
 
     #[test]
-    fn write_keeps_path_but_not_whole_file_content() {
+    fn edit_and_write_requests_keep_renderable_diffs() {
+        let edit = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "Edit",
+            &json!({
+                "file_path":"src/main.rs",
+                "old_string":"let before = 1;",
+                "new_string":"let after = 2;"
+            }),
+            Some("/repo"),
+            "e1",
+            Some("e1"),
+            None,
+        )
+        .unwrap();
+        let ToolAction::FileChange { changes } = edit.action else {
+            panic!("expected file change")
+        };
+        assert_eq!(changes[0].operation, Some(FileChangeOp::Update));
+        assert_eq!(changes[0].lines_added, Some(1));
+        assert_eq!(changes[0].lines_removed, Some(1));
+        assert_eq!(
+            changes[0].diff.as_ref().map(|diff| diff.as_preview()),
+            Some("--- src/main.rs\n+++ src/main.rs\n@@\n-let before = 1;\n+let after = 2;")
+        );
+
         let tool = project_request(
             Some(PINNED_WRITER_VERSION),
             "Write",
-            &json!({"file_path":"src/main.rs", "content":"very large body"}),
+            &json!({"file_path":"src/main.rs", "content":"first\nsecond"}),
             Some("/repo"),
             "w1",
             Some("w1"),
@@ -593,9 +800,75 @@ mod tests {
         match tool.action {
             ToolAction::FileChange { changes } => {
                 assert_eq!(changes[0].path.display_value(), "/repo/src/main.rs");
-                assert!(changes[0].diff.is_none());
+                assert_eq!(changes[0].operation, None);
+                assert_eq!(changes[0].lines_added, Some(2));
+                assert_eq!(changes[0].lines_removed, None);
+                assert_eq!(
+                    changes[0].diff.as_ref().map(|diff| diff.as_preview()),
+                    Some("--- src/main.rs\n+++ src/main.rs\n@@\n+first\n+second")
+                );
             }
             other => panic!("expected file change, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn successful_result_upgrades_the_fragment_to_claudes_contextual_patch() {
+        let action = project_change_result(
+            &json!({
+                "filePath":"/repo/src/main.rs",
+                "oldString":"before();",
+                "newString":"after();",
+                "originalFile":null,
+                "structuredPatch":[{
+                    "oldStart":40,
+                    "oldLines":3,
+                    "newStart":40,
+                    "newLines":3,
+                    "lines":[" context();", "-before();", "+after();"]
+                }]
+            }),
+            Some("/repo"),
+        )
+        .unwrap()
+        .expect("file result");
+        let ToolAction::FileChange { changes } = action else {
+            panic!("expected file change")
+        };
+        assert_eq!(changes[0].operation, Some(FileChangeOp::Update));
+        assert_eq!(changes[0].lines_added, Some(1));
+        assert_eq!(changes[0].lines_removed, Some(1));
+        assert_eq!(
+            changes[0].diff.as_ref().map(|diff| diff.as_preview()),
+            Some(
+                "--- /repo/src/main.rs\n+++ /repo/src/main.rs\n@@ -40,3 +40,3 @@\n context();\n-before();\n+after();"
+            )
+        );
+    }
+
+    #[test]
+    fn create_result_marks_dev_null_and_preserves_the_written_lines() {
+        let action = project_change_result(
+            &json!({
+                "type":"create",
+                "filePath":"/repo/new.txt",
+                "content":"one\ntwo",
+                "originalFile":null,
+                "structuredPatch":[]
+            }),
+            Some("/repo"),
+        )
+        .unwrap()
+        .expect("file result");
+        let ToolAction::FileChange { changes } = action else {
+            panic!("expected file change")
+        };
+        assert_eq!(changes[0].operation, Some(FileChangeOp::Create));
+        assert_eq!(changes[0].lines_added, Some(2));
+        assert_eq!(changes[0].lines_removed, None);
+        assert_eq!(
+            changes[0].diff.as_ref().map(|diff| diff.as_preview()),
+            Some("--- /dev/null\n+++ /repo/new.txt\n@@ -1,0 +1,2 @@\n+one\n+two")
+        );
     }
 }

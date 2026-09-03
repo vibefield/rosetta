@@ -20,21 +20,22 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use rosetta_capture::NotifyEvents;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, RebuildOptions,
-    SessionFile, SliceBudget, StreamReport, meta_ingest_inventory_into,
-    rebuild_runtime_with_options, reserve_unsealed_generation, stream_backfill_into,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
+    RawCommandLocator, RebuildOptions, SessionFile, SliceBudget, StreamReport,
+    meta_ingest_inventory_into, read_raw_command, rebuild_runtime_with_options,
+    reserve_unsealed_generation, stream_backfill_into,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
-    IngestCounterSource, IngestCounters, ProjectionReader, RuntimeTick, router,
+    IngestCounterSource, IngestCounters, ProjectionReader, RawCommandReader, RuntimeTick, router,
 };
 use rosetta_store::{Store, queries};
 
@@ -52,6 +53,34 @@ use crate::{
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
 const CONSENT_POLL: Duration = Duration::from_millis(200);
+
+struct LedgerCommandReader {
+    root: PathBuf,
+    adapters: Vec<&'static dyn rosetta_adapter_support::AgentAdapter>,
+}
+
+impl RawCommandReader for LedgerCommandReader {
+    fn read_command(&self, source: &queries::CommandSource) -> Result<Option<String>, String> {
+        let adapter = self
+            .adapters
+            .iter()
+            .copied()
+            .find(|adapter| adapter.kind() == source.agent_kind)
+            .ok_or_else(|| format!("no adapter for {}", source.agent_kind))?;
+        let locator = RawCommandLocator {
+            runtime_id: source.runtime_id.clone(),
+            session_id: source.session_id.clone(),
+            cursor_id: source.cursor_id,
+            relative_path: source.relative_path.clone(),
+            generation: source.generation,
+            offset: source.offset,
+            timeline_id: source.timeline_id.clone(),
+            correlation_key: source.correlation_key.clone(),
+        };
+        read_raw_command(adapter, &self.root.join(&source.agent_kind), &locator)
+            .map_err(|error| error.to_string())
+    }
+}
 
 /// A live meter over the pipeline's always-on atomic counters: the status
 /// endpoint reads deltas since `baseline` while the writer thread is blocked
@@ -245,7 +274,11 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .with_projection(projection_reader.clone())
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
-        .with_boost(boost.clone());
+        .with_boost(boost.clone())
+        .with_raw_commands(Arc::new(LedgerCommandReader {
+            root: public_ledgers.clone(),
+            adapters: crate::registry(),
+        }));
     let server = tokio_runtime.spawn({
         let mut shutdown_rx = shutdown_rx.clone();
         let router = router(state);

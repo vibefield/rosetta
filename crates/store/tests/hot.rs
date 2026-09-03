@@ -112,6 +112,7 @@ fn shell_tool(key: &str, command: &str) -> ToolInteraction {
         },
         action: ToolAction::Shell {
             command: CanonicalText::inline(command).unwrap(),
+            source_truncated: false,
             cwd: None,
             timeout_ms: None,
             background: false,

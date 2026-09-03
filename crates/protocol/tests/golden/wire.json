@@ -5,6 +5,9 @@
   "boost_response": {
     "queued": true
   },
+  "command": {
+    "command": "printf 'full source'"
+  },
   "contribution": {
     "rows": [
       {
@@ -51,7 +54,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 7,
+      "protocol_version": 8,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -67,7 +70,7 @@
               "action": {
                 "background": false,
                 "command": {
-                  "text": "true",
+                  "text": "one",
                   "type": "inline"
                 },
                 "cwd": null,
@@ -76,6 +79,7 @@
                   "process_id": null,
                   "signal": null
                 },
+                "source_truncated": true,
                 "timeout_ms": null,
                 "type": "shell"
               },
@@ -232,7 +236,7 @@
           "action": {
             "background": false,
             "command": {
-              "text": "true",
+              "text": "one",
               "type": "inline"
             },
             "cwd": null,
@@ -241,6 +245,7 @@
               "process_id": null,
               "signal": null
             },
+            "source_truncated": true,
             "timeout_ms": null,
             "type": "shell"
           },
@@ -343,7 +348,7 @@
         "action": {
           "background": false,
           "command": {
-            "text": "true",
+            "text": "one",
             "type": "inline"
           },
           "cwd": null,
@@ -352,6 +357,7 @@
             "process_id": null,
             "signal": null
           },
+          "source_truncated": true,
           "timeout_ms": null,
           "type": "shell"
         },
@@ -450,7 +456,7 @@
       }
     ]
   },
-  "protocol_version": 7,
+  "protocol_version": 8,
   "runtimes": {
     "runtimes": [
       {
@@ -602,7 +608,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 7,
+    "protocol_version": 8,
     "schema_version": 9,
     "search": {
       "projection_epoch": "epoch-1",
@@ -621,7 +627,7 @@
             "action": {
               "background": false,
               "command": {
-                "text": "true",
+                "text": "one",
                 "type": "inline"
               },
               "cwd": null,
@@ -630,6 +636,7 @@
                 "process_id": null,
                 "signal": null
               },
+              "source_truncated": true,
               "timeout_ms": null,
               "type": "shell"
             },

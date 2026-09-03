@@ -14,18 +14,20 @@ use tower::ServiceExt;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
+use rosetta_core::timeline::{ReadTarget, ResourceRef};
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, IngestOp, NativeToolRef, ProjectionAsset, StatusBasis,
-    ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    TimelineBody, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
-    ApiError, ErrorCode, SearchResponse, SessionsResponse, StatusResponse, TimelinePage,
+    ApiError, CommandResponse, ErrorCode, SearchResponse, SessionsResponse, StatusResponse,
+    TimelinePage,
 };
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
     SearchState, synchronize_fts5_once,
 };
-use rosetta_server::{AppState, Hub, HubConfig, ProjectionReader, router};
+use rosetta_server::{AppState, Hub, HubConfig, ProjectionReader, RawCommandReader, router};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
 use tempfile::TempDir;
 
@@ -247,6 +249,193 @@ async fn status_reports_versions_and_detached_search() {
         serde_json::to_value(parsed.search.readiness).unwrap(),
         "ready"
     );
+}
+
+struct StubRawCommands {
+    command: String,
+    seen: Mutex<Vec<queries::CommandSource>>,
+}
+
+impl RawCommandReader for StubRawCommands {
+    fn read_command(&self, source: &queries::CommandSource) -> Result<Option<String>, String> {
+        self.seen.lock().unwrap().push(source.clone());
+        Ok(Some(self.command.clone()))
+    }
+}
+
+#[tokio::test]
+async fn recorded_file_read_serves_only_the_addressed_canonical_target() {
+    let mut h = harness();
+    let path = h._dir.path().join("viewer-target.ts");
+    let contents = b"export const answer = 42;\n";
+    std::fs::write(&path, contents).unwrap();
+
+    let mut row = message("read-target", MessageKind::ToolUse, "");
+    row.content = None;
+    row.tool = Some(ToolInteraction {
+        correlation: ToolCorrelation {
+            key: "tool-read".into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some("tool-read".into()),
+            namespace: None,
+            name: "Read".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Succeeded,
+            basis: StatusBasis::NativeTerminalRecord,
+        },
+        action: ToolAction::FileRead {
+            targets: vec![ReadTarget {
+                resource: ResourceRef::File {
+                    path: path.to_string_lossy().into_owned(),
+                    resolved: true,
+                },
+                range: None,
+                media_kind: None,
+            }],
+            outcome: None,
+        },
+        failure: None,
+        timing: None,
+    });
+    h.append(vec![row]);
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/s1/timeline/read-target/read/0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/octet-stream"
+    );
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(bytes.as_ref(), contents);
+
+    let (status, _) = h.get("/api/sessions/s1/timeline/read-target/read/1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn full_command_is_loaded_only_through_its_raw_source_anchor() {
+    let mut h = harness();
+    let full = "one\ntwo\nthree\nfour\nfive\nsix\nseven".to_string();
+    let mut row = message("long-command", MessageKind::ToolUse, "");
+    row.content = None;
+    row.src_cursor = Some(h.cursor);
+    row.src_offset = Some(42);
+    row.tool = Some(ToolInteraction {
+        correlation: ToolCorrelation {
+            key: "tool-long".into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some("tool-long".into()),
+            namespace: None,
+            name: "Bash".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Succeeded,
+            basis: StatusBasis::NativeTerminalRecord,
+        },
+        action: ToolAction::Shell {
+            command: CanonicalText::inline(full.clone()).unwrap(),
+            source_truncated: false,
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        },
+        failure: None,
+        timing: None,
+    });
+    h.append(vec![row]);
+    let reader = Arc::new(StubRawCommands {
+        command: full.clone(),
+        seen: Mutex::new(Vec::new()),
+    });
+    h.app = router(
+        AppState::with_search(h.hub.clone(), h.db.clone(), Arc::new(h.search.clone()))
+            .with_raw_commands(reader.clone()),
+    );
+
+    let (status, body) = h
+        .get("/api/sessions/s1/timeline/long-command/command")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let response: CommandResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(response.command, full);
+    let seen = reader.seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].offset, 42);
+    assert_eq!(seen[0].relative_path, "p/x.jsonl");
+    assert_eq!(seen[0].correlation_key, "tool-long");
+
+    let stored = queries::timeline_page(h.store.conn(), "s1", None, 10).unwrap();
+    let TimelineBody::ToolUse { tool } = &stored[0].body else {
+        panic!("expected tool row");
+    };
+    let ToolAction::Shell {
+        command,
+        source_truncated,
+        ..
+    } = &tool.action
+    else {
+        panic!("expected shell action");
+    };
+    assert_eq!(command.as_preview(), "one");
+    assert!(source_truncated);
+}
+
+#[tokio::test]
+async fn unassigned_project_scope_reports_projectless_session_figures() {
+    let mut h = harness();
+    let mut orphan = session("orphan");
+    orphan.project_id = None;
+    orphan.cwd = None;
+    let mut orphan_message = message("orphan-message", MessageKind::Agent, "projectless");
+    orphan_message.session_id = "orphan".into();
+    orphan_message.usage = Some(rosetta_core::rows::TokenSnapshot {
+        input: Some(11),
+        output: Some(7),
+        ..Default::default()
+    });
+    let mut ops = vec![IngestOp::SessionMeta(orphan)];
+    ops.extend(IngestOp::project_message(orphan_message));
+    h.store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let scope = "__rosetta_unassigned__";
+    let (status, contribution) = h.get(&format!("/api/projects/{scope}/contribution")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(contribution["rows"][0]["session_id"], "orphan");
+    assert_eq!(contribution["rows"][0]["messages"], 1);
+    assert_eq!(contribution["rows"][0]["tokens"], 18);
+
+    let (status, heatmap) = h.get(&format!("/api/projects/{scope}/heatmap")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(heatmap["days"][0]["tokens"], 18);
+
+    let (status, usage) = h.get(&format!("/api/projects/{scope}/usage")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(usage["models"][0]["tokens"], 18);
+    assert_eq!(usage["hours"][0]["tokens"], 18);
 }
 
 #[tokio::test]
@@ -714,6 +903,7 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
         },
         action: ToolAction::Shell {
             command: CanonicalText::inline("false # ionosphere").unwrap(),
+            source_truncated: false,
             cwd: None,
             timeout_ms: None,
             background: false,

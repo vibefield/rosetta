@@ -1,5 +1,6 @@
 export type * from "./generated/ApiError";
 export type * from "./generated/CanonicalText";
+export type * from "./generated/CommandResponse";
 export type * from "./generated/AttachmentKind";
 export type * from "./generated/AttachmentRef";
 export type * from "./generated/BackfillState";
@@ -55,6 +56,7 @@ export type * from "./generated/TimelinePage";
 export type * from "./generated/TokenSnapshot";
 export type * from "./generated/ToolAction";
 export type * from "./generated/ToolInteraction";
+export type * from "./generated/StatusBasis";
 export type * from "./generated/ToolStatus";
 export type * from "./generated/UsageResponse";
 export type * from "./generated/serde_json/JsonValue";

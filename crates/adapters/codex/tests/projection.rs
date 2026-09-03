@@ -583,6 +583,219 @@ fn a_tool_result_merges_by_call_id() {
 }
 
 #[test]
+fn executor_transport_updates_the_original_long_running_command() {
+    let mut ctx = context();
+    let call = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "custom_tool_call",
+            "id": "ctc_command",
+            "status": "completed",
+            "name": "exec",
+            "call_id": "call_command",
+            "input": r#"const r = await tools.exec_command({cmd:"gh pr checks 52 --watch", yield_time_ms:1000}); text(JSON.stringify(r));"#,
+        }),
+    );
+    match call.ops.as_slice() {
+        [IngestOp::Message(row)] => {
+            let tool = tool(row).expect("command row");
+            assert!(matches!(tool.action, ToolAction::Shell { .. }));
+        }
+        other => panic!("expected the original command row, got {other:?}"),
+    }
+
+    let launched = ingest(
+        &mut ctx,
+        2,
+        "response_item",
+        json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call_command",
+            "output": [
+                {"type":"input_text", "text":"Script completed\nOutput:\n"},
+                {"type":"input_text", "text":r#"{"chunk_id":"a","wall_time_seconds":1.0,"session_id":79752,"output":"pending"}"#},
+            ],
+        }),
+    );
+    match launched.ops.as_slice() {
+        [
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
+                ..
+            },
+        ] => {
+            assert_eq!(correlation_key, "call_command");
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Running)
+            );
+            let Some(outcome) = patch.outcome.as_ref() else {
+                panic!("process id outcome")
+            };
+            assert!(matches!(
+                &outcome.action,
+                ToolAction::Shell {
+                    outcome: Some(value),
+                    ..
+                } if value.process_id.as_deref() == Some("79752") && value.exit_code.is_none()
+            ));
+        }
+        other => panic!("expected a running update, got {other:?}"),
+    }
+
+    let poll = ingest(
+        &mut ctx,
+        3,
+        "response_item",
+        json!({
+            "type": "custom_tool_call",
+            "id": "ctc_poll",
+            "status": "completed",
+            "name": "exec",
+            "call_id": "call_poll",
+            "input": r#"const r = await tools.write_stdin({session_id:79752, chars:"", yield_time_ms:30000}); text(JSON.stringify(r));"#,
+        }),
+    );
+    assert!(poll.ops.is_empty(), "an empty poll is transport, not a row");
+
+    let yielded = ingest(
+        &mut ctx,
+        4,
+        "response_item",
+        json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call_poll",
+            "output": "Script running with cell ID 1144\nWall time 11.0 seconds\nOutput:\n",
+        }),
+    );
+    assert!(yielded.ops.is_empty(), "a yielded cell is only a route");
+
+    let wait = ingest(
+        &mut ctx,
+        5,
+        "response_item",
+        json!({
+            "type": "function_call",
+            "id": "fc_wait",
+            "name": "wait",
+            "call_id": "call_wait",
+            "arguments": r#"{"cell_id":"1144","yield_time_ms":30000}"#,
+        }),
+    );
+    assert!(
+        wait.ops.is_empty(),
+        "waiting on the wrapper is not activity"
+    );
+
+    let finished = ingest(
+        &mut ctx,
+        6,
+        "response_item",
+        json!({
+            "type": "function_call_output",
+            "call_id": "call_wait",
+            "output": [
+                {"type":"input_text", "text":"Script completed\nOutput:\n"},
+                {"type":"input_text", "text":r#"{"chunk_id":"b","wall_time_seconds":25.5,"exit_code":0,"output":"all checks passed"}"#},
+            ],
+        }),
+    );
+    match finished.ops.as_slice() {
+        [
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
+                ..
+            },
+        ] => {
+            assert_eq!(correlation_key, "call_command");
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.value),
+                Some(ToolStatus::Succeeded)
+            );
+            assert_eq!(
+                patch.status.as_ref().map(|status| status.basis),
+                Some(StatusBasis::NativeState)
+            );
+            let Some(outcome) = patch.outcome.as_ref() else {
+                panic!("terminal command outcome")
+            };
+            assert!(matches!(
+                &outcome.action,
+                ToolAction::Shell {
+                    outcome: Some(value),
+                    ..
+                } if value.process_id.as_deref() == Some("79752") && value.exit_code == Some(0)
+            ));
+        }
+        other => panic!("expected one terminal update for the original command, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_literal_parallel_command_batch_keeps_both_commands() {
+    let mut ctx = context();
+    let call = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "custom_tool_call",
+            "id": "ctc_batch",
+            "status": "completed",
+            "name": "exec",
+            "call_id": "call_batch",
+            "input": r#"const rs = await Promise.all([
+                tools.exec_command({cmd:"gh run view 1 --json status"}),
+                tools.exec_command({cmd:"gh run view 2 --json status"})
+            ]); for (const r of rs) text(r.output);"#,
+        }),
+    );
+    assert_eq!(call.ops.len(), 2);
+    let commands = call
+        .ops
+        .iter()
+        .map(|op| match op {
+            IngestOp::Message(row) => match tool(row).map(|tool| &tool.action) {
+                Some(ToolAction::Shell { command, .. }) => command.as_preview(),
+                other => panic!("expected shell child, got {other:?}"),
+            },
+            other => panic!("expected only child rows, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commands,
+        ["gh run view 1 --json status", "gh run view 2 --json status"]
+    );
+
+    let output = ingest(
+        &mut ctx,
+        2,
+        "response_item",
+        json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call_batch",
+            "output": [
+                {"type":"input_text", "text":"Script completed\nOutput:\n"},
+                {"type":"input_text", "text":"{\"status\":\"completed\"}"},
+                {"type":"input_text", "text":"{\"status\":\"in_progress\"}"},
+            ],
+        }),
+    );
+    assert_eq!(output.ops.len(), 2);
+    assert!(output.ops.iter().all(|op| matches!(
+        op,
+        IngestOp::ToolUpdate { patch, .. }
+            if patch.status.as_ref().is_some_and(|status|
+                status.value == ToolStatus::Unknown
+                    && status.basis == StatusBasis::NativeTerminalRecord)
+    )));
+}
+
+#[test]
 fn a_custom_tool_call_projects_only_reviewed_patch_facts() {
     let mut ctx = context();
     let patch = "*** Begin Patch\n*** Add File: added.txt\n+hello\n*** End Patch";
@@ -614,8 +827,17 @@ fn a_custom_tool_call_projects_only_reviewed_patch_facts() {
                 &changes[0].path,
                 ResourceRef::File { path, .. } if path == "added.txt"
             ));
+            assert_eq!(
+                (changes[0].lines_added, changes[0].lines_removed),
+                (Some(1), None)
+            );
+            assert_eq!(
+                changes[0].diff.as_ref().map(|diff| diff.as_preview()),
+                Some("--- /dev/null\n+++ added.txt\n@@\n+hello")
+            );
             assert_eq!(edit.message_timeline_id.as_deref(), Some(&*row.timeline_id));
             assert_eq!(edit.path, "added.txt");
+            assert_eq!((edit.lines_added, edit.lines_removed), (Some(1), None));
         }
         other => panic!("expected a tool row and file edit, got {other:?}"),
     }
@@ -649,6 +871,42 @@ fn a_custom_tool_call_projects_only_reviewed_patch_facts() {
             assert!(patch.failure.is_none());
         }
         other => panic!("expected one custom tool result, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_exec_wrapped_patch_emits_the_diff_and_file_edit_activity() {
+    let mut ctx = context();
+    let call = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({
+            "type": "custom_tool_call",
+            "id": "ctc_exec_patch",
+            "status": "completed",
+            "call_id": "call_exec_patch",
+            "name": "exec",
+            "input": r#"const patch = "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** End Patch"; text(await tools.apply_patch(patch));"#,
+        }),
+    );
+    assert_eq!(call.status, LineStatus::Parsed);
+    match call.ops.as_slice() {
+        [IngestOp::Message(row), IngestOp::FileEdit(edit)] => {
+            let tool = tool(row).expect("wrapped patch call");
+            assert_eq!(tool.native.name, "exec");
+            let ToolAction::FileChange { changes } = &tool.action else {
+                panic!("wrapped apply_patch must project as file_change")
+            };
+            assert_eq!(
+                (changes[0].lines_added, changes[0].lines_removed),
+                (Some(1), Some(1))
+            );
+            assert!(changes[0].diff.is_some());
+            assert_eq!(edit.path, "src/main.rs");
+            assert_eq!((edit.lines_added, edit.lines_removed), (Some(1), Some(1)));
+        }
+        other => panic!("expected a tool row and file edit, got {other:?}"),
     }
 }
 

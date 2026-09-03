@@ -2,6 +2,7 @@
 //! agent-specific weirdness stops at this boundary (docs/ingest-engine.html).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::assets::ProjectionAsset;
 use crate::rows::{
@@ -69,6 +70,103 @@ pub enum IngestOp {
 impl IngestOp {
     pub fn push_message(ops: &mut Vec<Self>, row: MessageRow) {
         ops.extend(Self::project_message(row));
+    }
+
+    /// Close a tool update into the same bounded projection used by opener
+    /// messages. Result records can carry better request evidence than the
+    /// opener (for example Claude Code's contextual `structuredPatch`), and
+    /// those diffs need the same content-addressed overflow path as an
+    /// opener's action before SQLite validates the merged tool.
+    pub fn push_tool_update(
+        ops: &mut Vec<Self>,
+        session_id: String,
+        correlation_key: String,
+        evidence: EvidenceOrder,
+        mut patch: ToolUpdatePatch,
+        at: Option<Ms>,
+    ) {
+        let mut assets = Vec::new();
+        for action in [
+            patch.request.as_mut().map(|request| &mut request.action),
+            patch.outcome.as_mut().map(|outcome| &mut outcome.action),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assets.extend(action.externalize_text_members());
+        }
+        ops.extend(
+            assets
+                .into_iter()
+                .map(|asset| Self::ProjectionAsset { asset }),
+        );
+        ops.push(Self::ToolUpdate {
+            session_id,
+            correlation_key,
+            evidence,
+            patch: Box::new(patch),
+            at,
+        });
+    }
+
+    /// Close command/code payloads into their bounded SQLite projection.
+    /// Adapter normalization remains lossless until this explicit boundary,
+    /// so an on-demand raw-ledger read can run the same parser and recover the
+    /// exact source text without a second native-format implementation.
+    pub fn compact_command_previews(ops: &mut Vec<Self>) {
+        let mut retired_members = BTreeSet::new();
+        for op in ops.iter_mut() {
+            match op {
+                Self::Message(entry) => {
+                    if let TimelineBody::ToolUse { tool } = &mut entry.body
+                        && let Some(digest) = tool.action.compact_command_preview()
+                    {
+                        retired_members.insert(digest);
+                    }
+                }
+                Self::ToolUpdate { patch, .. } => {
+                    for action in [
+                        patch.request.as_mut().map(|request| &mut request.action),
+                        patch.outcome.as_mut().map(|outcome| &mut outcome.action),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if let Some(digest) = action.compact_command_preview() {
+                            retired_members.insert(digest);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if retired_members.is_empty() {
+            return;
+        }
+
+        // A hash may legitimately be shared with another canonical text
+        // member in the same batch. Keep that asset whenever any remaining
+        // typed op still names it; otherwise the raw ledger is its sole home.
+        let mut still_referenced = BTreeSet::new();
+        for op in ops.iter() {
+            if matches!(op, Self::ProjectionAsset { .. }) {
+                continue;
+            }
+            let Ok(encoded) = serde_json::to_string(op) else {
+                continue;
+            };
+            for digest in &retired_members {
+                if encoded.contains(digest) {
+                    still_referenced.insert(digest.clone());
+                }
+            }
+        }
+        ops.retain(|op| match op {
+            Self::ProjectionAsset { asset } => {
+                !retired_members.contains(&asset.digest) || still_referenced.contains(&asset.digest)
+            }
+            _ => true,
+        });
     }
 
     /// Close a normalizer-local message draft into the public timeline
@@ -386,6 +484,7 @@ mod tests {
                 command: CanonicalText::Inline {
                     text: command.clone(),
                 },
+                source_truncated: false,
                 cwd: None,
                 timeout_ms: None,
                 background: false,
@@ -411,6 +510,131 @@ mod tests {
         };
         assert!(matches!(command, CanonicalText::Member { .. }));
         assert!(entry.validate().is_ok());
+    }
+
+    #[test]
+    fn command_projection_keeps_one_line_and_retires_the_full_member() {
+        let command = (1..=7)
+            .map(|line| format!("printf line-{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut row = message(MessageKind::ToolUse, None);
+        row.tool = Some(ToolInteraction {
+            action: ToolAction::Shell {
+                command: CanonicalText::Inline {
+                    text: command.clone(),
+                },
+                source_truncated: false,
+                cwd: None,
+                timeout_ms: None,
+                background: false,
+                outcome: None,
+            },
+            ..ToolInteraction::unknown("tool-1", CorrelationDerivation::NativeId, "Bash")
+        });
+
+        let mut ops = IngestOp::project_message(row);
+        IngestOp::compact_command_previews(&mut ops);
+        let [IngestOp::Message(entry)] = ops.as_slice() else {
+            panic!("command previews retain only their message, got {ops:#?}");
+        };
+        let TimelineBody::ToolUse { tool } = &entry.body else {
+            panic!("expected tool row");
+        };
+        let ToolAction::Shell {
+            command,
+            source_truncated,
+            ..
+        } = &tool.action
+        else {
+            panic!("expected shell action");
+        };
+        assert_eq!(command.as_preview(), "printf line-1");
+        assert!(*source_truncated);
+
+        // Store application is a second defensive projection boundary. It
+        // must not mistake an already-bounded preview for complete source.
+        let mut action = tool.action.clone();
+        assert_eq!(action.compact_command_preview(), None);
+        let ToolAction::Shell {
+            source_truncated, ..
+        } = action
+        else {
+            unreachable!()
+        };
+        assert!(source_truncated);
+
+        // Oversized commands used to leave a complete projection member on
+        // disk. Compaction converts it to the same source-backed preview and
+        // removes that redundant asset from the batch.
+        let huge = (0..8)
+            .map(|line| format!("{line}:{}", "x".repeat(INLINE_TEXT_MAX_BYTES)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut huge_row = message(MessageKind::ToolUse, None);
+        huge_row.tool = Some(ToolInteraction {
+            action: ToolAction::Shell {
+                command: CanonicalText::Inline { text: huge },
+                source_truncated: false,
+                cwd: None,
+                timeout_ms: None,
+                background: false,
+                outcome: None,
+            },
+            ..ToolInteraction::unknown("tool-2", CorrelationDerivation::NativeId, "Bash")
+        });
+        let mut huge_ops = IngestOp::project_message(huge_row);
+        assert!(matches!(huge_ops[0], IngestOp::ProjectionAsset { .. }));
+        IngestOp::compact_command_previews(&mut huge_ops);
+        assert!(matches!(huge_ops.as_slice(), [IngestOp::Message(_)]));
+    }
+
+    #[test]
+    fn complete_42_character_command_is_not_marked_truncated() {
+        let complete = "x".repeat(crate::timeline::COMMAND_PREVIEW_MAX_CHARACTERS);
+        let mut action = ToolAction::Shell {
+            command: CanonicalText::inline(&complete).unwrap(),
+            source_truncated: false,
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        };
+        assert_eq!(action.compact_command_preview(), None);
+        let ToolAction::Shell {
+            command,
+            source_truncated,
+            ..
+        } = action
+        else {
+            unreachable!()
+        };
+        assert_eq!(command.as_preview(), complete);
+        assert!(!source_truncated);
+    }
+
+    #[test]
+    fn omitted_unicode_command_reserves_room_for_the_ui_marker() {
+        let source = format!("{}終", "é".repeat(42));
+        let mut action = ToolAction::Shell {
+            command: CanonicalText::inline(source).unwrap(),
+            source_truncated: false,
+            cwd: None,
+            timeout_ms: None,
+            background: false,
+            outcome: None,
+        };
+        assert_eq!(action.compact_command_preview(), None);
+        let ToolAction::Shell {
+            command,
+            source_truncated,
+            ..
+        } = action
+        else {
+            unreachable!()
+        };
+        assert_eq!(command.as_preview(), "é".repeat(39));
+        assert!(source_truncated);
     }
 
     #[test]

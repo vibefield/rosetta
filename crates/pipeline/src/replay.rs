@@ -810,7 +810,9 @@ pub fn rebuild_runtime_with_options(
                 instrument.add(Metric::RecordsFramed, 1);
                 file.ctx.src_offset = Some(start_offset as i64);
                 let outcome = instrument.time(Metric::NormalizeNanos, || {
-                    adapter.ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
+                    adapter
+                        .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
+                        .into_projection()
                 });
                 match &outcome.status {
                     LineStatus::Parsed => report.parsed += 1,
@@ -1099,7 +1101,9 @@ pub fn prepare_runtime(
                 report.raw_records += 1;
                 instrument.add(Metric::RecordsFramed, 1);
                 let outcome = instrument.time(Metric::NormalizeNanos, || {
-                    adapter.ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
+                    adapter
+                        .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
+                        .into_projection()
                 });
                 match outcome.status {
                     LineStatus::Parsed => report.parsed += 1,

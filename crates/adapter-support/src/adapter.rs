@@ -146,6 +146,14 @@ impl LineOutcome {
             status: LineStatus::Parsed,
         }
     }
+
+    /// Convert the lossless normalizer draft into the intentionally bounded
+    /// disposable projection. Raw-ledger inspection deliberately calls
+    /// `ingest_line` without this step so it can recover the exact command.
+    pub fn into_projection(mut self) -> Self {
+        IngestOp::compact_command_previews(&mut self.ops);
+        self
+    }
 }
 
 /// Per-file normalization context, created by the pipeline for each source

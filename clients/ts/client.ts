@@ -7,6 +7,7 @@
 import type { ApiError } from "./generated/ApiError";
 import type { BoostResponse } from "./generated/BoostResponse";
 import type { ContributionResponse } from "./generated/ContributionResponse";
+import type { CommandResponse } from "./generated/CommandResponse";
 import type { DiscoveriesResponse } from "./generated/DiscoveriesResponse";
 import type { EnableResponse } from "./generated/EnableResponse";
 import type { ErrorCode } from "./generated/ErrorCode";
@@ -107,7 +108,7 @@ export class RosettaClient {
     this.WebSocketImpl = options.WebSocketImpl ?? WebSocket;
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async response(path: string, init?: RequestInit): Promise<Response> {
     const response = await this.fetchFn(`${this.baseUrl}${path}`, init);
     if (!response.ok) {
       let code: ErrorCode | null = null;
@@ -126,7 +127,11 @@ export class RosettaClient {
       }
       throw new ApiRequestError(response.status, code, message);
     }
-    return (await response.json()) as T;
+    return response;
+  }
+
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    return (await (await this.response(path, init)).json()) as T;
   }
 
   status(): Promise<StatusResponse> {
@@ -187,6 +192,28 @@ export class RosettaClient {
     return this.request(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline${queryString(options)}`,
     );
+  }
+
+  /** Recover one deliberately omitted command body from its raw-ledger
+   * record. Nothing is fetched until the reader opens the disclosure. */
+  command(sessionId: string, timelineId: string): Promise<CommandResponse> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/command`,
+    );
+  }
+
+  /** Read the live file named by one canonical file-read target. The caller
+   * supplies identities and an index, never a path; the daemon resolves the
+   * exact path already stored on that timeline row. */
+  async readFileTarget(
+    sessionId: string,
+    timelineId: string,
+    targetIndex: number,
+  ): Promise<Uint8Array> {
+    const response = await this.response(
+      `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/read/${targetIndex}`,
+    );
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   search(request: SearchRequest): Promise<SearchResponse> {

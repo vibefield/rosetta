@@ -17,6 +17,12 @@ pub const ID_MAX_BYTES: usize = 512;
 pub const FAILURE_SUMMARY_MAX_BYTES: usize = 512;
 pub const FAILURE_DIAGNOSTIC_MAX_BYTES: usize = 4 * 1024;
 pub const FAILURE_DIAGNOSTIC_MAX_LINES: usize = 40;
+/// Commands are supporting evidence in the transcript, not prose. Keep the
+/// disposable projection deliberately small; the raw ledger remains the
+/// lossless source for an explicit on-demand expansion. The UI reserves the
+/// final three characters for its omission marker when source was dropped.
+pub const COMMAND_PREVIEW_MAX_CHARACTERS: usize = 42;
+const COMMAND_PREVIEW_OMISSION_CHARACTERS: usize = 3;
 pub const SEARCH_PATH_LIMIT: usize = 20;
 pub const WEB_SOURCE_LIMIT: usize = 10;
 pub const CITATION_RANGE_LIMIT: usize = 40;
@@ -317,6 +323,30 @@ fn utf8_prefix(value: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &value[..end]
+}
+
+/// Keep one meaningful line. When anything is omitted, retain at most 39
+/// characters so the UI's three-dot marker still fits inside the 42-character
+/// reading contract. `char` counting matches the render helper's Unicode-code-
+/// point counting and never slices through UTF-8.
+fn command_preview(value: &str) -> (String, bool) {
+    let line = value
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let line_characters = line.chars().count();
+    let omitted = line != value || line_characters > COMMAND_PREVIEW_MAX_CHARACTERS;
+    let limit = if omitted {
+        COMMAND_PREVIEW_MAX_CHARACTERS - COMMAND_PREVIEW_OMISSION_CHARACTERS
+    } else {
+        COMMAND_PREVIEW_MAX_CHARACTERS
+    };
+    (line.chars().take(limit).collect(), omitted)
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -958,6 +988,10 @@ pub enum ToolAction {
     },
     Shell {
         command: CanonicalText,
+        /// The command is a bounded projection preview. Its exact source text
+        /// remains addressable through the row's raw-ledger provenance.
+        #[serde(default, skip_serializing_if = "is_false")]
+        source_truncated: bool,
         cwd: Option<ResourceRef>,
         #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         timeout_ms: Option<u64>,
@@ -967,6 +1001,10 @@ pub enum ToolAction {
     CodeExecute {
         language: Option<String>,
         code: CanonicalText,
+        /// The code is a bounded projection preview. Its exact source text
+        /// remains addressable through the row's raw-ledger provenance.
+        #[serde(default, skip_serializing_if = "is_false")]
+        source_truncated: bool,
         cwd: Option<ResourceRef>,
         outcome: Option<ShellOutcome>,
     },
@@ -1206,6 +1244,46 @@ impl ToolAction {
         }
     }
 
+    /// Replace a shell command or executable code body with the small text
+    /// admitted to SQLite. Returns the digest of a projection member made
+    /// redundant by the replacement, so the ingest boundary can discard it.
+    ///
+    /// This deliberately runs *after* adapter normalization. The adapter's
+    /// typed draft is still lossless, which lets the raw-ledger reader reuse
+    /// the one native parser when a user asks to expand a command.
+    pub fn compact_command_preview(&mut self) -> Option<String> {
+        let (text, source_truncated) = match self {
+            Self::Shell {
+                command,
+                source_truncated,
+                ..
+            } => (command, source_truncated),
+            Self::CodeExecute {
+                code,
+                source_truncated,
+                ..
+            } => (code, source_truncated),
+            _ => return None,
+        };
+
+        let was_truncated = *source_truncated;
+        let retired_member = match text {
+            CanonicalText::Member { asset, .. } => Some(asset.digest.clone()),
+            CanonicalText::Inline { .. } => None,
+        };
+        let source = text.as_preview();
+        let (preview, clipped) = command_preview(source);
+        // A member's preview is already evidence that bytes were omitted,
+        // even when its first logical line happens to fit unchanged.
+        // Preserve an earlier true value: both the pipeline boundary and the
+        // store's defense-in-depth boundary may compact the same action.
+        *source_truncated = was_truncated || clipped || retired_member.is_some();
+        if clipped || retired_member.is_some() {
+            *text = CanonicalText::Inline { text: preview };
+        }
+        retired_member
+    }
+
     /// Move every lossless user-facing text field above the inline limit into
     /// a content-addressed projection member. Adapter projectors construct a
     /// typed draft; the central message boundary performs this exhaustive
@@ -1394,6 +1472,7 @@ impl ToolAction {
                 code,
                 cwd,
                 outcome,
+                ..
             } => {
                 bounded_option("code language", language.as_deref(), ID_MAX_BYTES)?;
                 validate_required_text("code", code)?;
@@ -2356,6 +2435,7 @@ enum ToolField {
     Path,
     Changes,
     Command,
+    SourceTruncated,
     Cwd,
     TimeoutMs,
     Background,
@@ -2604,6 +2684,7 @@ fn merge_action_fields(
         (
             ToolAction::Shell {
                 command: current_command,
+                source_truncated: current_source_truncated,
                 cwd: current_cwd,
                 timeout_ms: current_timeout,
                 background: current_background,
@@ -2611,6 +2692,7 @@ fn merge_action_fields(
             },
             ToolAction::Shell {
                 command: incoming_command,
+                source_truncated: incoming_source_truncated,
                 cwd: incoming_cwd,
                 timeout_ms: incoming_timeout,
                 background: incoming_background,
@@ -2619,6 +2701,11 @@ fn merge_action_fields(
         ) => match phase {
             ToolPatchPhase::Request => {
                 required!(Command, current_command, incoming_command);
+                required!(
+                    SourceTruncated,
+                    current_source_truncated,
+                    incoming_source_truncated
+                );
                 optional!(Cwd, current_cwd, incoming_cwd);
                 optional!(TimeoutMs, current_timeout, incoming_timeout);
                 required!(Background, current_background, incoming_background);
@@ -2629,12 +2716,14 @@ fn merge_action_fields(
             ToolAction::CodeExecute {
                 language: current_language,
                 code: current_code,
+                source_truncated: current_source_truncated,
                 cwd: current_cwd,
                 outcome: current_outcome,
             },
             ToolAction::CodeExecute {
                 language: incoming_language,
                 code: incoming_code,
+                source_truncated: incoming_source_truncated,
                 cwd: incoming_cwd,
                 outcome: incoming_outcome,
             },
@@ -2642,6 +2731,11 @@ fn merge_action_fields(
             ToolPatchPhase::Request => {
                 optional!(Language, current_language, incoming_language);
                 required!(Code, current_code, incoming_code);
+                required!(
+                    SourceTruncated,
+                    current_source_truncated,
+                    incoming_source_truncated
+                );
                 optional!(Cwd, current_cwd, incoming_cwd);
             }
             ToolPatchPhase::Outcome => optional!(Outcome, current_outcome, incoming_outcome),
@@ -4261,6 +4355,7 @@ mod tests {
         let mut tool = ToolInteraction {
             action: ToolAction::Shell {
                 command: CanonicalText::inline("true").unwrap(),
+                source_truncated: false,
                 cwd: None,
                 timeout_ms: None,
                 background: false,
@@ -4319,6 +4414,7 @@ mod tests {
         let mut shell = ToolInteraction {
             action: ToolAction::Shell {
                 command: CanonicalText::inline("true").unwrap(),
+                source_truncated: false,
                 cwd: None,
                 timeout_ms: None,
                 background: false,
@@ -4339,6 +4435,7 @@ mod tests {
             ToolInteraction {
                 action: ToolAction::Shell {
                     command: CanonicalText::inline("opener").unwrap(),
+                    source_truncated: false,
                     cwd: None,
                     timeout_ms: None,
                     background: false,
@@ -4357,6 +4454,7 @@ mod tests {
                 request: Some(ToolRequestPatch {
                     action: ToolAction::Shell {
                         command: CanonicalText::inline(command).unwrap(),
+                        source_truncated: false,
                         cwd: cwd.map(|path| ResourceRef::Directory {
                             path: path.into(),
                             resolved: true,
@@ -4414,6 +4512,7 @@ mod tests {
         let mut tool = ToolInteraction {
             action: ToolAction::Shell {
                 command: CanonicalText::inline("keep request").unwrap(),
+                source_truncated: false,
                 cwd: Some(ResourceRef::Directory {
                     path: "/repo".into(),
                     resolved: true,
@@ -4428,6 +4527,7 @@ mod tests {
             outcome: Some(ToolOutcomePatch {
                 action: ToolAction::Shell {
                     command: CanonicalText::inline("native result copy").unwrap(),
+                    source_truncated: false,
                     cwd: None,
                     timeout_ms: None,
                     background: true,
@@ -4453,6 +4553,7 @@ mod tests {
             timeout_ms,
             background,
             outcome,
+            ..
         } = &tool.action
         else {
             panic!("shell action");
@@ -4484,6 +4585,7 @@ mod tests {
                 },
                 action: ToolAction::Shell {
                     command: CanonicalText::inline("git status").unwrap(),
+                    source_truncated: false,
                     cwd: Some(ResourceRef::Directory {
                         path: "/repo".into(),
                         resolved: true,

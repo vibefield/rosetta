@@ -11,14 +11,14 @@ use rosetta_core::timeline::{
     TimelineGroup, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
-    ApiError, BackfillState, BoostRequest, BoostResponse, ContributionResponse, ContributionRow,
-    DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest, EnableResponse, ErrorCode,
-    HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, ModelDay,
-    Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow, ProjectsResponse, RuntimeBackfill,
-    RuntimeIngestStatus, RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness, SearchRequest,
-    SearchResponse, SearchState, ServerFrame, SessionResponse, SessionRole, SessionRow,
-    SessionsResponse, Stamp, StatusResponse, StreamState, TimelinePage, TokenSnapshot,
-    UsageResponse,
+    ApiError, BackfillState, BoostRequest, BoostResponse, CommandResponse, ContributionResponse,
+    ContributionRow, DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest,
+    EnableResponse, ErrorCode, HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase,
+    IngestProgress, ModelDay, Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow,
+    ProjectsResponse, RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse,
+    SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState, ServerFrame,
+    SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState,
+    TimelinePage, TokenSnapshot, UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -81,7 +81,8 @@ fn tool_interaction() -> ToolInteraction {
             basis: StatusBasis::NativeTerminalRecord,
         },
         action: ToolAction::Shell {
-            command: CanonicalText::inline("true").unwrap(),
+            command: CanonicalText::inline("one").unwrap(),
+            source_truncated: true,
             cwd: None,
             timeout_ms: None,
             background: false,
@@ -306,6 +307,7 @@ fn exemplars() -> serde_json::Value {
             entries: vec![timeline_entry()],
             cursor: Some("{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}".into()),
         },
+        "command": CommandResponse { command: "printf 'full source'".into() },
         "search_request": SearchRequest {
             q: "needle".into(),
             limit: Some(50),

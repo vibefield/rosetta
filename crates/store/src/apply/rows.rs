@@ -217,6 +217,7 @@ fn apply_projected_patch(
         .map_err(|error| StoreError::ProjectionInvalid {
             message: format!("invalid normalized tool update: {error}"),
         })?;
+    tool.action.compact_command_preview();
     Ok(*tool != before)
 }
 
@@ -469,7 +470,7 @@ fn apply_message_inner(
         TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
         _ => None,
     };
-    let tool = match reconciled_tool {
+    let mut tool = match reconciled_tool {
         Some(resolved) => {
             let opener = incoming_tool.ok_or_else(|| StoreError::ProjectionInvalid {
                 message: format!(
@@ -489,6 +490,11 @@ fn apply_message_inner(
         }
         None => incoming_tool.cloned(),
     };
+    if let Some(tool) = tool.as_mut() {
+        // Defense in depth for callers outside the normal pipeline: SQLite
+        // and the hot mutation mirror never retain a full command body.
+        tool.action.compact_command_preview();
+    }
     if let (Some(previous), Some(incoming)) = (
         old.as_ref().and_then(|row| row.tool.as_ref()),
         incoming_tool,
@@ -755,6 +761,7 @@ pub(super) fn apply_tool_updates(
                 latest_at = Some(latest_at.map_or(at, |current: Ms| current.max(at)));
             }
         }
+        tool.action.compact_command_preview();
         let started = Instant::now();
         if tool != before {
             update_encoded_tool(tx, old.id, &tool)?;

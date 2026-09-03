@@ -23,7 +23,7 @@ use rosetta_core::rows::{
 };
 use rosetta_core::timeline::{
     AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
-    ResourceRef, ResponseGroup, StatusBasis, TimelineGroup, ToolAction,
+    ResourceRef, ResponseGroup, StatusBasis, TimelineGroup, ToolAction, ToolRequestPatch,
 };
 use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,11 @@ pub struct ClaudeCodeState {
     /// tool to a child session.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     delegate_calls: BTreeSet<String>,
+    /// File result records likewise carry no tool name. Remember only typed
+    /// file-change openers so a coincidentally patch-shaped payload from some
+    /// other tool can never change its canonical family.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    file_change_calls: BTreeSet<String>,
 }
 
 impl ClaudeCodeState {
@@ -105,6 +110,14 @@ impl ClaudeCodeState {
 
     fn take_delegate_call(&mut self, tool_use_id: &str) -> bool {
         self.delegate_calls.remove(tool_use_id)
+    }
+
+    fn remember_file_change_call(&mut self, tool_use_id: &str) {
+        self.file_change_calls.insert(tool_use_id.to_owned());
+    }
+
+    fn take_file_change_call(&mut self, tool_use_id: &str) -> bool {
+        self.file_change_calls.remove(tool_use_id)
     }
 }
 
@@ -221,6 +234,17 @@ fn normalize(ctx: &mut NormalizeCtx, stream_id: &str, record: &KnownRecord) -> L
 // ---------------------------------------------------------------- record kinds
 
 fn user_line(emit: &mut Emit, line: &UserLine) {
+    // Claude persists model-only turn companions as `user` records. They are
+    // injected skill/context reminders (including the `[Image: ...]` sentence
+    // emitted after image reads), not words the human authored. Projecting
+    // one as a user row invents a prompt boundary and makes the transcript
+    // split one reply into several fake turns. The paired flags are the native
+    // provenance; content matching would mistake a literal human sentence for
+    // transport.
+    if line.is_meta == Some(true) && line.turn_companion == Some(true) {
+        return;
+    }
+
     let ts = rfc3339_ms(&line.timestamp);
     let seed = Seed {
         uuid: Some(&line.uuid),
@@ -261,6 +285,8 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
                         tool_use_id,
                         content: content.as_ref(),
                         is_error: *is_error,
+                        cwd: Some(&line.cwd),
+                        tool_use_result: line.tool_use_result.as_ref(),
                         delegate_child_native_id: line
                             .tool_use_result
                             .as_ref()
@@ -364,10 +390,11 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     Some(id),
                     None,
                 );
-                let (tool, is_delegate) = match projected {
+                let (tool, is_delegate, is_file_change) = match projected {
                     Ok(tool) => {
                         let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
-                        (tool, is_delegate)
+                        let is_file_change = matches!(&tool.action, ToolAction::FileChange { .. });
+                        (tool, is_delegate, is_file_change)
                     }
                     Err(error) => {
                         emit.drift(
@@ -387,6 +414,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                                 None,
                             ),
                             false,
+                            false,
                         )
                     }
                 };
@@ -398,6 +426,9 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 if is_delegate {
                     row.branch_tool_id = Some(id.clone());
                     emit.remember_delegate_call(id);
+                }
+                if is_file_change {
+                    emit.remember_file_change_call(id);
                 }
                 let edit = file_edit(&row, name, input, ts);
                 rows.push((row, edit));
@@ -611,10 +642,10 @@ fn snapshot(usage: &RecordedUsage) -> TokenSnapshot {
     }
 }
 
-/// Edit and Write are the file-changing tools. Edit's input shape is canonical
-/// (`tool-input` facet: file_path/old_string/new_string/replace_all); Write's is
-/// only in the census keysets, so it is read defensively — a change we cannot
-/// measure is still recorded, with the line counts left unknown.
+/// Claude's three file-changing tools also feed project activity. Edit's input
+/// shape is canonical (`file_path/old_string/new_string/replace_all`); Write
+/// and NotebookEdit are read defensively — a change we cannot measure is still
+/// recorded, with the unknown side of the line count left absent.
 fn file_edit(row: &MessageRow, name: &str, input: &Value, at: Option<Ms>) -> Option<FileEditRow> {
     let (kind, (lines_added, lines_removed)) = match name {
         "Edit" => (
@@ -629,12 +660,21 @@ fn file_edit(row: &MessageRow, name: &str, input: &Value, at: Option<Ms>) -> Opt
                 .as_str()
                 .map_or((None, None), |content| fold::line_delta(None, content)),
         ),
+        "NotebookEdit" => (
+            EditKind::Edit,
+            input["new_source"]
+                .as_str()
+                .map_or((None, None), |source| fold::line_delta(None, source)),
+        ),
         _ => return None,
     };
     Some(FileEditRow {
         session_id: row.session_id.clone(),
         message_timeline_id: Some(row.timeline_id.clone()),
-        path: input["file_path"].as_str()?.to_owned(),
+        path: input["file_path"]
+            .as_str()
+            .or_else(|| input["notebook_path"].as_str())?
+            .to_owned(),
         kind,
         // Claude Code keeps its own backups under file-history/; wiring that up
         // is that stream's job, not this one's.
@@ -779,6 +819,8 @@ struct ToolResultBlock<'a> {
     tool_use_id: &'a str,
     content: Option<&'a Value>,
     is_error: Option<bool>,
+    cwd: Option<&'a str>,
+    tool_use_result: Option<&'a Value>,
     delegate_child_native_id: Option<String>,
 }
 
@@ -901,6 +943,25 @@ impl<'a> Emit<'a> {
             .is_some_and(|state| state.take_delegate_call(tool_use_id))
     }
 
+    fn remember_file_change_call(&mut self, tool_use_id: &str) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_file_change_call(tool_use_id);
+        }
+    }
+
+    fn take_file_change_call(&mut self, tool_use_id: &str) -> bool {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .is_some_and(|state| state.take_file_change_call(tool_use_id))
+    }
+
     fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
         let diagnostic = result
             .is_error
@@ -920,13 +981,23 @@ impl<'a> Emit<'a> {
                 .as_deref()
                 .map(|native| ids::session_id(&self.ctx.runtime_id, native));
         }
-        self.ops.push(IngestOp::ToolUpdate {
-            session_id: self.session_id.clone(),
-            correlation_key: result.tool_use_id.to_owned(),
-            evidence: self.ctx.evidence(mutation_index),
-            patch: Box::new(patch),
+        if self.take_file_change_call(result.tool_use_id)
+            && result.is_error != Some(true)
+            && let Some(action) = result
+                .tool_use_result
+                .and_then(|value| crate::tool::project_change_result(value, result.cwd).ok())
+                .flatten()
+        {
+            patch.request = Some(ToolRequestPatch { action });
+        }
+        IngestOp::push_tool_update(
+            &mut self.ops,
+            self.session_id.clone(),
+            result.tool_use_id.to_owned(),
+            self.ctx.evidence(mutation_index),
+            patch,
             at,
-        });
+        );
     }
 
     fn drift(
@@ -1038,7 +1109,7 @@ fn local_command_artifact(text: &str) -> LocalCommandArtifact {
         return LocalCommandArtifact::Caveat;
     }
     if let Some(output) = tagged_value(trimmed, "local-command-stdout") {
-        let output = plain_terminal_text(output);
+        let output = concise_local_command_output(plain_terminal_text(output));
         return if output.is_empty() || output == "(no content)" {
             LocalCommandArtifact::EmptyOutput
         } else {
@@ -1067,6 +1138,51 @@ fn local_command_artifact(text: &str) -> LocalCommandArtifact {
         }
     }
     LocalCommandArtifact::None
+}
+
+/// Claude explains successful setting changes as UI copy. The canonical row
+/// keeps the setting's value, which is the durable fact; scope/default prose
+/// and the effort-level description belong to the CLI that rendered them.
+/// Unrecognised output (including invalid-command diagnostics) stays intact.
+fn concise_local_command_output(output: String) -> String {
+    let first_line = output.lines().next().unwrap_or_default().trim();
+
+    if let Some(rest) = first_line.strip_prefix("Set model to ") {
+        let mut value = rest.trim();
+        for suffix in [
+            " and saved as your default for new sessions",
+            " and saved as default",
+            " for this session",
+        ] {
+            if let Some(trimmed) = value.strip_suffix(suffix) {
+                value = trimmed.trim();
+            }
+        }
+        if let Some(trimmed) = value.strip_suffix(" (default)") {
+            value = trimmed.trim();
+        }
+        value = value.trim_matches('`').trim();
+        if !value.is_empty() {
+            return value.to_owned();
+        }
+    }
+
+    if let Some(rest) = first_line.strip_prefix("Set effort level to ") {
+        let value = rest
+            .split(|ch: char| ch.is_whitespace() || ch == '(' || ch == ':')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            return value.to_owned();
+        }
+    }
+
+    output
 }
 
 fn tagged_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {

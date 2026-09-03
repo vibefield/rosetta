@@ -22,10 +22,10 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::json;
 
 use rosetta_protocol::{
-    ApiError, BoostRequest, BoostResponse, ContributionResponse, DiscoveriesResponse,
-    EnableRequest, EnableResponse, ErrorCode, HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse,
-    RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
-    StatusResponse, TimelineCursor, TimelinePage, UsageResponse,
+    ApiError, BoostRequest, BoostResponse, CommandResponse, ContributionResponse,
+    DiscoveriesResponse, EnableRequest, EnableResponse, ErrorCode, HeatmapResponse,
+    PROTOCOL_VERSION, ProjectsResponse, RuntimesResponse, SearchRequest, SearchResponse,
+    SessionResponse, SessionsResponse, StatusResponse, TimelineCursor, TimelinePage, UsageResponse,
 };
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
@@ -38,6 +38,9 @@ use crate::hub::Hub;
 const DEFAULT_LIST_LIMIT: i64 = 100;
 const DEFAULT_SEARCH_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 1_000;
+/// Reserved transport id for the client-only bucket of sessions whose source
+/// format exposes no workspace. It is a query scope, never a canonical row.
+const UNASSIGNED_PROJECT_ID: &str = "__rosetta_unassigned__";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -59,6 +62,13 @@ pub struct AppState {
     pub consent: Option<Arc<crate::consent::ConsentGate>>,
     /// The boost queue, present only while a serve loop drains it.
     pub boost: Option<Arc<crate::consent::BoostLedger>>,
+    /// Lossless command bodies stay out of the projection and are recovered
+    /// through this synchronous engine boundary only on explicit disclosure.
+    pub raw_commands: Option<Arc<dyn RawCommandReader>>,
+}
+
+pub trait RawCommandReader: Send + Sync {
+    fn read_command(&self, source: &queries::CommandSource) -> Result<Option<String>, String>;
 }
 
 impl AppState {
@@ -75,6 +85,7 @@ impl AppState {
             health: None,
             consent: None,
             boost: None,
+            raw_commands: None,
         }
     }
 
@@ -89,6 +100,7 @@ impl AppState {
             health: None,
             consent: None,
             boost: None,
+            raw_commands: None,
         }
     }
 
@@ -107,6 +119,13 @@ impl AppState {
     /// Attach the boost ledger (the serve loop drains it between files).
     pub fn with_boost(mut self, boost: Arc<crate::consent::BoostLedger>) -> Self {
         self.boost = Some(boost);
+        self
+    }
+
+    /// Attach the daemon's append-only-ledger reader. Static projection
+    /// servers omit it and answer honestly that source expansion is absent.
+    pub fn with_raw_commands(mut self, reader: Arc<dyn RawCommandReader>) -> Self {
+        self.raw_commands = Some(reader);
         self
     }
 
@@ -222,6 +241,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/timeline", get(timeline))
+        .route(
+            "/api/sessions/{id}/timeline/{timeline_id}/command",
+            get(command),
+        )
+        .route(
+            "/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}",
+            get(read_file_target)
+                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
         .route("/api/assets/{name}", get(asset))
         .route("/api/search", get(search))
         .route(
@@ -417,6 +445,90 @@ async fn asset(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=31536000, immutable"),
     );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
+/// The file viewer's largest admitted payload. The UI performs its more
+/// specific text/image/binary limit after this read; this ceiling keeps a
+/// direct request from turning one historical path into an unbounded read.
+const FILE_VIEW_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+async fn read_file_target(
+    State(state): State<AppState>,
+    UrlPath((session_id, timeline_id, target_index)): UrlPath<(String, String, usize)>,
+) -> Result<Response, Failure> {
+    // The path is looked up from the canonical row. There is intentionally no
+    // path query parameter: the browser can ask for target 0, but it cannot
+    // substitute a different file for the one the transcript proved was read.
+    let target = with_read(state.projection.clone(), move |conn| {
+        queries::file_read_target(conn, &session_id, &timeline_id, target_index)
+            .map_err(store_err)?
+            .ok_or_else(|| Failure::not_found("no file at that recorded read target"))
+    })
+    .await?;
+
+    let path = {
+        let recorded = PathBuf::from(&target.path);
+        if recorded.is_absolute() {
+            recorded
+        } else {
+            let cwd = target
+                .cwd
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .ok_or_else(|| {
+                    Failure::not_found("that relative read has no recorded working directory")
+                })?;
+            cwd.join(recorded)
+        }
+    };
+
+    let bytes = tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+
+        let file = std::fs::File::open(&path)
+            .map_err(|_| Failure::not_found("the recorded file is no longer available"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| Failure::not_found("the recorded file is no longer available"))?;
+        if !metadata.is_file() {
+            return Err(Failure::not_found("the recorded target is not a file"));
+        }
+        if metadata.len() > FILE_VIEW_MAX_BYTES {
+            return Err(Failure::bad_request(
+                "the recorded file is too large to open here",
+            ));
+        }
+
+        // Re-check the cap while reading: a file can grow after metadata was
+        // sampled, and `std::fs::read` would discover that only after it had
+        // allocated the new size.
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.take(FILE_VIEW_MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| Failure::internal(format!("reading recorded file: {error}")))?;
+        if bytes.len() as u64 > FILE_VIEW_MAX_BYTES {
+            return Err(Failure::bad_request(
+                "the recorded file is too large to open here",
+            ));
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|error| Failure::internal(format!("recorded file read task failed: {error}")))??;
+
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -665,6 +777,37 @@ async fn timeline(
     Ok(Json(page))
 }
 
+async fn command(
+    State(state): State<AppState>,
+    UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
+) -> Result<Json<CommandResponse>, Failure> {
+    if !state.projection.is_published() {
+        return Err(Failure::not_ready(
+            "full commands are available after raw-ledger publication",
+        ));
+    }
+    let source = with_read(state.projection.clone(), {
+        let session_id = session_id.clone();
+        let timeline_id = timeline_id.clone();
+        move |conn| {
+            queries::command_source(conn, &session_id, &timeline_id)
+                .map_err(store_err)?
+                .ok_or_else(|| Failure::not_found("no raw command source for this row"))
+        }
+    })
+    .await?;
+    let reader = state
+        .raw_commands
+        .clone()
+        .ok_or_else(|| Failure::not_ready("this server has no raw-ledger command reader"))?;
+    let command = tokio::task::spawn_blocking(move || reader.read_command(&source))
+        .await
+        .map_err(|error| Failure::internal(format!("raw command task failed: {error}")))?
+        .map_err(Failure::internal)?
+        .ok_or_else(|| Failure::not_found("the raw command record is unavailable"))?;
+    Ok(Json(CommandResponse { command }))
+}
+
 async fn search(
     State(state): State<AppState>,
     Query(request): Query<SearchRequest>,
@@ -723,9 +866,10 @@ async fn heatmap(
 ) -> Result<Json<HeatmapResponse>, Failure> {
     require_canonical_aggregates(&state.projection)?;
     let response = with_read(state.projection.clone(), move |conn| {
-        let days = queries::heatmap_days_in_timezone(
+        let project_id = (id != UNASSIGNED_PROJECT_ID).then_some(id.as_str());
+        let days = queries::heatmap_days_in_timezone_for_scope(
             conn,
-            &id,
+            project_id,
             query.since_ms.unwrap_or(0),
             query.offset_minutes.unwrap_or(0),
         )
@@ -748,10 +892,13 @@ async fn usage(
     let response = with_read(state.projection.clone(), move |conn| {
         let since_ms = query.since_ms.unwrap_or(0);
         let offset_minutes = query.offset_minutes.unwrap_or(0);
-        let models = queries::model_days_in_timezone(conn, &id, since_ms, offset_minutes)
-            .map_err(store_err)?;
-        let hours = queries::hour_profile_in_timezone(conn, &id, since_ms, offset_minutes)
-            .map_err(store_err)?;
+        let project_id = (id != UNASSIGNED_PROJECT_ID).then_some(id.as_str());
+        let models =
+            queries::model_days_in_timezone_for_scope(conn, project_id, since_ms, offset_minutes)
+                .map_err(store_err)?;
+        let hours =
+            queries::hour_profile_in_timezone_for_scope(conn, project_id, since_ms, offset_minutes)
+                .map_err(store_err)?;
         Ok(UsageResponse { models, hours })
     })
     .await?;
@@ -764,7 +911,8 @@ async fn contribution(
 ) -> Result<Json<ContributionResponse>, Failure> {
     require_canonical_aggregates(&state.projection)?;
     let response = with_read(state.projection.clone(), move |conn| {
-        let rows = queries::contribution(conn, &id).map_err(store_err)?;
+        let project_id = (id != UNASSIGNED_PROJECT_ID).then_some(id.as_str());
+        let rows = queries::contribution_for_scope(conn, project_id).map_err(store_err)?;
         Ok(ContributionResponse { rows })
     })
     .await?;

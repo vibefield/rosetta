@@ -12,6 +12,7 @@
 //! here from `rosetta_core::ids`.
 
 pub mod checkpoint;
+pub mod command;
 pub mod discover;
 mod document;
 pub mod instrument;
@@ -25,6 +26,7 @@ mod snapshot;
 pub mod stream;
 
 pub use checkpoint::PipeCheckpoint;
+pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{Discovery, discover, expand_data_root};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{HintMapping, LiveOptions, LiveReport, LiveRunner, map_hint, stream_live};
