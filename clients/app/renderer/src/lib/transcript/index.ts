@@ -42,6 +42,7 @@ export {
 
 export type {
   CommandFact,
+  CommandDirectoryContext,
   DelegateFact,
   DetailKind,
   Diffstat,
@@ -51,7 +52,13 @@ export type {
   PathFact,
   SourceFact,
 } from "./families.ts";
-export { diffstatText, projectAction } from "./families.ts";
+export {
+  COMMAND_PREVIEW_CHARACTER_LIMIT,
+  commandDirectoryContext,
+  commandPreviewText,
+  diffstatText,
+  projectAction,
+} from "./families.ts";
 
 export type { LedgerLine, LedgerState, ResultTone, RunSummary } from "./ledger.ts";
 export {
@@ -67,12 +74,13 @@ export {
 export type {
   AttachmentFact,
   DocumentOptions,
+  LocalSetting,
   Prompt,
   ResponseHead,
   Segment,
   Turn,
 } from "./turns.ts";
-export { documentTurns, readAttachments } from "./turns.ts";
+export { documentTurns, imageMarkerTargets, localSetting, readAttachments } from "./turns.ts";
 
 export type { DayEntry, Sitting } from "./sittings.ts";
 export {

@@ -25,7 +25,13 @@
 //     (the component draws the `→` prefix; `elided` says so).
 //  5. Past RUN_FOLD_THRESHOLD lines the whole run closes by default to one
 //     sentence of NOUNS — never of verbs. See `runSummary`.
-import type { TimelineEntry, ToolAction, ToolInteraction, ToolStatus } from "@rosetta/protocol";
+import type {
+  StatusBasis,
+  TimelineEntry,
+  ToolAction,
+  ToolInteraction,
+  ToolStatus,
+} from "@rosetta/protocol";
 import type { CommandFact, LedgerDetail, PathFact } from "./families.ts";
 import { projectAction } from "./families.ts";
 import type {
@@ -125,7 +131,7 @@ function toolOf(row: TimelineEntry): ToolInteraction {
   return row.body.tool;
 }
 
-function stateOf(status: ToolStatus): LedgerState {
+function stateOf(status: ToolStatus, basis: StatusBasis): LedgerState {
   switch (status) {
     case "failed":
     case "denied":
@@ -133,8 +139,12 @@ function stateOf(status: ToolStatus): LedgerState {
       return "failed";
     case "cancelled":
     case "interrupted":
-    case "unknown":
       return "muted";
+    case "unknown":
+      // A terminal record proves that the call finished even when its native
+      // format omitted success/failure. Treat that as neutral completion; it
+      // must not look live, failed, or like a warning.
+      return basis === "native_terminal_record" ? "done" : "muted";
     case "pending":
     case "running":
       return "running";
@@ -143,10 +153,13 @@ function stateOf(status: ToolStatus): LedgerState {
   }
 }
 
-/** `timed out` · `status unknown`. Succeeded says nothing at all. */
-function statusWord(status: ToolStatus): string | null {
+/** `timed out` · `status unknown`. Proven completion says nothing at all. */
+function statusWord(status: ToolStatus, basis: StatusBasis): string | null {
   if (status === "succeeded") return null;
-  return status === "unknown" ? "status unknown" : status.replaceAll("_", " ");
+  if (status === "unknown") {
+    return basis === "native_terminal_record" ? null : "status unknown";
+  }
+  return status.replaceAll("_", " ");
 }
 
 /**
@@ -199,18 +212,22 @@ export function linkedChildSessionIds(row: TimelineEntry): readonly string[] {
 export function ledgerLine(row: TimelineEntry, context: LedgerContext = {}): LedgerLine {
   const tool = toolOf(row);
   const action = tool.action;
-  const projection = projectAction(action, tool.native, context);
+  const projection = projectAction(action, tool.native, context, {
+    sessionId: row.session_id,
+    timelineId: row.timeline_id,
+  });
   const status = tool.status.value;
+  const statusBasis = tool.status.basis;
 
   // The unknown family is never plain: the row is honest about knowing nothing,
   // and the muted state is what italicises `no detail recorded`.
-  const rawState = stateOf(status);
+  const rawState = stateOf(status, statusBasis);
   const state: LedgerState =
     action.type === "unknown" && rawState === "done" ? "muted" : rawState;
 
   const object: ObjectPart[] = [...projection.object];
   if (action.type === "unknown") {
-    const word = statusWord(status);
+    const word = statusWord(status, statusBasis);
     if (word !== null) object.push(part(` · ${word}`));
   }
 
@@ -233,7 +250,7 @@ export function ledgerLine(row: TimelineEntry, context: LedgerContext = {}): Led
     result = failure;
     resultTone = state === "failed" ? "failed" : state === "muted" ? "muted" : "plain";
   } else {
-    result = projection.result ?? statusWord(status);
+    result = projection.result ?? statusWord(status, statusBasis);
     resultTone =
       state === "failed"
         ? "failed"

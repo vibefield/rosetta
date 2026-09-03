@@ -17,6 +17,7 @@ import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import { clockShort } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
+import type { AttachmentFact, PathFact } from "../lib/transcript";
 import type { ProjectViewModel } from "../lib/model";
 import { parseSnippet } from "../lib/model";
 import type { SearchResultsViewModel } from "../lib/search-results";
@@ -32,6 +33,16 @@ import { ReceiptPill } from "./transcript/ReceiptPill";
 import { buildThreadIndex, messageDomId } from "./transcript/thread-index";
 import type { ThreadFocus } from "./transcript/thread-index";
 import { ColumnHeading, EmptyState, ResultGroupHeader } from "./ui";
+import { FileViewerDialog } from "./file-viewer";
+import type { FileHandle, FileSource } from "./file-viewer";
+import {
+  attachmentFileSource,
+  handleForAttachment,
+} from "./transcript/attachment-file-source";
+import {
+  handleForReadPath,
+  transcriptReadFileSource,
+} from "./transcript/read-file-source";
 
 export type { ThreadFocus } from "./transcript/thread-index";
 
@@ -40,6 +51,11 @@ export type { ThreadFocus } from "./transcript/thread-index";
  * a pinned pill occupies 58–80, and the first pill still in the flow starts at
  * 124. 88 is the one band that clears both. */
 const RECEIPT_TOP = 88;
+
+interface TranscriptViewerTarget {
+  readonly handle: FileHandle;
+  readonly source: FileSource;
+}
 
 export interface TranscriptColumnProps {
   readonly session: SessionRow | null;
@@ -79,6 +95,8 @@ export function TranscriptColumn({
   const [unseen, setUnseen] = useState(0);
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
+  const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
+  const viewerRequest = useRef(0);
   const focusTries = useRef(0);
   const index = useMemo(() => buildThreadIndex(sessions), [sessions]);
   const fold = useFoldPreference();
@@ -129,8 +147,37 @@ export function TranscriptColumn({
     setUnseen(0);
     setHighlightedTimelineId(null);
     setMenu(null);
+    viewerRequest.current += 1;
+    setViewerTarget(null);
     focusTries.current = 0;
   }, [session?.id]);
+
+  const openAttachment = (fact: AttachmentFact) => {
+    viewerRequest.current += 1;
+    const handle = handleForAttachment(fact);
+    if (handle === null) {
+      onReceipt("That image was not stored");
+      return;
+    }
+    setViewerTarget({ handle, source: attachmentFileSource });
+  };
+
+  const openReadPath = (path: PathFact) => {
+    const request = (viewerRequest.current += 1);
+    void handleForReadPath(path)
+      .then((handle) => {
+        if (request !== viewerRequest.current) return;
+        if (handle === null) {
+          onReceipt("That read did not record an openable file");
+          return;
+        }
+        setViewerTarget({ handle, source: transcriptReadFileSource });
+      })
+      .catch((error: unknown) => {
+        if (request !== viewerRequest.current) return;
+        onReceipt(error instanceof Error ? error.message : "Could not open that recorded file");
+      });
+  };
 
   useEffect(() => {
     focusTries.current = 0;
@@ -255,7 +302,7 @@ export function TranscriptColumn({
         </span>
       </header>
       <div
-        className="ah-scroll"
+        className="ah-scroll tr-scroll"
         data-flush=""
         ref={scrollRef}
         onScroll={() => {
@@ -317,6 +364,8 @@ export function TranscriptColumn({
                 highlightedTimelineId={highlightedTimelineId}
                 onFocusConsumed={onFocusConsumed}
                 onReceipt={onReceipt}
+                onOpenAttachment={openAttachment}
+                onOpenPath={openReadPath}
                 getRuntimeKind={getRuntimeKind}
                 homeDirectory={homeDirectory}
                 onPillPress={(element: HTMLElement, dayKey: string | null) => {
@@ -365,6 +414,17 @@ export function TranscriptColumn({
           </span>
         </button>
       )}
+      <FileViewerDialog
+        handle={viewerTarget?.handle ?? null}
+        source={viewerTarget?.source ?? attachmentFileSource}
+        tint={project?.tint ?? null}
+        homeDirectory={homeDirectory}
+        onClose={() => {
+          viewerRequest.current += 1;
+          setViewerTarget(null);
+        }}
+        onReceipt={onReceipt}
+      />
     </div>
   );
 }

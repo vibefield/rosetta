@@ -11,29 +11,28 @@
 //   · a prompt that is a local command wears a PILL instead of a panel, and
 //     its `command_output` rides beside it in the caption ramp. The pair is one
 //     object, which is why `turns.ts` absorbed the notice rather than leaving
-//     it to draw as a second marker.
+//     it to draw as a second marker. A setting command is the tighter form of
+//     that object: label + normalized value, with the CLI's prose discarded.
 import type { AttachmentFact, Prompt as PromptModel } from "../../lib/transcript";
 import { firstLine } from "../../lib/transcript";
 import { fmtBytes } from "../../lib/format";
-import { client } from "../../lib/rosetta";
 import { Anchor } from "./Anchor";
+import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
 import { Prose, SegmentActs } from "./Prose";
-
-/** The bytes the daemon kept, as a URL this renderer may actually load. */
-function assetUrl(fact: AttachmentFact): string | null {
-  const source = fact.ref?.source;
-  if (source === undefined || source === null || source.type !== "asset") return null;
-  const url = source.asset.url;
-  return /^https?:\/\//i.test(url) ? url : `${client.baseUrl}${url}`;
-}
 
 function captionOf(fact: AttachmentFact): string {
   const size = fact.byteLen === null ? null : fmtBytes(fact.byteLen);
   return [fact.caption, size].filter((piece) => piece !== null && piece !== "").join(" · ");
 }
 
-function Tile({ fact }: { readonly fact: AttachmentFact }) {
-  const url = fact.kind === "image" ? assetUrl(fact) : null;
+function Tile({
+  fact,
+  onOpenAttachment,
+}: {
+  readonly fact: AttachmentFact;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+}) {
+  const url = fact.kind === "image" ? attachmentAssetUrl(fact) : null;
   const caption = captionOf(fact);
   return (
     <figure>
@@ -44,21 +43,33 @@ function Tile({ fact }: { readonly fact: AttachmentFact }) {
           {fact.name ?? `${fact.kind} · not stored`}
         </div>
       ) : (
-        <a className="tr-att__tile" href={url} target="_blank" rel="noreferrer" title="Open">
+        <button
+          className="tr-att__tile"
+          type="button"
+          title="Open image"
+          aria-label={`Open image${fact.name === null ? "" : ` — ${fact.name}`}`}
+          onClick={() => onOpenAttachment(fact)}
+        >
           <img src={url} alt={fact.name ?? ""} loading="lazy" decoding="async" />
-        </a>
+        </button>
       )}
       {caption !== "" && <figcaption>{caption}</figcaption>}
     </figure>
   );
 }
 
-export function Attachments({ facts }: { readonly facts: readonly AttachmentFact[] }) {
+export function Attachments({
+  facts,
+  onOpenAttachment,
+}: {
+  readonly facts: readonly AttachmentFact[];
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+}) {
   if (facts.length === 0) return null;
   return (
     <div className="tr-att">
       {facts.map((fact) => (
-        <Tile key={fact.key} fact={fact} />
+        <Tile key={fact.key} fact={fact} onOpenAttachment={onOpenAttachment} />
       ))}
     </div>
   );
@@ -69,10 +80,18 @@ export interface PromptPanelProps {
   readonly domId: string;
   readonly landed: boolean;
   readonly onReceipt: (message: string) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
 }
 
 /** The panel alone, so a cluster can stack several inside one segment. */
-export function PromptPanel({ prompt, domId, landed, onReceipt }: PromptPanelProps) {
+export function PromptPanel({
+  prompt,
+  domId,
+  landed,
+  onReceipt,
+  onOpenAttachment,
+}: PromptPanelProps) {
+  const openableImages = prompt.attachments.filter(canOpenAttachment);
   return (
     <div
       className={landed ? "tr-prompt is-landed" : "tr-prompt"}
@@ -84,20 +103,49 @@ export function PromptPanel({ prompt, domId, landed, onReceipt }: PromptPanelPro
           <p className="tr-quiet">no text recorded</p>
         )
       ) : (
-        <Prose text={prompt.text} onReceipt={onReceipt} />
+        <Prose
+          text={prompt.text}
+          onReceipt={onReceipt}
+          imageAttachments={openableImages}
+          onOpenAttachment={onOpenAttachment}
+        />
       )}
-      <Attachments facts={prompt.attachments} />
+      <Attachments facts={prompt.attachments} onOpenAttachment={onOpenAttachment} />
     </div>
   );
 }
 
 export interface PromptProps {
-  /** One prompt, or a cluster of consecutive prompts inside five minutes. */
+  /** One conversational prompt, or adjacent successful setting commands. */
   readonly prompts: readonly PromptModel[];
   readonly sessionId: string;
   readonly domIdOf: (timelineId: string) => string;
   readonly landedTimelineId: string | null;
   readonly onReceipt: (message: string) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+}
+
+function CommandPrompt({ prompt, domId }: { readonly prompt: PromptModel; readonly domId: string }) {
+  if (prompt.setting !== null) {
+    return (
+      <div
+        className="tr-setting"
+        id={domId}
+        data-setting={prompt.setting.kind}
+        title={prompt.command ?? undefined}
+        aria-label={`${prompt.setting.label}: ${prompt.setting.value}`}
+      >
+        <span className="tr-setting__label">{prompt.setting.label}</span>
+        <span className="tr-setting__value">{prompt.setting.value}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="tr-cmd" id={domId}>
+      <code>{prompt.command}</code>
+      {prompt.commandOutput !== null && <span>{firstLine(prompt.commandOutput, 160)}</span>}
+    </div>
+  );
 }
 
 export function Prompt({
@@ -106,6 +154,7 @@ export function Prompt({
   domIdOf,
   landedTimelineId,
   onReceipt,
+  onOpenAttachment,
 }: PromptProps) {
   const first = prompts[0];
   if (first === undefined) return null;
@@ -135,10 +184,11 @@ export function Prompt({
         // §03 H — a prompt that is a local command wears a pill instead of a
         // panel, and its `command_output` rides beside it. One object.
         prompt.isCommand && prompt.command !== null ? (
-          <div className="tr-cmd" key={prompt.key} id={domIdOf(prompt.row.timeline_id)}>
-            <code>{prompt.command}</code>
-            {prompt.commandOutput !== null && <span>{firstLine(prompt.commandOutput, 160)}</span>}
-          </div>
+          <CommandPrompt
+            key={prompt.key}
+            prompt={prompt}
+            domId={domIdOf(prompt.row.timeline_id)}
+          />
         ) : (
           <PromptPanel
             key={prompt.key}
@@ -146,6 +196,7 @@ export function Prompt({
             domId={domIdOf(prompt.row.timeline_id)}
             landed={landedTimelineId === prompt.row.timeline_id}
             onReceipt={onReceipt}
+            onOpenAttachment={onOpenAttachment}
           />
         ),
       )}

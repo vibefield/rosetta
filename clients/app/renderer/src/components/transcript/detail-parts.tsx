@@ -7,9 +7,16 @@
 // bury it. Every rule they obey is the same one — show what the ROW proved,
 // state absence rather than faking it, and cap what would otherwise become a
 // scroll trap inside the measure.
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { CommandFact, Diffstat, PathFact } from "../../lib/transcript";
-import { canonicalText, diffstatText, resourceDisplay } from "../../lib/transcript";
+import {
+  canonicalText,
+  commandDirectoryContext,
+  commandPreviewText,
+  diffstatText,
+  resourceDisplay,
+} from "../../lib/transcript";
 import type {
   CanonicalDocument,
   CollaboratorRef,
@@ -21,6 +28,10 @@ import type {
   UserQuestion,
 } from "../../lib/transcript/protocol";
 import { parseDiff } from "../file-viewer/diff";
+import { highlight, languageFor, PLAIN_TEXT } from "../file-viewer/syntax";
+import type { Language, TokenLine } from "../file-viewer/syntax";
+import { client } from "../../lib/rosetta";
+import { DirectoryGlyph } from "./glyphs";
 
 /** Derived, never re-declared: a document's blocks are whatever the generated
  * `CanonicalDocument` says they are (iron rule 6). */
@@ -33,16 +44,152 @@ const DIFF_LINE_CAP = 12;
 /** A bounded list is a list; an unbounded one is a scroll trap in the measure. */
 export const LIST_CAP = 24;
 
-export function PathList({ paths, total }: { readonly paths: readonly PathFact[]; readonly total: number }) {
-  const shown = paths.slice(0, LIST_CAP);
+const SHELL = languageFor("command.sh") ?? PLAIN_TEXT;
+const LANGUAGE_FILE: Readonly<Record<string, string>> = {
+  bash: "command.sh",
+  bun: "command.js",
+  deno: "command.js",
+  fish: "command.sh",
+  javascript: "command.js",
+  js: "command.js",
+  lua: "command.lua",
+  node: "command.js",
+  nodejs: "command.js",
+  php: "command.php",
+  py: "command.py",
+  python: "command.py",
+  ruby: "command.rb",
+  sh: "command.sh",
+  shell: "command.sh",
+  sql: "command.sql",
+  sqlite3: "command.sql",
+  typescript: "command.ts",
+  ts: "command.ts",
+  zsh: "command.sh",
+};
+
+function namedLanguage(name: string | null): Language | null {
+  if (name === null) return null;
+  const normalized = name.trim().toLowerCase();
+  const file = LANGUAGE_FILE[normalized] ?? "command." + normalized;
+  return languageFor(file);
+}
+
+function heredocLanguage(opener: string): Language | null {
+  const redirected = opener.match(/>\s*["']?([^\s"';&|]+)["']?\s+<<-?/);
+  if (redirected !== null) {
+    const fromTarget = languageFor(redirected[1]);
+    if (fromTarget !== null) return fromTarget;
+  }
+  const interpreter = opener.match(
+    /(?:^|[;&|]\s*)(?:env\s+)?(python(?:\d+(?:\.\d+)*)?|nodejs?|deno|bun|ruby|php|lua|bash|zsh|fish|sh|sqlite3)\b/i,
+  )?.[1];
+  if (interpreter === undefined) return null;
+  return namedLanguage(interpreter.toLowerCase().replace(/^python.*$/, "python"));
+}
+
+/** A command is shell until a declared heredoc body begins. When its launcher
+ * or redirect target names a language, use the file viewer's grammar for that
+ * body and return to shell for the delimiter and anything after it. */
+function commandHighlight(
+  text: string,
+  language: string | null,
+  code: boolean,
+): readonly TokenLine[] {
+  if (code) return highlight(text, namedLanguage(language) ?? PLAIN_TEXT);
+
+  const lines = text.split("\n");
+  const markerMatch = lines[0]?.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/);
+  const embedded = markerMatch === undefined || markerMatch === null
+    ? null
+    : heredocLanguage(lines[0]);
+  if (markerMatch === undefined || markerMatch === null || embedded === null || lines.length < 2) {
+    return highlight(text, SHELL);
+  }
+
+  const marker = markerMatch[1] ?? markerMatch[2] ?? markerMatch[3];
+  const close = lines.findIndex((line, at) => at > 0 && line.trim() === marker);
+  const bodyEnd = close === -1 ? lines.length : close;
+  const out: TokenLine[] = [...highlight(lines[0], SHELL)];
+  if (bodyEnd > 1) out.push(...highlight(lines.slice(1, bodyEnd).join("\n"), embedded));
+  if (close !== -1) out.push(...highlight(lines.slice(close).join("\n"), SHELL));
+  return out;
+}
+
+function HighlightedCommand({
+  text,
+  language,
+  code,
+}: {
+  readonly text: string;
+  readonly language: string | null;
+  readonly code: boolean;
+}) {
+  const lines = useMemo(
+    () => commandHighlight(text, language, code),
+    [code, language, text],
+  );
   return (
-    <ul className="tr-paths">
-      {shown.map((path, at) => (
-        <li key={`${path.label}-${at}`}>
-          <span className="dir">{path.dir}</span>
-          {path.name}
-        </li>
-      ))}
+    <pre className={code ? "tr-diag tr-command__text" : "tr-command__text"} aria-label={text}>
+      <code>
+        {lines.map((line, row) => (
+          <span className="tr-command__line" key={row}>
+            {line.map((token, at) =>
+              token.kind === "plain" ? (
+                <span key={at}>{token.text}</span>
+              ) : (
+                <span data-t={token.kind} key={at}>
+                  {token.text}
+                </span>
+              ),
+            )}
+          </span>
+        ))}
+      </code>
+    </pre>
+  );
+}
+
+export function PathList({
+  paths,
+  total,
+  onOpenPath,
+}: {
+  readonly paths: readonly PathFact[];
+  readonly total: number;
+  readonly onOpenPath?: (path: PathFact) => void;
+}) {
+  const shown = paths.slice(0, LIST_CAP);
+  const hasOpenablePath =
+    onOpenPath !== undefined && shown.some((path) => path.read !== undefined);
+  return (
+    <ul className="tr-paths" data-openable={hasOpenablePath || undefined}>
+      {shown.map((path, at) => {
+        const openable = onOpenPath !== undefined && path.read !== undefined;
+        const label = (
+          <>
+            <span className="dir">{path.dir}</span>
+            <span className="name">{path.name}</span>
+          </>
+        );
+        return (
+          <li key={`${path.label}-${at}`}>
+            {openable ? (
+              <button
+                type="button"
+                className="tr-paths__file"
+                title={path.label}
+                aria-label={`Open ${path.label}`}
+                onClick={() => onOpenPath?.(path)}
+              >
+                {label}
+              </button>
+            ) : (
+              label
+            )}
+          </li>
+        );
+      })}
       {total > shown.length && <li className="tr-more">… {total - shown.length} more</li>}
     </ul>
   );
@@ -129,28 +276,104 @@ export function CommandList({
   readonly commands: readonly CommandFact[];
   readonly code: boolean;
 }) {
-  const cwd = commands.find((command) => command.cwd !== null)?.cwd ?? null;
+  const directory = commandDirectoryContext(commands);
   return (
     <>
+      {directory !== null && (
+        <span
+          aria-label={directory.title}
+          className="tr-command-cwd"
+          title={directory.title}
+        >
+          <DirectoryGlyph />
+          <bdi>{directory.label}</bdi>
+        </span>
+      )}
       {code ? (
-        <pre className="tr-diag">{commands.map((command) => command.command).join("\n\n")}</pre>
+        <div className="tr-command-stack">
+          {commands.map((command, at) => (
+            <CommandSource command={command} code key={at} />
+          ))}
+        </div>
       ) : (
         <ul className="tr-cmds">
           {commands.slice(0, LIST_CAP).map((command, at) => (
-            <li key={at}>{command.command}</li>
+            <CommandSource command={command} code={false} key={at} />
           ))}
           {commands.length > LIST_CAP && (
             <li className="tr-more">… {commands.length - LIST_CAP} more</li>
           )}
         </ul>
       )}
-      {cwd !== null && (
-        <dl className="tr-kv">
-          <dt>in</dt>
-          <dd>{cwd}</dd>
-        </dl>
-      )}
     </>
+  );
+}
+
+function CommandSource({ command, code }: { readonly command: CommandFact; readonly code: boolean }) {
+  const [full, setFull] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const expandable =
+    command.sourceTruncated && command.sessionId !== null && command.timelineId !== null;
+
+  const disclose = async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    if (!expandable || loading) return;
+    if (full !== null) {
+      setExpanded(true);
+      return;
+    }
+    setLoading(true);
+    setFailed(false);
+    try {
+      const response = await client.command(command.sessionId!, command.timelineId!);
+      setFull(response.command);
+      setExpanded(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const text =
+    expanded && full !== null
+      ? full
+      : commandPreviewText(command.command, command.sourceTruncated);
+  const body = <HighlightedCommand code={code} language={command.language} text={text} />;
+  const more = expandable ? (
+    <button
+      aria-expanded={expanded}
+      className="tr-command__more"
+      type="button"
+      onClick={disclose}
+      disabled={loading}
+    >
+      {loading
+        ? "loading full command…"
+        : failed
+          ? "couldn’t load · retry"
+          : expanded
+            ? "show preview"
+            : "show full command"}
+    </button>
+  ) : null;
+
+  return code ? (
+    <div className="tr-command ah-syntax" data-full={expanded || undefined}>
+      {body}
+      {more}
+    </div>
+  ) : (
+    <li className="tr-command ah-syntax" data-full={expanded || undefined}>
+      <span aria-hidden="true" className="tr-command__prompt">&gt;_</span>
+      {body}
+      {more}
+    </li>
   );
 }
 

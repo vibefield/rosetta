@@ -22,7 +22,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { clock } from "../../lib/format";
-import type { LedgerLine, ObjectPart, RunSummary } from "../../lib/transcript";
+import type { LedgerLine, ObjectPart, PathFact, RunSummary } from "../../lib/transcript";
 import { objectText, spanText } from "../../lib/transcript";
 import { FaviconStack, Favicon } from "./Favicon";
 import { FailGlyph, FamilyGlyph, LineChevron } from "./glyphs";
@@ -64,6 +64,7 @@ export interface LineProps {
   /** The child runs this line owns, already built (§03 F). */
   readonly subthreads: ReactNode;
   readonly hasChildren: boolean;
+  readonly onOpenPath: (path: PathFact) => void;
 }
 
 export function Line({
@@ -74,6 +75,7 @@ export function Line({
   forceOpen,
   subthreads,
   hasChildren,
+  onOpenPath,
 }: LineProps) {
   const [open, setOpen] = useState(line.openByDefault);
   useEffect(() => {
@@ -164,7 +166,11 @@ export function Line({
         <>
           {(() => {
             const body = (
-              <LineDetail detail={line.detail} diagnostic={line.diagnostic} />
+              <LineDetail
+                detail={line.detail}
+                diagnostic={line.diagnostic}
+                onOpenPath={onOpenPath}
+              />
             );
             // `LineDetail` answers null when the family has nothing honest to
             // show; a delegate whose child IS the detail is exactly that case.
@@ -193,6 +199,7 @@ export interface LedgerProps {
    * open for the subthread to mount at all, so the reader is not sent to an
    * element that does not exist yet. */
   readonly childFocused: (line: LedgerLine) => boolean;
+  readonly onOpenPath: (path: PathFact) => void;
 }
 
 export function Ledger({
@@ -205,6 +212,7 @@ export function Ledger({
   subthreadsFor,
   hasChildren,
   childFocused,
+  onOpenPath,
 }: LedgerProps) {
   const focusInside = lines.some(
     (line) =>
@@ -236,6 +244,7 @@ export function Ledger({
         forceOpen={inside}
         subthreads={subthreadsFor(line)}
         hasChildren={hasChildren(line)}
+        onOpenPath={onOpenPath}
       />
     );
   });

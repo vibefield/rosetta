@@ -12,6 +12,9 @@
 // list or a quote keeps the plain rendering: the bar belongs to a block that
 // owns the measure, and one that does not is not that.
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import type { AttachmentFact } from "../../lib/transcript";
+import { imageMarkerTargets } from "../../lib/transcript";
 import { parseMarkdown } from "../file-viewer/markdown";
 import type { Block } from "../file-viewer/markdown";
 import { MarkdownBlocks } from "../file-viewer/markdown/render";
@@ -124,15 +127,69 @@ function partition(blocks: readonly Block[]): (readonly Block[] | Extract<Block,
 export interface ProseProps {
   readonly text: string;
   readonly onReceipt: (message: string) => void;
+  readonly imageAttachments?: readonly AttachmentFact[];
+  readonly onOpenAttachment?: (fact: AttachmentFact) => void;
 }
 
-export function Prose({ text, onReceipt }: ProseProps) {
+const IMAGE_LINK = /\[Image\s*#\d+\]/g;
+
+function linkedImageMarkers(
+  value: string,
+  targets: ReadonlyMap<string, AttachmentFact>,
+  onOpen: (fact: AttachmentFact) => void,
+): ReactNode {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  for (const match of value.matchAll(IMAGE_LINK)) {
+    const start = match.index;
+    if (start > cursor) nodes.push(value.slice(cursor, start));
+    const label = match[0];
+    const target = targets.get(label);
+    nodes.push(
+      target === undefined ? (
+        label
+      ) : (
+        <button
+          className="tr-image-link"
+          type="button"
+          title="Open image"
+          aria-label={`${label} — open image`}
+          key={key}
+          onClick={() => onOpen(target)}
+        >
+          {label}
+        </button>
+      ),
+    );
+    key += 1;
+    cursor = start + label.length;
+  }
+  if (cursor === 0) return value;
+  if (cursor < value.length) nodes.push(value.slice(cursor));
+  return nodes;
+}
+
+export function Prose({
+  text,
+  onReceipt,
+  imageAttachments,
+  onOpenAttachment,
+}: ProseProps) {
   const parts = useMemo(() => partition(parseMarkdown(text)), [text]);
+  const imageTargets = useMemo(
+    () => imageMarkerTargets(text, imageAttachments ?? []),
+    [text, imageAttachments],
+  );
+  const renderText =
+    imageTargets.size > 0 && onOpenAttachment !== undefined
+      ? (value: string) => linkedImageMarkers(value, imageTargets, onOpenAttachment)
+      : undefined;
   return (
     <>
       {parts.map((part, at) =>
         Array.isArray(part) ? (
-          <MarkdownBlocks key={at} blocks={part} />
+          <MarkdownBlocks key={at} blocks={part} renderText={renderText} />
         ) : (
           <CodeBar
             key={at}

@@ -13,6 +13,7 @@
 //     to resolve a repository-relative path to something it may load.
 
 import { Fragment } from "react";
+import type { ReactNode } from "react";
 import { highlight, languageFor, PLAIN_TEXT } from "../syntax";
 import type { Block, Inline } from "./types";
 
@@ -31,26 +32,34 @@ function safeHref(href: string): string | null {
   return /^https?:\/\//i.test(trimmed) ? trimmed : null;
 }
 
-function InlineNodes({ nodes }: { readonly nodes: readonly Inline[] }) {
+export type InlineTextRenderer = (value: string) => ReactNode;
+
+function InlineNodes({
+  nodes,
+  renderText,
+}: {
+  readonly nodes: readonly Inline[];
+  readonly renderText?: InlineTextRenderer;
+}) {
   return (
     <>
       {nodes.map((node, at) => (
         <Fragment key={at}>
           {node.type === "text" ? (
-            node.value
+            renderText === undefined ? node.value : renderText(node.value)
           ) : node.type === "code" ? (
             <code>{node.value}</code>
           ) : node.type === "strong" ? (
             <strong>
-              <InlineNodes nodes={node.children} />
+              <InlineNodes nodes={node.children} renderText={renderText} />
             </strong>
           ) : node.type === "emphasis" ? (
             <em>
-              <InlineNodes nodes={node.children} />
+              <InlineNodes nodes={node.children} renderText={renderText} />
             </em>
           ) : node.type === "strike" ? (
             <s>
-              <InlineNodes nodes={node.children} />
+              <InlineNodes nodes={node.children} renderText={renderText} />
             </s>
           ) : node.type === "break" ? (
             <br />
@@ -114,7 +123,15 @@ function CodeFence({ language, text }: { readonly language: string | null; reado
   );
 }
 
-export function MarkdownBlocks({ blocks }: { readonly blocks: readonly Block[] }) {
+export function MarkdownBlocks({
+  blocks,
+  renderText,
+}: {
+  readonly blocks: readonly Block[];
+  /** Optional decoration for plain text nodes. Code and link targets remain
+   * literal, so callers cannot accidentally nest an action inside a link. */
+  readonly renderText?: InlineTextRenderer;
+}) {
   return (
     <>
       {blocks.map((block, at) => {
@@ -123,14 +140,14 @@ export function MarkdownBlocks({ blocks }: { readonly blocks: readonly Block[] }
             const Tag = `h${Math.min(block.level, 6)}` as "h1";
             return (
               <Tag key={at}>
-                <InlineNodes nodes={block.children} />
+                <InlineNodes nodes={block.children} renderText={renderText} />
               </Tag>
             );
           }
           case "paragraph":
             return (
               <p key={at}>
-                <InlineNodes nodes={block.children} />
+                <InlineNodes nodes={block.children} renderText={renderText} />
               </p>
             );
           case "code":
@@ -138,7 +155,7 @@ export function MarkdownBlocks({ blocks }: { readonly blocks: readonly Block[] }
           case "quote":
             return (
               <blockquote key={at}>
-                <MarkdownBlocks blocks={block.children} />
+                <MarkdownBlocks blocks={block.children} renderText={renderText} />
               </blockquote>
             );
           case "rule":
@@ -146,7 +163,7 @@ export function MarkdownBlocks({ blocks }: { readonly blocks: readonly Block[] }
           case "list": {
             const items = block.items.map((item, index) => (
               <li key={index}>
-                <MarkdownBlocks blocks={item} />
+                <MarkdownBlocks blocks={item} renderText={renderText} />
               </li>
             ));
             return block.ordered ? (
@@ -169,7 +186,7 @@ export function MarkdownBlocks({ blocks }: { readonly blocks: readonly Block[] }
                     <tr>
                       {block.head.map((cell, column) => (
                         <th key={column} style={{ textAlign: block.align[column] ?? undefined }}>
-                          <InlineNodes nodes={cell} />
+                          <InlineNodes nodes={cell} renderText={renderText} />
                         </th>
                       ))}
                     </tr>
@@ -179,7 +196,7 @@ export function MarkdownBlocks({ blocks }: { readonly blocks: readonly Block[] }
                       <tr key={index}>
                         {row.map((cell, column) => (
                           <td key={column} style={{ textAlign: block.align[column] ?? undefined }}>
-                            <InlineNodes nodes={cell} />
+                            <InlineNodes nodes={cell} renderText={renderText} />
                           </td>
                         ))}
                       </tr>

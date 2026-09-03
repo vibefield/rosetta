@@ -1,10 +1,11 @@
 // §04's last column — what a ledger line opens into.
 //
 // One rule governs every branch: the detail shows what the ROW proved and
-// nothing else. A read keeps no content by rule, so it opens into its paths
-// and not a file; a fetch opens into its final url, title and status and never
-// the body; a change without a stored diff says `no diff recorded` rather than
-// drawing an empty one. Absence is stated, never faked (§06).
+// nothing else. A read keeps no content in the projection, so it opens into
+// its targets; an explicit target press may ask the daemon for the live file.
+// A fetch opens into its final url, title and status and never the body; a
+// change without a stored diff says `no diff recorded` rather than drawing an
+// empty one. Absence is stated, never faked (§06).
 //
 // Q5 A — the diff opens IN PLACE, capped at twelve lines. The record accepted
 // two renderers of one diff for it: the file viewer's `DiffBody` is virtual,
@@ -12,7 +13,7 @@
 // line are a different object. The PARSER is shared (`file-viewer/diff`), so
 // the two renderers can never disagree about what git said.
 import type { ReactNode } from "react";
-import type { FetchFact, LedgerDetail, SourceFact } from "../../lib/transcript";
+import type { FetchFact, LedgerDetail, PathFact, SourceFact } from "../../lib/transcript";
 import { resourceDisplay } from "../../lib/transcript";
 import type { SourceLocation } from "../../lib/transcript/protocol";
 import {
@@ -109,17 +110,20 @@ export interface LineDetailProps {
   /** The delegate's child run, resolved by the document and passed in — this
    * module knows the shape of a detail, not the shape of a session tree. */
   readonly subthread?: ReactNode;
+  /** The document owns the viewer; detail rows only report which exact path
+   * the reader pressed. */
+  readonly onOpenPath?: (path: PathFact) => void;
 }
 
 /** The body of one open line. Returns null when the family has nothing honest
  * to show, which is what makes the line unpressable in `Ledger`. */
-export function LineDetail({ detail, diagnostic, subthread }: LineDetailProps) {
+export function LineDetail({ detail, diagnostic, subthread, onOpenPath }: LineDetailProps) {
   const body = ((): ReactNode => {
     switch (detail.kind) {
       case "none":
         return null;
       case "paths":
-        return <PathList paths={detail.paths} total={detail.total} />;
+        return <PathList paths={detail.paths} total={detail.total} onOpenPath={onOpenPath} />;
       case "locations":
         return <LocationList locations={detail.locations} total={detail.total} />;
       case "sources":

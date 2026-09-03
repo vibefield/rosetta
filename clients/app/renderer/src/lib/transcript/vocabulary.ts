@@ -80,7 +80,7 @@ export const FAMILY_NOUN: Readonly<Record<ToolFamily, readonly [string, string]>
   code_execute: ["run", "runs"],
   file_change: ["edit", "edits"],
   process: ["process", "processes"],
-  orchestration: ["orchestration", "orchestrations"],
+  orchestration: ["tool batch", "tool batches"],
   delegate: ["delegation", "delegations"],
   collaborate: ["message", "messages"],
   question: ["question", "questions"],

@@ -44,6 +44,15 @@ export interface PathFact {
   readonly dir: string;
   readonly name: string;
   readonly resource: ResourceRef;
+  /** Present only when this path is an exact target of a canonical file-read
+   * row. It is an address into that row, not a renderer-supplied filesystem
+   * path, so the daemon can reopen the recorded file without widening its
+   * read authority. */
+  readonly read?: {
+    readonly sessionId: string;
+    readonly timelineId: string;
+    readonly targetIndex: number;
+  };
 }
 
 /** A web result. The protocol keeps url and title only; the HOST is derived,
@@ -66,8 +75,68 @@ export interface FetchFact {
 export interface CommandFact {
   readonly command: string;
   readonly cwd: string | null;
+  /** Whether this command ran at the session's settled root. */
+  readonly cwdIsSessionRoot: boolean;
   readonly language: string | null;
   readonly background: boolean;
+  readonly sourceTruncated: boolean;
+  readonly sessionId: string | null;
+  readonly timelineId: string | null;
+}
+
+/** The command row is a glanceable label, not a second source viewer. Keep
+ * its omission marker inside the 42-character contract. `Array.from` counts
+ * Unicode code points, matching Rust's projection boundary. */
+export const COMMAND_PREVIEW_CHARACTER_LIMIT = 42;
+const COMMAND_PREVIEW_OMISSION = "...";
+const COMMAND_PREVIEW_CONTENT_LIMIT =
+  COMMAND_PREVIEW_CHARACTER_LIMIT - COMMAND_PREVIEW_OMISSION.length;
+
+export function commandPreviewText(text: string, sourceTruncated: boolean): string {
+  const lines = text.split(/\r?\n/);
+  const line = lines.find((candidate) => candidate.trim() !== "") ?? "";
+  const characters = Array.from(line);
+  const omitted =
+    sourceTruncated || lines.length > 1 || characters.length > COMMAND_PREVIEW_CHARACTER_LIMIT;
+  if (!omitted) return characters.join("");
+  return `${characters.slice(0, COMMAND_PREVIEW_CONTENT_LIMIT).join("")}${COMMAND_PREVIEW_OMISSION}`;
+}
+
+export interface CommandDirectoryContext {
+  readonly label: string;
+  readonly title: string;
+}
+
+/** Directory context gets one compact badge on the detail frame. A mixed fold
+ * is named honestly rather than borrowing the first command's cwd for every
+ * member. */
+export function commandDirectoryContext(
+  commands: readonly CommandFact[],
+): CommandDirectoryContext | null {
+  const known = commands.filter(
+    (command): command is CommandFact & { readonly cwd: string } => command.cwd !== null,
+  );
+  if (known.length === 0) return null;
+
+  const directories = [...new Set(known.map((command) => command.cwd))];
+  if (directories.length === 1) {
+    return {
+      label: directories[0],
+      title: `Working directory: ${directories[0]}`,
+    };
+  }
+  return {
+    label: `${directories.length} folders`,
+    title: `Working directories: ${directories.join(", ")}`,
+  };
+}
+
+function isSessionCwd(resource: ResourceRef, context: LedgerContext): boolean {
+  if (context.cwd === null || context.cwd === undefined) return false;
+  if (resource.type !== "file" && resource.type !== "directory") return false;
+  const source = resourceLabel(resource).replace(/\/+$/, "");
+  const session = context.cwd.replace(/\/+$/, "");
+  return source === session;
 }
 
 /** `+18 −4` across however many files the one row changed. */
@@ -91,8 +160,8 @@ export interface DelegateFact {
 
 /**
  * What a ledger line opens into (§04's last column). `none` means the line has
- * nothing honest to show — a read keeps no content by rule, and an `unknown`
- * row keeps nothing at all.
+ * nothing honest to show. A read keeps no content in SQLite but does retain
+ * its target addresses; an `unknown` row keeps nothing at all.
  */
 export type LedgerDetail =
   | { readonly kind: "none" }
@@ -158,10 +227,14 @@ function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function pathFact(resource: ResourceRef, context: LedgerContext): PathFact {
+function pathFact(
+  resource: ResourceRef,
+  context: LedgerContext,
+  read?: PathFact["read"],
+): PathFact {
   const label = resourceDisplay(resource, context);
   const { dir, name } = splitPath(label);
-  return { label, dir, name, resource };
+  return { label, dir, name, resource, ...(read === undefined ? {} : { read }) };
 }
 
 function pathFacts(resources: readonly ResourceRef[], context: LedgerContext): PathFact[] {
@@ -228,6 +301,19 @@ const PROCESS_VERB: Readonly<Record<string, string>> = {
   inspect: "Inspected",
 };
 
+const EXEC_CHILD_LABEL: Readonly<
+  Record<string, { readonly verb: string; readonly noun: string; readonly many?: string }>
+> = {
+  exec_command: { verb: "Ran", noun: "command" },
+  write_stdin: { verb: "Sent input to", noun: "process", many: "processes" },
+  apply_patch: { verb: "Applied", noun: "patch", many: "patches" },
+  mcp__node_repl__js: { verb: "Ran", noun: "script" },
+  update_plan: { verb: "Updated", noun: "plan" },
+  web__run: { verb: "Browsed", noun: "web request" },
+  view_image: { verb: "Viewed", noun: "image" },
+  get_goal: { verb: "Checked", noun: "goal" },
+};
+
 const CHANGE_VERB: Readonly<Record<string, string>> = {
   create: "Created",
   update: "Edited",
@@ -265,6 +351,7 @@ export function projectAction(
   action: ToolAction,
   native: NativeToolRef,
   context: LedgerContext = {},
+  source: { readonly sessionId: string; readonly timelineId: string } | null = null,
 ): FamilyProjection {
   const base = {
     family: action.type,
@@ -277,9 +364,14 @@ export function projectAction(
     /* ── Looking ─────────────────────────────────────────────────────────── */
 
     case "file_read": {
-      const facts = pathFacts(
-        action.targets.map((target) => target.resource),
-        context,
+      const facts = action.targets.map((target, targetIndex) =>
+        pathFact(
+          target.resource,
+          context,
+          source !== null && target.resource.type === "file"
+            ? { ...source, targetIndex }
+            : undefined,
+        ),
       );
       const range = action.targets.find((target) => target.range !== null)?.range ?? null;
       const media = action.targets.find((target) => target.media_kind !== null)?.media_kind ?? null;
@@ -298,9 +390,10 @@ export function projectAction(
           action.outcome?.truncated ? "truncated" : null,
           media,
         ]),
-        // Reads keep no content by rule; only the paths are pressable.
+        // Read content stays out of the projection. The exact target address
+        // lets an explicit click ask for the live file through the viewer.
         detail:
-          facts.length > 1 ? { kind: "paths", paths: facts, total: facts.length } : NO_DETAIL,
+          facts.length > 0 ? { kind: "paths", paths: facts, total: facts.length } : NO_DETAIL,
       };
     }
 
@@ -441,6 +534,7 @@ export function projectAction(
       const added = sumOrNull(changes.map((change) => change.lines_added));
       const removed = sumOrNull(changes.map((change) => change.lines_removed));
       const stat = diffstatText(added, removed);
+      const hasDiff = changes.some((change) => change.diff !== null);
       const first = changes[0] ?? null;
       const object: ObjectPart[] =
         changes.length > 1
@@ -458,7 +552,7 @@ export function projectAction(
         verb,
         object,
         // Absence is stated, never faked with a zero (§06).
-        result: stat ?? "no diff recorded",
+        result: stat ?? (hasDiff ? null : "no diff recorded"),
         detail: {
           kind: "diff",
           deltas: changes,
@@ -483,8 +577,12 @@ export function projectAction(
             {
               command: canonicalText(action.command),
               cwd: action.cwd === null ? null : resourceDisplay(action.cwd, context),
+              cwdIsSessionRoot: action.cwd === null ? false : isSessionCwd(action.cwd, context),
               language: null,
               background: action.background,
+              sourceTruncated: action.source_truncated === true,
+              sessionId: source?.sessionId ?? null,
+              timelineId: source?.timelineId ?? null,
             },
           ],
         },
@@ -507,8 +605,12 @@ export function projectAction(
             {
               command: canonicalText(action.code),
               cwd: action.cwd === null ? null : resourceDisplay(action.cwd, context),
+              cwdIsSessionRoot: action.cwd === null ? false : isSessionCwd(action.cwd, context),
               language: action.language,
               background: false,
+              sourceTruncated: action.source_truncated === true,
+              sessionId: source?.sessionId ?? null,
+              timelineId: source?.timelineId ?? null,
             },
           ],
         },
@@ -528,6 +630,67 @@ export function projectAction(
 
     case "orchestration": {
       const unavailable = action.trace === "unavailable";
+      const childLabels = action.executed_children.map((child) => EXEC_CHILD_LABEL[child] ?? null);
+      const firstChild = childLabels[0] ?? null;
+      const oneKnownKind =
+        firstChild !== null &&
+        childLabels.every(
+          (child) =>
+            child !== null &&
+            child.verb === firstChild.verb &&
+            child.noun === firstChild.noun &&
+            child.many === firstChild.many,
+        );
+      const childCount =
+        action.executed_child_count ??
+        (action.trace === "complete" ? action.executed_children.length : null);
+      if (oneKnownKind) {
+        return {
+          ...base,
+          verb: firstChild.verb,
+          object: [
+            part(
+              childCount === null
+                ? (firstChild.many ?? `${firstChild.noun}s`)
+                : plural(childCount, firstChild.noun, firstChild.many),
+            ),
+          ],
+          result: null,
+          detail:
+            action.executed_children.length === 0
+              ? NO_DETAIL
+              : {
+                  kind: "names",
+                  names: action.executed_children,
+                  total: action.executed_child_count ?? action.executed_children.length,
+                },
+        };
+      }
+      if (action.runtime === "functions.exec") {
+        const kinds = [
+          ...new Set(
+            action.executed_children.map((child, index) => {
+              const label = childLabels[index];
+              return label?.noun ?? child.replaceAll("_", " ");
+            }),
+          ),
+        ];
+        return {
+          ...base,
+          verb: "Ran",
+          object: [part("tool batch")],
+          result: kinds.length === 0 ? "trace unavailable" : kinds.slice(0, 3).join(" · "),
+          resultMuted: kinds.length === 0,
+          detail:
+            action.executed_children.length === 0
+              ? NO_DETAIL
+              : {
+                  kind: "names",
+                  names: action.executed_children,
+                  total: action.executed_child_count ?? action.executed_children.length,
+                },
+        };
+      }
       return {
         ...base,
         verb: "Executed",

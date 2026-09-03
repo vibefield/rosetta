@@ -8,6 +8,8 @@ import type { DiffAbsence, DiffHunk, DiffLine, ParsedDiff } from "./types";
 
 /** `@@ -12,7 +12,9 @@ fn walk()` — counts are optional and default to 1. */
 const HUNK = /^@@+ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@+(.*)$/;
+/** Codex `apply_patch` also persists location-free `@@` hunks. */
+const UNPOSITIONED_HUNK = /^@@(?:\s+(.*))?$/;
 
 const EMPTY: ParsedDiff = {
   oldPath: null,
@@ -59,18 +61,18 @@ export function parseDiff(text: string): ParsedDiff {
   let statedNew: string | null = null;
 
   let current: DiffLine[] | null = null;
-  let oldNumber = 0;
-  let newNumber = 0;
+  let oldNumber: number | null = 0;
+  let newNumber: number | null = 0;
 
-  const close = (header: string, oldStart: number, newStart: number): void => {
+  const close = (header: string, oldStart: number | null, newStart: number | null): void => {
     if (current !== null && current.length > 0) {
       hunks.push({ header, oldStart, newStart, lines: current });
     }
     current = null;
   };
   let header = "";
-  let oldStart = 0;
-  let newStart = 0;
+  let oldStart: number | null = 0;
+  let newStart: number | null = 0;
 
   for (const line of lines) {
     const hunk = HUNK.exec(line);
@@ -81,6 +83,17 @@ export function parseDiff(text: string): ParsedDiff {
       newStart = Number.parseInt(hunk[3], 10);
       oldNumber = oldStart;
       newNumber = newStart;
+      current = [];
+      continue;
+    }
+    const unpositioned = UNPOSITIONED_HUNK.exec(line);
+    if (unpositioned !== null) {
+      close(header, oldStart, newStart);
+      header = (unpositioned[1] ?? "").trim();
+      oldStart = null;
+      newStart = null;
+      oldNumber = null;
+      newNumber = null;
       current = [];
       continue;
     }
@@ -121,16 +134,16 @@ export function parseDiff(text: string): ParsedDiff {
 
     if (marker === "+") {
       current.push({ kind: "add", text: body, oldNumber: null, newNumber });
-      newNumber += 1;
+      if (newNumber !== null) newNumber += 1;
       added += 1;
     } else if (marker === "-") {
       current.push({ kind: "del", text: body, oldNumber, newNumber: null });
-      oldNumber += 1;
+      if (oldNumber !== null) oldNumber += 1;
       deleted += 1;
     } else if (marker === " ") {
       current.push({ kind: "context", text: body, oldNumber, newNumber });
-      oldNumber += 1;
-      newNumber += 1;
+      if (oldNumber !== null) oldNumber += 1;
+      if (newNumber !== null) newNumber += 1;
     } else if (marker === "\\") {
       current.push({ kind: "note", text: body.trim(), oldNumber: null, newNumber: null });
     } else {

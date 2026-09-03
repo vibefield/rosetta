@@ -15,10 +15,10 @@
 //     second part continues without a head — T-4 says one head per response,
 //     and a continuation is the same response.
 //
-//  2. Prompts cluster only while the group can stay honest: consecutive
-//     prompts inside five minutes, in the same sitting, with nothing but
-//     prompts between them. A turn that answered something (or that carries a
-//     marker) ends the group rather than hiding its content under a stack.
+//  2. Only adjacent successful setting commands may cluster. Human prose and
+//     parent-agent prompts always remain standalone messages with their own
+//     anchor and actions. A response, marker, or sitting boundary also ends a
+//     configuration group.
 //
 // Pure: no clock, no DOM, no React.
 import type { TimelineEntry } from "@rosetta/protocol";
@@ -29,7 +29,7 @@ export interface TurnPart {
   readonly key: string;
   readonly sittingIndex: number;
   readonly turn: Turn;
-  /** The prompts this part opens with — several only when they clustered. */
+  /** The prompts this part opens with — several only for grouped settings. */
   readonly prompts: readonly Prompt[];
   /** Segments before the head (leading markers) and after it. */
   readonly before: readonly Segment[];
@@ -74,7 +74,7 @@ function turnSitting(turn: Turn, indexOf: (row: TimelineEntry) => number): numbe
   return first === undefined ? 0 : indexOf(segmentRows(first)[0]);
 }
 
-/** Consecutive turns that cluster into one stacked group (§07's last rule). */
+/** Adjacent setting turns that share one compact configuration group. */
 function clusterGroups(turns: readonly Turn[], sittingOf: (turn: Turn) => number): Turn[][] {
   const groups: Turn[][] = [];
   for (const turn of turns) {
@@ -86,6 +86,10 @@ function clusterGroups(turns: readonly Turn[], sittingOf: (turn: Turn) => number
       turn.clusteredWithPrevious &&
       turn.prompt !== null &&
       previous.prompt !== null &&
+      turn.prompt.setting !== null &&
+      previous.prompt.setting !== null &&
+      !turn.prompt.fromParent &&
+      !previous.prompt.fromParent &&
       previous.segments.length === 0 &&
       sittingOf(previous) === sittingOf(turn);
     if (joins) current.push(turn);

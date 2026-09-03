@@ -70,10 +70,13 @@ export interface AttachmentFact {
   readonly caption: string;
 }
 
-// Claude Code injects these ahead of a pasted image: `[Image #4]` when the
-// bytes did arrive, `[Image: source: …/3.png]` and `[Image: original 2400x1600,
-// displayed at …]` when they did not. Both are transport, not speech.
+// Claude Code writes two different things ahead of pasted images. A numbered
+// marker (`[Image #4]`) identifies bytes that did arrive and stays in the
+// prose as a reader-facing link. A descriptive marker (`[Image: source: …]`
+// or `[Image: original 2400x1600, …]`) is injected transport; when no bytes
+// arrived it becomes the honest missing-image fact instead.
 const IMAGE_MARKER = /^\s*\[Image(?:\s*#(\d+))?(?::\s*([^\]]*))?\]\s*/;
+const NUMBERED_IMAGE_MARKER = /\[Image\s*#(\d+)\]/g;
 
 function mediaShortName(mediaType: string | null, name: string | null): string | null {
   if (mediaType !== null && mediaType !== "") {
@@ -131,35 +134,81 @@ function factFromMarker(payload: string | null, index: number): AttachmentFact {
 }
 
 /**
- * Strip the injected image markers off a prompt and turn them into facts.
- * When the row DID carry attachments the markers are pure noise and only the
- * stored references become tiles; when it carried none, each marker becomes a
- * placeholder so the reader sees a missing image rather than a sentence about
- * one.
+ * Recover attachment facts from a prompt. A numbered marker whose row carries
+ * stored bytes remains in the prose so it can open the same viewer as its
+ * tile. Descriptive transport markers are removed; when the row carried no
+ * attachment, each becomes a placeholder so the reader sees a missing image
+ * rather than a sentence about one.
  */
 export function readAttachments(
   text: string | null,
   refs: readonly AttachmentRef[],
 ): { text: string | null; attachments: AttachmentFact[] } {
+  const stored = refs.map(factFromRef);
   const markers: (string | null)[] = [];
   let rest = text ?? "";
   for (;;) {
     const match = IMAGE_MARKER.exec(rest);
     if (match === null) break;
+    // This is the useful handle the user asked to keep. Leaving the whole
+    // match intact also preserves punctuation and spacing exactly as written.
+    if (match[1] !== undefined && stored.length > 0) break;
     markers.push(match[2] ?? null);
     rest = rest.slice(match[0].length);
   }
-  const stored = refs.map(factFromRef);
   const attachments =
     stored.length > 0 ? stored : markers.map((payload, index) => factFromMarker(payload, index));
   const trimmed = rest.trim();
   return { text: trimmed === "" ? null : rest, attachments };
 }
 
+/**
+ * Which stored image each numbered marker names.
+ *
+ * Claude normally numbers images from one, but persisted sessions can carry
+ * global numbers such as `#4` in a prompt containing only one or two images.
+ * Direct local numbering wins; otherwise occurrence order pairs the markers
+ * with the stored images. A lone stored image is unambiguous at any number.
+ */
+export function imageMarkerTargets(
+  text: string,
+  attachments: readonly AttachmentFact[],
+): ReadonlyMap<string, AttachmentFact> {
+  const images = attachments.filter((fact) => fact.kind === "image" && !fact.missing);
+  const targets = new Map<string, AttachmentFact>();
+  if (images.length === 0) return targets;
+
+  const markers: RegExpMatchArray[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(NUMBERED_IMAGE_MARKER)) {
+    if (seen.has(match[0])) continue;
+    seen.add(match[0]);
+    markers.push(match);
+  }
+  const locallyNumbered = markers.every((match) => {
+    const index = Number(match[1]) - 1;
+    return index >= 0 && index < images.length;
+  });
+  markers.forEach((match, occurrence) => {
+    const target =
+      images.length === 1
+        ? images[0]
+        : images[locallyNumbered ? Number(match[1]) - 1 : occurrence];
+    if (target !== undefined) targets.set(match[0], target);
+  });
+  return targets;
+}
+
 /* ── the prompt ──────────────────────────────────────────────────────────── */
 
 // A local command as the reader typed it: one line, a leading slash, a name.
 const LOCAL_COMMAND = /^\/[A-Za-z][\w:.-]*(?:\s+\S.*)?$/;
+
+export interface LocalSetting {
+  readonly kind: "model" | "effort";
+  readonly label: "Model" | "Effort";
+  readonly value: string;
+}
 
 export interface Prompt {
   readonly key: string;
@@ -176,6 +225,8 @@ export interface Prompt {
   /** The command's reply, riding beside the pill in the caption ramp. */
   readonly commandOutput: string | null;
   readonly commandOutputRow: TimelineEntry | null;
+  /** A successful local setting change, reduced to label + canonical value. */
+  readonly setting: LocalSetting | null;
   /** The parent session sent this, not a person (`parent_invocation`). */
   readonly fromParent: boolean;
 }
@@ -184,6 +235,31 @@ function looksLocalCommand(text: string | null): boolean {
   if (text === null) return false;
   const trimmed = text.trim();
   return !trimmed.includes("\n") && LOCAL_COMMAND.test(trimmed);
+}
+
+/** Project a normalized setting value into the two words the reader needs.
+ * Diagnostics deliberately fail this predicate and retain the generic command
+ * treatment, so compact presentation never conceals a rejected command. */
+export function localSetting(
+  command: string | null,
+  output: string | null,
+): LocalSetting | null {
+  if (command === null || output === null) return null;
+  const value = output.trim();
+  if (value === "" || value.includes("\n") || value.length > 96) return null;
+
+  const name = command.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  if (name === "/effort") {
+    return /^[a-z][\w-]*$/i.test(value)
+      ? { kind: "effort", label: "Effort", value }
+      : null;
+  }
+  if (name === "/model") {
+    return /^(?:set|invalid|unknown|error|failed|usage)\b/i.test(value)
+      ? null
+      : { kind: "model", label: "Model", value };
+  }
+  return null;
 }
 
 /* ── segments ────────────────────────────────────────────────────────────── */
@@ -263,8 +339,9 @@ export interface Turn {
   /** Every row in the turn, in order — anchors, focus landing, watermark. */
   readonly rows: readonly TimelineEntry[];
   readonly at: number | null;
-  /** §07: this prompt stacks with the previous turn's, 4px apart — consecutive
-   * prompts inside five minutes with no reply between them. */
+  /** §07: this successful human setting command joins the previous setting
+   * command's compact group. Conversational and parent-agent prompts are
+   * always standalone turns. */
   readonly clusteredWithPrevious: boolean;
 }
 
@@ -325,6 +402,8 @@ function buildPrompt(
             : { type: "inline", text: "" },
         )
       : null;
+  const command = isCommand && text !== null ? text.trim() : null;
+  const commandOutput = output === null || output === "" ? null : output;
   return {
     key: row.timeline_id,
     row,
@@ -333,9 +412,10 @@ function buildPrompt(
     text,
     attachments,
     isCommand,
-    command: isCommand && text !== null ? text.trim() : null,
-    commandOutput: output === null || output === "" ? null : output,
+    command,
+    commandOutput,
     commandOutputRow: outputRow,
+    setting: localSetting(command, commandOutput),
     fromParent: row.group.kind === "parent_invocation",
   };
 }
@@ -500,6 +580,7 @@ export function documentTurns(
   const turns: Turn[] = [];
   let previousPromptAt: number | null = null;
   let previousHadReply = true;
+  let previousWasHumanSetting = false;
 
   for (const group of groups) {
     const promptRow = group.prompt;
@@ -527,6 +608,9 @@ export function documentTurns(
     const at = promptRow?.at ?? firstStamp(body);
     const clusteredWithPrevious =
       prompt !== null &&
+      prompt.setting !== null &&
+      !prompt.fromParent &&
+      previousWasHumanSetting &&
       !previousHadReply &&
       withinPromptCluster(previousPromptAt, prompt.at);
 
@@ -548,6 +632,7 @@ export function documentTurns(
     if (prompt !== null) {
       previousPromptAt = prompt.at;
       previousHadReply = agentRows.length > 0;
+      previousWasHumanSetting = prompt.setting !== null && !prompt.fromParent;
     }
   }
 

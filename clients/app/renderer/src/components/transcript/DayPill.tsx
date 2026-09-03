@@ -128,17 +128,19 @@ export function DayMenu({ days, currentDayKey, top, onJump, onDismiss }: DayMenu
  */
 export function markStuckPills(scroller: HTMLElement | null): void {
   if (scroller === null) return;
-  // The sticky edge is the SCROLLPORT's top — the padding box, not the border
-  // box — plus the pill's own 6px offset. Measuring against the wrong one
-  // leaves a pinned pill drawing its hairline through the text under it.
+  // The sticky edge is the SCROLLPORT's padding box plus the pill's declared
+  // inset. Read both from CSS so the stamp follows the layout instead of
+  // keeping a second, slightly different copy of its geometry here.
   const padding = Number.parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-  const top = scroller.getBoundingClientRect().top + padding;
+  const edge = scroller.getBoundingClientRect().top + padding;
   const scrolled = scroller.scrollTop > 0;
   for (const day of scroller.querySelectorAll<HTMLElement>(".tr-day")) {
     const rect = day.getBoundingClientRect();
+    const inset = Number.parseFloat(getComputedStyle(day).top) || 0;
+    const top = edge + inset;
     // Pinned means AT the edge and still in view: a pill whose section has
     // ended is being pushed out, and a pushed-out pill is not chrome.
-    const stuck = scrolled && rect.top - top <= 7 && rect.bottom > top;
+    const stuck = scrolled && rect.top - top <= 1 && rect.bottom > edge;
     day.setAttribute("data-stuck", stuck ? "true" : "false");
   }
 }

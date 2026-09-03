@@ -58,7 +58,10 @@ export function DiffBody({ unified, name }: DiffBodyProps) {
       out.push({
         kind: "hunk",
         header: hunk.header,
-        range: `@@ −${hunk.oldStart} +${hunk.newStart} @@`,
+        range:
+          hunk.oldStart === null || hunk.newStart === null
+            ? "@@"
+            : `@@ −${hunk.oldStart} +${hunk.newStart} @@`,
       });
       for (const line of hunk.lines) {
         out.push({

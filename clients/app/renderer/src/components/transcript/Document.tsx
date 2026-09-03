@@ -12,7 +12,7 @@
 import { Fragment } from "react";
 import type { ReactNode } from "react";
 import type { SessionRow } from "@rosetta/protocol";
-import type { LedgerLine, Segment } from "../../lib/transcript";
+import type { AttachmentFact, LedgerLine, PathFact, Segment } from "../../lib/transcript";
 import { linkedChildSessionIds } from "../../lib/transcript";
 import type { TimelineFeed } from "../../lib/hooks";
 import { EmptyState } from "../ui";
@@ -22,13 +22,14 @@ import type { TranscriptModel } from "./document-model";
 import type { TurnPart } from "./document-plan";
 import { Ledger } from "./Ledger";
 import { GapMarker, Marker, Watermark } from "./Marker";
-import { Prompt } from "./Prompt";
+import { Attachments, Prompt } from "./Prompt";
 import { Prose, SegmentActs } from "./Prose";
 import { ResponseHead } from "./ResponseHead";
 import { Subthread } from "./Subthread";
 import type { ThreadFocus, ThreadIndex } from "./thread-index";
 import { messageDomId, sessionContains } from "./thread-index";
 import { Thinking } from "./Thinking";
+import { canOpenAttachment } from "./attachment-file-source";
 
 export interface TranscriptDocumentProps {
   readonly session: SessionRow;
@@ -42,6 +43,8 @@ export interface TranscriptDocumentProps {
   readonly highlightedTimelineId: string | null;
   readonly onFocusConsumed: () => void;
   readonly onReceipt: (text: string) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenPath: (path: PathFact) => void;
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly homeDirectory: string | null;
   /** The day list only exists where a menu can be drawn: the root column. */
@@ -61,6 +64,8 @@ export function TranscriptDocument({
   highlightedTimelineId,
   onFocusConsumed,
   onReceipt,
+  onOpenAttachment,
+  onOpenPath,
   getRuntimeKind,
   homeDirectory,
   onPillPress,
@@ -108,6 +113,8 @@ export function TranscriptDocument({
       focus={focus}
       onFocusConsumed={onFocusConsumed}
       onReceipt={onReceipt}
+      onOpenAttachment={onOpenAttachment}
+      onOpenPath={onOpenPath}
       getRuntimeKind={getRuntimeKind}
       homeDirectory={homeDirectory}
     />
@@ -141,6 +148,7 @@ export function TranscriptDocument({
                 renderChild(child, true),
               )
             }
+            onOpenPath={onOpenPath}
           />
         );
       case "thinking":
@@ -201,7 +209,18 @@ export function TranscriptDocument({
               timelineId={rowId}
               onReceipt={onReceipt}
             />
-            {segment.text !== null && <Prose text={segment.text} onReceipt={onReceipt} />}
+            {segment.text !== null && (
+              <Prose
+                text={segment.text}
+                onReceipt={onReceipt}
+                imageAttachments={segment.attachments.filter(canOpenAttachment)}
+                onOpenAttachment={onOpenAttachment}
+              />
+            )}
+            <Attachments
+              facts={segment.attachments}
+              onOpenAttachment={onOpenAttachment}
+            />
             {segment.citationLabels.length > 0 && (
               <p className="tr-cites">
                 {segment.citationLabels.map((label, at) => (
@@ -266,6 +285,7 @@ export function TranscriptDocument({
               domIdOf={domIdOf}
               landedTimelineId={highlightedTimelineId}
               onReceipt={onReceipt}
+              onOpenAttachment={onOpenAttachment}
             />
           )}
           {part.before.map(renderSegment)}

@@ -64,7 +64,13 @@ export default function App() {
   const search = useSearch(query);
   const searching = search.query !== "";
 
-  const projectIds = useMemo(() => (meta?.projects ?? []).map((p) => p.id).sort(), [meta]);
+  const projectIds = useMemo(() => {
+    const ids = (meta?.projects ?? []).map((p) => p.id);
+    if ((meta?.sessions ?? []).some((session) => session.project_id === null)) {
+      ids.push(UNASSIGNED_PROJECT_ID);
+    }
+    return ids.sort();
+  }, [meta]);
   // Cross-session figures wait for canonical publication. Metadata and
   // completed timelines remain progressive; aggregate scans never compete
   // with the sole cold writer for the shared RAM projection.
@@ -162,10 +168,7 @@ export default function App() {
     client.boost(sessionId).catch(() => {});
   }, [sessionId, sessionState, ingest?.phase]);
   const feed = useTimeline(sessionId);
-  const usage = useProjectUsage(
-    projectId === UNASSIGNED_PROJECT_ID ? null : projectId,
-    canonicalReady === true,
-  );
+  const usage = useProjectUsage(projectId, canonicalReady === true);
 
   const projectRoot = useMemo(() => {
     if (projectId === null) return null;

@@ -13,6 +13,7 @@ import type { SessionRow } from "@rosetta/protocol";
 import { clock } from "../../lib/format";
 import { AgentMark, agentLabel } from "../../lib/agents";
 import { useTimeline } from "../../lib/hooks";
+import type { AttachmentFact, PathFact } from "../../lib/transcript";
 import { TranscriptDocument } from "./Document";
 import { useTranscriptModel } from "./document-model";
 import type { ThreadFocus, ThreadIndex } from "./thread-index";
@@ -28,6 +29,8 @@ export interface SubthreadProps {
   readonly focus: ThreadFocus | null;
   readonly onFocusConsumed: () => void;
   readonly onReceipt: (text: string) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenPath: (path: PathFact) => void;
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly homeDirectory: string | null;
 }
@@ -40,6 +43,8 @@ export function Subthread({
   focus,
   onFocusConsumed,
   onReceipt,
+  onOpenAttachment,
+  onOpenPath,
   getRuntimeKind,
   homeDirectory,
 }: SubthreadProps) {
@@ -137,6 +142,8 @@ export function Subthread({
           highlightedTimelineId={highlightedTimelineId}
           onFocusConsumed={onFocusConsumed}
           onReceipt={onReceipt}
+          onOpenAttachment={onOpenAttachment}
+          onOpenPath={onOpenPath}
           getRuntimeKind={getRuntimeKind}
           homeDirectory={homeDirectory}
           onPillPress={null}

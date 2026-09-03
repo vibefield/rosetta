@@ -4,8 +4,11 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
+  COMMAND_PREVIEW_CHARACTER_LIMIT,
   FOLD_NAME_LIMIT,
   RUN_FOLD_THRESHOLD,
+  commandDirectoryContext,
+  commandPreviewText,
   commandName,
   ledgerLine,
   ledgerLines,
@@ -73,7 +76,15 @@ const sentence = (l) => `${l.verb} ${objectText(l.object)}`;
 
 const shell = (command, over = {}) =>
   tool(
-    { type: "shell", command: inline(command), cwd: null, timeout_ms: null, background: false, outcome: over.outcome ?? null },
+    {
+      type: "shell",
+      command: inline(command),
+      source_truncated: over.source_truncated ?? false,
+      cwd: null,
+      timeout_ms: null,
+      background: false,
+      outcome: over.outcome ?? null,
+    },
     over,
   );
 
@@ -107,7 +118,13 @@ describe("§04 — the twenty-eight families", () => {
     assert.equal(l.result, "L1–180");
     assert.equal(l.glyph, "read");
     assert.equal(l.cls, "look");
-    assert.equal(l.detail.kind, "none"); // reads keep no content by rule
+    assert.equal(l.detail.kind, "paths");
+    assert.equal(l.detail.paths.length, 1);
+    assert.deepEqual(l.detail.paths[0].read, {
+      sessionId: "s1",
+      timelineId: l.rows[0].timeline_id,
+      targetIndex: 0,
+    });
   });
 
   it("file_read reports truncation and a media kind", () => {
@@ -314,6 +331,23 @@ describe("§04 — the twenty-eight families", () => {
     assert.equal(l.result, "no diff recorded");
   });
 
+  it("file_change does not call a stored zero-line structural diff missing", () => {
+    const l = line({
+      type: "file_change",
+      changes: [
+        {
+          operation: "move",
+          path: file("/w/a.ts"),
+          destination: file("/w/b.ts"),
+          diff: inline("rename from a.ts\nrename to b.ts"),
+          lines_added: null,
+          lines_removed: null,
+        },
+      ],
+    });
+    assert.equal(l.result, null);
+  });
+
   it("file_change points a move at its destination and folds many files into a count", () => {
     const moved = line({
       type: "file_change",
@@ -350,6 +384,21 @@ describe("§04 — the twenty-eight families", () => {
     assert.equal(l.result, null);
     assert.equal(l.cls, "look");
     assert.equal(l.detail.kind, "command");
+    const source = ledgerLine(
+      shell("one\ntwo", {
+        source_truncated: true,
+        timeline_id: "source-command",
+      }),
+      CTX,
+    );
+    assert.deepEqual(
+      {
+        truncated: source.detail.commands[0].sourceTruncated,
+        session: source.detail.commands[0].sessionId,
+        timeline: source.detail.commands[0].timelineId,
+      },
+      { truncated: true, session: "s1", timeline: "source-command" },
+    );
     const background = line({
       type: "shell",
       command: inline("pnpm dev"),
@@ -359,6 +408,51 @@ describe("§04 — the twenty-eight families", () => {
       outcome: null,
     });
     assert.equal(sentence(background), "Ran pnpm dev in background");
+  });
+
+  it("renders one command line with a 42-character maximum including omission", () => {
+    assert.equal(
+      commandPreviewText("python3 - <<'PYEOF'\nimport sys", true),
+      "python3 - <<'PYEOF'...",
+    );
+    const long = "é".repeat(50);
+    const shown = commandPreviewText(long, true);
+    assert.equal(Array.from(shown).length, COMMAND_PREVIEW_CHARACTER_LIMIT);
+    assert.equal(shown, `${"é".repeat(39)}...`);
+    assert.equal(
+      commandPreviewText("x".repeat(COMMAND_PREVIEW_CHARACTER_LIMIT), false),
+      "x".repeat(COMMAND_PREVIEW_CHARACTER_LIMIT),
+    );
+    assert.equal(shown.includes("\n"), false);
+  });
+
+  it("keeps every known cwd as one quiet command-frame badge", () => {
+    const commandAt = (cwd) =>
+      line({
+        type: "shell",
+        command: inline("pwd"),
+        source_truncated: false,
+        cwd: directory(cwd),
+        timeout_ms: null,
+        background: false,
+        outcome: null,
+      }).detail.commands[0];
+    const root = commandAt("/w");
+    const nested = commandAt("/w/draft/card-redesign");
+    assert.equal(root.cwdIsSessionRoot, true);
+    assert.equal(nested.cwdIsSessionRoot, false);
+    assert.deepEqual(commandDirectoryContext([root]), {
+      label: "w",
+      title: "Working directory: w",
+    });
+    assert.deepEqual(commandDirectoryContext([nested]), {
+      label: "draft/card-redesign",
+      title: "Working directory: draft/card-redesign",
+    });
+    assert.deepEqual(commandDirectoryContext([root, nested]), {
+      label: "2 folders",
+      title: "Working directories: w, draft/card-redesign",
+    });
   });
 
   it("code_execute is an ACT and names its language", () => {
@@ -405,6 +499,48 @@ describe("§04 — the twenty-eight families", () => {
     });
     assert.equal(blind.result, "trace unavailable");
     assert.equal(blind.resultTone, "muted");
+  });
+
+  it("names a Codex exec batch by the inner tools instead of its transport wrapper", () => {
+    const commands = line({
+      type: "orchestration",
+      runtime: "functions.exec",
+      trace: "partial",
+      executed_children: ["exec_command", "exec_command", "exec_command"],
+      executed_child_count: null,
+    });
+    assert.equal(sentence(commands), "Ran commands");
+    assert.equal(commands.result, null);
+
+    const patches = line({
+      type: "orchestration",
+      runtime: "functions.exec",
+      trace: "partial",
+      executed_children: ["apply_patch", "apply_patch"],
+      executed_child_count: null,
+    });
+    assert.equal(sentence(patches), "Applied patches");
+
+    const mixed = line({
+      type: "orchestration",
+      runtime: "functions.exec",
+      trace: "partial",
+      executed_children: ["update_plan", "exec_command"],
+      executed_child_count: null,
+    });
+    assert.equal(sentence(mixed), "Ran tool batch");
+    assert.equal(mixed.result, "plan · command");
+
+    const opaque = line({
+      type: "orchestration",
+      runtime: "functions.exec",
+      trace: "unavailable",
+      executed_children: [],
+      executed_child_count: null,
+    });
+    assert.equal(sentence(opaque), "Ran tool batch");
+    assert.equal(opaque.result, "trace unavailable");
+    assert.equal(opaque.resultTone, "muted");
   });
 
   it("delegate names the child and leaves its count to the component", () => {
@@ -667,6 +803,19 @@ describe("T-5 — hue only for what did not complete, or is still happening", ()
     assert.equal(l.resultTone, "plain");
   });
 
+  it("a terminal record without an outcome is quiet completed activity", () => {
+    const l = ledgerLine(
+      shell("git status", {
+        status: "unknown",
+        basis: "native_terminal_record",
+      }),
+      CTX,
+    );
+    assert.equal(l.state, "done");
+    assert.equal(l.result, null);
+    assert.equal(l.resultTone, "plain");
+  });
+
   it("a failed command states its exit code and the failure's first line", () => {
     const l = ledgerLine(
       shell("pnpm -F field-app test -- CardShell", {
@@ -832,6 +981,12 @@ describe("T-3 — fold by class, not by run", () => {
       "4 files · CardShell.tsx, silhouette.ts, tokens.css, DESIGN.md",
     );
     assert.equal(lines[0].result, "1 truncated");
+    assert.equal(lines[0].detail.kind, "paths");
+    assert.deepEqual(
+      lines[0].detail.paths.map((path) => path.name),
+      ["CardShell.tsx", "silhouette.ts", "tokens.css", "DESIGN.md"],
+    );
+    assert.ok(lines[0].detail.paths.every((path) => path.read?.sessionId === "s1"));
   });
 
   it("different LOOK families do not fold into each other", () => {

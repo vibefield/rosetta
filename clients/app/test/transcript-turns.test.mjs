@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   documentTurns,
+  imageMarkerTargets,
   objectText,
   readAttachments,
 } from "../renderer/src/lib/transcript/index.ts";
@@ -264,17 +265,30 @@ describe("§03 H — the command pill and its output are one object", () => {
   it("absorbs the command_output notice that rides beside the pill", () => {
     const [turn] = documentTurns([
       prompt("/effort max", { at: 1_000 }),
-      notice({ type: "command_output", output: inline("Set effort level to max (this session only)") }, {
+      notice({ type: "command_output", output: inline("max") }, {
         at: 1_000,
       }),
       agent("ok"),
     ]);
     assert.equal(turn.prompt.isCommand, true);
     assert.equal(turn.prompt.command, "/effort max");
-    assert.equal(turn.prompt.commandOutput, "Set effort level to max (this session only)");
+    assert.equal(turn.prompt.commandOutput, "max");
+    assert.deepEqual(turn.prompt.setting, { kind: "effort", label: "Effort", value: "max" });
     assert.equal(turn.prompt.rows.length, 2);
     // The notice never also draws as a marker.
     assert.deepEqual(turn.segments.map((segment) => segment.kind), ["prose"]);
+  });
+
+  it("projects a normalized model value as a compact setting", () => {
+    const [turn] = documentTurns([
+      prompt("/model"),
+      notice({ type: "command_output", output: inline("Opus 5 (1M context)") }),
+    ]);
+    assert.deepEqual(turn.prompt.setting, {
+      kind: "model",
+      label: "Model",
+      value: "Opus 5 (1M context)",
+    });
   });
 
   it("recognises a rejected command the same way", () => {
@@ -287,6 +301,7 @@ describe("§03 H — the command pill and its output are one object", () => {
     ]);
     assert.equal(turn.prompt.isCommand, true);
     assert.ok(turn.prompt.commandOutput.startsWith("Invalid argument"));
+    assert.equal(turn.prompt.setting, null);
   });
 
   it("leaves ordinary prose a panel, and its notice a marker", () => {
@@ -334,7 +349,7 @@ describe("§06 — a missing image is a placeholder fact, never a sentence", () 
     assert.equal(fact.caption, "2400×1600");
   });
 
-  it("strips the marker off real prose and keeps the stored attachment", () => {
+  it("keeps a numbered marker beside its stored attachment", () => {
     const [turn] = documentTurns([
       prompt("[Image #4] now look at this, they are stacking", {
         attachments: [
@@ -349,10 +364,30 @@ describe("§06 — a missing image is a placeholder fact, never a sentence", () 
         ],
       }),
     ]);
-    assert.equal(turn.prompt.text, "now look at this, they are stacking");
+    assert.equal(turn.prompt.text, "[Image #4] now look at this, they are stacking");
     assert.equal(turn.prompt.attachments.length, 1);
     assert.equal(turn.prompt.attachments[0].missing, false);
     assert.equal(turn.prompt.attachments[0].caption, "2048×1536 · PNG");
+    assert.equal(
+      imageMarkerTargets(turn.prompt.text, turn.prompt.attachments).get("[Image #4]"),
+      turn.prompt.attachments[0],
+    );
+  });
+
+  it("pairs globally numbered markers with multiple images by occurrence", () => {
+    const refs = ["one.png", "two.png"].map((name) => ({
+      kind: "image",
+      name,
+      media_type: "image/png",
+      byte_len: 1024,
+      source: { type: "file", path: `/w/${name}`, resolved: true },
+      dimensions: null,
+    }));
+    const text = "compare [Image #4] with [Image #5]";
+    const { attachments } = readAttachments(text, refs);
+    const targets = imageMarkerTargets(text, attachments);
+    assert.equal(targets.get("[Image #4]"), attachments[0]);
+    assert.equal(targets.get("[Image #5]"), attachments[1]);
   });
 
   it("leaves prose that mentions no marker exactly as it was", () => {
@@ -362,37 +397,68 @@ describe("§06 — a missing image is a placeholder fact, never a sentence", () 
   });
 });
 
-/* ── §07's clustering, as a flag on the turn ─────────────────────────────── */
+/* ── §07's compact setting group, as a flag on the turn ─────────────────── */
 
-describe("§07 — consecutive prompts stack", () => {
-  it("flags a second prompt inside five minutes with no reply between", () => {
+describe("§07 — only adjacent human setting commands group", () => {
+  it("groups successful settings inside five minutes with no reply between", () => {
     const turns = documentTurns([
-      prompt("look at this", { at: 1_000 }),
-      prompt("and the one from the ipad?", { at: 1_000 + 60_000 }),
+      prompt("/model", { at: 1_000 }),
+      notice({ type: "command_output", output: inline("Opus 5 (1M context)") }, { at: 1_000 }),
+      prompt("/effort max", { at: 1_000 + 60_000 }),
+      notice({ type: "command_output", output: inline("max") }, { at: 1_000 + 60_000 }),
     ]);
     assert.equal(turns[0].clusteredWithPrevious, false);
     assert.equal(turns[1].clusteredWithPrevious, true);
   });
 
-  it("does not stack once a reply stood between them", () => {
+  it("keeps every conversational user prompt standalone", () => {
     const turns = documentTurns([
       prompt("look at this", { at: 1_000 }),
-      agent("Several issues visible.", { at: 2_000 }),
-      prompt("and the one from the ipad?", { at: 3_000 }),
+      prompt("and the one from the ipad?", { at: 1_000 + 60_000 }),
     ]);
+    assert.equal(turns[0].clusteredWithPrevious, false);
     assert.equal(turns[1].clusteredWithPrevious, false);
   });
 
-  it("does not stack across more than five minutes", () => {
+  it("keeps a parent-agent prompt standalone, even when it resembles a setting", () => {
     const turns = documentTurns([
-      prompt("a", { at: 1_000 }),
-      prompt("b", { at: 1_000 + 6 * 60_000 }),
+      prompt("/model", { at: 1_000 }),
+      notice({ type: "command_output", output: inline("Opus 5") }, { at: 1_000 }),
+      prompt("/effort max", { at: 2_000, kind: "parent_invocation" }),
+      notice({ type: "command_output", output: inline("max") }, { at: 2_000 }),
+    ]);
+    assert.equal(turns[1].prompt.fromParent, true);
+    assert.equal(turns[1].clusteredWithPrevious, false);
+  });
+
+  it("does not group settings once a reply stood between them", () => {
+    const turns = documentTurns([
+      prompt("/model", { at: 1_000 }),
+      notice({ type: "command_output", output: inline("Opus 5") }, { at: 1_000 }),
+      agent("Model selected.", { at: 2_000 }),
+      prompt("/effort max", { at: 3_000 }),
+      notice({ type: "command_output", output: inline("max") }, { at: 3_000 }),
     ]);
     assert.equal(turns[1].clusteredWithPrevious, false);
   });
 
-  it("never stacks on an unstamped prompt", () => {
-    const turns = documentTurns([prompt("a", { at: null }), prompt("b", { at: 1_000 })]);
+  it("does not group settings across more than five minutes", () => {
+    const turns = documentTurns([
+      prompt("/model", { at: 1_000 }),
+      notice({ type: "command_output", output: inline("Opus 5") }, { at: 1_000 }),
+      prompt("/effort max", { at: 1_000 + 6 * 60_000 }),
+      notice({ type: "command_output", output: inline("max") }, { at: 1_000 + 6 * 60_000 }),
+    ]);
+    assert.equal(turns[1].clusteredWithPrevious, false);
+  });
+
+  it("never groups an unstamped setting", () => {
+    const turns = documentTurns([
+      prompt("/model", { at: null }),
+      notice({ type: "command_output", output: inline("Opus 5") }, { at: null }),
+      prompt("/effort max", { at: 1_000 }),
+      notice({ type: "command_output", output: inline("max") }, { at: 1_000 }),
+    ]);
     assert.equal(turns[1].clusteredWithPrevious, false);
   });
 });

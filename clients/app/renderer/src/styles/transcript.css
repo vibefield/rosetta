@@ -21,8 +21,15 @@
 /* The measure is a CONTAINER: the anchor's margin appears and disappears with
    the rail, not with the window, so the query has to ask the column. */
 .tr-col { container-type: inline-size; container-name: measure; }
+/* The record is one vertical reading surface. Wide code and tables own their
+   local scrollports; the document itself must never acquire a sideways one.
+   Removing the room's 6px top inset lets the fade begin at the literal
+   scrollport edge; the pill keeps its own inset above that painted ground.
+   The same 6px stays in the document's resting headroom. */
+.tr-scroll { padding-top: 0; overflow-x: hidden; }
 .tr {
-  position: relative; max-width: 68ch; margin: 0 auto; padding: 22px 28px 30px;
+  --tr-action-gap: 14px;
+  position: relative; max-width: 68ch; margin: 0 auto; padding: 28px 28px 30px;
   font-size: 14px; line-height: 1.55; color: var(--vf-text-primary);
 }
 .tr p { margin: 0; }
@@ -61,7 +68,7 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
    the gutter costs about 24px of line, and the revealed anchor — one size
    down, closer in — sits wholly inside the column, never over the words. */
 @container measure (max-width: 759.98px) {
-  .tr { padding-left: 60px; }
+  .tr { --tr-action-gap: 10px; padding-left: 60px; padding-right: 60px; }
   .tr-anchor { margin-right: 4px; font-size: 10px; }
 }
 
@@ -84,8 +91,9 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
   cursor: zoom-in;
 }
 /* WRITTEN — the record's tile held a canvas; a real attachment is an image
-   inside a link, and it must cover the tile rather than stretch. */
+   inside an act, and it must cover the tile rather than stretch. */
 .tr-att__tile { display: block; }
+button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-att__tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .tr-att__tile--missing {
   display: grid; place-items: center; box-shadow: none;
@@ -96,8 +104,33 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
 .tr-att figcaption {
   color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums;
 }
+/* Claude's numbered paste marker is a second handle for the same image. It
+   reads like a link and acts like the thumbnail, without navigating away. */
+.tr-image-link {
+  margin: 0; padding: 0; border: 0; background: none; color: var(--vf-cyan);
+  font: inherit; line-height: inherit; text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 42%, transparent);
+  text-underline-offset: 2px; cursor: zoom-in;
+}
+.tr-image-link:hover { text-decoration-color: currentColor; }
 
-/* §03 H — a prompt that is a command wears a pill, its output beside it */
+/* §03 H — a command is one object; settings reduce to label + useful value */
+.tr-setting {
+  display: inline-flex; align-items: center; min-width: 0; max-width: 100%; height: 26px;
+  padding: 0 10px; border-radius: 999px; background: var(--vf-fill); white-space: nowrap;
+}
+.tr-setting__label {
+  display: inline-flex; align-items: center; flex: none;
+  color: var(--vf-text-tertiary); font-size: 10.5px; font-weight: 500;
+}
+.tr-setting__label::after {
+  content: ""; width: 1px; height: 11px; margin: 0 8px;
+  background: var(--vf-hairline-strong);
+}
+.tr-setting__value {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  color: var(--vf-text-primary); font-size: 11.5px; font-weight: 500;
+}
 .tr-cmd { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
 .tr-cmd code {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; height: 26px; padding: 0 10px;
@@ -205,11 +238,15 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
 
 /* the hover acts — copy is the one act this room actually has */
 .tr-acts {
-  position: absolute; top: -6px; right: 0; display: flex; gap: 5px;
-  opacity: 0; transition: opacity 160ms ease;
+  position: absolute; top: 0; bottom: 0; left: calc(100% + var(--tr-action-gap));
+  display: flex; align-items: flex-start; gap: 5px; width: max-content;
+  /* Sticky actions are chrome, so they share the day pill's layer above the
+     top fade (`.tr-frost` is 3) instead of dissolving with message content. */
+  z-index: 4; opacity: 0; transition: opacity 160ms ease;
 }
 .tr-seg:hover > .tr-acts, .tr-seg:focus-within > .tr-acts { opacity: 1; }
 .tr-acts button {
+  position: sticky; top: 12px; flex: none; white-space: nowrap;
   height: 24px; padding: 0 9px; border: 1px solid var(--vf-hairline); border-radius: 999px;
   background: var(--vf-chrome-solid); color: var(--vf-text-secondary); font-size: 10.5px;
   cursor: pointer; transition: transform 140ms ease, background-color 160ms ease;
@@ -293,6 +330,20 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
   margin: 2px 0 8px 26px; border: 1px solid var(--vf-hairline-strong); border-radius: 8px;
   overflow: hidden; font-size: 11.5px;
 }
+.tr-detail:has(> .tr-command-cwd) {
+  position: relative; margin-top: 8px; overflow: visible;
+}
+.tr-command-cwd {
+  position: absolute; z-index: 2; top: 0; left: 10px; transform: translateY(-50%);
+  display: flex; align-items: center; gap: 5px; max-width: calc(100% - 22px); height: 15px;
+  padding: 0 4px; border-radius: 3px; background: var(--vf-chrome-solid);
+  color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 9.5px;
+  line-height: 15px;
+}
+.tr-command-cwd svg { flex: none; width: 11px; height: 11px; color: var(--vf-text-faint); }
+.tr-command-cwd bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-command-cwd + .tr-cmds { padding-top: 9px; }
+.tr-command-cwd + .tr-command-stack { padding-top: 5px; }
 .tr-detail__bar {
   display: flex; align-items: center; gap: 12px; height: 26px; padding: 0 10px;
   border-bottom: 1px solid var(--vf-hairline); color: var(--vf-text-tertiary);
@@ -329,6 +380,15 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
   white-space: nowrap; overflow-x: auto;
 }
 .tr-paths .dir { color: var(--vf-text-tertiary); }
+.tr-paths[data-openable] { padding: 4px 6px; overflow-x: hidden; }
+.tr-paths__file {
+  display: block; width: 100%; min-width: 0; padding: 2px 4px; border: 0; border-radius: 5px;
+  background: none; color: var(--vf-text-secondary); font: inherit; line-height: inherit;
+  text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.tr-paths__file:hover { background: var(--vf-fill); color: var(--vf-text-primary); }
+.tr-paths__file:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.tr-paths__file .name { color: inherit; }
 .tr-paths .n { color: var(--vf-text-faint); font-variant-numeric: tabular-nums; margin-left: 10px; }
 .tr-kv { display: grid; grid-template-columns: 90px 1fr; gap: 3px 12px; padding: 7px 10px; font-size: 11.5px; margin: 0; }
 .tr-kv dt { margin: 0; color: var(--vf-text-tertiary); }
@@ -359,8 +419,45 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
   font-size: 11.5px; line-height: 1.9; color: var(--vf-text-secondary);
   white-space: pre-wrap; word-break: break-word;
 }
-.tr-cmds li::before { content: ">_ "; color: var(--vf-text-faint); }
-.tr-cmds li.tr-more::before { content: ""; }
+.tr-cmds .tr-command {
+  position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center; min-width: 0;
+}
+.tr-command__prompt {
+  grid-column: 1; grid-row: 1; color: var(--vf-text-faint); white-space: nowrap;
+}
+.tr-command__text {
+  min-width: 0; margin: 0; color: inherit; font: inherit; line-height: inherit;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tr-command__text code { color: inherit; font: inherit; }
+.tr-command__line { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tr-cmds .tr-command__line { min-height: 1.9em; }
+.tr-command-stack .tr-command__line { min-height: 1.55em; }
+.tr-cmds .tr-command__text { grid-column: 2; grid-row: 1; padding: 0; background: none; }
+.tr-cmds .tr-command:not([data-full="true"]) .tr-command__text,
+.tr-cmds .tr-command:not([data-full="true"]) .tr-command__line {
+  overflow: hidden; white-space: nowrap;
+}
+.tr-cmds .tr-command:not([data-full="true"]) .tr-command__more {
+  grid-column: 3; grid-row: 1; align-self: center; margin-left: 12px; white-space: nowrap;
+}
+.tr-cmds .tr-command[data-full="true"] .tr-command__text {
+  display: block; max-height: 360px; padding-bottom: 22px; overflow: auto;
+}
+.tr-cmds .tr-command[data-full="true"] .tr-command__more {
+  position: absolute; right: 0; bottom: 3px; z-index: 1; margin: 0; padding-left: 18px;
+  background: linear-gradient(90deg, transparent, var(--vf-chrome-solid) 16px);
+}
+.tr-command-stack .tr-command + .tr-command { border-top: 1px solid var(--vf-hairline); }
+.tr-command-stack .tr-command__more { margin: 0 10px 8px; }
+.tr-command__more {
+  padding: 0; border: 0; border-bottom: 1px dotted var(--vf-hairline-strong);
+  background: none; color: var(--vf-text-tertiary); font-family: var(--vf-font-sans);
+  font-size: 10.5px; line-height: 1.5; cursor: pointer;
+}
+.tr-command__more:hover { color: var(--vf-text-primary); }
+.tr-command__more:disabled { cursor: wait; opacity: .7; }
 /* the sources — a site's icon is content, so it keeps its colour */
 .tr-src { list-style: none; margin: 0; padding: 4px 6px; }
 .tr-src li {
@@ -470,8 +567,11 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
    pushes it OUT instead of stacking on it */
 .tr-sitting { position: relative; }
 .tr-day + .tr-turn { margin-top: 0; }
-/* clustered prompts — consecutive prompts inside five minutes stack as one */
-.tr-cluster { display: grid; gap: 4px; justify-items: start; }
+/* Grouped setting commands use a definite, shrinkable track. An implicit
+   max-content track can otherwise widen the entire transcript scrollport. */
+.tr-cluster {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; justify-items: start;
+}
 .tr-cluster .tr-prompt { border-radius: 10px; }
 .tr-cluster .tr-prompt + .tr-prompt { border-top-left-radius: 4px; }
 .tr-cluster .tr-prompt:has(+ .tr-prompt) { border-bottom-left-radius: 4px; }

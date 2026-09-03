@@ -26,8 +26,10 @@ export interface DiffHunk {
   /** The `@@ … @@` line, whose trailing text git fills with the enclosing
    * function or section — worth showing, and not ours to invent. */
   readonly header: string;
-  readonly oldStart: number;
-  readonly newStart: number;
+  /** Null when the source persisted a hunk but omitted its coordinates, as
+   * Codex's `apply_patch` dialect may do with a bare `@@`. */
+  readonly oldStart: number | null;
+  readonly newStart: number | null;
   readonly lines: readonly DiffLine[];
 }
 

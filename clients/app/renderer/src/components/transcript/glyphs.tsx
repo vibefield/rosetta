@@ -140,6 +140,16 @@ export function LineChevron() {
   );
 }
 
+/** Working directory — metadata for a command frame, not another ledger act. */
+export function DirectoryGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...ROUND} aria-hidden="true">
+      <path d="M2.5 4.5h4l1.4 1.6h5.6v6.4a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" />
+      <path d="M2.5 6.1V4a1 1 0 0 1 1-1h2.4l1.4 1.5" />
+    </svg>
+  );
+}
+
 /** The column head's activity act — fold or open every run at once (§05). */
 export function ActivityGlyph() {
   return (

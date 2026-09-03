@@ -15,9 +15,8 @@ import { dayLabel } from "../format.ts";
 /** A silence this long or longer means the reader left and came back. */
 export const SITTING_PAUSE_MS = 15 * 60_000;
 
-/** Consecutive prompts inside this window stack as one group, 4px apart —
- * Slack's five-minute rule, applied to the only speaker still uncustered
- * (the agent's reply is already one authored run under one head, T-4). */
+/** Adjacent successful setting commands inside this window may share one
+ * compact configuration group. Conversational prompts never use this rule. */
 export const PROMPT_CLUSTER_MS = 5 * 60_000;
 
 const MINUTES_TO_MS = 60_000;
@@ -196,9 +195,10 @@ export function sittingCount(rows: readonly TimelineEntry[], now = Date.now()): 
 }
 
 /**
- * The time half of the clustering rule. Whether a response stood between the
- * two prompts is the document's business, so `turns.ts` owns that half and
- * sets `Turn.clusteredWithPrevious`.
+ * The time half of the setting-group rule. Whether both rows are successful
+ * human setting commands, or a response stood between them, is the document's
+ * business; `turns.ts` owns those checks and sets
+ * `Turn.clusteredWithPrevious`.
  */
 export function withinPromptCluster(
   previousAt: number | null,
