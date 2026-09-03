@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rosetta — ingest time sequence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,500;0,600;0,700;1,500&amp;family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+  :root {
+    --bg: #F6F3EC; --paper: #FBF9F4; --card: #FFFCF7; --ink: #1E2320;
+    --muted: #6A7068; --line: #D8D2C4; --chip: #EEE8DC;
+    --copper: #A14E28; --copper-bg: rgba(161,78,40,.10);
+    --teal: #1F6E63; --teal-bg: rgba(31,110,99,.10);
+    --amber: #8A6A12; --amber-bg: rgba(138,106,18,.12);
+    --rose: #8A3A48; --rose-bg: rgba(138,58,72,.10);
+    --indigo: #3B4A86; --indigo-bg: rgba(59,74,134,.10);
+    --forest: #2C5B38; --forest-bg: rgba(44,91,56,.10);
+    --violet: #6A3C78; --violet-bg: rgba(106,60,120,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141714; --paper: #191C19; --card: #1F231F; --ink: #E8E4DA;
+      --muted: #9AA196; --line: #333830; --chip: #2A2F2A;
+      --copper: #D3805A; --copper-bg: rgba(211,128,90,.14);
+      --teal: #55A99B; --teal-bg: rgba(85,169,155,.14);
+      --amber: #D4B45A; --amber-bg: rgba(212,180,90,.14);
+      --rose: #D48A96; --rose-bg: rgba(212,138,150,.14);
+      --indigo: #8B9AD4; --indigo-bg: rgba(139,154,212,.14);
+      --forest: #7BB088; --forest-bg: rgba(123,176,136,.14);
+      --violet: #C08BD0; --violet-bg: rgba(192,139,208,.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141714; --paper: #191C19; --card: #1F231F; --ink: #E8E4DA;
+    --muted: #9AA196; --line: #333830; --chip: #2A2F2A;
+    --copper: #D3805A; --copper-bg: rgba(211,128,90,.14);
+    --teal: #55A99B; --teal-bg: rgba(85,169,155,.14);
+    --amber: #D4B45A; --amber-bg: rgba(212,180,90,.14);
+    --rose: #D48A96; --rose-bg: rgba(212,138,150,.14);
+    --indigo: #8B9AD4; --indigo-bg: rgba(139,154,212,.14);
+    --forest: #7BB088; --forest-bg: rgba(123,176,136,.14);
+    --violet: #C08BD0; --violet-bg: rgba(192,139,208,.14);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1100px 520px at 0% -8%, var(--copper-bg), transparent 50%), var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', system-ui, sans-serif;
+    font-size: 15.5px; line-height: 1.55;
+  }
+  .wrap { max-width: 1220px; margin: 0 auto; padding: 40px 28px 96px; }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--copper);
+  }
+  h1 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; margin: 8px 0 10px; }
+  h2 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 24px; margin: 52px 0 8px; }
+  h3 { font-family: Spectral, Georgia, serif; font-weight: 600; font-size: 17px; margin: 24px 0 8px; }
+  .lede, .note { color: var(--muted); max-width: 92ch; }
+  a { color: var(--copper); }
+  code { font-family: 'JetBrains Mono', monospace; font-size: .88em; }
+  .callout {
+    border: 1px solid var(--line); background: var(--card);
+    border-radius: 10px; padding: 14px 18px; max-width: 96ch; margin: 16px 0 22px; font-size: 14px;
+  }
+  .callout.teal { border-color: var(--teal); background: var(--teal-bg); }
+  .callout b { color: var(--copper); }
+  .callout.teal b { color: var(--teal); }
+  .lanes { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 14px 0 8px; font-size: 13px; color: var(--muted); }
+  .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .tl { position: relative; margin: 18px 0 8px; padding-left: 0; }
+  .step {
+    display: grid; grid-template-columns: 72px 14px 1fr; gap: 0 14px;
+    margin: 0 0 0; align-items: stretch;
+  }
+  .step .when {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+    color: var(--muted); text-align: right; padding-top: 14px;
+  }
+  .step .rail { position: relative; }
+  .step .rail::before {
+    content: ""; position: absolute; left: 5px; top: 0; bottom: 0;
+    width: 2px; background: var(--line);
+  }
+  .step:first-child .rail::before { top: 22px; }
+  .step:last-child .rail::before { bottom: auto; height: 22px; }
+  .step .bead {
+    position: absolute; left: 0; top: 18px; width: 12px; height: 12px;
+    border-radius: 99px; border: 2px solid var(--ink); background: var(--card); z-index: 1;
+  }
+  .step .bead.w { border-color: var(--copper); background: var(--copper); }
+  .step .bead.t { border-color: var(--indigo); background: var(--indigo); }
+  .step .bead.s { border-color: var(--amber); background: var(--amber); }
+  .step .bead.a { border-color: var(--teal); background: var(--teal); }
+  .step .bead.p { border-color: var(--violet); background: var(--violet); }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 16px; margin: 8px 0 12px;
+  }
+  .card h3 { margin: 0 0 4px; }
+  .card p { margin: 0; font-size: 14px; color: var(--muted); }
+  .fn { font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
+  .fn .c { color: var(--muted); }
+  .fn .k { color: var(--copper); }
+  .tag {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;
+    letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; margin-right: 4px;
+  }
+  .t-w { color: var(--copper); background: var(--copper-bg); }
+  .t-t { color: var(--indigo); background: var(--indigo-bg); }
+  .t-s { color: var(--amber); background: var(--amber-bg); }
+  .t-a { color: var(--teal); background: var(--teal-bg); }
+  .t-p { color: var(--violet); background: var(--violet-bg); }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13px; }
+  th {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em; color: var(--muted);
+    text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.cm { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; }
+  figure { margin: 12px 0 8px; }
+  figure svg { display: block; width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; max-width: 96ch; }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  footer.note { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; }
+  .theme-row { display: flex; gap: 6px; margin-top: 10px; }
+  .theme-row button {
+    font: 10.5px/1 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 4px; padding: 5px 8px; cursor: pointer;
+  }
+  .theme-row button[aria-pressed="true"] { color: var(--ink); background: var(--chip); }
+  ol.inner { margin: 8px 0 0; padding-left: 1.2em; font-size: 13.5px; color: var(--muted); }
+  ol.inner li { margin: 3px 0; }
+  ol.inner code { font-size: .92em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">rosetta · runtime · time sequence</div>
+  <h1>What runs, in what order, on which thread</h1>
+  <p class="lede">
+    Product path: Electron spawns <code>rosettad serve</code>, the writer thread
+    ingests, Tokio serves HTTP/WS, a detached thread builds FTS, and the History
+    room reads only L3. Finite <code>ingest</code> is the same pipeline without
+    a listener. Function names are from the current tree.
+    Design: <a href="ingest-engine.html">ingest-engine.html</a>.
+    Call graph: <a href="ingest-pipeline.html">ingest-pipeline.html</a>.
+  </p>
+
+  <div class="callout teal">
+    <b>One synchronous writer owns SQLite.</b>
+    Tokio never applies a batch. Search never writes the canonical file.
+    The app never opens the projection. During cold load, the only fan-out
+    to the UI is a 500&nbsp;ms read-only <code>Hub::rewarm</code> plus
+    <code>/api/status</code> meters. After <code>canonical_ready</code>,
+    live ticks drain <code>Effects</code> into <code>Hub::absorb</code>.
+  </div>
+
+  <div class="lanes">
+    <span class="lg"><span class="dot" style="background:var(--copper)"></span>Writer (main) — discover, meta, stream, apply, live ticks</span>
+    <span class="lg"><span class="dot" style="background:var(--indigo)"></span>Tokio — bind, axum, 500 ms rewarm, signals</span>
+    <span class="lg"><span class="dot" style="background:var(--amber)"></span>Search thread — FTS5 sidecar</span>
+    <span class="lg"><span class="dot" style="background:var(--teal)"></span>App — Electron + React over HTTP/WS</span>
+    <span class="lg"><span class="dot" style="background:var(--violet)"></span>Filesystem — agent homes, ledger, notify</span>
+  </div>
+
+  <h2>Four lanes, one clock</h2>
+  <figure>
+    <svg viewBox="0 0 1100 280" role="img" aria-label="Parallel lanes for writer, tokio, search, and the app.">
+      <style>
+        .lane { fill: var(--card); stroke: var(--line); stroke-width: 1.1; }
+        .lab { font-family: Spectral, Georgia, serif; font-size: 14px; font-weight: 600; fill: currentColor; }
+        .s { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; fill: var(--muted); }
+        .bar { rx: 3; }
+      </style>
+      <rect class="lane" x="20" y="16" width="1060" height="58" rx="8"/>
+      <text class="lab" x="36" y="38">Writer</text>
+      <text class="s" x="36" y="56">discover → consent wait → meta_ingest_into × N → stream_backfill_into per file → finish_progressive → live tick loop</text>
+      <rect x="620" y="28" width="140" height="12" class="bar" fill="var(--copper)"/>
+      <rect x="770" y="28" width="220" height="12" class="bar" fill="var(--copper)"/>
+      <rect x="1000" y="28" width="60" height="12" class="bar" fill="var(--copper)"/>
+
+      <rect class="lane" x="20" y="82" width="1060" height="58" rx="8"/>
+      <text class="lab" x="36" y="104">Tokio</text>
+      <text class="s" x="36" y="122">TcpListener + axum::serve from first breath · rewarm every 500 ms until canonical_ready · ctrl-c</text>
+      <rect x="36" y="94" width="1040" height="8" class="bar" fill="var(--indigo)" opacity=".35"/>
+
+      <rect class="lane" x="20" y="148" width="1060" height="58" rx="8"/>
+      <text class="lab" x="36" y="170">Search</text>
+      <text class="s" x="36" y="188">Fts5SearchWorker::start at bind · wake after each file · await_initial_search after canonical_ready</text>
+      <rect x="770" y="160" width="250" height="12" class="bar" fill="var(--amber)"/>
+
+      <rect class="lane" x="20" y="214" width="1060" height="58" rx="8"/>
+      <text class="lab" x="36" y="236">App</text>
+      <text class="s" x="36" y="254">spawn daemon → /api/status poll → /ws/meta → enable/boost POSTs → /ws/sessions/{id} → /api/search</text>
+      <rect x="120" y="226" width="960" height="8" class="bar" fill="var(--teal)" opacity=".4"/>
+    </svg>
+    <figcaption>
+      Time flows left → right. The listener is up before any agent file is
+      read. The app can paint an empty room and a roll-call immediately.
+    </figcaption>
+  </figure>
+
+  <h2>Serve — the product timeline</h2>
+  <p class="note">
+    <code>rosettad::serve::cmd_serve</code>. Electron
+    (<code>clients/app/electron/main.mjs</code>) spawns this with
+    <code>--db</code> under the app’s <code>userData/archive</code> and passes
+    <code>?daemon=http://127.0.0.1:PORT</code> into the renderer.
+  </p>
+
+  <div class="tl">
+    <div class="step">
+      <div class="when">T0</div>
+      <div class="rail"><span class="bead t"></span></div>
+      <div class="card">
+        <h3><span class="tag t-t">tokio</span> Bind before ingest</h3>
+        <p>
+          <code>open_progressive_backfill</code> opens a public SQLite
+          (WAL, progressive mode). <code>Hub::warm</code> loads whatever
+          lists already exist. <code>Fts5SearchWorker::start</code> forks
+          thread <code>rosetta-search</code>. Tokio multi-thread runtime
+          binds <code>127.0.0.1:4640</code> (or <code>--addr</code>).
+          <code>axum::serve(listener, router)</code> is spawned.
+          <code>/api/status</code> answers from this instant.
+        </p>
+        <pre class="fn"><span class="c">crates/rosettad/src/serve.rs</span>
+Store::open_progressive → Hub::new + Hub::warm
+Fts5SidecarSearch::new + Fts5SearchWorker::start
+tokio::net::TcpListener::bind → axum::serve
+spawn rewarm loop (500 ms, SQLITE_OPEN_READ_ONLY → Hub::rewarm)</pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T1</div>
+      <div class="rail"><span class="bead a"></span></div>
+      <div class="card">
+        <h3><span class="tag t-a">app</span> Room connects</h3>
+        <p>
+          <code>RosettaClient</code> base URL from <code>?daemon=</code>.
+          <code>useDaemonStatus</code> polls <code>GET /api/status</code>
+          every 2.5 s while ingest is moving (30 s once live).
+          <code>useMeta</code> opens <code>GET /ws/meta</code>.
+          Empty lists + honest meters. If nothing is enrolled,
+          <code>RollCallPanel</code> is the UI.
+        </p>
+        <pre class="fn">clients/app/renderer/src/lib/hooks.ts · useMeta, useDaemonStatus
+clients/app/renderer/src/lib/rosetta.ts · new RosettaClient
+crates/server/src/http.rs · status, discoveries
+crates/server/src/ws.rs · meta</pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T2</div>
+      <div class="rail"><span class="bead w"></span></div>
+      <div class="card">
+        <h3><span class="tag t-w">writer</span> Census, then consent</h3>
+        <p>
+          <code>discover</code> walks each adapter’s
+          <code>layout.data_root</code> (filter: matching stream globs).
+          Installed = at least one claimed file. <code>ConsentGate::publish</code>
+          fills <code>/api/discoveries</code>. Prior
+          <code>agent_runtime.enabled</code> is reused. If the set is empty,
+          the writer blocks on <code>consent.arm()</code> /
+          <code>recv_timeout(200 ms)</code>. The app POSTs
+          <code>/api/runtimes/enable</code> → <code>ConsentGate::grant</code>.
+        </p>
+        <pre class="fn">pipeline::discover → capture::walk_filtered
+ids::runtime_id(kind, data_root)
+ConsentGate::publish / arm / grant
+http::enable → EnableRequest { kinds }</pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T3</div>
+      <div class="rail"><span class="bead w"></span></div>
+      <div class="card">
+        <h3><span class="tag t-w">writer</span> Meta skim — every enrolled runtime first</h3>
+        <p>
+          Watchers are created <em>before</em> the skim
+          (<code>NotifyEvents::watch</code>) so writes during census are
+          hints, not gaps. Then <code>meta_ingest_into</code> for each
+          consented runtime: walk again, head/tail skim JSONL, admit
+          document/SQLite snapshots, adapter <code>skim</code>, mint
+          session/project ids in the pipeline, ledger the meta batch,
+          <code>Store::apply</code>. No transcript bodies.
+          <code>health.ingest_metadata_ready()</code> is the census seam.
+        </p>
+        <pre class="fn">NotifyEvents::watch(root)                    <span class="c">// watch-before-scan</span>
+open_ledger(public_ledgers, kind)
+meta_ingest_into(adapter, runtime, root, store, opts, instrument, ledger)
+  capture::head_tail / first_record / sqlite_file_status
+  AgentAdapter::skim
+  pipeline::project (cwd → ProjectRow) — ownership closed here
+  Ledger::append (meta frames, schema v2)
+  Store::apply (SessionMeta / Runtime / Project only)
+DaemonHealth::ingest_metadata_ready</pre>
+        <p style="margin-top:8px">The 500&nbsp;ms rewarm now sees session lists. The app drops the list veil when <code>ingest.phase === "metadata_ready"</code> (<code>isCensusRunning</code> is false).</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T4</div>
+      <div class="rail"><span class="bead w"></span></div>
+      <div class="card">
+        <h3><span class="tag t-w">writer</span> First readable session, then round-robin</h3>
+        <p>
+          <code>BackfillSchedule</code> orders each runtime newest-session-first,
+          canonical path within a session. <code>bootstrap</code> completes the
+          first canonical-list session before rotation.
+          Each pop is <strong>one file</strong>:
+          <code>stream_backfill_into(..., slice::from_ref(&file), audit_free)</code>.
+          Between files: <code>boost.drain()</code> —
+          the app’s <code>POST /api/ingest/boost { session_id }</code> jumps
+          that session’s remaining sources to the front.
+        </p>
+        <pre class="fn">queries::session_list(conn, None, 1000) → bootstrap
+loop {
+  schedule.promote(boost.drain())
+  (runtime, file) = schedule.pop_next()
+  stream_backfill_into(..., [file], audit_files_per_run: 0, ledger)
+  search_worker.wake()
+  Store::acknowledge_search(drain_acknowledgements())
+}</pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T4↔</div>
+      <div class="rail"><span class="bead a"></span></div>
+      <div class="card">
+        <h3><span class="tag t-a">app</span> Parallel reads while files land</h3>
+        <p>
+          Opening a session calls <code>useTimeline</code> →
+          <code>GET /ws/sessions/{id}</code>. Snapshot is REST
+          <code>/api/sessions/{id}/timeline</code>; live tail is hub
+          mutations (after live; during backfill the 500&nbsp;ms rewarm
+          only updates <em>lists</em>, not per-row rings).
+          Heatmaps poll every 5&nbsp;s while ingest is active.
+          Search is empty until the sidecar is ready.
+        </p>
+        <pre class="fn">GET /api/sessions, /api/projects          <span class="c">// hub mirror, no SQLite on the request path</span>
+GET /api/sessions/{id}/timeline
+GET /api/projects/{id}/heatmap|usage|contribution
+GET /ws/sessions/{id}  + stamp resume
+POST /api/ingest/boost                    <span class="c">// writer notices on next file boundary</span></pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T5</div>
+      <div class="rail"><span class="bead w"></span></div>
+      <div class="card">
+        <h3><span class="tag t-w">writer</span> Audit pass, then freeze rewarm</h3>
+        <p>
+          After every ordinary file, one <code>stream_backfill_into</code> per
+          runtime with the <em>full roster</em> so
+          <code>rotating_audit_paths</code> can pick. Ledgers flush.
+          Rewarm task is stopped so WAL is not pinned.
+          <code>Instrument::finish_progressive_load</code> →
+          <code>Store::finish_progressive_load</code> validates, checkpoints,
+          marks <code>canonical_ready</code>.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T6</div>
+      <div class="rail"><span class="bead s"></span></div>
+      <div class="card">
+        <h3><span class="tag t-s">search</span> Clean I/O window</h3>
+        <p>
+          <code>await_initial_search</code>: writer sleeps 100&nbsp;ms,
+          wakes the worker, drains acks into
+          <code>Store::acknowledge_search</code>, until sidecar
+          <code>SearchReadiness::Ready</code> or <code>Failed</code>.
+          HTTP stays up. Watchers already armed — agent writes queue as
+          hints. Search failure never blocks canonical live ingest.
+        </p>
+        <pre class="fn">Fts5SearchWorker::wake
+synchronize_fts5_once → full_build | repair_generation
+try_send SearchAck → Store::acknowledge_search(epoch, revision)
+GET /api/search starts returning hits; useDaemonStatus.searchReadiness</pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="when">T7</div>
+      <div class="rail"><span class="bead w"></span></div>
+      <div class="card">
+        <h3><span class="tag t-w">writer</span> Live loop</h3>
+        <p>
+          One <code>LiveRunner</code> per runtime, same store, no extra
+          threads. <code>Store::observe_effects</code> on. Authoritative
+          <code>Hub::rewarm</code> then <code>drain_effects</code>.
+          Each tick: coalesce notify (250&nbsp;ms first wait, ≤256 events),
+          30&nbsp;s poll, maybe <code>admit</code> (re-run meta for a new
+          file), <code>stream_backfill_into</code> on the dirty subset,
+          rotating audit on poll. After all runtimes:
+          <code>search_worker.wake</code>, ack search,
+          <code>hub.absorb(drain_effects())</code>.
+        </p>
+        <pre class="fn">LiveRunner::resume_from_roster(..., events, roster, ledger)
+Store::observe_effects
+loop {
+  for runner in runners { runner.tick(store, instrument) }
+  search_worker.wake(); acknowledge_search
+  hub.absorb(conn, store.drain_effects(), now)
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <h2>Inside one file — <code>ingest_file</code></h2>
+  <p class="note">
+    <code>pipeline/src/stream.rs</code>. JSONL only; document/SQLite snapshot
+    drivers take sibling functions after the tail queue drains.
+    Ledger bytes are durable <em>before</em> the projection transaction.
+  </p>
+  <div class="card">
+    <ol class="inner">
+      <li><code>cursor_row</code> — load or insert <code>ingest_cursor</code> for <code>(runtime, stream, path)</code>.</li>
+      <li><code>PipeCheckpoint::decode</code> — resume only if session, stream, <code>normalizer_version</code>, and <code>source_generation == active_generation</code>. Otherwise replay from byte zero (RAM join state is not on disk).</li>
+      <li><code>AgentAdapter::restore_state</code> — adapter-private cursor (Claude response map, etc.).</li>
+      <li>Loop: <code>Tailer::read(path, tail, force_replay)</code> → <code>TailRead::Batch</code> of framed records (or Missing / Retry / oversized).</li>
+      <li>On generation restart: bump generation, reset ordinal/usage/state, <code>generations_restarted++</code>.</li>
+      <li>For each <code>TailItem::Record</code>: <code>adapter.ingest_line(&amp;mut NormalizeCtx, stream_id, payload)</code> → parse + normalize (one function; not separately timed). Emits <code>Vec&lt;IngestOp&gt;</code>.</li>
+      <li>Build <code>PipeCheckpoint</code> + <code>SourceMode</code>: Append if same generation; Activate if complete+clean replacement; Abandon if complete+dirty; else Stage (RAM, not published).</li>
+      <li><code>Ledger::append_raw</code> then optional <code>complete_generation</code>, then <code>checkpoint</code> (not a full fsync every batch — durability barrier is later).</li>
+      <li><code>Store::apply(Batch { ops, checkpoints, source })</code> — one transaction, CAS on the cursor blob.</li>
+      <li>If <code>!batch.more_available</code>, break. Sibling-heal: if this file restarted a generation, replay other files in the same session.</li>
+    </ol>
+    <pre class="fn" style="margin-top:12px"><span class="c">// adapter boundary (all nine agents)</span>
+AgentAdapter::ingest_line(ctx, stream, bytes) → LineOutcome { status, ops }
+  raw::parse_line → normalize::* → IngestOp::{Timeline / ToolUpdate / ProjectionAsset / Drift / …}
+
+<span class="c">// store boundary</span>
+Store::apply
+  assets.materialize_batch          <span class="c">// files on disk before URLs are visible</span>
+  ram_reconciliation.prepare        <span class="c">// process-local tool fold</span>
+  ram_reconciliation.projected_batch
+  apply::apply_batch(tx, …)         <span class="c">// rows, drift, cursors; no tool_update_fact table</span>
+  ram_reconciliation.resolve
+  search_sync::record_batch         <span class="c">// live mode only → search_dirty</span>
+  tx.commit
+  ram_reconciliation.commit</pre>
+  </div>
+
+  <h2>What is allowed to run in parallel</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h3>Yes, concurrently</h3>
+      <p>
+        Axum handlers vs the writer (read-only SQLite / hub mutex).
+        Rewarm <code>spawn_blocking</code> opens a second read-only
+        connection every 500&nbsp;ms during backfill.
+        Search worker reads the canonical file, writes only the sidecar.
+        App HTTP/WS. Filesystem notify queue. Ctrl-c watcher.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Never concurrently</h3>
+      <p>
+        Two <code>Store::apply</code> calls. Two writers on one projection
+        (file lock in <code>projection_lock</code>). Tokio applying batches.
+        Search acknowledging its own revision (the writer thread calls
+        <code>acknowledge_search</code>). Meta ingest of runtime B before
+        runtime A’s skim has committed — skims are sequential on the writer
+        so lists appear as a whole roster.
+      </p>
+    </div>
+  </div>
+
+  <h2>App ↔ daemon, both directions</h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>when</th><th>app → daemon</th><th>daemon → app</th><th>UI effect</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="cm">T0+</td>
+          <td class="cm">GET /api/status</td>
+          <td>DaemonHealth meters, search readiness, ingest.phase</td>
+          <td>connectivity; ColdStart / cooking cards</td>
+        </tr>
+        <tr>
+          <td class="cm">T1</td>
+          <td class="cm">GET /ws/meta</td>
+          <td>Hub meta diffs (rewarm or absorb)</td>
+          <td>project + session columns</td>
+        </tr>
+        <tr>
+          <td class="cm">T2</td>
+          <td class="cm">GET /api/discoveries<br>POST /api/runtimes/enable</td>
+          <td>roll-call board; grant unblocks writer</td>
+          <td>RollCallPanel → first skim starts</td>
+        </tr>
+        <tr>
+          <td class="cm">T3</td>
+          <td class="cm">(poll status)</td>
+          <td>phase skimming → metadata_ready; files_skimmed</td>
+          <td>list veil lifts</td>
+        </tr>
+        <tr>
+          <td class="cm">T4</td>
+          <td class="cm">POST /api/ingest/boost<br>GET /ws/sessions/{id}</td>
+          <td>BoostLedger; timeline snapshot + later mutations</td>
+          <td>opened session jumps the round-robin; transcript fills</td>
+        </tr>
+        <tr>
+          <td class="cm">T6</td>
+          <td class="cm">GET /api/search</td>
+          <td>FTS hits once Ready</td>
+          <td>SearchStrip</td>
+        </tr>
+        <tr>
+          <td class="cm">T7</td>
+          <td class="cm">WS already open</td>
+          <td>Hub::absorb session mutations + meta diffs</td>
+          <td>live tail, watermarks, cooking → indexed</td>
+        </tr>
+        <tr>
+          <td class="cm">always</td>
+          <td class="cm">GET /api/assets/{name}</td>
+          <td>content-addressed member bytes</td>
+          <td>images / spilled text</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    Origin guard: WS upgrades and the two POSTs require a loopback
+    <code>Origin</code> (or no Origin). CORS matches. The renderer never
+    imports <code>node:fs</code>; git/worktree IPC is a separate Electron
+    concern and is not on the ingest path.
+  </p>
+
+  <h2>Finite <code>ingest</code> vs <code>serve</code></h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th></th><th>rosettad ingest</th><th>rosettad serve</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="cm">entry</td>
+          <td class="cm">cmd_ingest</td>
+          <td class="cm">cmd_serve</td>
+        </tr>
+        <tr>
+          <td class="cm">store mode</td>
+          <td>private Bulk — unpublished until validate</td>
+          <td>Progressive — public from first skim</td>
+        </tr>
+        <tr>
+          <td class="cm">HTTP</td>
+          <td>none</td>
+          <td>bound first</td>
+        </tr>
+        <tr>
+          <td class="cm">consent</td>
+          <td>CLI <code>--agent</code> is consent</td>
+          <td>enabled flags or app roll call</td>
+        </tr>
+        <tr>
+          <td class="cm">stream</td>
+          <td>whole roster per runtime, then <code>flush_bulk_reconciliation</code></td>
+          <td>one file at a time, boost, then audit roster pass</td>
+        </tr>
+        <tr>
+          <td class="cm">tool join</td>
+          <td>RAM bulk buffer, emit closed rows at runtime end</td>
+          <td>RAM buffer per batch (public readers exist)</td>
+        </tr>
+        <tr>
+          <td class="cm">search</td>
+          <td><code>synchronize_fts5_once</code> after publication</td>
+          <td>worker from T0; await after canonical_ready</td>
+        </tr>
+        <tr>
+          <td class="cm">live</td>
+          <td>no</td>
+          <td>LiveRunner ticks</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    <code>watch</code> is serve’s live loop without the progressive first-run
+    theater (existing db). <code>rebuild</code> is ledger replay into a fresh
+    private projection, then atomic replace.
+  </p>
+
+  <h2>Function index (ingest spine)</h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>function</th><th>crate</th><th>role</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="cm">cmd_serve / cmd_ingest / cmd_watch / cmd_rebuild</td><td>rosettad</td><td>CLI owners</td></tr>
+        <tr><td class="cm">discover / expand_data_root</td><td>pipeline</td><td>installed? file counts</td></tr>
+        <tr><td class="cm">walk_filtered / head_tail / first_record</td><td>capture</td><td>bytes off disk</td></tr>
+        <tr><td class="cm">NotifyEvents::watch / Tailer::read</td><td>capture</td><td>hints + framing</td></tr>
+        <tr><td class="cm">Ledger::append_raw / complete_generation / flush</td><td>capture</td><td>append-only raw</td></tr>
+        <tr><td class="cm">meta_ingest_into</td><td>pipeline</td><td>bounded metadata</td></tr>
+        <tr><td class="cm">stream_backfill_into / ingest_file</td><td>pipeline</td><td>full records</td></tr>
+        <tr><td class="cm">stream_document_sources / stream_snapshot_sources</td><td>pipeline</td><td>non-JSONL drivers</td></tr>
+        <tr><td class="cm">AgentAdapter::skim / ingest_line / restore_state</td><td>adapters/*</td><td>parse + normalize</td></tr>
+        <tr><td class="cm">ids::runtime_id / session_id / project_id / timeline_id</td><td>core</td><td>deterministic ids</td></tr>
+        <tr><td class="cm">Store::apply / ram_reconciliation / apply_batch</td><td>store</td><td>one tx</td></tr>
+        <tr><td class="cm">flush_bulk_reconciliation</td><td>store</td><td>private cold tool fold</td></tr>
+        <tr><td class="cm">search_sync::record_batch / acknowledge</td><td>store</td><td>search_dirty</td></tr>
+        <tr><td class="cm">Fts5SearchWorker::start / synchronize_fts5_once</td><td>search</td><td>sidecar</td></tr>
+        <tr><td class="cm">Hub::warm / rewarm / absorb / subscribe_*</td><td>server</td><td>mirrors + rings</td></tr>
+        <tr><td class="cm">ConsentGate / BoostLedger</td><td>server</td><td>app → writer</td></tr>
+        <tr><td class="cm">LiveRunner::tick / admit / poll</td><td>pipeline</td><td>live = same phases</td></tr>
+        <tr><td class="cm">router / status / enable / boost / ws::meta|session</td><td>server</td><td>L3</td></tr>
+        <tr><td class="cm">RosettaClient / useMeta / useTimeline / useDaemonStatus</td><td>clients</td><td>room spine</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Crash and resume rules (why the order is that order)</h2>
+  <div class="card">
+    <ol class="inner">
+      <li>An orphan ledger tail is harmless; a projection row without flushed raw bytes is not — hence ledger-before-<code>apply</code>.</li>
+      <li>A process exit drops the RAM tool accumulator. Resume replays the generation from byte zero instead of reading a SQLite journal that no longer exists.</li>
+      <li>Checkpoint CAS (<code>expected</code> blob) makes two writers on one cursor fail closed.</li>
+      <li>Progressive first-run commits are public and resumable; finite ingest publishes atomically after validation.</li>
+      <li>Search epoch must match projection epoch; a sidecar from another rebuild is never serveable.</li>
+      <li>Effects are observed only after <code>canonical_ready</code>, so the hub never fans a half-built live ring during cold load — lists move via rewarm instead.</li>
+    </ol>
+  </div>
+
+  <footer class="note">
+    Traced from <code>crates/rosettad/src/serve.rs</code>,
+    <code>crates/pipeline/{discover,meta,stream,live,replay}.rs</code>,
+    <code>crates/store/{lib,apply,search_sync}.rs</code>,
+    <code>crates/search/src/worker.rs</code>,
+    <code>crates/server/{http,ws,hub,consent}.rs</code>,
+    <code>clients/app/electron/main.mjs</code>,
+    <code>clients/app/renderer/src/lib/{hooks,ingest,rosetta}.ts</code>.
+    Companion maps: <a href="ingest-pipeline.html">ingest-pipeline.html</a>,
+    <a href="ingest-engine.html">ingest-engine.html</a>,
+    <a href="ARCHITECTURE.md">ARCHITECTURE.md</a>.
+  </footer>
+
+  <div class="theme-row">
+    <button type="button" data-theme="light">Light</button>
+    <button type="button" data-theme="dark">Dark</button>
+  </div>
+</div>
+<script>
+  const buttons = document.querySelectorAll('.theme-row button');
+  const stored = localStorage.getItem('rosetta-theme');
+  if (stored) document.documentElement.dataset.theme = stored;
+  function sync() {
+    const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur)));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.theme;
+    localStorage.setItem('rosetta-theme', b.dataset.theme);
+    sync();
+  }));
+  sync();
+</script>
+</body>
+</html>
