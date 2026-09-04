@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+from .facets_claude import message_envelope_hits as _claude_message_envelope_hits
+from .facets_claude import safe_protocol_value as _claude_safe_protocol_value
 
 Facet = dict[str, Any]
 
@@ -12,7 +16,7 @@ def extract(
     agent: str,
     stream_id: str,
     record: dict[str, Any],
-    context: dict[str, str],
+    context: dict[str, Any],
 ) -> list[Facet]:
     if agent == "claude-code":
         return _claude_code(stream_id, record, context)
@@ -54,15 +58,306 @@ def _hit(
 def _claude_code(
     stream_id: str,
     record: dict[str, Any],
-    context: dict[str, str],
+    context: dict[str, Any],
 ) -> list[Facet]:
+    relative_path = context.get("__relative_path__", "")
+    is_workflow_child = (
+        isinstance(relative_path, str)
+        and "/subagents/workflows/" in f"/{relative_path}"
+    )
+
+    if stream_id == "workflow-run":
+        hits: list[Facet] = []
+        default_model = record.get("defaultModel")
+        if isinstance(default_model, str):
+            hits.append(
+                _hit(
+                    "workflow-run-default-models",
+                    "workflow-run.defaultModel",
+                    "model",
+                    default_model,
+                    {"model": default_model},
+                )
+            )
+        result = record.get("result")
+        result_kind = (
+            "null"
+            if result is None
+            else "array"
+            if isinstance(result, list)
+            else "object"
+            if isinstance(result, dict)
+            else "string"
+            if isinstance(result, str)
+            else "other"
+        )
+        hits.append(
+            _hit(
+                "workflow-run-results",
+                "workflow-run.result (by JSON kind)",
+                "kind",
+                result_kind,
+                {"kind": result_kind, "result": result},
+            )
+        )
+        progress = record.get("workflowProgress")
+        if isinstance(progress, list):
+            for item in progress:
+                if not isinstance(item, dict):
+                    continue
+                item_type = (
+                    item.get("type")
+                    if isinstance(item.get("type"), str)
+                    else "<untyped>"
+                )
+                hits.append(
+                    _hit(
+                        "workflow-progress-items",
+                        "workflow-run.workflowProgress[]",
+                        "type",
+                        item_type,
+                        item,
+                    )
+                )
+                if item_type != "workflow_agent":
+                    continue
+                state = (
+                    item.get("state")
+                    if isinstance(item.get("state"), str)
+                    else "<none>"
+                )
+                hits.append(
+                    _hit(
+                        "workflow-agent-states",
+                        "workflow-run.workflowProgress[type=workflow_agent]",
+                        "state",
+                        state,
+                        item,
+                    )
+                )
+                cache_state = "cached" if item.get("cached") is True else "not-marked-cached"
+                hits.append(
+                    _hit(
+                        "workflow-agent-cache-states",
+                        "workflow-run.workflowProgress[type=workflow_agent]",
+                        "state",
+                        cache_state,
+                        item,
+                    )
+                )
+                model = item.get("model")
+                if isinstance(model, str):
+                    hits.append(
+                        _hit(
+                            "workflow-agent-models",
+                            "workflow-run.workflowProgress[type=workflow_agent]",
+                            "model",
+                            model,
+                            {"model": model},
+                        )
+                    )
+        return hits
+
+    if stream_id == "workflow-journal":
+        if record.get("type") != "result":
+            return []
+        result = record.get("result")
+        result_kind = (
+            "null"
+            if result is None
+            else "array"
+            if isinstance(result, list)
+            else "object"
+            if isinstance(result, dict)
+            else "string"
+            if isinstance(result, str)
+            else "other"
+        )
+        return [
+            _hit(
+                "workflow-journal-results",
+                "workflow-journal[type=result].result (by JSON kind)",
+                "kind",
+                result_kind,
+                {"kind": result_kind, "result": result},
+            )
+        ]
+
+    if stream_id == "subagent-metadata" and is_workflow_child:
+        agent_type = (
+            record.get("agentType")
+            if isinstance(record.get("agentType"), str)
+            else "<none>"
+        )
+        return [
+            _hit(
+                "workflow-worker-metadata",
+                "subagents/workflows/*/agent-*.meta.json (by agentType)",
+                "agentType",
+                agent_type,
+                record,
+            )
+        ]
+
+    if stream_id == "team-config":
+        lead_id = record.get("leadAgentId")
+        members = record.get("members")
+        if not isinstance(members, list):
+            return []
+        hits: list[Facet] = []
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            hits.append(
+                _hit(
+                    "team-members",
+                    "team-config.members[] (by membership role)",
+                    "role",
+                    "lead" if member.get("agentId") == lead_id else "member",
+                    member,
+                )
+            )
+            color = (
+                member.get("color")
+                if isinstance(member.get("color"), str)
+                else "<none>"
+            )
+            hits.append(
+                _hit(
+                    "team-member-colors",
+                    "team-config.members[] (by native color)",
+                    "color",
+                    color,
+                    member,
+                )
+            )
+            model = (
+                member.get("model")
+                if isinstance(member.get("model"), str)
+                else "<none>"
+            )
+            hits.append(
+                _hit(
+                    "team-member-models",
+                    "team-config.members[] (by configured model)",
+                    "model",
+                    model,
+                    member,
+                )
+            )
+            backend = member.get("backendType")
+            if not isinstance(backend, str):
+                pane = member.get("tmuxPaneId")
+                backend = (
+                    pane
+                    if pane in {"leader", "in-process"}
+                    else "external-pane"
+                    if isinstance(pane, str) and pane
+                    else "<none>"
+                )
+            hits.append(
+                _hit(
+                    "team-member-backends",
+                    "team-config.members[] (by backend or pane class)",
+                    "backend",
+                    backend,
+                    member,
+                )
+            )
+        return hits
+
+    if stream_id == "team-inbox":
+        payload = None
+        text = record.get("text")
+        if isinstance(text, str):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(parsed, dict):
+                    payload = parsed
+        kind = (
+            record.get("type")
+            if isinstance(record.get("type"), str)
+            else payload.get("type")
+            if isinstance(payload, dict) and isinstance(payload.get("type"), str)
+            else "<plain>"
+        )
+        read = record.get("read")
+        delivery = "read" if read is True else "unread" if read is False else "unknown"
+        safe_record = _claude_safe_protocol_value(record)
+        if payload is not None:
+            safe_record["textPayload"] = _claude_safe_protocol_value(payload)
+        return [
+            _hit(
+                "team-inbox-messages",
+                "team-inbox[] (by message type)",
+                "type",
+                kind,
+                safe_record,
+            ),
+            _hit(
+                "team-inbox-delivery",
+                "team-inbox[] (by read state)",
+                "state",
+                delivery,
+                safe_record,
+            ),
+        ]
+
     if stream_id not in {"transcript", "subagent-transcript"}:
         return []
     hits: list[Facet] = []
     record_type = record.get("type", "")
 
+    if stream_id == "subagent-transcript" and is_workflow_child:
+        child_type = record_type if isinstance(record_type, str) and record_type else "<untyped>"
+        hits.append(
+            _hit(
+                "workflow-child-records",
+                "subagents/workflows/*/agent-*.jsonl (by record type)",
+                "type",
+                child_type,
+                record,
+            )
+        )
+
     if record_type == "assistant":
-        blocks = record.get("message", {}).get("content")
+        message = record.get("message")
+        message = message if isinstance(message, dict) else {}
+        model = (
+            message.get("model")
+            if isinstance(message.get("model"), str)
+            else "missing-model"
+        )
+        effort = (
+            record.get("effort")
+            if isinstance(record.get("effort"), str)
+            else "missing-effort"
+        )
+        profile = f"{model}.{effort}"
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", profile):
+            hits.append(
+                _hit(
+                    "assistant-response-profiles",
+                    "assistant response (by recorded model and effort)",
+                    "profile",
+                    profile,
+                    {"model": model, "effort": effort},
+                )
+            )
+            if stream_id == "subagent-transcript" and is_workflow_child:
+                hits.append(
+                    _hit(
+                        "workflow-child-response-profiles",
+                        "Workflow child assistant response (by recorded model and effort)",
+                        "profile",
+                        profile,
+                        {"model": model, "effort": effort},
+                    )
+                )
+        blocks = message.get("content")
         if isinstance(blocks, list):
             for block in blocks:
                 if not isinstance(block, dict):
@@ -82,15 +377,55 @@ def _claude_code(
                     key = "mcp__*" if name.startswith("mcp__") else name
                     if isinstance(block.get("id"), str) and isinstance(block.get("name"), str):
                         context[block["id"]] = key
+                    tool_input = block.get("input")
                     hits.append(
                         _hit(
                             "tool-input",
                             "assistant.message.content[type=tool_use].input",
                             "name",
                             key,
-                            block.get("input"),
+                            tool_input,
                         )
                     )
+                    if name == "Agent" and isinstance(tool_input, dict):
+                        operation = "resume" if "resume" in tool_input else "launch"
+                        if isinstance(block.get("id"), str):
+                            context[f"claude-agent-operation:{block['id']}"] = operation
+                        hits.append(
+                            _hit(
+                                "agent-requests",
+                                "Agent input (by operation)",
+                                "operation",
+                                operation,
+                                tool_input,
+                            )
+                        )
+                    elif name == "SendMessage" and isinstance(tool_input, dict):
+                        message_type = (
+                            tool_input.get("type")
+                            if isinstance(tool_input.get("type"), str)
+                            else "<none>"
+                        )
+                        hits.append(
+                            _hit(
+                                "send-message-requests",
+                                "SendMessage input (by type)",
+                                "type",
+                                message_type,
+                                tool_input,
+                            )
+                        )
+                    elif name == "Workflow" and isinstance(tool_input, dict):
+                        operation = "resume" if "resumeFromRunId" in tool_input else "launch"
+                        hits.append(
+                            _hit(
+                                "workflow-requests",
+                                "Workflow input (by operation)",
+                                "operation",
+                                operation,
+                                tool_input,
+                            )
+                        )
     elif record_type == "user":
         blocks = record.get("message", {}).get("content")
         if isinstance(blocks, list):
@@ -109,22 +444,112 @@ def _claude_code(
                 )
         if "toolUseResult" in record:
             tool = "<unmatched>"
+            tool_use_id = None
+            tool_result_block = None
             if isinstance(blocks, list):
                 for block in blocks:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
-                        tool_use_id = block.get("tool_use_id")
-                        if isinstance(tool_use_id, str):
-                            tool = context.get(tool_use_id, "<unmatched>")
+                        tool_result_block = block
+                        candidate = block.get("tool_use_id")
+                        if isinstance(candidate, str):
+                            tool_use_id = candidate
+                            tool = context.get(candidate, "<unmatched>")
                             break
+            result = record["toolUseResult"]
             hits.append(
                 _hit(
                     "tool-result",
                     "user.toolUseResult (keyed by producing tool)",
                     "tool",
                     tool,
-                    record["toolUseResult"],
+                    result,
                 )
             )
+            if tool == "Workflow" and tool_result_block is not None:
+                outcome = (
+                    "error"
+                    if tool_result_block.get("is_error") is True
+                    else "launch-receipt"
+                )
+                hits.append(
+                    _hit(
+                        "workflow-tool-result-blocks",
+                        "user.message.content[type=tool_result] for Workflow",
+                        "outcome",
+                        outcome,
+                        {
+                            "content": tool_result_block.get("content"),
+                            "is_error": tool_result_block.get("is_error"),
+                        },
+                    )
+                )
+            if tool == "Agent" and isinstance(result, dict):
+                status = (
+                    result.get("status")
+                    if isinstance(result.get("status"), str)
+                    else "<none>"
+                )
+                operation = (
+                    context.get(f"claude-agent-operation:{tool_use_id}", "unknown-request")
+                    if tool_use_id is not None
+                    else "unknown-request"
+                )
+                hits.append(
+                    _hit(
+                        "agent-results",
+                        "Agent toolUseResult (by request operation and result status)",
+                        "status",
+                        f"{operation}.{status}",
+                        result,
+                    )
+                )
+            elif tool == "SendMessage" and isinstance(result, dict):
+                outcome = (
+                    "resumed"
+                    if "resumedAgentId" in result
+                    else "routed"
+                    if "routing" in result
+                    else "acknowledged"
+                    if "success" in result
+                    else "other"
+                )
+                hits.append(
+                    _hit(
+                        "send-message-results",
+                        "SendMessage toolUseResult (by result shape)",
+                        "outcome",
+                        outcome,
+                        result,
+                    )
+                )
+            elif tool == "Workflow" and isinstance(result, dict):
+                status = (
+                    result.get("status")
+                    if isinstance(result.get("status"), str)
+                    else "<none>"
+                )
+                hits.append(
+                    _hit(
+                        "workflow-results",
+                        "Workflow toolUseResult (by status)",
+                        "status",
+                        status,
+                        result,
+                    )
+                )
+        origin = record.get("origin")
+        if isinstance(origin, dict):
+            kind = origin.get("kind") if isinstance(origin.get("kind"), str) else "<none>"
+            hits.append(
+                _hit(
+                    "user-origins",
+                    "user.origin (by kind)",
+                    "kind",
+                    kind,
+                    _claude_safe_protocol_value(origin),
+                )
+            )
+        hits.extend(_claude_message_envelope_hits(record, context))
     elif record_type == "system":
         subtype = record.get("subtype") if isinstance(record.get("subtype"), str) else "<none>"
         hits.append(_hit("system-subtypes", "system (by subtype)", "subtype", subtype, record))
@@ -134,6 +559,7 @@ def _claude_code(
         kind = data.get("type") if isinstance(data.get("type"), str) else "<none>"
         hits.append(_hit("progress-data", "progress.data (by data.type)", "data.type", kind, data))
     return hits
+
 
 def _codex(stream_id: str, record: dict[str, Any]) -> list[Facet]:
     if stream_id != "rollout":

@@ -78,6 +78,18 @@ class ShapeTests(unittest.TestCase):
                 "projects/p/s/subagents/x/y/agent-7.jsonl",
             )
         )
+        self.assertTrue(
+            glob_match(
+                "projects/*/*/subagents/workflows/*/journal.jsonl",
+                "projects/p/s/subagents/workflows/wf-1/journal.jsonl",
+            )
+        )
+        self.assertTrue(
+            glob_match(
+                "projects/*/*/workflows/wf_*.json",
+                "projects/p/s/workflows/wf_1.json",
+            )
+        )
         self.assertTrue(glob_match("**/*.jsonl", "c.jsonl"))
         self.assertTrue(glob_match("todos/*-agent-*.json", "todos/1-agent-2.json"))
 
@@ -139,6 +151,7 @@ class ShapeTests(unittest.TestCase):
                                     "role": "assistant",
                                     "id": "msg_abcdefgh",
                                     "title": "private-project",
+                                    "model": "claude-opus-4-8[1m]",
                                     "toolName": "mcp__private__deploy",
                                     "tools": ["Read", "mcp__private__deploy"],
                                     "byName": {"spaghetti-channel": True},
@@ -169,6 +182,10 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(fields["role"]["shape"]["values"], {"assistant": 1})
         self.assertNotIn("values", fields["id"]["shape"])
         self.assertNotIn("values", fields["title"]["shape"])
+        self.assertEqual(
+            fields["model"]["shape"]["values"],
+            {"claude-opus-4-8[1m]": 1},
+        )
         self.assertEqual(fields["toolName"]["shape"]["values"], {"mcp__*": 1})
         self.assertEqual(
             fields["tools"]["shape"]["items"]["values"],

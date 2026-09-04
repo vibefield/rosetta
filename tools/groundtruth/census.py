@@ -60,6 +60,8 @@ CENSUS_STREAMS = {
         "transcript",
         "subagent-transcript",
         "subagent-metadata",
+        "workflow-journal",
+        "workflow-run",
         "prompt-history",
         "todos",
         "tasks",
@@ -250,6 +252,12 @@ def capture(
                     ]
 
             context: dict[str, str] = {}
+            # Facet extractors sometimes need storage provenance to distinguish
+            # records that intentionally share one broad stream (for example,
+            # ordinary subagents and Workflow-owned children).  The path is
+            # used only as an in-memory classifier; it never enters a census
+            # value and is therefore not publishable evidence itself.
+            context["__relative_path__"] = relative
             for value in values:
                 if not isinstance(value, (dict, list)):
                     continue
@@ -273,8 +281,15 @@ def capture(
                     )
                 elif discriminant in accumulators[stream["id"]].types:
                     accumulators[stream["id"]].types[discriminant]["observed"] += 1
-                if isinstance(value, dict):
-                    for hit in extract_facets(agent, stream["id"], value, context):
+                facet_records = (
+                    [value]
+                    if isinstance(value, dict)
+                    else [item for item in value if isinstance(item, dict)]
+                    if isinstance(value, list)
+                    else []
+                )
+                for facet_record in facet_records:
+                    for hit in extract_facets(agent, stream["id"], facet_record, context):
                         key = (stream["id"], hit["facet_id"])
                         if key not in facets:
                             facets[key] = (
@@ -302,6 +317,7 @@ def capture(
             "discipline": spec["discipline"],
             "evidence": "observed",
             "notes": (
+                f"{spec.get('notes', '').strip()} "
                 "Structure-only census of a live organic dataset. "
                 "Shapes sampled from the first "
                 f"{DOCUMENT_SHAPE_MERGE_CAP if spec['file_format'] == 'json' else SHAPE_MERGE_CAP} "

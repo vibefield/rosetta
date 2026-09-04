@@ -24,7 +24,7 @@ glob = "projects/*/*/subagents/**/agent-*.jsonl"
 file_format = "jsonl"
 discipline = "append_only"
 evidence = "observed"
-notes = "Subagent transcripts. Census: own record vocabulary — started, result, fork-context-ref — plus user/assistant/progress/attachment/system."
+notes = "Subagent transcripts. Census: own record vocabulary — started, result, fork-context-ref — plus user/assistant/progress/attachment/system. Workflow-owned children are separately faceted by storage provenance so their response model/effort evidence and complete record vocabulary are not blended into ordinary Agent workers."
 
 [[streams]]
 id = "subagent-metadata"
@@ -32,7 +32,23 @@ glob = "projects/*/*/subagents/**/agent-*.meta.json"
 file_format = "json"
 discipline = "rewrite_in_place"
 evidence = "observed"
-notes = "Subagent metadata sidecars. `worktreePath`, when present as an absolute path, is explicit worktree-isolation evidence; the enclosing session directory proves the owning parent session."
+notes = "Subagent metadata sidecars. `worktreePath`, when present as an absolute path, is explicit worktree-isolation evidence; the enclosing session directory proves the owning parent session. Workflow-owned sidecars are separately faceted by their `subagents/workflows/<run>/` provenance."
+
+[[streams]]
+id = "workflow-journal"
+glob = "projects/*/*/subagents/workflows/*/journal.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "observed"
+notes = "Workflow coordinator journal. Untimestamped `started` and `result` records correlate one workflow worker key with its agent id. The journal can be unbalanced and can accumulate prior-attempt starts across a resume; it is lifecycle evidence, not the current roster or a chronology. Observed result payloads are either prose strings or structured objects."
+
+[[streams]]
+id = "workflow-run"
+glob = "projects/*/*/workflows/wf_*.json"
+file_format = "json"
+discipline = "rewrite_in_place"
+evidence = "observed"
+notes = "Mutable Workflow-run snapshots paired with subagents/workflows/<run>/journal.jsonl and worker transcripts. `workflowProgress` interleaves phase and worker records; worker states are `done`, `error`, `progress`, and `start`, and `cached=true` marks resume reuse. A resume can replace the current roster and task id while the journal retains older starts, so this document is not attempt history. Results are workflow-defined JSON, logs are untimestamped strings, and the full script, scriptPath, args, default model, exact status, metrics, error/result, and current progress all remain evidence."
 
 [[streams]]
 id = "todos"

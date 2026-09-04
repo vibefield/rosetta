@@ -404,8 +404,8 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   its keep here; some record types (`summary`, `file-history-snapshot`) only appear
   under interactive behaviors, so the scenario suite needs resume/compaction flows to
   exercise them; closed source means fixtures are the *only* reliable signal.
-- **Organic census (2026-08-28):** 1,228,589 current transcript records were merged into
-  the version-scoped canonical source. Custom-title records now participate in skim and
+- **Organic census (2026-08-28):** 1,228,589 retained transcript records were merged into
+  an all-writer-version corroboration source. Custom-title records now participate in skim and
   summary projection. Metadata variants that intentionally emit no canonical row are
   still checked against their canonical top-level field sets, so declared no-ops no
   longer hide schema additions. Titles are not guaranteed to occur in the ordinary head
@@ -413,6 +413,31 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   capped at 128 KiB / 256 records, only while a main-session title is missing. Full
   streaming remains authoritative and reconciles generated and explicit title records;
   explicit titles win independently of source order or batch boundaries.
+- **Delegated-work census (2026-09-03):** the privacy-bounded, all-retained-version
+  refresh at `groundtruth/claude-code/sources/observed-2026-09-03.json` scanned
+  1,300,340 JSON/JSONL records across eleven admitted streams. It adds the two omitted
+  workflow rails (`workflows/wf_*.json` and `subagents/workflows/*/journal.jsonl`) and
+  content-free facets for Agent launch/resume, SendMessage routing, response model/effort,
+  structured origins, top-level agent/team/task envelopes, team members, and inbox items.
+  This is Channel-4 corroboration, not fixture authority; its job is to prevent the
+  presentation and adapter work from collapsing three distinct persisted relationships:
+  invocation-owned workers, persistent team members, and workflow-managed worker sets.
+  The same audit found 258 `origin.kind=peer` user records (251 wrapped
+  `agent-message` deliveries and seven wrapperless deliveries) plus 25 coordinator
+  follow-ups, so ordinary subagents are not a one-request/one-result-only channel.
+  Four `Agent(resume=...)` requests returned `teammate_spawned`, and 88 SendMessage
+  results carried `resumedAgentId`; result status alone therefore cannot distinguish a
+  new member from a resumed one. Of 3,220 literal `teammate-message` tags, only 1,904
+  are top-level envelopes; 1,316 are nested copies inside another notification/result
+  body and cannot be projected as separate chronology. The refresh now facets the Workflow
+  rails themselves: 119 phases and 761 current workers across 48 run snapshots, all four
+  observed worker states, 14 cached/resume-reused workers, configured models, arbitrary run
+  result kinds, exact journal result kinds, 35,545 Workflow-child transcript records, and
+  Workflow-only launch receipts and callbacks. The correlated audit additionally proves that
+  current progress is a replaceable roster, journals accumulate untimestamped attempt
+  evidence, callbacks are attempt-scoped and optional, and a resumed run can finish after its
+  first callback failed. Full relationship, lifecycle, and de-duplication constraints are
+  catalogued in `docs/groundtruth/claude-code.md` §4.
 
 ### 5.7 Codex CLI (OpenAI) — **Tier A**
 

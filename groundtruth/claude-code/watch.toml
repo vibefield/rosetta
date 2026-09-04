@@ -3,7 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
-  "Closed writer: pinned fixtures cover basic chat, tools, and resume; compaction, teams, subagents, and rare system records rely on version-scoped organic evidence.",
+  "Closed writer: pinned fixtures cover basic chat, tools, and resume; compaction, teams, subagents, workflows, and rare system records rely on organic evidence.",
 ]
 
 [agent]

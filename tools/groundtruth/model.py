@@ -42,6 +42,7 @@ CENSUS_ENUM_FIELDS = {
     "backend",
     "category",
     "channel",
+    "color",
     "direction",
     "effort",
     "entrypoint",
@@ -64,6 +65,7 @@ CENSUS_ENUM_FIELDS = {
     "permission",
     "permissionmode",
     "phase",
+    "profile",
     "promptsource",
     "protocol",
     "protocolversion",
@@ -102,6 +104,7 @@ CENSUS_ENUM_SUFFIXES = {
     "backend",
     "category",
     "channel",
+    "color",
     "direction",
     "event",
     "format",
@@ -162,7 +165,10 @@ def write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 def enumerable_value(value: str) -> bool:
     return bool(value) and len(value.encode()) <= ENUM_VALUE_BYTES_CAP and all(
-        char.isascii() and (char.isalnum() or char in "-_.") for char in value
+        # Bracketed model aliases such as `claude-opus-4-8[1m]` are native,
+        # finite protocol values rather than payload text.  Values are still
+        # published only for enum-like field names by `_safe_enum_values`.
+        char.isascii() and (char.isalnum() or char in "-_.[]") for char in value
     )
 
 
@@ -484,7 +490,14 @@ def _sanitize_census_record_types(
     sanitized: dict[str, dict[str, Any]] = {}
     semantic_field = "tool" if tool_names else discriminator
     preserve_names = tool_names or discriminator == "table" or _census_enum_field(discriminator)
-    sentinels = {"", "<none>", "<unnamed>", "<unmatched>", "<untyped>"}
+    sentinels = {
+        "",
+        "<none>",
+        "<plain>",
+        "<unnamed>",
+        "<unmatched>",
+        "<untyped>",
+    }
     for raw_name, raw_record_type in record_types.items():
         name = raw_name
         if name not in sentinels:

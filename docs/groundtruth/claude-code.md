@@ -1,11 +1,14 @@
 # Claude Code — Ground Truth Reference
 
 Curated catalog of everything rosetta knows about Claude Code's on-disk data.
-Distilled 2026-08-24 from four evidence sources, strongest first:
+Distilled 2026-08-24 and refreshed through 2026-09-03 from four evidence
+channels, strongest first:
 
 1. **Fixtures** — hermetic corpus `fixtures/2.1.241/` (CI-enforced).
-2. **Census** — `groundtruth/claude-code/sources/observed-2026-08-25.json`:
-   privacy-bounded organic structure scoped to writer version 2.1.241. The older
+2. **Census** — `groundtruth/claude-code/sources/observed-2026-08-25.json` is
+   privacy-bounded organic structure scoped to writer version 2.1.241;
+   `sources/observed-2026-09-03.json` is an explicitly historical, all-retained-version
+   corroboration census covering delegated-work relations and workflow streams. The older
    `groundtruth/claude-code/census/2026-08-24-local-structure.json` records only
    aggregate version distribution across the full historical tree and is not merged.
 3. **spaghetti** (p008) — production parsers that ingested this format for months:
@@ -183,29 +186,167 @@ its minimum identity becomes a bounded `unknown` action. The raw ledger retains 
 value for replay. This separation keeps the production scar intact without making opaque
 native JSON a public presentation contract.
 
-## 4. Subagents & workflows — `projects/<slug>/<sid>/…`
+## 4. Delegated work — three persisted relationship geometries
 
-- `subagents/agent-<agentId>.jsonl` (+ nested
-  `subagents/workflows/<wf>/agent-*.jssonl` — one level). Agent ids start with
-  'a' (regex `^agent-(a.+)\.jsonl$`).
-- Own record vocabulary on top of the shared types (census): `started`,
-  `result`, `fork-context-ref`.
-- Sibling `agent-<id>.meta.json` (SubagentMeta): agentType (free-form — 22+
-  real values; do NOT infer from filename), description?, name?, spawnDepth?,
-  worktreePath?, parentAgentId?, model?, taskKind?, teamName?, color?,
-  planModeRequired?, permissionMode?, stoppedByUser?, toolUseId? (join back to
-  the spawning Agent tool_use). Nested workflow metas can be just
-  {agentType[, spawnDepth]} — everything else optional (§8.5).
-- `workflows/wf_*.json` (WorkflowRun): runId, workflowName, status, agentCount,
-  totalTokens, totalToolCalls, durationMs + real-data extras (phases,
-  result{confirmed, refuted_count, uncertain}, workflowProgress[]).
-- `subagents/workflows/<wf>/journal.jsonl`: started/result lines that appear
-  ONLY here (result embeds each subagent's verbatim StructuredOutput). A typed
-  subagent-line reader would silently drop them — journals need their own
-  reader.
-- `tool-results/<toolUseId>.txt` — persisted tool results; stems are OPAQUE
-  (toolu_*, short ids, hook ids). .json/PDF siblings exist and are knowingly
-  excluded by spaghetti.
+The 2026-09-03 structure-only audit covered 562 main transcripts, 4,268 direct
+worker transcripts, 760 workflow-managed worker transcripts, 48 workflow journals,
+2,765 worker sidecars, 44 team configs, 30 inbox files, and 47 retained task records.
+Those rails overlap, but they are not synonyms. In particular, `subagent` is a broad
+product word, while ordinary Agent workers, Agent Team members, and Workflow workers
+have different native ownership and messaging evidence.
+
+### 4.1 Ordinary Agent workers
+
+- Direct transcripts are `subagents/agent-<agentId>.jsonl`. Sibling
+  `agent-<id>.meta.json` files carry optional `agentType`, description, name,
+  spawnDepth, worktreePath, parentAgentId, model, taskKind, teamName, color,
+  planModeRequired, permissionMode, stoppedByUser, isFork, and toolUseId. The
+  enclosing main-session directory proves the owning session; `toolUseId`, when
+  present, is the exact invocation join. Of 4,268 direct worker files, 2,263 have
+  no sidecar, so historical linkage cannot depend on the sidecar alone.
+- An ordinary worker is not a write-only one-call/one-result channel. User records
+  contain 258 structured `origin.kind=peer` deliveries: 178 worker-to-main and 73
+  worker-to-worker records use an `agent-message` wrapper, and seven additional
+  cross-session/process peer deliveries carry the structured origin without that
+  wrapper. Another 25 `origin.kind=coordinator` records deliver follow-up prompts to
+  24 already-existing workers.
+- Four stored `Agent` requests use `resume`; their results have
+  `status=teammate_spawned`, scoped to the existing named worker. Separately, 88
+  SendMessage results carry `resumedAgentId` (51 from team workers, 24 from main
+  transcripts, 13 from non-team workers). `teammate_spawned` is therefore a transport
+  result, not sufficient proof of a first join; the initiating request distinguishes
+  launch from resume.
+- Fifty direct workers have `spawnDepth=2`. Five sidecars are forks, 13 record a
+  worktree path, and three record `stoppedByUser`. A child file may contain the same
+  user/assistant/tool grammar as its parent plus `fork-context-ref`; relation and
+  lifecycle must not be inferred from transcript prose.
+- Runtime identity is response-scoped evidence. Seventy-five worker files contain more
+  than one observed model/effort pair, while 82 direct workers contain no assistant
+  response at all. Sidecar/configured model aliases are useful configuration facts but
+  cannot fill a missing response model or effort.
+
+### 4.2 Agent Teams
+
+- `teams/<team>/config.json` stores `{name, createdAt, leadAgentId, leadSessionId,
+  members[]}`. A member has an address (`name` and composite `agentId`), optional
+  configured model, prompt, native color, `planModeRequired`, join time, cwd,
+  subscriptions, and backend/pane fields. The retained configs contain all eight native
+  colors: blue, green, yellow, purple, orange, pink, cyan, and red. Color is optional;
+  missing is real absence, not permission to synthesize a native color. The local corpus
+  proves only `in-process` members; tmux/split-pane presentation remains unvalidated.
+- Team communication is stored as one or more top-level `teammate-message` envelopes in
+  a user record. The direct envelope census is 1,904: 1,579 plain messages, 120
+  `idle_notification`, 190 `task_assignment`, three `shutdown_request`, six
+  `shutdown_approved`, and six `teammate_terminated`. `idleReason` includes `available`
+  and `failed`; availability is a state signal, while a failed idle carries failure
+  evidence. There is no native `report` message kind: substantive reports remain ordinary
+  `message` payloads, and report-like prose alone is not a structural classifier.
+- The raw corpus contains 3,220 literal `teammate-message` tags. The extra 1,316 are
+  nested inside another top-level task/result envelope rather than independent messages.
+  A parser must recognize only top-level envelopes for chronology and retain nested copies
+  as provenance, not replay them as additional speech.
+- `teams/<team>/inboxes/<agent>.json` is a retained mailbox array. Its 190 entries split
+  into 165 read and 25 unread; the unread set contains ten plain messages and 15 task
+  assignments. Unread inbox-only items are pending delivery state and have no justified
+  position in delivered transcript chronology.
+- Ten `taskKind=in_process_teammate` sidecars at `spawnDepth=1` sit under one ordinary
+  worker, proving that an Agent worker can own a team. Runtime error text also records 65
+  rejected attempts by teammates to spawn teammates. Both are historical facts: readers
+  must honor stored ownership evidence rather than hard-code either a permanently flat or
+  permanently recursive team topology.
+
+### 4.3 Workflow-managed workers
+
+- Worker transcripts and minimal sidecars live under
+  `subagents/workflows/<workflow>/agent-*.jsonl`. All 760 child files are non-empty and
+  together contain 35,545 records: 21,585 assistant, 11,378 user, and 2,582 attachment.
+  Their 760 sidecars comprise 655 `{agentType, spawnDepth}` shapes and 105
+  `{agentType}` shapes; the observed agent types are 672 `workflow-subagent`, 87
+  `general-purpose`, and one `Explore`. Every journaled start has a corresponding child
+  transcript.
+- The child transcript is the authoritative worker chronology, not the preview fields in
+  the run snapshot. Seven hundred forty-one children contain a real assistant model; 19
+  contain only synthetic API-error assistant records, all stale workers from an earlier
+  attempt of one resumed run. Seventeen child files record `effort=max`; the other 743
+  record no effort. Excluding synthetic error records, each child has exactly one observed
+  model and every current worker that can be correlated agrees with its configured progress
+  model after removing the `[1m]` context alias.
+- `workflows/wf_*.json` is a mutable WorkflowRun snapshot. All 48 observed documents carry
+  run/task identity, `workflowName`, summary, full inline script and `scriptPath`, declared
+  phases, `defaultModel`, current `workflowProgress`, timestamps/duration, logs, aggregate
+  token/tool counts, status, and result; five also carry `args` and three terminal errors.
+  The 48 retained runs are 45 completed, one failed, and two killed. `timestamp` agrees with
+  `startTime + durationMs` to within five milliseconds, and `agentCount` equals the number
+  of current `workflow_agent` progress records in every snapshot.
+- `workflowProgress` is a replaceable current roster, not an event stream. It contains 119
+  `workflow_phase` and 761 `workflow_agent` records. Worker states are 714 `done`, six
+  `error`, 13 `progress`, and 28 `start`. Every worker has a configured model and none has
+  effort. All 28 `start` rows belong to one killed run and lack an agent id/start time,
+  attempt, metrics, duration, and result: they mean queued while live and never started once
+  the run is terminal. The 13 `progress` rows belong to killed runs and become interrupted,
+  not perpetually running. A completed run can still contain worker errors: one observed
+  completed run has 19 done and five errored workers plus a final result.
+- Fourteen current workers in the two resumed runs carry `cached=true`. Cached rows represent
+  reused prior work, omit fresh attempt/timing/usage fields, and can have an empty result even
+  when a durable child transcript exists. They must not be presented as newly executed work.
+  Worker labels are display text, not identity: 11 runs reuse labels, with 71 occurrences
+  beyond the first. Join current progress, journal, and children by run/key/index/agent id,
+  never by label.
+- A run's terminal `result` is workflow-defined JSON, not one fixed result schema: the 45
+  completed snapshots contain 43 objects and two arrays; failed/killed snapshots contain
+  null plus an error string. `promptPreview`, `resultPreview`, `lastToolName`, and
+  `lastToolSummary` are explicitly bounded/current hints. Logs are arrays of untimestamped
+  strings. Neither can replace a child transcript or establish event chronology.
+- `subagents/workflows/<workflow>/journal.jsonl` is a distinct append-only stream. It has
+  760 `{type:"started", agentId, key}` records and 714
+  `{type:"result", agentId, key, result}` records: 659 result objects and 55 strings. Journal
+  rows have no timestamp, status, error, model, or usage fields. There are 46 unmatched
+  starts and no unmatched results. Two resumed journals retain 27 starts from superseded
+  attempt rosters, while one killed run's current roster contains 28 queued rows that never
+  received an agent id or journal start. The journal is therefore cumulative lifecycle
+  evidence, not a balanced list, clock, denominator, or current roster.
+- The Workflow tool has 53 stored calls: 51 launches and two resumes. Fifty accepted attempts
+  returned a plain-text launch receipt in the visible `tool_result` block and a parallel
+  structured `toolUseResult` with `status=async_launched`, task id, run id, transcript/script
+  paths, and summary; three validation errors remained plain text and created no task or run.
+  The two resumes produced new task ids while retaining their original run ids. Inputs cover
+  inline script, description plus script, `resumeFromRunId` plus `scriptPath`, and
+  argument/name/path variants. Workflow is thus a third ownership rail, not an Agent Team
+  alias or a single opaque ledger row.
+
+### 4.4 Arrival, correlation, and de-duplication constraints
+
+- Top-level `task-notification` envelopes record asynchronous arrival independently of
+  the original tool line. The retained direct-envelope census is 1,591: 1,291 completed,
+  68 failed, 44 killed, three stopped, and 185 without a status. Optional fields include
+  result, usage, output file, diagnostics, worktree, workflow-agent counts, and duration.
+- Forty-six of the 50 accepted Workflow attempts have an exactly correlated top-level
+  notification: 44 completed and two failed. Thirty-seven completed result bodies are
+  explicitly truncated with a pointer to a temporary full-result file, seven are complete,
+  and the two failed callbacks omit result while retaining usage. All 46 referenced temp
+  output files had expired at audit time. The four missing callbacks comprise both killed
+  runs, one completed standalone run, and the first attempt of a later-resumed run; a
+  callback is therefore optional arrival evidence, never the durable result store.
+- Workflow callbacks and snapshots have different scope. In one real run the first attempt's
+  callback failed, a resume later completed the same run, and the current snapshot's `taskId`,
+  status, and aggregate metrics describe the resumed attempt. The other correlated callbacks
+  agree with their current snapshots. Preserve callback status/usage on the exact attempt;
+  never let an earlier failed callback terminalize the resumed run or overwrite its final
+  metrics. The snapshot retains only the latest task id, so attempt ids must be accumulated
+  from the chronological tool calls/results.
+- The same team communication can be present in four places: sender SendMessage input,
+  structured routing result, retained inbox entry, and recipient envelope. Use native
+  message/routing/tool/request/task identifiers and timestamps to correlate these
+  observations; text equality is not identity. Of 2,008 SendMessage requests, 1,441 carry
+  both `content` and `message`; at least 1,000 pair a 50-character preview in `content`
+  with a longer full `message`, so the latter is the canonical body when both exist.
+- Historical classification must fail closed but use all exact evidence available:
+  Agent input/result, sidecar fields, team config/inbox membership, storage path,
+  structured origin, and workflow journal. Neither a filename nor
+  `status=teammate_spawned` alone establishes the relationship kind.
+- `tool-results/<toolUseId>.txt` stores persisted tool output under opaque stems.
+  `.json` and PDF siblings exist and remain outside the old spaghetti reader; their
+  presence is not a relation signal.
 
 ## 5. Other streams
 
@@ -232,9 +373,12 @@ native JSON a public presentation contract.
   A directory IS a team even with missing/corrupt config (observed) →
   config:null. **inboxes/`<agent>`.json** — JSON ARRAY of {from, text (may embed
   JSON — leave raw), summary?, timestamp, color?, read, msg_id?, msgV?, type?}.
-  Payload variants seen: idle_notification, task_assignment, shutdown_request,
-  shutdown_approved. Identity: msg_id, else fingerprint(sender+timestamp+text
-  +ordinal); `read` excluded from identity.
+  Direct envelope/control variants are plain message, idle_notification,
+  task_assignment, shutdown_request, shutdown_approved, and teammate_terminated.
+  For stable identity inside one inbox use msg_id, else a full-record fingerprint
+  including sender, timestamp, text, and ordinal; `read` is mutable and excluded.
+  That fallback must never correlate a separate sender/result/recipient observation
+  by text equality (§4.4).
 - **sessions/`<pid>`.json** — active-session presence: pid, sessionId, cwd,
   startedAt (+ kind, entrypoint, name, nameSince, status busy|idle|shell,
   updatedAt, statusUpdatedAt, procStart, version, peerProtocol, peerFeatures[],

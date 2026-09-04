@@ -41,6 +41,203 @@ class FacetTests(unittest.TestCase):
         result = next(hit for hit in results if hit["facet_id"] == "tool-result")
         self.assertEqual(result["key"], "Bash")
 
+    def test_claude_agent_resume_and_result_status_are_explicit_facets(self) -> None:
+        context: dict[str, object] = {}
+        calls = extract(
+            "claude-code",
+            "transcript",
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus-5",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call-1",
+                            "name": "Agent",
+                            "input": {"resume": "worker-id", "prompt": "continue"},
+                        }
+                    ],
+                },
+                "effort": "max",
+            },
+            context,
+        )
+        request = next(hit for hit in calls if hit["facet_id"] == "agent-requests")
+        profile = next(
+            hit for hit in calls if hit["facet_id"] == "assistant-response-profiles"
+        )
+        self.assertEqual(request["key"], "resume")
+        self.assertEqual(profile["key"], "claude-opus-5.max")
+
+        results = extract(
+            "claude-code",
+            "transcript",
+            {
+                "type": "user",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "call-1"}]
+                },
+                "toolUseResult": {
+                    "status": "teammate_spawned",
+                    "agentId": "worker-id",
+                },
+            },
+            context,
+        )
+        result = next(hit for hit in results if hit["facet_id"] == "agent-results")
+        self.assertEqual(result["key"], "resume.teammate_spawned")
+
+    def test_claude_embedded_collaboration_envelopes_drop_prose(self) -> None:
+        hits = extract(
+            "claude-code",
+            "subagent-transcript",
+            {
+                "type": "user",
+                "message": {
+                    "content": (
+                        '<teammate-message teammate_id="writer" color="cyan">'
+                        '{"type":"idle_notification","from":"writer",'
+                        '"idleReason":"available","summary":"private report"}'
+                        "</teammate-message>\n"
+                        '<teammate-message teammate_id="writer" color="cyan">'
+                        '{"type":"shutdown_approved","from":"writer"}'
+                        "</teammate-message>"
+                    )
+                },
+            },
+            {},
+        )
+        envelopes = [hit for hit in hits if hit["facet_id"] == "message-envelopes"]
+        payloads = [
+            hit for hit in hits if hit["facet_id"] == "teammate-message-payloads"
+        ]
+        self.assertEqual(len(envelopes), 2)
+        self.assertEqual([hit["key"] for hit in payloads], ["idle_notification", "shutdown_approved"])
+        self.assertEqual(payloads[0]["value"]["idleReason"], "available")
+        self.assertEqual(payloads[0]["value"]["summary"], "")
+
+    def test_claude_nested_envelope_text_is_not_a_second_message(self) -> None:
+        hits = extract(
+            "claude-code",
+            "transcript",
+            {
+                "type": "user",
+                "message": {
+                    "content": (
+                        "<task-notification><status>completed</status>"
+                        "<result><teammate-message teammate_id=\"worker\">"
+                        "nested copy</teammate-message></result></task-notification>"
+                    )
+                },
+            },
+            {},
+        )
+        envelopes = [hit for hit in hits if hit["facet_id"] == "message-envelopes"]
+        self.assertEqual([hit["key"] for hit in envelopes], ["task-notification"])
+
+    def test_claude_peer_and_task_notification_facets(self) -> None:
+        peer = extract(
+            "claude-code",
+            "subagent-transcript",
+            {
+                "type": "user",
+                "origin": {
+                    "kind": "peer",
+                    "from": "worker-id",
+                    "body": "private message",
+                },
+                "message": {
+                    "content": (
+                        "Message from a peer:\n"
+                        '<agent-message from="worker">private report</agent-message>'
+                    )
+                },
+            },
+            {},
+        )
+        origins = next(hit for hit in peer if hit["facet_id"] == "user-origins")
+        envelope = next(hit for hit in peer if hit["facet_id"] == "message-envelopes")
+        self.assertEqual(origins["key"], "peer")
+        self.assertEqual(origins["value"]["body"], "")
+        self.assertEqual(envelope["key"], "agent-message")
+
+        notification = extract(
+            "claude-code",
+            "transcript",
+            {
+                "type": "user",
+                "message": {
+                    "content": (
+                        "<task-notification><task-id>opaque</task-id>"
+                        "<status>failed</status><summary>private</summary>"
+                        '<usage>{"input_tokens":12}</usage></task-notification>'
+                    )
+                },
+            },
+            {},
+        )
+        task = next(hit for hit in notification if hit["facet_id"] == "task-notifications")
+        self.assertEqual(task["key"], "failed")
+        self.assertEqual(task["value"]["task-id"], "")
+        self.assertEqual(task["value"]["usage"], {"input_tokens": 12})
+
+    def test_claude_team_documents_expose_members_and_inbox_items(self) -> None:
+        members = extract(
+            "claude-code",
+            "team-config",
+            {
+                "leadAgentId": "lead",
+                "members": [
+                    {"agentId": "lead", "name": "lead", "color": "blue"},
+                    {"agentId": "peer", "name": "peer", "color": "red"},
+                ],
+            },
+            {},
+        )
+        by_facet: dict[str, list[str]] = {}
+        for hit in members:
+            by_facet.setdefault(hit["facet_id"], []).append(hit["key"])
+        self.assertEqual(by_facet["team-members"], ["lead", "member"])
+        self.assertEqual(by_facet["team-member-colors"], ["blue", "red"])
+        self.assertEqual(by_facet["team-member-backends"], ["<none>", "<none>"])
+
+        inbox = extract(
+            "claude-code",
+            "team-inbox",
+            {
+                "type": "task_assignment",
+                "from": "lead",
+                "text": "private assignment",
+                "color": "cyan",
+                "read": False,
+            },
+            {},
+        )
+        by_id = {hit["facet_id"]: hit for hit in inbox}
+        self.assertEqual(by_id["team-inbox-messages"]["key"], "task_assignment")
+        self.assertEqual(by_id["team-inbox-delivery"]["key"], "unread")
+        self.assertEqual(by_id["team-inbox-messages"]["value"]["text"], "")
+
+        encoded = extract(
+            "claude-code",
+            "team-inbox",
+            {
+                "from": "lead",
+                "text": '{"type":"task_assignment","subject":"private"}',
+                "read": False,
+            },
+            {},
+        )
+        encoded_by_id = {hit["facet_id"]: hit for hit in encoded}
+        self.assertEqual(
+            encoded_by_id["team-inbox-messages"]["key"], "task_assignment"
+        )
+        self.assertEqual(
+            encoded_by_id["team-inbox-messages"]["value"]["textPayload"]["subject"],
+            "",
+        )
+
     def test_codex_arguments_are_parsed(self) -> None:
         hits = extract(
             "codex",
