@@ -37,6 +37,7 @@ fn meta_batch() -> Batch {
                 project_id: Some("p1".into()),
                 cwd: Some("/w/rosetta".into()),
                 parent_session_id: None,
+                delegation: None,
                 root_session_id: "s1".into(),
                 role: SessionRole::Main,
                 title: None,

@@ -11,4 +11,21 @@ import type { ParticipantColor } from "./ParticipantColor";
  * inbox copies, and recipient envelopes can all describe the same speech.
  * Adapters emit only the user-facing observation they can place in time.
  */
-export type CollaborationEvent = { kind: CollaborationEventKind, channel: CollaborationChannel, sender: string | null, recipient: string | null, team: string | null, color: ParticipantColor | null, summary: string | null, body: CanonicalText | null, task_id: string | null, delivery_id: string | null, status: CollaborationStatus | null, };
+export type CollaborationEvent = { kind: CollaborationEventKind, channel: CollaborationChannel, sender: string | null, recipient: string | null, team: string | null, color: ParticipantColor | null, summary: string | null, body: CanonicalText | null, task_id: string | null, delivery_id: string | null, status: CollaborationStatus | null, 
+/**
+ * Native send time carried inside a delivery envelope. `TimelineEntry.at`
+ * remains the containing transcript's observed-arrival time.
+ */
+authored_at: number | null, 
+/**
+ * Exact owning session for an optional report-work disclosure.
+ */
+source_session_id: string | null, 
+/**
+ * Exact response in that session which produced the task-linked result.
+ */
+source_response_id: string | null, 
+/**
+ * Inclusive exact bounds within `source_session_id`. Both or neither.
+ */
+work_start_timeline_id: string | null, work_end_timeline_id: string | null, };

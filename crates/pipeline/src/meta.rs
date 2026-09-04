@@ -447,6 +447,8 @@ pub fn meta_ingest_inventory_into(
 fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
     match sessions.iter_mut().find(|existing| existing.id == row.id) {
         Some(existing) => {
+            let incoming_has_delegation = row.delegation.is_some();
+            let existing_has_delegation = existing.delegation.is_some();
             let existing_started_at = existing.started_at;
             let newer = row.updated_at >= existing.updated_at;
             existing.started_at = existing.started_at.min(row.started_at);
@@ -467,8 +469,15 @@ fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
             // Project assignment is derived after every metadata source has
             // contributed its bounded fact.
             existing.project_id = None;
-            existing.parent_session_id =
-                existing.parent_session_id.clone().or(row.parent_session_id);
+            existing.parent_session_id = if incoming_has_delegation {
+                row.parent_session_id
+                    .or_else(|| existing.parent_session_id.clone())
+            } else if existing_has_delegation {
+                existing.parent_session_id.clone()
+            } else {
+                existing.parent_session_id.clone().or(row.parent_session_id)
+            };
+            existing.delegation = merge_delegation(existing.delegation.take(), row.delegation);
             if existing.root_session_id == existing.id && row.root_session_id != row.id {
                 existing.root_session_id = row.root_session_id;
             }
@@ -478,6 +487,23 @@ fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
             existing.stream_state = stronger_stream_state(existing.stream_state, row.stream_state);
         }
         None => sessions.push(row),
+    }
+}
+
+fn merge_delegation(
+    existing: Option<rosetta_core::SessionDelegation>,
+    incoming: Option<rosetta_core::SessionDelegation>,
+) -> Option<rosetta_core::SessionDelegation> {
+    match (existing, incoming) {
+        (Some(existing), Some(incoming)) => Some(rosetta_core::SessionDelegation {
+            parent_tool_native_id: incoming
+                .parent_tool_native_id
+                .or(existing.parent_tool_native_id),
+            team: incoming.team.or(existing.team),
+            color: incoming.color.or(existing.color),
+            configured_model: incoming.configured_model.or(existing.configured_model),
+        }),
+        (existing, incoming) => incoming.or(existing),
     }
 }
 
@@ -714,6 +740,34 @@ fn admit_identified(
         .unwrap_or_else(|| session_id.clone());
     let role = skim.role.unwrap_or(SessionRole::Main);
 
+    // A depth-2 sidecar can name an immediate parent whose own transcript has
+    // expired. Materialize the proven root first so both foreign keys remain
+    // honest even when only the descendant sidecar survives.
+    if let Some(root_native) = skim.root_session_id.as_deref()
+        && root_session_id != session_id
+        && parent_session_id.as_deref() != Some(root_session_id.as_str())
+    {
+        merge_session(
+            &mut output.sessions,
+            SessionRow {
+                id: root_session_id.clone(),
+                native_session_id: root_native.to_owned(),
+                runtime_id: runtime.id.clone(),
+                project_id: None,
+                cwd: None,
+                parent_session_id: None,
+                delegation: None,
+                root_session_id: root_session_id.clone(),
+                role: SessionRole::Main,
+                title: None,
+                summary: None,
+                started_at: skim.started_at.unwrap_or(source.modified_ms),
+                updated_at: source.modified_ms,
+                stream_state: StreamState::Pending,
+            },
+        );
+    }
+
     // A retained subagent transcript can outlive its parent's transcript.
     // Materialize an honest parent placeholder so the relationship and FK
     // survive GC; a later main skim refines the same deterministic row.
@@ -721,6 +775,7 @@ fn admit_identified(
         skim.parent_session_id.as_deref(),
         parent_session_id.as_ref(),
     ) {
+        let nested_parent = parent_id != &root_session_id;
         merge_session(
             &mut output.sessions,
             SessionRow {
@@ -729,9 +784,14 @@ fn admit_identified(
                 runtime_id: runtime.id.clone(),
                 project_id: None,
                 cwd: None,
-                parent_session_id: None,
+                parent_session_id: nested_parent.then(|| root_session_id.clone()),
+                delegation: None,
                 root_session_id: root_session_id.clone(),
-                role: SessionRole::Main,
+                role: if nested_parent {
+                    SessionRole::Subagent
+                } else {
+                    SessionRole::Main
+                },
                 title: None,
                 summary: None,
                 started_at: skim.started_at.unwrap_or(source.modified_ms),
@@ -750,6 +810,7 @@ fn admit_identified(
         project_id: None,
         cwd,
         parent_session_id,
+        delegation: skim.delegation,
         root_session_id,
         role,
         // Ranked title facts are applied after all session rows exist.
@@ -1020,6 +1081,7 @@ mod tests {
             project_id: None,
             cwd: cwd.map(str::to_owned),
             parent_session_id: parent.map(str::to_owned),
+            delegation: None,
             root_session_id: root.to_owned(),
             role,
             title: None,
@@ -1042,6 +1104,44 @@ mod tests {
         merge_session(&mut right, early);
         assert_eq!(left[0].cwd.as_deref(), Some("/work/early"));
         assert_eq!(left[0].cwd, right[0].cwd);
+    }
+
+    #[test]
+    fn exact_sidecar_parent_outranks_directory_fallback_in_any_order() {
+        let fallback = session(
+            "child",
+            None,
+            Some("root"),
+            "root",
+            SessionRole::Subagent,
+            10,
+        );
+        let mut exact = fallback.clone();
+        exact.parent_session_id = Some("worker-parent".into());
+        exact.delegation = Some(rosetta_core::SessionDelegation {
+            parent_tool_native_id: Some("toolu-child".into()),
+            team: None,
+            color: None,
+            configured_model: Some("opus".into()),
+        });
+        let mut forward = Vec::new();
+        merge_session(&mut forward, fallback.clone());
+        merge_session(&mut forward, exact.clone());
+        let mut reverse = Vec::new();
+        merge_session(&mut reverse, exact);
+        merge_session(&mut reverse, fallback);
+        assert_eq!(forward, reverse);
+        assert_eq!(
+            forward[0].parent_session_id.as_deref(),
+            Some("worker-parent")
+        );
+        assert_eq!(
+            forward[0]
+                .delegation
+                .as_ref()
+                .and_then(|delegation| delegation.parent_tool_native_id.as_deref()),
+            Some("toolu-child")
+        );
     }
 
     #[test]

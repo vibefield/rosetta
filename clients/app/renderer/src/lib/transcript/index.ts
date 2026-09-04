@@ -100,12 +100,15 @@ export {
 } from "./sittings.ts";
 
 export type {
+  CollaborationStamp,
+  CollaborationTimeBasis,
   RuntimeProfile,
   RuntimeProfileBasis,
   TeamMemberOperation,
   TeamMemberPresentation,
   TeamParticipantPresentation,
   TeamReportWork,
+  TeamChronology,
   WorkerThreadLinks,
 } from "./collaboration.ts";
 
@@ -121,10 +124,12 @@ export {
   workflowWorkerState,
 } from "./workflow.ts";
 export {
+  collaborationStamp,
   interleaveTeamCollaboration,
   participantPresentation,
   runtimeProfile,
   teamMemberPresentations,
+  teamChronology,
   teamParticipants,
   taskBoundedReportWork,
   teamSessionIds,

@@ -8,6 +8,7 @@ import type { ApiError } from "./generated/ApiError";
 import type { BoostResponse } from "./generated/BoostResponse";
 import type { ContributionResponse } from "./generated/ContributionResponse";
 import type { CommandResponse } from "./generated/CommandResponse";
+import type { CollaborationTimeline } from "./generated/CollaborationTimeline";
 import type { DiscoveriesResponse } from "./generated/DiscoveriesResponse";
 import type { EnableResponse } from "./generated/EnableResponse";
 import type { ErrorCode } from "./generated/ErrorCode";
@@ -195,6 +196,14 @@ export class RosettaClient {
   ): Promise<TimelinePage> {
     return this.request(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline${queryString(options)}`,
+    );
+  }
+
+  /** Complete delivered collaboration history for one team member. The
+   * response deliberately excludes private prose and tool rows. */
+  collaborationTimeline(sessionId: string): Promise<CollaborationTimeline> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/collaboration`,
     );
   }
 

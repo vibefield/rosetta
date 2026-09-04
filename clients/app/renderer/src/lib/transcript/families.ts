@@ -479,6 +479,7 @@ const ARTIFACT_VERB: Readonly<Record<string, string>> = {
 const COLLABORATE_VERB: Readonly<Record<string, string>> = {
   send: "Sent to",
   request_stop: "Asked to stop",
+  respond_stop: "Responded to stop",
   create: "Created",
   delete: "Deleted",
   list: "Listed",

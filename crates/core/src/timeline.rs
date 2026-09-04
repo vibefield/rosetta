@@ -206,6 +206,7 @@ wire_enum!(PlanOp {
 wire_enum!(CollaborationOp {
     Send,
     RequestStop,
+    RespondStop,
     Create,
     Delete,
     List
@@ -934,6 +935,21 @@ pub struct CollaborationEvent {
     pub task_id: Option<String>,
     pub delivery_id: Option<String>,
     pub status: Option<CollaborationStatus>,
+    /// Native send time carried inside a delivery envelope. `TimelineEntry.at`
+    /// remains the containing transcript's observed-arrival time.
+    #[serde(default)]
+    pub authored_at: Option<Ms>,
+    /// Exact owning session for an optional report-work disclosure.
+    #[serde(default)]
+    pub source_session_id: Option<String>,
+    /// Exact response in that session which produced the task-linked result.
+    #[serde(default)]
+    pub source_response_id: Option<String>,
+    /// Inclusive exact bounds within `source_session_id`. Both or neither.
+    #[serde(default)]
+    pub work_start_timeline_id: Option<String>,
+    #[serde(default)]
+    pub work_end_timeline_id: Option<String>,
 }
 
 impl CollaborationEvent {
@@ -960,18 +976,111 @@ impl CollaborationEvent {
             self.delivery_id.as_deref(),
             ID_MAX_BYTES,
         )?;
+        bounded_option(
+            "collaboration source session id",
+            self.source_session_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option(
+            "collaboration source response id",
+            self.source_response_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option(
+            "collaboration work start timeline id",
+            self.work_start_timeline_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option(
+            "collaboration work end timeline id",
+            self.work_end_timeline_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
         validate_optional_text(self.body.as_ref())?;
+        let visible_body = self
+            .body
+            .as_ref()
+            .is_some_and(|body| !body.as_preview().trim().is_empty());
+        let visible_summary = self
+            .summary
+            .as_deref()
+            .is_some_and(|summary| !summary.trim().is_empty());
         if matches!(
             self.kind,
             CollaborationEventKind::Message
                 | CollaborationEventKind::Assignment
                 | CollaborationEventKind::Report
-        ) && self.body.is_none()
-            && self.summary.is_none()
+        ) && !visible_body
+            && !visible_summary
         {
             return Err(CanonicalError::Invalid(
                 "collaboration event has no visible fact".into(),
             ));
+        }
+        let has_start = self.work_start_timeline_id.is_some();
+        let has_end = self.work_end_timeline_id.is_some();
+        if has_start != has_end {
+            return Err(CanonicalError::Invalid(
+                "collaboration report work bounds are incomplete".into(),
+            ));
+        }
+        if (has_start || self.source_session_id.is_some() || self.source_response_id.is_some())
+            && self.kind != CollaborationEventKind::Report
+        {
+            return Err(CanonicalError::Invalid(
+                "collaboration work provenance belongs only to reports".into(),
+            ));
+        }
+        if has_start && self.source_session_id.is_none() {
+            return Err(CanonicalError::Invalid(
+                "collaboration report work has no source session".into(),
+            ));
+        }
+        if self.kind == CollaborationEventKind::Report
+            && (self.task_id.is_none()
+                || self.source_session_id.is_none()
+                || self.source_response_id.is_none())
+        {
+            return Err(CanonicalError::Invalid(
+                "collaboration report has no exact task source".into(),
+            ));
+        }
+        if self.kind == CollaborationEventKind::Report {
+            required_bounded(
+                "collaboration report task id",
+                self.task_id.as_deref().expect("presence checked above"),
+                ID_MAX_BYTES,
+            )?;
+            required_bounded(
+                "collaboration report source session id",
+                self.source_session_id
+                    .as_deref()
+                    .expect("presence checked above"),
+                ID_MAX_BYTES,
+            )?;
+            required_bounded(
+                "collaboration report source response id",
+                self.source_response_id
+                    .as_deref()
+                    .expect("presence checked above"),
+                ID_MAX_BYTES,
+            )?;
+        }
+        if has_start {
+            required_bounded(
+                "collaboration report work start timeline id",
+                self.work_start_timeline_id
+                    .as_deref()
+                    .expect("paired bounds checked above"),
+                ID_MAX_BYTES,
+            )?;
+            required_bounded(
+                "collaboration report work end timeline id",
+                self.work_end_timeline_id
+                    .as_deref()
+                    .expect("paired bounds checked above"),
+                ID_MAX_BYTES,
+            )?;
         }
         Ok(())
     }
@@ -4205,6 +4314,9 @@ impl TimelineEntry {
                 if let Some(summary) = &event.summary {
                     SearchLanes::push(&mut lanes.intent, summary);
                 }
+                if let Some(task_id) = &event.task_id {
+                    SearchLanes::push(&mut lanes.target, task_id);
+                }
             }
             TimelineBody::Notice {
                 notice: Notice::CommandOutput { output },
@@ -4362,6 +4474,7 @@ impl ToolAction {
             Self::Delegate {
                 agent_kind,
                 name,
+                team,
                 objective,
                 ..
             } => {
@@ -4370,6 +4483,9 @@ impl ToolAction {
                 }
                 if let Some(v) = name {
                     SearchLanes::push(&mut lanes.tool, v);
+                }
+                if let Some(v) = team {
+                    SearchLanes::push(&mut lanes.target, v);
                 }
                 lanes.push_text(SearchLane::Intent, objective);
             }
@@ -4909,9 +5025,72 @@ mod tests {
                 task_id: None,
                 delivery_id: Some("shutdown-1".into()),
                 status: None,
+                authored_at: None,
+                source_session_id: None,
+                source_response_id: None,
+                work_start_timeline_id: None,
+                work_end_timeline_id: None,
             },
         });
         assert!(row.validate().is_ok());
+    }
+
+    #[test]
+    fn collaboration_prose_requires_non_whitespace_content() {
+        let row = base(TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::Message,
+                channel: CollaborationChannel::Team,
+                sender: Some("w1".into()),
+                recipient: None,
+                team: Some("review".into()),
+                color: None,
+                summary: Some("   ".into()),
+                body: None,
+                task_id: None,
+                delivery_id: None,
+                status: None,
+                authored_at: None,
+                source_session_id: None,
+                source_response_id: None,
+                work_start_timeline_id: None,
+                work_end_timeline_id: None,
+            },
+        });
+        assert!(row.validate().is_err());
+    }
+
+    #[test]
+    fn collaboration_report_work_requires_exact_paired_bounds() {
+        let mut row = base(TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::Report,
+                channel: CollaborationChannel::Team,
+                sender: Some("w1".into()),
+                recipient: Some("coordinator".into()),
+                team: Some("review".into()),
+                color: None,
+                summary: Some("done".into()),
+                body: None,
+                task_id: Some("task-1".into()),
+                delivery_id: None,
+                status: Some(CollaborationStatus::Completed),
+                authored_at: None,
+                source_session_id: Some("member-1".into()),
+                source_response_id: Some("response-1".into()),
+                work_start_timeline_id: Some("work-1".into()),
+                work_end_timeline_id: None,
+            },
+        });
+        assert!(row.validate().is_err());
+        if let TimelineBody::Collaboration { event } = &mut row.body {
+            event.work_end_timeline_id = Some("work-2".into());
+        }
+        assert!(row.validate().is_ok());
+        if let TimelineBody::Collaboration { event } = &mut row.body {
+            event.source_response_id = Some("   ".into());
+        }
+        assert!(row.validate().is_err());
     }
 
     #[test]
@@ -5225,6 +5404,57 @@ mod tests {
         assert_eq!(lanes.target, "/repo");
         assert_eq!(lanes.tool, "shell");
         assert!(lanes.change.is_empty());
+    }
+
+    #[test]
+    fn collaboration_search_keeps_team_and_task_addresses() {
+        let delegate = base(TimelineBody::ToolUse {
+            tool: Box::new(ToolInteraction {
+                action: ToolAction::Delegate {
+                    agent_kind: Some("general-purpose".into()),
+                    name: Some("w2-docs".into()),
+                    model: None,
+                    mode: None,
+                    team: Some("refinement".into()),
+                    color: Some(ParticipantColor::Green),
+                    objective: CanonicalText::inline("land the design deltas").unwrap(),
+                    child_session_id: Some("member-2".into()),
+                    resume_id: None,
+                    background: true,
+                    orphan_result_summary: None,
+                },
+                ..ToolInteraction::unknown("delegate-1", CorrelationDerivation::NativeId, "Agent")
+            }),
+        });
+        let lanes = delegate.search_lanes();
+        assert_eq!(lanes.target, "refinement");
+        assert!(lanes.tool.contains("w2-docs"));
+
+        let message = base(TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::Message,
+                channel: CollaborationChannel::Peer,
+                sender: Some("w2-docs".into()),
+                recipient: Some("coordinator".into()),
+                team: Some("refinement".into()),
+                color: Some(ParticipantColor::Green),
+                summary: None,
+                body: Some(CanonicalText::inline("docs are ready").unwrap()),
+                task_id: Some("task-22".into()),
+                delivery_id: Some("delivery-22".into()),
+                status: None,
+                authored_at: None,
+                source_session_id: None,
+                source_response_id: None,
+                work_start_timeline_id: None,
+                work_end_timeline_id: None,
+            },
+        });
+        let lanes = message.search_lanes();
+        assert!(lanes.prose.contains("docs are ready"));
+        assert!(lanes.target.contains("w2-docs"));
+        assert!(lanes.target.contains("refinement"));
+        assert!(lanes.target.contains("task-22"));
     }
 
     #[test]

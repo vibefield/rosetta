@@ -107,6 +107,7 @@ impl AgentAdapter for PiAdapter {
             ops: Vec::new(),
             session_id: Some(header.id),
             parent_session_id: parent.clone(),
+            delegation: None,
             root_session_id: parent,
             role: Some(SessionRole::Main),
             cwd: (!header.cwd.is_empty()).then_some(header.cwd),

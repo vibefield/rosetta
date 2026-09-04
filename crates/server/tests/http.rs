@@ -14,14 +14,18 @@ use tower::ServiceExt;
 use rosetta_core::rows::{
     MessageKind, MessageRow, PlanRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
-use rosetta_core::timeline::{ArtifactKind, ArtifactOp, ReadTarget, ResourceRef};
+use rosetta_core::timeline::{
+    ArtifactKind, ArtifactOp, CollaborationChannel, CollaborationEvent, CollaborationEventKind,
+    GroupDerivation, GroupKind, ReadTarget, ResourceRef, TimelineGroup,
+};
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, IngestOp, NativeToolRef, ProjectionAsset, StatusBasis,
-    TimelineBody, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    TimelineBody, TimelineEntry, TokenSnapshot, ToolAction, ToolCorrelation, ToolInteraction,
+    ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
-    ApiError, CommandResponse, ErrorCode, SearchResponse, SessionsResponse, StatusResponse,
-    TimelinePage,
+    ApiError, CollaborationTimeline, CommandResponse, ErrorCode, SearchResponse, SessionsResponse,
+    StatusResponse, TimelinePage,
 };
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness,
@@ -39,6 +43,7 @@ fn session(id: &str) -> SessionRow {
         project_id: Some("p1".into()),
         cwd: Some("/w/rosetta".into()),
         parent_session_id: None,
+        delegation: None,
         root_session_id: id.into(),
         role: SessionRole::Main,
         title: None,
@@ -259,6 +264,79 @@ async fn exact_timeline_row_is_scoped_and_does_not_require_paging() {
 
     let (wrong_session, _) = h.get("/api/sessions/s2/timeline/old-task-anchor").await;
     assert_eq!(wrong_session, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn collaboration_history_returns_boundaries_without_private_rows() {
+    let mut h = harness();
+    let event = TimelineEntry {
+        timeline_id: "team-message".into(),
+        session_id: "s1".into(),
+        ordinal: 2,
+        group: TimelineGroup {
+            id: "team-cycle".into(),
+            kind: GroupKind::SystemCycle,
+            derivation: GroupDerivation::Native,
+        },
+        response: None,
+        block_index: None,
+        native_id: Some("delivery-native".into()),
+        parent_native_id: None,
+        at: Some(3_600_200),
+        model: None,
+        effort: None,
+        body: TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::Message,
+                channel: CollaborationChannel::Team,
+                sender: Some("w1".into()),
+                recipient: Some("coordinator".into()),
+                team: Some("refinement".into()),
+                color: None,
+                summary: Some("ready".into()),
+                body: Some(CanonicalText::inline("The implementation is ready.").unwrap()),
+                task_id: None,
+                delivery_id: Some("message-1".into()),
+                status: None,
+                authored_at: Some(3_600_100),
+                source_session_id: None,
+                source_response_id: None,
+                work_start_timeline_id: None,
+                work_end_timeline_id: None,
+            },
+        },
+        parent_tool_native_id: None,
+        usage: TokenSnapshot::default(),
+        provenance: rosetta_core::Provenance {
+            agent_version: None,
+            src_cursor: None,
+            src_offset: None,
+        },
+    };
+    let private = message(
+        "private-work",
+        MessageKind::Agent,
+        "secret implementation detail",
+    );
+    let mut ops = IngestOp::project_message(private);
+    ops.push(IngestOp::Message(Box::new(event)));
+    h.store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let (status, body) = h.get("/api/sessions/s1/collaboration").await;
+    assert_eq!(status, StatusCode::OK);
+    let history: CollaborationTimeline = serde_json::from_value(body).unwrap();
+    assert_eq!(history.entries.len(), 1);
+    assert_eq!(history.entries[0].timeline_id, "team-message");
+    assert!(
+        !serde_json::to_string(&history)
+            .unwrap()
+            .contains("secret implementation detail")
+    );
 }
 
 #[tokio::test]

@@ -113,6 +113,7 @@ fn scaffolding(ops: &[IngestOp], runtime_id: &str, kind: &str) -> Vec<IngestOp> 
             project_id: None,
             cwd: None,
             parent_session_id: None,
+            delegation: None,
             root_session_id: session_id,
             role: SessionRole::Main,
             title: None,

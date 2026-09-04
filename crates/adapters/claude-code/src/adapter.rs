@@ -7,7 +7,7 @@ use rosetta_adapter_support::{
     AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, ProjectHint, SkimResult,
     StreamDriver,
 };
-use rosetta_core::rows::{Ms, SessionRole, TitleKind};
+use rosetta_core::rows::{Ms, SessionDelegation, SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, ClaudeCodeState};
@@ -36,7 +36,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        20
+        21
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -144,6 +144,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             ops: Vec::new(),
             session_id,
             parent_session_id,
+            delegation: None,
             root_session_id,
             role,
             cwd: skim.cwd,
@@ -346,7 +347,7 @@ fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
     let Some(child) = subagent_metadata_stem(&stat.relative_path).map(str::to_owned) else {
         return SkimResult::default();
     };
-    let Some(parent) = parent_from_path(&stat.relative_path).map(str::to_owned) else {
+    let Some(root) = parent_from_path(&stat.relative_path).map(str::to_owned) else {
         return SkimResult::default();
     };
     let project = meta
@@ -354,7 +355,7 @@ fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
         .as_deref()
         .filter(|path| absolute_native_path(path))
         .map(|_| ProjectHint::SameAsSession {
-            native_session_id: parent.clone(),
+            native_session_id: root.clone(),
         });
     let role = if meta.task_kind.as_deref() == Some("in_process_teammate") {
         SessionRole::Team
@@ -366,11 +367,27 @@ fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
         .clone()
         .or_else(|| Some(meta.agent_type.clone()))
         .filter(|title| !title.trim().is_empty());
+    let parent = meta
+        .parent_agent_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| root.clone());
+    let delegation = SessionDelegation {
+        parent_tool_native_id: meta.tool_use_id.filter(|value| !value.trim().is_empty()),
+        team: meta.team_name.filter(|value| !value.trim().is_empty()),
+        color: meta
+            .color
+            .as_deref()
+            .and_then(crate::envelope::participant_color),
+        configured_model: meta.model.filter(|value| !value.trim().is_empty()),
+    };
     SkimResult {
         ops: Vec::new(),
         session_id: Some(child),
-        parent_session_id: Some(parent.clone()),
-        root_session_id: Some(parent),
+        parent_session_id: Some(parent),
+        delegation: Some(delegation),
+        root_session_id: Some(root),
         role: Some(role),
         cwd: None,
         project,
@@ -398,6 +415,7 @@ mod tests {
     use super::{ClaudeCodeAdapter, FileStat};
     use crate::spec;
     use rosetta_adapter_support::{AgentAdapter, ProjectHint, StreamDriver};
+    use rosetta_core::ParticipantColor;
     use rosetta_core::rows::SessionRole;
 
     fn stat(relative_path: &str) -> FileStat {
@@ -570,7 +588,7 @@ mod tests {
         let result = ClaudeCodeAdapter.skim(
             spec::SUBAGENT_METADATA,
             &stat("projects/p/parent-1/subagents/agent-member-7.meta.json"),
-            br#"{"agentType":"general-purpose","taskKind":"in_process_teammate","teamName":"refinement","name":"w2-docs","description":"Land the docs","model":"opus","color":"green"}"#,
+            br#"{"agentType":"general-purpose","taskKind":"in_process_teammate","teamName":"refinement","name":"w2-docs","description":"Land the docs","model":"opus","color":"green","parentAgentId":"worker-parent","toolUseId":"toolu-team-2"}"#,
             b"",
         );
         assert_eq!(result.role, Some(SessionRole::Team));
@@ -580,6 +598,16 @@ mod tests {
             Some(rosetta_core::rows::TitleKind::Generated)
         );
         assert_eq!(result.summary.as_deref(), Some("Land the docs"));
+        assert_eq!(result.parent_session_id.as_deref(), Some("worker-parent"));
+        assert_eq!(result.root_session_id.as_deref(), Some("parent-1"));
+        let delegation = result.delegation.expect("sidecar delegation evidence");
+        assert_eq!(
+            delegation.parent_tool_native_id.as_deref(),
+            Some("toolu-team-2")
+        );
+        assert_eq!(delegation.team.as_deref(), Some("refinement"));
+        assert_eq!(delegation.color, Some(ParticipantColor::Green));
+        assert_eq!(delegation.configured_model.as_deref(), Some("opus"));
     }
 
     #[test]

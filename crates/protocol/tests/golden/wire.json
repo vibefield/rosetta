@@ -5,6 +5,71 @@
   "boost_response": {
     "queued": true
   },
+  "collaboration_timeline": {
+    "entries": [
+      {
+        "at": 3800000,
+        "block_index": null,
+        "body": {
+          "event": {
+            "authored_at": 3799000,
+            "body": {
+              "text": "All design deltas landed.",
+              "type": "inline"
+            },
+            "channel": "team",
+            "color": "green",
+            "delivery_id": "delivery-2",
+            "kind": "report",
+            "recipient": "coordinator",
+            "sender": "w2-docs",
+            "source_response_id": "team-response-2",
+            "source_session_id": "team-member-s2",
+            "status": "completed",
+            "summary": "design docs updated",
+            "task_id": "task-2",
+            "team": "refinement",
+            "work_end_timeline_id": "team-work-end",
+            "work_start_timeline_id": "team-work-start"
+          },
+          "type": "collaboration"
+        },
+        "effort": null,
+        "group": {
+          "derivation": "native",
+          "id": "team-delivery-1",
+          "kind": "system_cycle"
+        },
+        "model": null,
+        "native_id": "team-native-1",
+        "ordinal": 9,
+        "parent_native_id": "team-parent-1",
+        "parent_tool_native_id": null,
+        "provenance": {
+          "agent_version": "2.1.240",
+          "src_cursor": 4,
+          "src_offset": 3072
+        },
+        "response": null,
+        "session_id": "s1",
+        "timeline_id": "team-report-1",
+        "usage": {
+          "cache_read": null,
+          "cache_write": null,
+          "input": null,
+          "output": null,
+          "thinking": null
+        }
+      }
+    ],
+    "response_runtimes": [
+      {
+        "effort": "high",
+        "model": "claude-opus-4-1",
+        "response_id": "response-team-1"
+      }
+    ]
+  },
   "command": {
     "command": "printf 'full source'"
   },
@@ -54,7 +119,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 11,
+      "protocol_version": 12,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -137,6 +202,7 @@
           "block_index": null,
           "body": {
             "event": {
+              "authored_at": 3799000,
               "body": {
                 "text": "All design deltas landed.",
                 "type": "inline"
@@ -147,10 +213,14 @@
               "kind": "report",
               "recipient": "coordinator",
               "sender": "w2-docs",
+              "source_response_id": "team-response-2",
+              "source_session_id": "team-member-s2",
               "status": "completed",
               "summary": "design docs updated",
               "task_id": "task-2",
-              "team": "refinement"
+              "team": "refinement",
+              "work_end_timeline_id": "team-work-end",
+              "work_start_timeline_id": "team-work-start"
             },
             "type": "collaboration"
           },
@@ -365,6 +435,7 @@
       "sessions": [
         {
           "cwd": "/w/rosetta",
+          "delegation": null,
           "id": "s1",
           "native_session_id": "native-s1",
           "parent_session_id": "s0",
@@ -535,6 +606,7 @@
       "block_index": null,
       "body": {
         "event": {
+          "authored_at": 3799000,
           "body": {
             "text": "All design deltas landed.",
             "type": "inline"
@@ -545,10 +617,14 @@
           "kind": "report",
           "recipient": "coordinator",
           "sender": "w2-docs",
+          "source_response_id": "team-response-2",
+          "source_session_id": "team-member-s2",
           "status": "completed",
           "summary": "design docs updated",
           "task_id": "task-2",
-          "team": "refinement"
+          "team": "refinement",
+          "work_end_timeline_id": "team-work-end",
+          "work_start_timeline_id": "team-work-start"
         },
         "type": "collaboration"
       },
@@ -644,6 +720,7 @@
     },
     {
       "cwd": "/w/rosetta",
+      "delegation": null,
       "id": "s1",
       "native_session_id": "native-s1",
       "parent_session_id": "s0",
@@ -700,7 +777,7 @@
       }
     ]
   },
-  "protocol_version": 11,
+  "protocol_version": 12,
   "runtimes": {
     "runtimes": [
       {
@@ -761,6 +838,7 @@
   "session": {
     "session": {
       "cwd": "/w/rosetta",
+      "delegation": null,
       "id": "s1",
       "native_session_id": "native-s1",
       "parent_session_id": "s0",
@@ -779,6 +857,7 @@
     "sessions": [
       {
         "cwd": "/w/rosetta",
+        "delegation": null,
         "id": "s1",
         "native_session_id": "native-s1",
         "parent_session_id": "s0",
@@ -852,8 +931,8 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 11,
-    "schema_version": 15,
+    "protocol_version": 12,
+    "schema_version": 16,
     "search": {
       "projection_epoch": "epoch-1",
       "readiness": "catching-up",
@@ -960,6 +1039,7 @@
         "block_index": null,
         "body": {
           "event": {
+            "authored_at": 3799000,
             "body": {
               "text": "All design deltas landed.",
               "type": "inline"
@@ -970,10 +1050,14 @@
             "kind": "report",
             "recipient": "coordinator",
             "sender": "w2-docs",
+            "source_response_id": "team-response-2",
+            "source_session_id": "team-member-s2",
             "status": "completed",
             "summary": "design docs updated",
             "task_id": "task-2",
-            "team": "refinement"
+            "team": "refinement",
+            "work_end_timeline_id": "team-work-end",
+            "work_start_timeline_id": "team-work-start"
           },
           "type": "collaboration"
         },

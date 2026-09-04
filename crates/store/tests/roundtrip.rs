@@ -2,15 +2,16 @@
 //! unknownness, drift-aggregation, and checkpoint-CAS semantics end to end.
 
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole,
-    SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, ProjectRow, RuntimeRow,
+    SessionDelegation, SessionRole, SessionRow, SessionTitleRow, SessionUsageRow, StreamState,
+    TitleKind, TokenSnapshot,
 };
 use rosetta_core::timeline::{
     AttachmentKind, AttachmentRef, CitationRef, CollaborationChannel, CollaborationEvent,
     CollaborationEventKind, CollaborationStatus, INLINE_TEXT_MAX_BYTES, ParticipantColor,
-    ReadTarget, ResourceRef, TextRange, TimelineBody, TimelineEntry, WorkflowJournalKind,
-    WorkflowJournalObservation, WorkflowPhase, WorkflowResultKind, WorkflowRun, WorkflowRunStatus,
-    WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
+    ReadTarget, ResourceRef, ResponseGroup, TextRange, TimelineBody, TimelineEntry,
+    WorkflowJournalKind, WorkflowJournalObservation, WorkflowPhase, WorkflowResultKind,
+    WorkflowRun, WorkflowRunStatus, WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
 };
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, EvidenceOrder, IngestOp, NativeToolRef, ProjectionAsset,
@@ -52,6 +53,7 @@ fn session(id: &str) -> SessionRow {
         project_id: Some("p1".into()),
         cwd: Some("/w/rosetta".into()),
         parent_session_id: None,
+        delegation: None,
         root_session_id: id.into(),
         role: SessionRole::Main,
         title: None,
@@ -1112,6 +1114,15 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
     let mut store = Store::open(&projection).unwrap();
     store.apply(&base_batch()).unwrap();
 
+    let mut runtime_row = message("team-runtime", 0, MessageKind::Agent);
+    runtime_row.model = Some("claude-opus-5".into());
+    runtime_row.effort = Some("high".into());
+    runtime_row.response = Some(ResponseGroup {
+        id: "response-team-1".into(),
+        derivation: rosetta_core::GroupDerivation::Native,
+    });
+    runtime_row.block_index = Some(0);
+
     let prose = "team result ".repeat(INLINE_TEXT_MAX_BYTES / 4);
     let (body, asset) = CanonicalText::externalize(prose.clone());
     let event = CollaborationEvent {
@@ -1126,6 +1137,11 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
         task_id: Some("task-2".into()),
         delivery_id: Some("delivery-2".into()),
         status: Some(CollaborationStatus::Completed),
+        authored_at: Some(1_777_000),
+        source_session_id: Some("s1".into()),
+        source_response_id: Some("response-team-1".into()),
+        work_start_timeline_id: Some("work-start".into()),
+        work_end_timeline_id: Some("work-end".into()),
     };
     let entry = TimelineEntry {
         timeline_id: "team-report".into(),
@@ -1160,6 +1176,7 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
                 IngestOp::ProjectionAsset {
                     asset: asset.expect("large collaboration body is externalized"),
                 },
+                message_op(runtime_row),
                 IngestOp::Message(Box::new(entry)),
             ],
             ..Batch::default()
@@ -1167,9 +1184,10 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
         .unwrap();
 
     let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
-    let [stored] = page.as_slice() else {
-        panic!("expected one collaboration row");
-    };
+    let stored = page
+        .iter()
+        .find(|row| row.timeline_id == "team-report")
+        .expect("collaboration row");
     let TimelineBody::Collaboration { event: stored } = &stored.body else {
         panic!("expected collaboration body, got {:?}", stored.body);
     };
@@ -1180,6 +1198,22 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
     assert_eq!(
         stored.body.as_ref().unwrap().as_preview().len() <= 2 * 1024,
         true
+    );
+    let (boundaries, runtimes) = queries::collaboration_timeline(store.conn(), "s1").unwrap();
+    assert_eq!(
+        boundaries
+            .iter()
+            .map(|row| row.timeline_id.as_str())
+            .collect::<Vec<_>>(),
+        ["team-report"]
+    );
+    assert_eq!(
+        runtimes,
+        [queries::ResponseRuntime {
+            response_id: "response-team-1".into(),
+            model: Some("claude-opus-5".into()),
+            effort: Some("high".into()),
+        }]
     );
 }
 
@@ -2408,9 +2442,20 @@ fn metadata_merges_are_independent_of_arrival_order() {
         zulu.name = "zulu".into();
         zulu.root_paths = vec!["/w/zulu".into()];
 
-        let placeholder = session("s2");
+        let mut placeholder = session("s2");
+        placeholder.parent_session_id = Some("s1".into());
+        let mut nested_parent = session("s3");
+        nested_parent.parent_session_id = Some("s1".into());
+        nested_parent.root_session_id = "s1".into();
+        nested_parent.role = SessionRole::Subagent;
         let mut child = session("s2");
-        child.parent_session_id = Some("s1".into());
+        child.parent_session_id = Some("s3".into());
+        child.delegation = Some(SessionDelegation {
+            parent_tool_native_id: Some("toolu-child".into()),
+            team: None,
+            color: None,
+            configured_model: Some("opus".into()),
+        });
         child.root_session_id = "s1".into();
         child.role = SessionRole::Subagent;
         let alpha_title = SessionTitleRow {
@@ -2430,6 +2475,7 @@ fn metadata_merges_are_independent_of_arrival_order() {
             vec![
                 IngestOp::Project(zulu),
                 IngestOp::Project(alpha),
+                IngestOp::SessionMeta(nested_parent.clone()),
                 IngestOp::SessionMeta(child),
                 IngestOp::SessionMeta(placeholder),
             ]
@@ -2437,6 +2483,7 @@ fn metadata_merges_are_independent_of_arrival_order() {
             vec![
                 IngestOp::Project(alpha),
                 IngestOp::Project(zulu),
+                IngestOp::SessionMeta(nested_parent),
                 IngestOp::SessionMeta(placeholder),
                 IngestOp::SessionMeta(child),
             ]
@@ -2491,9 +2538,17 @@ fn metadata_merges_are_independent_of_arrival_order() {
     let reverse = projected(true);
     assert_eq!(forward, reverse);
     assert_eq!(forward.0, "alpha");
-    assert_eq!(forward.2.parent_session_id.as_deref(), Some("s1"));
+    assert_eq!(forward.2.parent_session_id.as_deref(), Some("s3"));
     assert_eq!(forward.2.root_session_id, "s1");
     assert_eq!(forward.2.role, SessionRole::Subagent);
+    assert_eq!(
+        forward
+            .2
+            .delegation
+            .as_ref()
+            .and_then(|delegation| delegation.parent_tool_native_id.as_deref()),
+        Some("toolu-child")
+    );
     assert_eq!((forward.3.as_str(), forward.4), ("Alpha title", 20_000));
 }
 

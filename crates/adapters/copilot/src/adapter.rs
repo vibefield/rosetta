@@ -95,6 +95,7 @@ impl AgentAdapter for CopilotAdapter {
             ops: Vec::new(),
             session_id,
             parent_session_id: skim.parent_session_id.clone(),
+            delegation: None,
             // The grammar exposes an immediate spawning parent, but no
             // distinct root id. Until it does, that parent is the best native
             // root fact available for a detached child.
@@ -170,6 +171,7 @@ fn workspace_skim(stat: &FileStat, document: &[u8]) -> SkimResult {
         ops: Vec::new(),
         session_id,
         parent_session_id: None,
+        delegation: None,
         root_session_id: None,
         role: Some(SessionRole::Main),
         cwd: workspace.cwd.and_then(nonempty),

@@ -22,14 +22,16 @@ pub use rosetta_core::rows::{
 pub use rosetta_core::{TimelineBody, TimelineEntry};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
-pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
+pub use rosetta_store::queries::{
+    ContributionRow, HeatmapDay, HourTotal, ModelDay, ResponseRuntime,
+};
 pub use rosetta_store::timeline_meta::{
     TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
     TimelineMetaPlanSource, TimelineMetaTask,
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -285,6 +287,15 @@ pub struct TimelinePage {
     /// the timeline. Expires (HTTP 410, [`ErrorCode::CursorExpired`]) when
     /// the session's projection was rewritten under it.
     pub cursor: Option<String>,
+}
+
+/// Complete shared speech for one team-member session. Private work is not
+/// part of this response; response runtimes carry no content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CollaborationTimeline {
+    pub entries: Vec<TimelineEntry>,
+    pub response_runtimes: Vec<ResponseRuntime>,
 }
 
 /// Exact shell/code source recovered from the raw ledger only after an

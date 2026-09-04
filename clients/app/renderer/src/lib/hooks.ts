@@ -7,6 +7,7 @@ import type {
   MetaState,
   SearchReadiness,
   SearchResponse,
+  ResponseRuntime,
   SubscriptionStatus,
   TimelineEntry,
   TimelineMeta,
@@ -411,6 +412,10 @@ export interface TeamTimelineFeed {
   /** Tail snapshots for the known team members. Only boundary rows are merged
    * by the transcript model; private work remains in these source sessions. */
   readonly rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>;
+  /** Content-free response model/effort observations across full history. */
+  readonly responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]>;
+  /** True only after every current member's complete boundary query succeeds. */
+  readonly historyReady: boolean;
   /** Pull one exact older boundary row for a search landing. */
   readonly loadAnchor: (sessionId: string, timelineId: string) => Promise<boolean>;
 }
@@ -422,38 +427,102 @@ export interface TeamTimelineFeed {
 export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFeed {
   const key = [...new Set(sessionIds)].sort().join("\n");
   const ids = useMemo(() => (key === "" ? [] : key.split("\n")), [key]);
-  const [rowsBySession, setRowsBySession] = useState<
+  const [tailBySession, setTailBySession] = useState<
     ReadonlyMap<string, readonly TimelineEntry[]>
   >(new Map());
+  const [boundaryBySession, setBoundaryBySession] = useState<
+    ReadonlyMap<string, readonly TimelineEntry[]>
+  >(new Map());
+  const [responseRuntimesBySession, setResponseRuntimesBySession] = useState<
+    ReadonlyMap<string, readonly ResponseRuntime[]>
+  >(new Map());
+  const [completeHistoryIds, setCompleteHistoryIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const activeIds = useRef(new Set(ids));
   activeIds.current = new Set(ids);
 
   useEffect(() => {
     let active = true;
-    setRowsBySession(new Map());
-    const subscriptions = ids.map((sessionId) =>
-      client.subscribeSession(sessionId, {
+    setTailBySession(new Map());
+    setBoundaryBySession(new Map());
+    setResponseRuntimesBySession(new Map());
+    setCompleteHistoryIds(new Set());
+    const refreshBoundary = async (sessionId: string) => {
+      try {
+        const history = await client.collaborationTimeline(sessionId);
+        if (!active || !activeIds.current.has(sessionId)) return;
+        setBoundaryBySession((current) => {
+          const next = new Map(current);
+          next.set(sessionId, history.entries);
+          return next;
+        });
+        setResponseRuntimesBySession((current) => {
+          const next = new Map(current);
+          next.set(sessionId, history.response_runtimes);
+          return next;
+        });
+        setCompleteHistoryIds((current) => new Set(current).add(sessionId));
+      } catch {
+        // The live tail remains useful, but callers must continue to treat
+        // history as incomplete and avoid historical claims.
+      }
+    };
+    const subscriptions = ids.map((sessionId) => {
+      let refreshAfterSnapshot = false;
+      void refreshBoundary(sessionId);
+      return client.subscribeSession(sessionId, {
         onChange: (entries) => {
           if (!active) return;
-          setRowsBySession((current) => {
+          setTailBySession((current) => {
             const next = new Map(current);
             next.set(sessionId, entries);
             return next;
           });
+          if (refreshAfterSnapshot) {
+            refreshAfterSnapshot = false;
+            void refreshBoundary(sessionId);
+          }
         },
-      }),
-    );
+        onStatus: (status) => {
+          if (status === "resyncing") refreshAfterSnapshot = true;
+        },
+      });
+    });
     return () => {
       active = false;
       subscriptions.forEach((subscription) => subscription.close());
     };
   }, [ids]);
 
+  const rowsBySession = useMemo(() => {
+    const merged = new Map<string, readonly TimelineEntry[]>();
+    for (const sessionId of ids) {
+      const rows = new Map<string, TimelineEntry>();
+      for (const row of boundaryBySession.get(sessionId) ?? []) {
+        rows.set(row.timeline_id, row);
+      }
+      for (const row of tailBySession.get(sessionId) ?? []) {
+        rows.set(row.timeline_id, row);
+      }
+      if (rows.size > 0) {
+        merged.set(
+          sessionId,
+          [...rows.values()].sort(
+            (left, right) =>
+              left.ordinal - right.ordinal || left.timeline_id.localeCompare(right.timeline_id),
+          ),
+        );
+      }
+    }
+    return merged;
+  }, [ids, boundaryBySession, tailBySession]);
+
   const loadAnchor = useCallback(async (sessionId: string, timelineId: string) => {
     if (!activeIds.current.has(sessionId)) return false;
     const entry = await client.timelineEntry(sessionId, timelineId);
     if (!activeIds.current.has(sessionId) || entry.session_id !== sessionId) return false;
-    setRowsBySession((current) => {
+    setTailBySession((current) => {
       const next = new Map(current);
       const rows = current.get(sessionId) ?? [];
       next.set(
@@ -480,9 +549,25 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
       ),
     [ids, rowsBySession],
   );
+  const activeRuntimes = useMemo(
+    () =>
+      new Map(
+        ids.flatMap((sessionId) => {
+          const runtimes = responseRuntimesBySession.get(sessionId);
+          return runtimes === undefined ? [] : [[sessionId, runtimes] as const];
+        }),
+      ),
+    [ids, responseRuntimesBySession],
+  );
+  const historyReady = ids.every((sessionId) => completeHistoryIds.has(sessionId));
   return useMemo(
-    () => ({ rowsBySession: activeRows, loadAnchor }),
-    [activeRows, loadAnchor],
+    () => ({
+      rowsBySession: activeRows,
+      responseRuntimesBySession: activeRuntimes,
+      historyReady,
+      loadAnchor,
+    }),
+    [activeRows, activeRuntimes, historyReady, loadAnchor],
   );
 }
 

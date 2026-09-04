@@ -276,7 +276,7 @@ export function Ledger({
     const teamMember = teamMemberFor(line);
     if (teamMember !== null) {
       const members = [teamMember];
-      if (teamMember.operation === "start") {
+      if (teamMember.operation === "start" || teamMember.operation === "known") {
         while (at + 1 < lines.length) {
           const candidate = teamMemberFor(lines[at + 1]);
           if (candidate === null || !sameStartBurst(teamMember, candidate)) break;

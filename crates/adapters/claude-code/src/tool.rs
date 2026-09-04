@@ -19,14 +19,15 @@ use rosetta_adapter_support::tool::{
     VersionRange, canonical_text, first_bool, first_string, first_u64, lexical_resource,
     lookup_registration, open_interaction, string_values, url,
 };
-use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
-    ArtifactKind, ArtifactOp, CANONICAL_LIST_LIMIT, CodeLookupOp, CollaborationOp,
-    CorrelationDerivation, ExecutionMode, FileChangeOp, FileDelta, FileSearchMode, ModeOp,
-    ParticipantColor, ProcessOp, QuestionOption, RangeUnit, ReadTarget, ScheduleOp, SearchFilter,
+    ArtifactKind, ArtifactOp, CANONICAL_LIST_LIMIT, CORE_SCALAR_MAX_BYTES, CodeLookupOp,
+    CollaborationOp, CollaborationOutcome, CollaboratorRef, CorrelationDerivation, ExecutionMode,
+    FileChangeOp, FileDelta, FileSearchMode, ID_MAX_BYTES, ModeOp, ParticipantColor,
+    ParticipantState, ProcessOp, QuestionOption, RangeUnit, ReadTarget, ScheduleOp, SearchFilter,
     SearchFilterKind, SourceRange, TaskOp, TaskSnapshotItem, ToolAction, ToolActionKind,
     ToolInteraction, UserQuestion,
 };
+use rosetta_core::{TaskStatus, ids};
 use serde_json::Value;
 
 pub const AGENT: &str = "claude-code";
@@ -740,6 +741,11 @@ fn project_collaboration(name: &str, input: &Value) -> Result<ToolAction, Projec
         {
             CollaborationOp::RequestStop
         }
+        "SendMessage"
+            if first_string(input, &["type"]).is_some_and(|kind| kind == "shutdown_response") =>
+        {
+            CollaborationOp::RespondStop
+        }
         "TeamCreate" => CollaborationOp::Create,
         "TeamDelete" => CollaborationOp::Delete,
         "ListAgents" => CollaborationOp::List,
@@ -750,13 +756,194 @@ fn project_collaboration(name: &str, input: &Value) -> Result<ToolAction, Projec
         recipient: first_string(input, &["recipient"]).map(str::to_owned),
         team: first_string(input, &["team_name", "team"]).map(str::to_owned),
         summary: first_string(input, &["summary"]).map(str::to_owned),
-        body: first_string(input, &["content", "message", "body"])
+        body: first_string(input, &["message", "body", "content"])
             .map(canonical_text)
             .transpose()?,
         linked_session_id: None,
-        delivery_id: None,
+        delivery_id: first_string(input, &["msg_id", "request_id", "requestId"]).map(str::to_owned),
         outcome: None,
     })
+}
+
+/// Fold Claude's structured collaboration receipt onto its exact opener.
+/// Request prose remains authoritative; receipts contribute only routing,
+/// acknowledgement ids, resume links, and participant snapshots.
+pub(crate) fn project_collaboration_result(
+    request: &ToolAction,
+    result: &Value,
+    runtime_id: &str,
+) -> Option<ToolAction> {
+    let ToolAction::Collaborate {
+        operation,
+        recipient,
+        team,
+        summary,
+        body,
+        linked_session_id,
+        delivery_id,
+        outcome,
+    } = request
+    else {
+        return None;
+    };
+    let routing = result.get("routing").filter(|value| value.is_object());
+    let receipt_string = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| result.get(key).and_then(Value::as_str))
+            .or_else(|| {
+                routing.and_then(|route| {
+                    keys.iter()
+                        .find_map(|key| route.get(key).and_then(Value::as_str))
+                })
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let receipt_recipient = receipt_string(&["target", "recipient"])
+        .map(|value| bounded_field(value.trim_start_matches('@'), ID_MAX_BYTES));
+    let receipt_team = receipt_string(&["team_name", "teamName", "team"])
+        .map(|value| bounded_field(value, ID_MAX_BYTES));
+    let receipt_summary =
+        receipt_string(&["summary"]).map(|value| bounded_field(value, CORE_SCALAR_MAX_BYTES));
+    let receipt_delivery = receipt_string(&["msg_id", "request_id", "requestId"])
+        .map(|value| bounded_field(value, ID_MAX_BYTES));
+    let resumed = receipt_string(&["resumedAgentId", "resumed_agent_id"])
+        .map(|native| ids::session_id(runtime_id, native));
+
+    let participant_values = result
+        .get("agents")
+        .or_else(|| result.get("participants"))
+        .and_then(Value::as_array);
+    let receipt_outcome = participant_values
+        .map(|values| {
+            let participants = values
+                .iter()
+                .filter_map(|value| {
+                    let native_id =
+                        first_string(value, &["agentId", "agent_id", "sessionId", "session_id"])
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty());
+                    let name = first_string(value, &["name", "agentName", "agent_name"])
+                        .or_else(|| native_id.and_then(|id| id.split('@').next()))?;
+                    let name = bounded_field(name, ID_MAX_BYTES);
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let state = participant_state(
+                        first_string(value, &["status", "state"]).unwrap_or_default(),
+                    );
+                    Some(CollaboratorRef {
+                        name,
+                        role: first_string(value, &["role", "agentType", "agent_type"])
+                            .map(|value| bounded_field(value, ID_MAX_BYTES))
+                            .filter(|value| !value.is_empty()),
+                        session_id: native_id.map(|id| ids::session_id(runtime_id, id)),
+                        state,
+                    })
+                })
+                .take(CANONICAL_LIST_LIMIT)
+                .collect::<Vec<_>>();
+            CollaborationOutcome {
+                participants,
+                total_count: u64::try_from(values.len()).unwrap_or(u64::MAX),
+            }
+        })
+        .or_else(|| {
+            result
+                .get("listing")
+                .and_then(Value::as_str)
+                .map(project_participant_listing)
+        });
+
+    Some(ToolAction::Collaborate {
+        operation: *operation,
+        recipient: receipt_recipient.or_else(|| recipient.clone()),
+        team: receipt_team.or_else(|| team.clone()),
+        summary: summary.clone().or(receipt_summary),
+        body: body.clone(),
+        linked_session_id: resumed.or_else(|| linked_session_id.clone()),
+        delivery_id: receipt_delivery.or_else(|| delivery_id.clone()),
+        outcome: receipt_outcome.or_else(|| outcome.clone()),
+    })
+}
+
+fn participant_state(value: &str) -> ParticipantState {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "active" | "running" | "working" | "busy" => ParticipantState::Active,
+        "idle" | "available" => ParticipantState::Idle,
+        "completed" | "done" => ParticipantState::Completed,
+        "failed" | "error" => ParticipantState::Failed,
+        _ => ParticipantState::Unknown,
+    }
+}
+
+fn bounded_field(value: &str, max_bytes: usize) -> String {
+    let value = value.trim();
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    value[..end].to_owned()
+}
+
+/// Claude's current `ListAgents` receipt is a human-readable listing rather
+/// than JSON rows. Admit only its stable section/count and middle-dot columns;
+/// bracketed ids are deliberately not promoted to session ids because some are
+/// shortened display ids.
+fn project_participant_listing(listing: &str) -> CollaborationOutcome {
+    let mut declared_total = 0_u64;
+    let mut participants = Vec::new();
+    let mut in_participant_section = false;
+    for line in listing.lines() {
+        let trimmed = line.trim();
+        let section = ["Subagents (", "Teammates (", "Peer sessions ("]
+            .into_iter()
+            .find_map(|prefix| {
+                trimmed
+                    .strip_prefix(prefix)
+                    .and_then(|rest| rest.strip_suffix("):"))
+                    .and_then(|count| count.parse::<u64>().ok())
+            });
+        if let Some(count) = section {
+            declared_total = declared_total.saturating_add(count);
+            in_participant_section = true;
+            continue;
+        }
+        if trimmed.is_empty() {
+            in_participant_section = false;
+            continue;
+        }
+        if !in_participant_section || participants.len() >= CANONICAL_LIST_LIMIT {
+            continue;
+        }
+        let columns = trimmed.split("  ·  ").collect::<Vec<_>>();
+        if columns.len() < 3 {
+            continue;
+        }
+        let identity = columns[0].trim();
+        let name = identity
+            .rsplit_once(" [")
+            .and_then(|(name, id)| id.ends_with(']').then_some(name))
+            .unwrap_or(identity)
+            .trim();
+        if name.is_empty() {
+            continue;
+        }
+        participants.push(CollaboratorRef {
+            name: bounded_field(name, ID_MAX_BYTES),
+            role: columns
+                .get(1)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| bounded_field(value, ID_MAX_BYTES)),
+            session_id: None,
+            state: participant_state(columns[2]),
+        });
+    }
+    CollaborationOutcome {
+        total_count: declared_total.max(u64::try_from(participants.len()).unwrap_or(u64::MAX)),
+        participants,
+    }
 }
 
 #[cfg(test)]
@@ -782,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn send_message_keeps_content_and_distinguishes_shutdown_requests() {
+    fn send_message_prefers_full_message_and_distinguishes_shutdown_operations() {
         let message = project_request(
             Some(PINNED_WRITER_VERSION),
             "SendMessage",
@@ -790,7 +977,8 @@ mod tests {
                 "type":"message",
                 "recipient":"researcher",
                 "summary":"found the implementation",
-                "content":"The implementation is in src/message.rs."
+                "content":"The implementation is in src/message.rs. Previ",
+                "message":"The implementation is in src/message.rs. Full native body wins."
             }),
             None,
             "send-1",
@@ -813,7 +1001,7 @@ mod tests {
         assert_eq!(summary.as_deref(), Some("found the implementation"));
         assert_eq!(
             body.as_ref().map(|text| text.as_preview()),
-            Some("The implementation is in src/message.rs.")
+            Some("The implementation is in src/message.rs. Full native body wins.")
         );
 
         let shutdown = project_request(
@@ -837,6 +1025,136 @@ mod tests {
                 ..
             }
         ));
+
+        let response = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "SendMessage",
+            &json!({
+                "type":"shutdown_response",
+                "recipient":"researcher",
+                "request_id":"stop-7",
+                "approve":true
+            }),
+            None,
+            "send-3",
+            Some("send-3"),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            response.action,
+            ToolAction::Collaborate {
+                operation: CollaborationOp::RespondStop,
+                delivery_id: Some(ref delivery_id),
+                ..
+            } if delivery_id == "stop-7"
+        ));
+    }
+
+    #[test]
+    fn collaboration_receipts_add_routing_delivery_resume_and_roster_evidence() {
+        let send = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "SendMessage",
+            &json!({
+                "recipient":"worker",
+                "summary":"author summary",
+                "message":"full body"
+            }),
+            None,
+            "send-1",
+            Some("send-1"),
+            None,
+        )
+        .unwrap();
+        let routed = project_collaboration_result(
+            &send.action,
+            &json!({
+                "msg_id":"message-7",
+                "resumedAgentId":"native-worker-7",
+                "routing": {
+                    "target":"@worker",
+                    "targetColor":"green",
+                    "summary":"delivered"
+                }
+            }),
+            "runtime-1",
+        )
+        .unwrap();
+        let ToolAction::Collaborate {
+            recipient,
+            summary,
+            body,
+            linked_session_id,
+            delivery_id,
+            ..
+        } = routed
+        else {
+            panic!("expected collaboration receipt")
+        };
+        assert_eq!(recipient.as_deref(), Some("worker"));
+        assert_eq!(summary.as_deref(), Some("author summary"));
+        assert_eq!(
+            body.as_ref().map(|body| body.as_preview()),
+            Some("full body")
+        );
+        assert_eq!(
+            linked_session_id,
+            Some(ids::session_id("runtime-1", "native-worker-7"))
+        );
+        assert_eq!(delivery_id.as_deref(), Some("message-7"));
+
+        let list = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "ListAgents",
+            &json!({}),
+            None,
+            "list-1",
+            Some("list-1"),
+            None,
+        )
+        .unwrap();
+        let listed = project_collaboration_result(
+            &list.action,
+            &json!({"agents":[
+                {"agentId":"w1@team", "name":"w1", "status":"working", "agentType":"Explore"},
+                {"agentId":"w2@team", "name":"w2", "status":"idle"}
+            ]}),
+            "runtime-1",
+        )
+        .unwrap();
+        let ToolAction::Collaborate { outcome, .. } = listed else {
+            unreachable!()
+        };
+        let outcome = outcome.unwrap();
+        assert_eq!(outcome.total_count, 2);
+        assert_eq!(outcome.participants[0].state, ParticipantState::Active);
+        assert_eq!(outcome.participants[1].state, ParticipantState::Idle);
+
+        let native_listing = project_collaboration_result(
+            &list.action,
+            &json!({"listing": concat!(
+                "This session is lead [123abc] — it is not listed below.\n\n",
+                "Subagents (1):\n",
+                "  afa78f5b2b6e9ed84  ·  general-purpose  ·  running  ·  started 9m ago\n\n",
+                "Teammates (2):\n",
+                "  rust-tools [8c73b8]  ·  general-purpose  ·  working  ·  started 1h ago\n",
+                "  docs [224603]  ·  Explore  ·  idle  ·  started 1h ago\n"
+            )}),
+            "runtime-1",
+        )
+        .unwrap();
+        let ToolAction::Collaborate { outcome, .. } = native_listing else {
+            unreachable!()
+        };
+        let outcome = outcome.unwrap();
+        assert_eq!(outcome.total_count, 3);
+        assert_eq!(outcome.participants.len(), 3);
+        assert_eq!(outcome.participants[0].name, "afa78f5b2b6e9ed84");
+        assert_eq!(outcome.participants[0].state, ParticipantState::Active);
+        assert_eq!(outcome.participants[1].name, "rust-tools");
+        assert_eq!(outcome.participants[1].session_id, None);
+        assert_eq!(outcome.participants[2].state, ParticipantState::Idle);
     }
 
     /// Replaces `newer_writer_does_not_silently_inherit_the_mapping`, which

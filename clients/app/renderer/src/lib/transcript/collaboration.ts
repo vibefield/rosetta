@@ -5,7 +5,12 @@
 // shared chronology and roster without teaching React about Claude envelopes.
 // Ordinary Agent workers never enter these helpers: they remain invocation-
 // rooted child documents.
-import type { ParticipantColor, SessionRow, TimelineEntry } from "@rosetta/protocol";
+import type {
+  ParticipantColor,
+  ResponseRuntime,
+  SessionRow,
+  TimelineEntry,
+} from "@rosetta/protocol";
 import type { LedgerLine } from "./ledger.ts";
 import { linkedChildSessionIds } from "./ledger.ts";
 import { canonicalText } from "./vocabulary.ts";
@@ -20,7 +25,7 @@ export interface RuntimeProfile {
   readonly profileCount: number;
 }
 
-export type TeamMemberOperation = "start" | "add" | "resume";
+export type TeamMemberOperation = "start" | "known" | "add" | "resume";
 
 export interface TeamMemberPresentation {
   readonly row: TimelineEntry;
@@ -56,6 +61,19 @@ export interface TeamReportWork {
   readonly endedAt: number | null;
 }
 
+export interface TeamChronology {
+  readonly rows: readonly TimelineEntry[];
+  /** Every suppressed transport copy points at the one rendered delivery. */
+  readonly duplicateRepresentatives: ReadonlyMap<string, string>;
+}
+
+export type CollaborationTimeBasis = "authored" | "observed_arrival" | "unknown";
+
+export interface CollaborationStamp {
+  readonly at: number | null;
+  readonly basis: CollaborationTimeBasis;
+}
+
 const UNKNOWN_RUNTIME: RuntimeProfile = {
   basis: "unknown",
   label: "runtime not recorded",
@@ -69,8 +87,16 @@ const UNKNOWN_RUNTIME: RuntimeProfile = {
 export function runtimeProfile(
   rows: readonly TimelineEntry[],
   configuredModel: string | null,
+  responseRuntimes: readonly ResponseRuntime[] = [],
 ): RuntimeProfile {
   const responses = new Map<string, { model: string | null; effort: string | null }>();
+  for (const runtime of responseRuntimes) {
+    const current = responses.get(runtime.response_id) ?? { model: null, effort: null };
+    responses.set(runtime.response_id, {
+      model: current.model ?? runtime.model,
+      effort: current.effort ?? runtime.effort,
+    });
+  }
   for (const row of rows) {
     if (row.response === null || (row.model === null && row.effort === null)) continue;
     const current = responses.get(row.response.id) ?? { model: null, effort: null };
@@ -135,7 +161,9 @@ export function teamSessionIds(
   const ids = new Set(
     directChildren
       .filter(
-        (child) => child.parent_session_id === parentSessionId && child.role === "team",
+        (child) =>
+          child.parent_session_id === parentSessionId &&
+          (child.role === "team" || child.delegation?.team != null),
       )
       .map((child) => child.id),
   );
@@ -162,6 +190,8 @@ export function teamMemberPresentations(
   rows: readonly TimelineEntry[],
   sessions: ReadonlyMap<string, SessionRow>,
   rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>,
+  responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]> = new Map(),
+  historyComplete = true,
 ): ReadonlyMap<string, TeamMemberPresentation> {
   const out = new Map<string, TeamMemberPresentation>();
   const seenTeams = new Set<string>();
@@ -172,7 +202,13 @@ export function teamMemberPresentations(
     const session =
       action.child_session_id === null ? null : (sessions.get(action.child_session_id) ?? null);
     const operation: TeamMemberOperation =
-      action.resume_id !== null ? "resume" : seenTeams.has(action.team) ? "add" : "start";
+      action.resume_id !== null
+        ? "resume"
+        : seenTeams.has(action.team)
+          ? "add"
+          : historyComplete
+            ? "start"
+            : "known";
     seenTeams.add(action.team);
     const name =
       action.name ?? session?.title ?? action.agent_kind ?? session?.native_session_id ?? "teammate";
@@ -184,10 +220,16 @@ export function teamMemberPresentations(
       operation,
       team: action.team,
       name,
-      color: action.color,
+      color: action.color ?? session?.delegation?.color ?? null,
       objective: canonicalText(action.objective),
-      configuredModel: action.model,
-      runtime: runtimeProfile(memberRows, action.model),
+      configuredModel: action.model ?? session?.delegation?.configured_model ?? null,
+      runtime: runtimeProfile(
+        memberRows,
+        action.model ?? session?.delegation?.configured_model ?? null,
+        action.child_session_id === null
+          ? []
+          : (responseRuntimesBySession.get(action.child_session_id) ?? []),
+      ),
     });
   }
   return out;
@@ -201,6 +243,9 @@ function participantKey(value: string): string {
  * no timestamp or prose matching participates in this join. */
 export function teamParticipants(
   members: ReadonlyMap<string, TeamMemberPresentation>,
+  knownSessions: readonly SessionRow[] = [],
+  rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]> = new Map(),
+  responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]> = new Map(),
 ): ReadonlyMap<string, TeamParticipantPresentation> {
   const out = new Map<string, TeamParticipantPresentation>();
   const bareTeam = new Map<string, string>();
@@ -233,7 +278,49 @@ export function teamParticipants(
       }
     }
   }
+  for (const session of knownSessions) {
+    const team = session.delegation?.team ?? null;
+    const name = session.title ?? session.native_session_id;
+    const presentation = {
+      color: session.delegation?.color ?? null,
+      runtime: runtimeProfile(
+        rowsBySession.get(session.id) ?? [],
+        session.delegation?.configured_model ?? null,
+        responseRuntimesBySession.get(session.id) ?? [],
+      ),
+      sessionId: session.id,
+    };
+    const key = participantKey(name);
+    if (team !== null) out.set(`${participantKey(team)}\u0000${key}`, presentation);
+    if (!ambiguous.has(key)) {
+      const previousTeam = bareTeam.get(key);
+      const teamKey = team ?? "";
+      if (previousTeam === undefined || previousTeam === teamKey) {
+        bareTeam.set(key, teamKey);
+        out.set(key, presentation);
+      } else {
+        bareTeam.delete(key);
+        ambiguous.add(key);
+        out.delete(key);
+      }
+    }
+  }
   return out;
+}
+
+/** Native authored time is the shared-chronology stamp when present. The
+ * containing row time is an explicitly labelled observed-delivery fallback. */
+export function collaborationStamp(row: TimelineEntry): CollaborationStamp {
+  if (row.body.type !== "collaboration") {
+    return { at: row.at, basis: row.at === null ? "unknown" : "observed_arrival" };
+  }
+  if (row.body.event.authored_at !== null) {
+    return { at: row.body.event.authored_at, basis: "authored" };
+  }
+  return {
+    at: row.at,
+    basis: row.at === null ? "unknown" : "observed_arrival",
+  };
 }
 
 /** Add only delivered boundary events from team-member transcripts to the
@@ -241,17 +328,14 @@ export function teamParticipants(
  * private; later coordinator follow-ups are addressable team conversation and
  * do interleave. A delivery id is the only cross-session dedupe key we trust;
  * similar prose is never silently collapsed. Parent row order remains
- * canonical, while child events enter the gap selected by their own stamp. */
-export function interleaveTeamCollaboration(
+ * canonical, while child events enter the gap selected by native authored
+ * time, or their explicitly labelled observed-arrival fallback. */
+export function teamChronology(
   parentRows: readonly TimelineEntry[],
   rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>,
-): readonly TimelineEntry[] {
+): TeamChronology {
   const seenTimelineIds = new Set(parentRows.map((row) => row.timeline_id));
-  const seenDeliveries = new Set<string>();
-  for (const row of parentRows) {
-    if (row.body.type !== "collaboration") continue;
-    if (row.body.event.delivery_id !== null) seenDeliveries.add(row.body.event.delivery_id);
-  }
+  const duplicateRepresentatives = new Map<string, string>();
 
   const candidates: TimelineEntry[] = [];
   for (const rows of rowsBySession.values()) {
@@ -270,36 +354,91 @@ export function interleaveTeamCollaboration(
   }
   candidates.sort(
     (left, right) =>
-      (left.at ?? Number.MAX_SAFE_INTEGER) - (right.at ?? Number.MAX_SAFE_INTEGER) ||
+      (collaborationStamp(left).at ?? Number.MAX_SAFE_INTEGER) -
+        (collaborationStamp(right).at ?? Number.MAX_SAFE_INTEGER) ||
       left.session_id.localeCompare(right.session_id) ||
       left.ordinal - right.ordinal ||
       left.timeline_id.localeCompare(right.timeline_id),
   );
+
+  // Delivered boundary evidence is the representative for a matching
+  // sender-side tool receipt. Parent boundary rows win over child copies;
+  // otherwise the earliest canonical child candidate wins. Text never participates.
+  const representativeByDelivery = new Map<string, TimelineEntry>();
+  for (const row of [...parentRows, ...candidates]) {
+    if (row.body.type !== "collaboration") continue;
+    const delivery = row.body.event.delivery_id;
+    if (delivery !== null && !representativeByDelivery.has(delivery)) {
+      representativeByDelivery.set(delivery, row);
+    }
+  }
+
+  const retainedParent: TimelineEntry[] = [];
+  for (const row of parentRows) {
+    const deliveryIds =
+      row.body.type === "collaboration"
+        ? [row.body.event.delivery_id]
+        : row.body.type === "tool_use" && row.body.tool.action.type === "collaborate"
+          ? [
+              row.body.tool.action.delivery_id,
+              row.body.tool.correlation.key,
+              row.body.tool.native.id,
+            ]
+          : [];
+    const representative = deliveryIds
+      .filter((value): value is string => value !== null)
+      .map((delivery) => representativeByDelivery.get(delivery))
+      .find((candidate) => candidate !== undefined);
+    if (representative !== undefined && representative.timeline_id !== row.timeline_id) {
+      duplicateRepresentatives.set(row.timeline_id, representative.timeline_id);
+      continue;
+    }
+    retainedParent.push(row);
+  }
+
   const additions: TimelineEntry[] = [];
   for (const row of candidates) {
     const delivery = row.body.type === "collaboration" ? row.body.event.delivery_id : null;
-    if (delivery !== null && seenDeliveries.has(delivery)) continue;
-    if (delivery !== null) seenDeliveries.add(delivery);
+    const representative = delivery === null ? undefined : representativeByDelivery.get(delivery);
+    if (representative !== undefined && representative.timeline_id !== row.timeline_id) {
+      duplicateRepresentatives.set(row.timeline_id, representative.timeline_id);
+      continue;
+    }
     additions.push(row);
   }
-  if (additions.length === 0) return parentRows;
+  if (additions.length === 0) {
+    return {
+      rows: retainedParent.length === parentRows.length ? parentRows : retainedParent,
+      duplicateRepresentatives,
+    };
+  }
 
-  const buckets = Array.from({ length: parentRows.length + 1 }, () => [] as TimelineEntry[]);
+  const buckets = Array.from(
+    { length: retainedParent.length + 1 },
+    () => [] as TimelineEntry[],
+  );
   for (const row of additions) {
-    const at = row.at;
+    const at = collaborationStamp(row).at;
     const before =
       at === null
         ? -1
-        : parentRows.findIndex((parent) => parent.at !== null && parent.at > at);
-    buckets[before === -1 ? parentRows.length : before].push(row);
+        : retainedParent.findIndex((parent) => parent.at !== null && parent.at > at);
+    buckets[before === -1 ? retainedParent.length : before].push(row);
   }
 
   const merged: TimelineEntry[] = [];
-  for (let at = 0; at < parentRows.length; at += 1) {
-    merged.push(...buckets[at], parentRows[at]);
+  for (let at = 0; at < retainedParent.length; at += 1) {
+    merged.push(...buckets[at], retainedParent[at]);
   }
-  merged.push(...buckets[parentRows.length]);
-  return merged;
+  merged.push(...buckets[retainedParent.length]);
+  return { rows: merged, duplicateRepresentatives };
+}
+
+export function interleaveTeamCollaboration(
+  parentRows: readonly TimelineEntry[],
+  rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>,
+): readonly TimelineEntry[] {
+  return teamChronology(parentRows, rowsBySession).rows;
 }
 
 export function participantPresentation(
@@ -334,6 +473,25 @@ export function workerThreadLinks(
     const rowId = line.rows[0]?.timeline_id;
     if (rowId === undefined) continue;
     const childIds = new Set(line.rows.flatMap((row) => linkedChildSessionIds(row)));
+    const nativeToolIds = new Set(
+      line.rows.flatMap((row) =>
+        row.body.type === "tool_use"
+          ? [row.body.tool.correlation.key, row.body.tool.native.id].filter(
+              (value): value is string => value !== null,
+            )
+          : [],
+      ),
+    );
+    for (const child of sessions.values()) {
+      if (
+        child.parent_session_id === parentSessionId &&
+        !excludedSessionIds.has(child.id) &&
+        child.delegation?.parent_tool_native_id != null &&
+        nativeToolIds.has(child.delegation.parent_tool_native_id)
+      ) {
+        childIds.add(child.id);
+      }
+    }
     for (const childId of childIds) {
       const child = sessions.get(childId);
       if (
@@ -360,9 +518,9 @@ export function workerThreadLinks(
   return { anchorRowByChild, childrenByRow, referencedChildIdsByRow };
 }
 
-/** Recover a teammate report's nested work only from matching native task
- * identifiers in the same member transcript. The closing report is rendered
- * above the disclosure, so the returned slice stops immediately before it. */
+/** Recover report work only when canonical evidence names the exact source
+ * session and inclusive timeline bounds. A shared task id alone is not a
+ * safe range: teammates can overlap work on the same task. */
 export function taskBoundedReportWork(
   reportRow: TimelineEntry,
   sourceRows: readonly TimelineEntry[],
@@ -370,41 +528,36 @@ export function taskBoundedReportWork(
   if (
     reportRow.body.type !== "collaboration" ||
     reportRow.body.event.kind !== "report" ||
-    reportRow.body.event.task_id === null
+    reportRow.body.event.source_session_id === null ||
+    reportRow.body.event.source_response_id === null ||
+    reportRow.body.event.work_start_timeline_id === null ||
+    reportRow.body.event.work_end_timeline_id === null
   ) {
     return null;
   }
+  const event = reportRow.body.event;
   const ordered = [...sourceRows].sort(
     (left, right) => left.ordinal - right.ordinal || left.timeline_id.localeCompare(right.timeline_id),
   );
-  const reportAt = ordered.findIndex((row) => row.timeline_id === reportRow.timeline_id);
-  const reportStamp = reportRow.at;
-  const candidates =
-    reportAt >= 0
-      ? ordered.slice(0, reportAt)
-      : reportStamp === null
-        ? []
-        : ordered.filter((row) => row.at !== null && row.at <= reportStamp);
-  if (candidates.length === 0) return null;
-  const taskId = reportRow.body.event.task_id;
-  let assignmentAt = -1;
-  for (let at = candidates.length - 1; at >= 0; at -= 1) {
-    const row = candidates[at];
-    if (
-      row.body.type === "collaboration" &&
-      row.body.event.kind === "assignment" &&
-      row.body.event.task_id === taskId
-    ) {
-      assignmentAt = at;
-      break;
-    }
+  if (
+    ordered.length === 0 ||
+    ordered.some((row) => row.session_id !== event.source_session_id)
+  ) {
+    return null;
   }
-  if (assignmentAt === -1) return null;
-  const rows = candidates.slice(assignmentAt);
+  const startAt = ordered.findIndex(
+    (row) => row.timeline_id === event.work_start_timeline_id,
+  );
+  const endAt = ordered.findIndex(
+    (row) => row.timeline_id === event.work_end_timeline_id,
+  );
+  if (startAt === -1 || endAt < startAt) return null;
+  const rows = ordered.slice(startAt, endAt + 1);
+  if (!rows.some((row) => row.response?.id === event.source_response_id)) return null;
   return {
     rows,
     actionCount: rows.filter((row) => row.body.type === "tool_use").length,
     startedAt: rows.find((row) => row.at !== null)?.at ?? null,
-    endedAt: reportRow.at,
+    endedAt: [...rows].reverse().find((row) => row.at !== null)?.at ?? null,
   };
 }

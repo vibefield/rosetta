@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use rosetta_core::{
-    CollaborationChannel, CollaborationEventKind, CollaborationStatus, ParticipantColor,
+    CollaborationChannel, CollaborationEventKind, CollaborationStatus, Ms, ParticipantColor,
 };
 use serde_json::Value;
 
@@ -26,6 +26,9 @@ pub(crate) struct CollaborationDraft {
     pub task_id: Option<String>,
     pub delivery_id: Option<String>,
     pub status: Option<CollaborationStatus>,
+    /// Timestamp authored inside the payload. The outer record remains the
+    /// observation time used to place the row in its transcript.
+    pub authored_at: Option<Ms>,
 }
 
 /// Exact fields carried by Claude's top-level async completion callback. The
@@ -92,6 +95,7 @@ pub(crate) fn classify(
             task_id: origin.and_then(|origin| origin.sender_task_id.clone()),
             delivery_id: None,
             status: None,
+            authored_at: None,
         }]),
         Some("coordinator") => Some(vec![CollaborationDraft {
             kind: CollaborationEventKind::Message,
@@ -105,6 +109,7 @@ pub(crate) fn classify(
             task_id: None,
             delivery_id: None,
             status: None,
+            authored_at: None,
         }]),
         Some("task-notification") => Some(Vec::new()),
         Some("human") => None,
@@ -122,6 +127,7 @@ pub(crate) fn classify(
             task_id: None,
             delivery_id: None,
             status: None,
+            authored_at: None,
         }]),
         _ => None,
     }
@@ -186,6 +192,7 @@ fn agent_message(envelope: Envelope<'_>, origin: Option<&UserOrigin>) -> Collabo
         task_id: origin.and_then(|origin| origin.sender_task_id.clone()),
         delivery_id: None,
         status: None,
+        authored_at: None,
     }
 }
 
@@ -202,6 +209,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
         .filter(Value::is_object);
 
     let payload_type = payload.as_ref().and_then(|value| value["type"].as_str());
+    let authored_at = string_ref(&payload, "timestamp").and_then(crate::time::rfc3339_ms);
     match payload_type {
         Some("idle_notification") => CollaborationDraft {
             kind: CollaborationEventKind::Idle,
@@ -219,6 +227,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
                 Some("failed") => Some(CollaborationStatus::Failed),
                 _ => None,
             },
+            authored_at,
         },
         Some("task_assignment") => CollaborationDraft {
             kind: CollaborationEventKind::Assignment,
@@ -232,6 +241,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
             task_id: string(&payload, "taskId"),
             delivery_id: None,
             status: None,
+            authored_at,
         },
         Some("shutdown_request") => CollaborationDraft {
             kind: CollaborationEventKind::StopRequested,
@@ -245,6 +255,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
             task_id: None,
             delivery_id: string(&payload, "requestId"),
             status: None,
+            authored_at,
         },
         Some("shutdown_approved") => CollaborationDraft {
             kind: CollaborationEventKind::StopApproved,
@@ -258,6 +269,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
             task_id: None,
             delivery_id: string(&payload, "requestId"),
             status: None,
+            authored_at,
         },
         Some("teammate_terminated") => CollaborationDraft {
             kind: CollaborationEventKind::Terminated,
@@ -271,6 +283,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
             task_id: None,
             delivery_id: None,
             status: Some(CollaborationStatus::Completed),
+            authored_at,
         },
         _ => CollaborationDraft {
             kind: CollaborationEventKind::Message,
@@ -284,6 +297,7 @@ fn teammate_message(envelope: Envelope<'_>, team_name: Option<&str>) -> Collabor
             task_id: None,
             delivery_id: None,
             status: None,
+            authored_at,
         },
     }
 }

@@ -9,7 +9,7 @@
 use std::any::Any;
 
 use rosetta_core::fold::CumulativeUsage;
-use rosetta_core::rows::{Ms, SessionRole, TitleKind};
+use rosetta_core::rows::{Ms, SessionDelegation, SessionRole, TitleKind};
 use rosetta_core::{EvidenceOrder, IngestOp, SourceIdentity};
 
 use crate::GroundTruthDoc;
@@ -99,6 +99,8 @@ pub struct SkimResult {
     /// Native parent session id for a child stream (for example a Claude Code
     /// subagent transcript). The pipeline derives both canonical ids together.
     pub parent_session_id: Option<String>,
+    /// Exact invocation/team facts from a native child sidecar.
+    pub delegation: Option<SessionDelegation>,
     /// Native root session id when it differs from the immediate parent.
     pub root_session_id: Option<String>,
     pub role: Option<rosetta_core::rows::SessionRole>,
@@ -273,6 +275,7 @@ pub trait AgentAdapter: Send + Sync {
             ops: Vec::new(),
             session_id: text("native_session_id"),
             parent_session_id: text("parent_native_session_id"),
+            delegation: None,
             root_session_id: text("root_native_session_id"),
             role: match text("role").as_deref() {
                 Some("subagent") => Some(SessionRole::Subagent),

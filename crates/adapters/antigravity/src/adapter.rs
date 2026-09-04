@@ -90,6 +90,7 @@ impl AgentAdapter for AntigravityAdapter {
             ops: Vec::new(),
             session_id: conversation_id(&stat.relative_path).map(str::to_owned),
             parent_session_id: None,
+            delegation: None,
             root_session_id: None,
             role: Some(SessionRole::Main),
             cwd: None,

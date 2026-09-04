@@ -792,6 +792,7 @@ button.tr-sub__head:hover { color: var(--vf-text-primary); }
   color: var(--vf-text-faint); font-family: var(--vf-font-mono);
   font-size: 10px; font-variant-numeric: tabular-nums;
 }
+.tm-time-basis { color: var(--vf-text-faint); font-family: var(--vf-font-sans); }
 .tm-message__subject {
   margin: 5px 0 0 21px; color: var(--vf-text-secondary); font-size: 12px; font-weight: 500;
 }
@@ -849,7 +850,30 @@ button.tr-sub__head:hover { color: var(--vf-text-primary); }
   .tm-roster__job { grid-column: 2; grid-row: 3; white-space: normal; }
   .tm-message__kind { margin-left: 0; }
   .tm-message__time { margin-left: auto; }
-  .tm-invocation .tr-line__r .tm-runtime { display: none; }
+  .tm-invocation[data-team-operation="add"],
+  .tm-invocation[data-team-operation="resume"] {
+    grid-template-columns: 16px minmax(0, 1fr);
+    grid-template-rows: minmax(var(--vf-tree-row-height), auto) auto auto;
+    padding-top: 3px; padding-bottom: 4px;
+  }
+  .tm-invocation[data-team-operation="add"] .tr-line__g,
+  .tm-invocation[data-team-operation="resume"] .tr-line__g {
+    grid-column: 1; grid-row: 1;
+  }
+  .tm-invocation[data-team-operation="add"] .tr-line__v,
+  .tm-invocation[data-team-operation="resume"] .tr-line__v {
+    grid-column: 2; grid-row: 1;
+  }
+  .tm-invocation[data-team-operation="add"] .tr-line__o,
+  .tm-invocation[data-team-operation="resume"] .tr-line__o {
+    grid-column: 2; grid-row: 2; min-width: 0;
+    overflow: visible; text-overflow: clip; white-space: normal;
+  }
+  .tm-invocation[data-team-operation="add"] .tr-line__r,
+  .tm-invocation[data-team-operation="resume"] .tr-line__r {
+    grid-column: 2; grid-row: 3; min-width: 0; justify-self: start;
+    flex-wrap: wrap;
+  }
   .tm-report__line {
     grid-template-columns: 16px minmax(0, 1fr);
     grid-template-rows: minmax(var(--vf-tree-row-height), auto) 20px 20px;

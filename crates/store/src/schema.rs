@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS session (
   project_id        TEXT REFERENCES project(id),
   cwd               TEXT,
   parent_session_id TEXT REFERENCES session(id),
+  delegation        TEXT CHECK (delegation IS NULL OR json_valid(delegation)),
   root_session_id   TEXT NOT NULL REFERENCES session(id),
   role              TEXT NOT NULL DEFAULT 'main',
   title             TEXT,

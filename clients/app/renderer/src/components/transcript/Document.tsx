@@ -20,12 +20,13 @@ import type {
   Segment,
 } from "../../lib/transcript";
 import {
-  interleaveTeamCollaboration,
+  collaborationStamp,
   linkedChildSessionIds,
   participantPresentation,
   runtimeProfile,
   taskBoundedReportWork,
   teamMemberPresentations,
+  teamChronology,
   teamParticipants,
   teamSessionIds,
   workerThreadLinks,
@@ -202,25 +203,76 @@ export function TranscriptDocument({
   );
   const teamIdSet = useMemo(() => new Set(teamIds), [teamIds]);
   const teamFeed = useTeamTimelines(teamIds);
-  const displayedRows = useMemo(
-    () => interleaveTeamCollaboration(feed.rows, teamFeed.rowsBySession),
+  const chronology = useMemo(
+    () => teamChronology(feed.rows, teamFeed.rowsBySession),
     [feed.rows, teamFeed.rowsBySession],
   );
+  const displayedRows = chronology.rows;
   const model = useMemo(
-    () =>
-      displayedRows === feed.rows
-        ? baseModel
-        : transcriptModel(displayedRows, session, homeDirectory, Date.now(), {
-            sharedCollaborationSessionIds: teamIdSet,
-          }),
-    [displayedRows, feed.rows, baseModel, session, homeDirectory, teamIdSet],
+    () => {
+        const derived =
+          displayedRows === feed.rows
+            ? baseModel
+            : transcriptModel(displayedRows, session, homeDirectory, Date.now(), {
+                sharedCollaborationSessionIds: teamIdSet,
+              });
+        if (chronology.duplicateRepresentatives.size === 0) return derived;
+        return {
+          ...derived,
+          representatives: new Map([
+            ...derived.representatives,
+            ...chronology.duplicateRepresentatives,
+          ]),
+        };
+    },
+    [
+      displayedRows,
+      feed.rows,
+      baseModel,
+      session,
+      homeDirectory,
+      teamIdSet,
+      chronology.duplicateRepresentatives,
+    ],
   );
   const workflowAttempts = useMemo(() => workflowAttemptIndex(displayedRows), [displayedRows]);
   const teamMembers = useMemo(
-    () => teamMemberPresentations(feed.rows, index.byId, teamFeed.rowsBySession),
-    [feed.rows, index.byId, teamFeed.rowsBySession],
+    () =>
+      teamMemberPresentations(
+        feed.rows,
+        index.byId,
+        teamFeed.rowsBySession,
+        teamFeed.responseRuntimesBySession,
+        feed.snapshotReady && feed.earlier.kind === "none",
+      ),
+    [
+      feed.rows,
+      feed.snapshotReady,
+      feed.earlier.kind,
+      index.byId,
+      teamFeed.rowsBySession,
+      teamFeed.responseRuntimesBySession,
+    ],
   );
-  const participants = useMemo(() => teamParticipants(teamMembers), [teamMembers]);
+  const knownTeamSessions = useMemo(
+    () => directChildren.filter((child) => teamIdSet.has(child.id)),
+    [directChildren, teamIdSet],
+  );
+  const participants = useMemo(
+    () =>
+      teamParticipants(
+        teamMembers,
+        knownTeamSessions,
+        teamFeed.rowsBySession,
+        teamFeed.responseRuntimesBySession,
+      ),
+    [
+      teamMembers,
+      knownTeamSessions,
+      teamFeed.rowsBySession,
+      teamFeed.responseRuntimesBySession,
+    ],
+  );
   const sessionByTimelineId = useMemo(
     () => new Map(displayedRows.map((row) => [row.timeline_id, row.session_id])),
     [displayedRows],
@@ -235,6 +287,26 @@ export function TranscriptDocument({
   const [teamHighlight, setTeamHighlight] = useState<string | null>(null);
   const teamFocusRequest = useRef<string | null>(null);
   const highlightedTimelineId = teamHighlight ?? parentHighlightedTimelineId;
+
+  useEffect(() => {
+    if (focus === null || focus.sessionId !== session.id) return;
+    const drawnBy = chronology.duplicateRepresentatives.get(focus.timelineId);
+    if (drawnBy === undefined) return;
+    const element = document.getElementById(
+      messageDomId(sessionByTimelineId.get(drawnBy) ?? session.id, drawnBy),
+    );
+    if (element === null) return;
+    element.scrollIntoView({ block: "center" });
+    setTeamHighlight(drawnBy);
+    onFocusConsumed();
+    window.setTimeout(() => setTeamHighlight(null), 1500);
+  }, [
+    focus,
+    session.id,
+    chronology.duplicateRepresentatives,
+    sessionByTimelineId,
+    onFocusConsumed,
+  ]);
 
   useEffect(() => {
     if (teamFocus === null) {
@@ -358,9 +430,7 @@ export function TranscriptDocument({
       row.body.event.sender,
       row.body.event.team,
     );
-    const memberSessionId = teamIdSet.has(row.session_id)
-      ? row.session_id
-      : participant?.sessionId;
+    const memberSessionId = row.body.event.source_session_id;
     if (memberSessionId === null || memberSessionId === undefined) return null;
     const sourceRows = teamFeed.rowsBySession.get(memberSessionId);
     const memberSession = index.byId.get(memberSessionId);
@@ -383,7 +453,14 @@ export function TranscriptDocument({
           rows={work.rows}
           name={row.body.event.sender}
           color={row.body.event.color ?? participant?.color ?? null}
-          runtime={participant?.runtime ?? runtimeProfile(work.rows, null)}
+          runtime={
+            participant?.runtime ??
+            runtimeProfile(
+              work.rows,
+              memberSession.delegation?.configured_model ?? null,
+              teamFeed.responseRuntimesBySession.get(memberSession.id) ?? [],
+            )
+          }
           startedAt={work.startedAt}
           endedAt={work.endedAt}
           index={index}
@@ -548,11 +625,13 @@ export function TranscriptDocument({
           event.recipient,
           event.team,
         );
+        const stamp = collaborationStamp(segment.row);
         return (
           <TeamEvent
             key={segment.key}
             event={event}
-            at={segment.at}
+            at={stamp.at}
+            timeBasis={stamp.basis}
             domId={domIdOf(rowId)}
             timelineId={rowId}
             participant={participant}
@@ -638,8 +717,13 @@ export function TranscriptDocument({
     );
   };
 
-  const knownTeamSessions = directChildren.filter((child) => teamIdSet.has(child.id));
-  const showKnownTeam = knownTeamSessions.length > 0 && teamMembers.size === 0;
+  const partialParentHistory = !feed.snapshotReady || feed.earlier.kind !== "none";
+  const hasSafeRosterLine = [...teamMembers.values()].some(
+    (member) => member.operation === "known",
+  );
+  const showKnownTeam =
+    knownTeamSessions.length > 0 &&
+    (teamMembers.size === 0 || (partialParentHistory && !hasSafeRosterLine));
   const empty = model.plan.length === 0 && workerChildren.length === 0 && !showKnownTeam;
   return (
     <>
@@ -648,6 +732,8 @@ export function TranscriptDocument({
         <KnownTeamRoster
           sessions={knownTeamSessions}
           rowsBySession={teamFeed.rowsBySession}
+          responseRuntimesBySession={teamFeed.responseRuntimesBySession}
+          historyReady={teamFeed.historyReady}
         />
       )}
       {model.plan.map(({ sitting, parts }) => (

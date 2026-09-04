@@ -10,8 +10,9 @@ use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, TitleKind};
 use rosetta_core::timeline::{
-    AttachmentKind, CollaborationChannel, CollaborationEventKind, CollaborationStatus, Notice,
-    ParticipantColor, TimelineBody, TimelineEntry, ToolAction, ToolStatus,
+    AttachmentKind, CollaborationChannel, CollaborationEventKind, CollaborationOp,
+    CollaborationStatus, Notice, ParticipantColor, TimelineBody, TimelineEntry, ToolAction,
+    ToolStatus,
 };
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
@@ -700,7 +701,7 @@ fn top_level_team_envelopes_split_and_nested_copies_do_not_replay() {
             "\"summary\":\"tests failed\",\"timestamp\":\"2026-09-03T00:00:00Z\"}",
             "</teammate-message>"
         )),
-        json!({"teamName": "refinement"}),
+        json!({"teamName": "refinement", "sourceToolUseID": "toolu-ambiguous"}),
     );
     let nested = user(
         json!(
@@ -725,12 +726,36 @@ fn top_level_team_envelopes_split_and_nested_copies_do_not_replay() {
     assert_eq!(event.team.as_deref(), Some("refinement"));
     assert_eq!(event.color, Some(ParticipantColor::Blue));
     assert_eq!(event.summary.as_deref(), Some("root cause"));
+    assert_eq!(
+        event.delivery_id, None,
+        "one record id cannot identify two envelopes"
+    );
 
     let TimelineBody::Collaboration { event } = &rows[1].body else {
         unreachable!()
     };
     assert_eq!(event.kind, CollaborationEventKind::Idle);
     assert_eq!(event.status, Some(CollaborationStatus::Failed));
+    assert_eq!(event.delivery_id, None);
+    assert_eq!(event.authored_at, Some(1_788_393_600_000));
+    assert_ne!(
+        event.authored_at, rows[1].at,
+        "authored and arrival time differ"
+    );
+}
+
+#[test]
+fn a_single_team_delivery_retains_its_exact_source_tool_id() {
+    let delivered = user(
+        json!("<teammate-message teammate_id=\"w1\">full message</teammate-message>"),
+        json!({"teamName": "refinement", "sourceToolUseID": "toolu-send-7"}),
+    );
+    let (ops, _) = run(&[delivered]);
+    let rows = messages(&ops);
+    let TimelineBody::Collaboration { event } = &rows[0].body else {
+        unreachable!()
+    };
+    assert_eq!(event.delivery_id.as_deref(), Some("toolu-send-7"));
 }
 
 #[test]
@@ -780,6 +805,68 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     );
     assert!(patch.failure.is_none(), "successful output is noise");
     assert_eq!(*at, Some(1787625320000));
+}
+
+#[test]
+fn collaboration_receipt_survives_checkpoint_and_enriches_the_exact_call() {
+    let lines = vec![
+        assistant(
+            json!([{"type":"tool_use", "id":"toolu_send", "name":"SendMessage",
+                    "input":{"type":"message", "recipient":"w1", "team":"refinement",
+                             "content":"A fifty character preview that must never win here...",
+                             "message":"The complete implementation report with all details."}}]),
+            None,
+        ),
+        user(
+            json!([{"type":"tool_result", "tool_use_id":"toolu_send",
+                    "content":"Message sent successfully", "is_error":false}]),
+            json!({"toolUseResult": {
+                "success":true,
+                "message":"Message sent successfully",
+                "msg_id":"delivery-7",
+                "resumedAgentId":"member-native-7",
+                "routing":{"sender":"team-lead", "target":"@w1",
+                           "targetColor":"blue", "summary":"implementation ready"}
+            }}),
+        ),
+    ];
+    let ops = run_with_checkpoint(&lines, 1);
+    let update = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } if patch.request.is_some() => Some(&**patch),
+            _ => None,
+        })
+        .expect("collaboration result update");
+    let ToolAction::Collaborate {
+        operation,
+        recipient,
+        summary,
+        body,
+        linked_session_id,
+        delivery_id,
+        ..
+    } = &update.request.as_ref().unwrap().action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*operation, CollaborationOp::Send);
+    assert_eq!(recipient.as_deref(), Some("w1"));
+    assert_eq!(summary.as_deref(), Some("implementation ready"));
+    assert_eq!(
+        body.as_ref().map(|body| body.as_preview()),
+        Some("The complete implementation report with all details.")
+    );
+    assert_eq!(
+        linked_session_id.as_deref(),
+        Some(ids::session_id(
+            &ids::runtime_id("claude-code", "~/.claude"),
+            "member-native-7"
+        ))
+        .as_deref()
+    );
+    assert_eq!(delivery_id.as_deref(), Some("delivery-7"));
+    assert!(update.outcome.is_some());
 }
 
 #[test]

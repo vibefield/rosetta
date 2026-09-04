@@ -68,20 +68,28 @@ pub(super) fn apply_project(tx: &Transaction, row: &ProjectRow) -> Result<(), St
 pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), StoreError> {
     tx.prepare_cached(
         "INSERT INTO session
-           (id, native_session_id, runtime_id, project_id, cwd, parent_session_id,
+           (id, native_session_id, runtime_id, project_id, cwd, parent_session_id, delegation,
             root_session_id, role, title, title_rank, title_at, title_src_cursor,
             summary, started_at, updated_at, stream_state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 0, NULL, NULL, ?9, ?10,
-                 ?11, ?12)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, 0, NULL, NULL, ?10, ?11,
+                 ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET
            -- Metadata may fill a previously unknown assignment, but a later
            -- stream/re-skim can never move an already-set session.
            project_id = COALESCE(session.project_id, excluded.project_id),
            cwd = COALESCE(session.cwd, excluded.cwd),
            parent_session_id = CASE
+             WHEN excluded.delegation IS NOT NULL
+                  AND excluded.parent_session_id IS NOT NULL
+               THEN excluded.parent_session_id
+             WHEN session.delegation IS NOT NULL THEN session.parent_session_id
              WHEN session.parent_session_id IS NULL THEN excluded.parent_session_id
              WHEN excluded.parent_session_id IS NULL THEN session.parent_session_id
              ELSE MIN(session.parent_session_id, excluded.parent_session_id) END,
+           delegation = CASE
+             WHEN session.delegation IS NULL THEN excluded.delegation
+             WHEN excluded.delegation IS NULL THEN session.delegation
+             ELSE json_patch(session.delegation, excluded.delegation) END,
            -- A main/self row is the placeholder used before stronger native
            -- topology arrives; it must never erase a subagent relationship.
            root_session_id = CASE
@@ -111,6 +119,10 @@ pub(super) fn apply_session(tx: &Transaction, row: &SessionRow) -> Result<(), St
         row.project_id,
         row.cwd,
         row.parent_session_id,
+        row.delegation
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?,
         row.root_session_id,
         row.role.as_str(),
         row.summary,

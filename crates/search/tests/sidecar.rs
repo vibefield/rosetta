@@ -40,6 +40,7 @@ fn session(id: &str, project_id: Option<&str>) -> SessionRow {
         project_id: project_id.map(str::to_string),
         cwd: project_id.map(|_| "/w/rosetta".to_owned()),
         parent_session_id: None,
+        delegation: None,
         root_session_id: id.into(),
         role: SessionRole::Main,
         title: None,

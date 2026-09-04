@@ -14,14 +14,14 @@ use rosetta_core::timeline::{
     ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
-    ApiError, BackfillState, BoostRequest, BoostResponse, CommandResponse, ContributionResponse,
-    ContributionRow, DaemonStatus, DiscoveriesResponse, DiscoveryRow, EnableRequest,
-    EnableResponse, ErrorCode, HeatmapDay, HeatmapResponse, HourTotal, HubStatus, IngestPhase,
-    IngestProgress, ModelDay, Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow,
-    ProjectsResponse, RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse,
-    SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState, ServerFrame,
-    SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState,
-    TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
+    ApiError, BackfillState, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
+    ContributionResponse, ContributionRow, DaemonStatus, DiscoveriesResponse, DiscoveryRow,
+    EnableRequest, EnableResponse, ErrorCode, HeatmapDay, HeatmapResponse, HourTotal, HubStatus,
+    IngestPhase, IngestProgress, ModelDay, Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow,
+    ProjectsResponse, ResponseRuntime, RuntimeBackfill, RuntimeIngestStatus, RuntimeRow,
+    RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState,
+    ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse,
+    StreamState, TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
     TimelineMetaPlanSource, TimelineMetaTask, TimelinePage, TokenSnapshot, UsageResponse,
 };
 
@@ -58,6 +58,7 @@ fn session_row() -> SessionRow {
         project_id: Some("p1".into()),
         cwd: Some("/w/rosetta".into()),
         parent_session_id: Some("s0".into()),
+        delegation: None,
         root_session_id: "s0".into(),
         role: SessionRole::Subagent,
         title: Some("Named".into()),
@@ -224,6 +225,11 @@ fn collaboration_entry() -> TimelineEntry {
                 task_id: Some("task-2".into()),
                 delivery_id: Some("delivery-2".into()),
                 status: Some(CollaborationStatus::Completed),
+                authored_at: Some(3_799_000),
+                source_session_id: Some("team-member-s2".into()),
+                source_response_id: Some("team-response-2".into()),
+                work_start_timeline_id: Some("team-work-start".into()),
+                work_end_timeline_id: Some("team-work-end".into()),
             },
         },
         parent_tool_native_id: None,
@@ -313,7 +319,7 @@ fn timeline_meta() -> TimelineMeta {
 fn exemplars() -> serde_json::Value {
     let status = StatusResponse {
         protocol_version: PROTOCOL_VERSION,
-        schema_version: 15,
+        schema_version: 16,
         canonical_ready: true,
         search: search_state(),
         daemon: Some(DaemonStatus {
@@ -445,6 +451,14 @@ fn exemplars() -> serde_json::Value {
         "timeline_page": TimelinePage {
             entries: vec![timeline_entry(), collaboration_entry()],
             cursor: Some("{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}".into()),
+        },
+        "collaboration_timeline": CollaborationTimeline {
+            entries: vec![collaboration_entry()],
+            response_runtimes: vec![ResponseRuntime {
+                response_id: "response-team-1".into(),
+                model: Some("claude-opus-4-1".into()),
+                effort: Some("high".into()),
+            }],
         },
         "task_action": task_action(),
         "command": CommandResponse { command: "printf 'full source'".into() },

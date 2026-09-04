@@ -4,7 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::timeline::{AttachmentRef, CitationRef, ResponseGroup, TimelineGroup, ToolInteraction};
+use crate::timeline::{
+    AttachmentRef, CitationRef, ParticipantColor, ResponseGroup, TimelineGroup, ToolInteraction,
+};
 
 /// Unix milliseconds.
 pub type Ms = i64;
@@ -185,6 +187,26 @@ pub struct ProjectRow {
     pub git_repo: Option<String>,
 }
 
+/// Native evidence connecting a child session to the invocation or team that
+/// created it. This belongs on the session relation because Claude can write
+/// the sidecar before or after either transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionDelegation {
+    /// Exact native tool-use id from the child sidecar, when recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool_native_id: Option<String>,
+    /// Persistent Agent Team identity. Absence means an ordinary subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    /// Native participant address colour; never inferred from ordering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ParticipantColor>,
+    /// Launch configuration. Observed response runtime still wins in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_model: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SessionRow {
@@ -196,6 +218,9 @@ pub struct SessionRow {
     /// bounded metadata admission. Timeline records never mutate it.
     pub cwd: Option<String>,
     pub parent_session_id: Option<String>,
+    /// Exact child-launch and team metadata, when a native sidecar proves it.
+    #[serde(default)]
+    pub delegation: Option<SessionDelegation>,
     /// `== id` for top-level sessions; subagent trees roll up here.
     pub root_session_id: String,
     pub role: SessionRole,

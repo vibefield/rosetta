@@ -7,12 +7,14 @@ import type { ReactNode } from "react";
 import type {
   CollaborationEvent,
   ParticipantColor,
+  ResponseRuntime,
   SessionRow,
   TimelineEntry,
 } from "@rosetta/protocol";
 import { AgentMark } from "../../lib/agents";
 import { clock } from "../../lib/format";
 import type {
+  CollaborationTimeBasis,
   RuntimeProfile,
   TeamMemberPresentation,
   TeamParticipantPresentation,
@@ -38,7 +40,11 @@ function TeamAvatar({
   readonly name: string | null;
 }) {
   return (
-    <span className="tm-avatar" data-member-color={color ?? undefined}>
+    <span
+      className="tm-avatar"
+      data-member-color={color ?? undefined}
+      aria-hidden="true"
+    >
       <AgentMark kind="claude-code" note={name === null ? "Agent Team member" : speaker(name)} />
     </span>
   );
@@ -140,8 +146,9 @@ export interface TeamInvocationProps {
   readonly focusTimelineId: string | null;
 }
 
-/** One initial burst becomes one roster line. Later add/resume operations keep
- * their own chronological line and put the member's model/effort at the edge. */
+/** One proven initial burst, or the first safe view of an older team, becomes
+ * one roster line. Later add/resume operations keep their own chronological
+ * line and put the member's model/effort at the edge. */
 export function TeamInvocation({
   members,
   domIdOf,
@@ -149,24 +156,25 @@ export function TeamInvocation({
   focusTimelineId,
 }: TeamInvocationProps) {
   const first = members[0];
-  const isStart = first.operation === "start";
+  const isRoster = first.operation === "start" || first.operation === "known";
   const forceOpen =
-    isStart && members.some((member) => member.row.timeline_id === focusTimelineId);
+    isRoster && members.some((member) => member.row.timeline_id === focusTimelineId);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
-  const expanded = isStart && (open || forceOpen);
+  const expanded = isRoster && (open || forceOpen);
   const range = invocationRange(members);
   const hit = members.some((member) => member.row.timeline_id === highlightedTimelineId);
 
-  if (!isStart) {
+  if (!isRoster) {
     const verb = first.operation === "resume" ? "Resumed teammate" : "Added teammate";
     return (
       <div
         className="tr-line tm-invocation"
         id={domIdOf(first.row.timeline_id)}
         data-timeline-id={first.row.timeline_id}
+        data-team-operation={first.operation}
         data-member-color={first.color ?? undefined}
         data-hit={hit || undefined}
       >
@@ -192,6 +200,7 @@ export function TeamInvocation({
         className="tr-line tm-invocation"
         id={domIdOf(first.row.timeline_id)}
         data-timeline-id={first.row.timeline_id}
+        data-team-operation={first.operation}
         data-hit={hit || undefined}
         role="button"
         tabIndex={0}
@@ -208,10 +217,15 @@ export function TeamInvocation({
             <TeamAvatar key={member.row.timeline_id} color={member.color} name={member.name} />
           ))}
         </span>
-        <span className="tr-line__v">Started team</span>
+        <span className="tr-line__v">
+          {first.operation === "start" ? "Started team" : "Team active"}
+        </span>
         <span className="tr-line__o">{first.team}</span>
         <span className="tr-line__r">
-          <span>{members.length} {members.length === 1 ? "teammate" : "teammates"}</span>
+          <span>
+            {members.length} {first.operation === "known" ? "known " : ""}
+            {members.length === 1 ? "teammate" : "teammates"}
+          </span>
           {range !== null && <span className="t">{range}</span>}
           <span className="chev"><LineChevron /></span>
         </span>
@@ -236,6 +250,11 @@ export function TeamInvocation({
           {members.some((member) => member.color === null) && (
             <div className="tm-note">A missing native colour keeps the Claude mark neutral.</div>
           )}
+          {first.operation === "known" && (
+            <div className="tm-note">
+              Team creation is above this page; this is the known roster, not a reconstructed start.
+            </div>
+          )}
         </div>
       )}
     </>
@@ -247,11 +266,16 @@ export function TeamInvocation({
 export function KnownTeamRoster({
   sessions,
   rowsBySession,
+  responseRuntimesBySession,
+  historyReady,
 }: {
   readonly sessions: readonly SessionRow[];
   readonly rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>;
+  readonly responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]>;
+  readonly historyReady: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const team = sessions.find((session) => session.delegation?.team != null)?.delegation?.team;
   return (
     <div className="tr-ledger tm-known">
       <div
@@ -268,24 +292,43 @@ export function KnownTeamRoster({
       >
         <span className="tr-line__g tm-avatar-stack">
           {sessions.slice(0, 3).map((session) => (
-            <TeamAvatar key={session.id} color={null} name={session.title} />
+            <TeamAvatar
+              key={session.id}
+              color={session.delegation?.color ?? null}
+              name={session.title}
+            />
           ))}
         </span>
         <span className="tr-line__v">Team active</span>
-        <span className="tr-line__o">{sessions.length} known {sessions.length === 1 ? "teammate" : "teammates"}</span>
+        <span className="tr-line__o">
+          {team == null ? "Agent Team" : team} · {sessions.length} known {sessions.length === 1 ? "teammate" : "teammates"}
+        </span>
         <span className="tr-line__r"><span className="chev"><LineChevron /></span></span>
       </div>
       {open && (
         <div className="tm-roster" role="region" aria-label="Known Agent Team members">
           {sessions.map((session) => (
             <div className="tm-roster__row" key={session.id}>
-              <TeamAvatar color={null} name={session.title} />
+              <TeamAvatar
+                color={session.delegation?.color ?? null}
+                name={session.title}
+              />
               <span className="tm-roster__name">{address(session.title ?? session.native_session_id)}</span>
               <span className="tm-roster__job" title={session.summary ?? undefined}>{session.summary ?? "objective not recorded on this page"}</span>
-              <span className="tm-runtime">{runtimeProfile(rowsBySession.get(session.id) ?? [], null).label}</span>
+              <span className="tm-runtime">
+                {runtimeProfile(
+                  rowsBySession.get(session.id) ?? [],
+                  session.delegation?.configured_model ?? null,
+                  responseRuntimesBySession.get(session.id) ?? [],
+                ).label}
+              </span>
             </div>
           ))}
-          <div className="tm-note">Creation is above this page; no historical start time or colour is inferred.</div>
+          <div className="tm-note">
+            {historyReady
+              ? "Creation is above this page; no historical start time is inferred."
+              : "Loading complete delivered-message history; private teammate work stays closed."}
+          </div>
         </div>
       )}
     </div>
@@ -313,6 +356,33 @@ function eventRuntime(participant: TeamParticipantPresentation | null): RuntimeP
   };
 }
 
+function TeamTime({
+  at,
+  basis,
+  className,
+}: {
+  readonly at: number | null;
+  readonly basis: CollaborationTimeBasis;
+  readonly className?: string;
+}) {
+  if (at === null) return null;
+  const arrivalFallback = basis === "observed_arrival";
+  return (
+    <time
+      className={className}
+      data-time-basis={basis}
+      title={
+        arrivalFallback
+          ? "Delivery arrival time; native authored time was not recorded"
+          : "Native authored time"
+      }
+    >
+      {clock(at)}
+      {arrivalFallback && <span className="tm-time-basis"> · arrived</span>}
+    </time>
+  );
+}
+
 function lifecycleText(event: CollaborationEvent): string {
   const who = speaker(event.sender);
   switch (event.kind) {
@@ -334,6 +404,7 @@ function lifecycleText(event: CollaborationEvent): string {
 function TeamReport({
   event,
   at,
+  timeBasis,
   domId,
   timelineId,
   color,
@@ -345,6 +416,7 @@ function TeamReport({
 }: {
   readonly event: CollaborationEvent;
   readonly at: number | null;
+  readonly timeBasis: CollaborationTimeBasis;
   readonly domId: string;
   readonly timelineId: string;
   readonly color: ParticipantColor | null;
@@ -398,7 +470,7 @@ function TeamReport({
         </span>
         <span className="tr-line__r">
           <span className="tm-runtime">{runtime.label}</span>
-          {at !== null && <span className="t">{clock(at)}</span>}
+          <TeamTime at={at} basis={timeBasis} className="t" />
           {pressable && <span className="chev"><LineChevron /></span>}
         </span>
       </div>
@@ -435,6 +507,7 @@ function TeamReport({
 export interface TeamEventProps {
   readonly event: CollaborationEvent;
   readonly at: number | null;
+  readonly timeBasis: CollaborationTimeBasis;
   readonly domId: string;
   readonly timelineId: string;
   readonly participant: TeamParticipantPresentation | null;
@@ -455,6 +528,7 @@ export interface TeamReportWorkPresentation {
 export function TeamEvent({
   event,
   at,
+  timeBasis,
   domId,
   timelineId,
   participant,
@@ -471,6 +545,7 @@ export function TeamEvent({
       <TeamReport
         event={event}
         at={at}
+        timeBasis={timeBasis}
         domId={domId}
         timelineId={timelineId}
         color={color}
@@ -493,7 +568,8 @@ export function TeamEvent({
         data-hit={hit || undefined}
       >
         <TeamAvatar color={color} name={event.sender} />
-        <span>{lifecycleText(event)}{at === null ? "" : ` · ${clock(at)}`}</span>
+        <span>{lifecycleText(event)}</span>
+        <TeamTime at={at} basis={timeBasis} />
       </div>
     );
   }
@@ -519,7 +595,7 @@ export function TeamEvent({
           <span className="tm-message__route">{route}</span>
         ) : null}
         <span className="tm-message__kind">{event.kind}</span>
-        {at !== null && <time className="tm-message__time">{clock(at)}</time>}
+        <TeamTime at={at} basis={timeBasis} className="tm-message__time" />
       </header>
       {event.summary !== null && event.body !== null && (
         <p className="tm-message__subject">{event.summary}</p>

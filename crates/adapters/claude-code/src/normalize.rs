@@ -79,6 +79,10 @@ pub struct ClaudeCodeState {
     /// terminal record so the final timeline row can hold an after-state.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     task_calls: BTreeMap<String, ToolAction>,
+    /// Collaboration acknowledgements carry routing and delivery identity
+    /// only in the result record, so retain the exact typed opener by id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    collaboration_calls: BTreeMap<String, ToolAction>,
     /// Transient point-in-time task board. This is checkpointed normalizer
     /// state, never a second durable task store; the raw ledger recreates it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -156,6 +160,15 @@ impl ClaudeCodeState {
     fn remember_task_call(&mut self, tool_use_id: &str, action: &ToolAction) {
         self.task_calls
             .insert(tool_use_id.to_owned(), action.clone());
+    }
+
+    fn remember_collaboration_call(&mut self, tool_use_id: &str, action: &ToolAction) {
+        self.collaboration_calls
+            .insert(tool_use_id.to_owned(), action.clone());
+    }
+
+    fn take_collaboration_call(&mut self, tool_use_id: &str) -> Option<ToolAction> {
+        self.collaboration_calls.remove(tool_use_id)
     }
 
     fn remember_workflow_call(
@@ -653,7 +666,17 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
     };
 
     if let Some(drafts) = collaboration {
-        for (index, draft) in drafts.into_iter().enumerate() {
+        // A single delivered envelope can retain the exact sender tool id on
+        // its containing user record. Multiple sibling envelopes cannot all
+        // own that one id, so leave those unresolved instead of collapsing
+        // distinct speech.
+        let source_delivery_id = (drafts.len() == 1)
+            .then(|| line.source_tool_use_id.clone())
+            .flatten();
+        for (index, mut draft) in drafts.into_iter().enumerate() {
+            if draft.delivery_id.is_none() {
+                draft.delivery_id = source_delivery_id.clone();
+            }
             emit.push_collaboration(
                 &seed,
                 &format!("{}#collaboration-{index}", line.uuid),
@@ -731,40 +754,55 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     Some(id),
                     None,
                 );
-                let (tool, is_delegate, is_file_change, is_task, is_workflow) = match projected {
-                    Ok(tool) => {
-                        let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
-                        let is_file_change = matches!(&tool.action, ToolAction::FileChange { .. });
-                        let is_task = matches!(&tool.action, ToolAction::Task { .. });
-                        let is_workflow = matches!(&tool.action, ToolAction::Workflow { .. });
-                        (tool, is_delegate, is_file_change, is_task, is_workflow)
-                    }
-                    Err(error) => {
-                        emit.drift(
-                            error.drift_code(),
-                            &projection_record_kind("request", None, name),
-                            projection_shape_paths(input),
-                            ts,
-                            Some(&line.version),
-                        );
-                        (
-                            unknown_interaction(
-                                id,
-                                CorrelationDerivation::NativeId,
-                                Some(id.clone()),
-                                None,
-                                name,
-                                None,
-                            ),
-                            false,
-                            false,
-                            false,
-                            false,
-                        )
-                    }
-                };
+                let (tool, is_delegate, is_file_change, is_task, is_collaboration, is_workflow) =
+                    match projected {
+                        Ok(tool) => {
+                            let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
+                            let is_file_change =
+                                matches!(&tool.action, ToolAction::FileChange { .. });
+                            let is_task = matches!(&tool.action, ToolAction::Task { .. });
+                            let is_collaboration =
+                                matches!(&tool.action, ToolAction::Collaborate { .. });
+                            let is_workflow = matches!(&tool.action, ToolAction::Workflow { .. });
+                            (
+                                tool,
+                                is_delegate,
+                                is_file_change,
+                                is_task,
+                                is_collaboration,
+                                is_workflow,
+                            )
+                        }
+                        Err(error) => {
+                            emit.drift(
+                                error.drift_code(),
+                                &projection_record_kind("request", None, name),
+                                projection_shape_paths(input),
+                                ts,
+                                Some(&line.version),
+                            );
+                            (
+                                unknown_interaction(
+                                    id,
+                                    CorrelationDerivation::NativeId,
+                                    Some(id.clone()),
+                                    None,
+                                    name,
+                                    None,
+                                ),
+                                false,
+                                false,
+                                false,
+                                false,
+                                false,
+                            )
+                        }
+                    };
                 if is_task {
                     emit.remember_task_call(id, &tool.action);
+                }
+                if is_collaboration {
+                    emit.remember_collaboration_call(id, &tool.action);
                 }
                 if is_workflow {
                     emit.remember_workflow_call(id, &tool.action, ts);
@@ -1361,6 +1399,11 @@ impl<'a> Emit<'a> {
                     task_id: draft.task_id,
                     delivery_id: draft.delivery_id,
                     status: draft.status,
+                    authored_at: draft.authored_at,
+                    source_session_id: None,
+                    source_response_id: None,
+                    work_start_timeline_id: None,
+                    work_end_timeline_id: None,
                 },
             },
             parent_tool_native_id: None,
@@ -1462,6 +1505,17 @@ impl<'a> Emit<'a> {
             .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
         {
             state.remember_task_call(tool_use_id, action);
+        }
+    }
+
+    fn remember_collaboration_call(&mut self, tool_use_id: &str, action: &ToolAction) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_collaboration_call(tool_use_id, action);
         }
     }
 
@@ -1656,6 +1710,14 @@ impl<'a> Emit<'a> {
             .and_then(|state| state.resolve_task_call(tool_use_id, result, failed))
     }
 
+    fn take_collaboration_call(&mut self, tool_use_id: &str) -> Option<ToolAction> {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.take_collaboration_call(tool_use_id))
+    }
+
     fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
         let native_failure = result
             .tool_use_result
@@ -1731,6 +1793,17 @@ impl<'a> Emit<'a> {
             self.resolve_task_call(result.tool_use_id, result.tool_use_result, failed)
         {
             patch.request = Some(ToolRequestPatch { action });
+        }
+        if let Some(request) = self.take_collaboration_call(result.tool_use_id)
+            && !failed
+            && let Some(result) = result.tool_use_result
+            && let Some(action) =
+                crate::tool::project_collaboration_result(&request, result, &self.ctx.runtime_id)
+        {
+            patch.request = Some(ToolRequestPatch {
+                action: action.clone(),
+            });
+            patch.outcome = Some(ToolOutcomePatch { action });
         }
         IngestOp::push_tool_update(
             &mut self.ops,

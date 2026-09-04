@@ -22,10 +22,11 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::json;
 
 use rosetta_protocol::{
-    ApiError, BoostRequest, BoostResponse, CommandResponse, ContributionResponse,
-    DiscoveriesResponse, EnableRequest, EnableResponse, ErrorCode, HeatmapResponse,
-    PROTOCOL_VERSION, ProjectsResponse, RuntimesResponse, SearchRequest, SearchResponse,
-    SessionResponse, SessionsResponse, StatusResponse, TimelineCursor, TimelinePage, UsageResponse,
+    ApiError, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
+    ContributionResponse, DiscoveriesResponse, EnableRequest, EnableResponse, ErrorCode,
+    HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse, RuntimesResponse, SearchRequest,
+    SearchResponse, SessionResponse, SessionsResponse, StatusResponse, TimelineCursor,
+    TimelinePage, UsageResponse,
 };
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
@@ -240,6 +241,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/contribution", get(contribution))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}", get(session))
+        .route(
+            "/api/sessions/{id}/collaboration",
+            get(collaboration_timeline),
+        )
         .route("/api/sessions/{id}/timeline", get(timeline))
         .route(
             "/api/sessions/{id}/timeline/{timeline_id}",
@@ -834,6 +839,31 @@ async fn timeline(
     })
     .await?;
     Ok(Json(page))
+}
+
+async fn collaboration_timeline(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<CollaborationTimeline>, Failure> {
+    let hide_pending = !state.projection.is_published();
+    with_read(state.projection.clone(), move |conn| {
+        let Some(session) = queries::session(conn, &id).map_err(store_err)? else {
+            return Err(Failure::not_found(format!("no session {id}")));
+        };
+        if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+            return Ok(Json(CollaborationTimeline {
+                entries: Vec::new(),
+                response_runtimes: Vec::new(),
+            }));
+        }
+        let (entries, response_runtimes) =
+            queries::collaboration_timeline(conn, &id).map_err(store_err)?;
+        Ok(Json(CollaborationTimeline {
+            entries,
+            response_runtimes,
+        }))
+    })
+    .await
 }
 
 async fn timeline_entry(

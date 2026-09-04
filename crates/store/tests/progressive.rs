@@ -27,6 +27,7 @@ fn session(state: StreamState) -> SessionRow {
         project_id: None,
         cwd: None,
         parent_session_id: None,
+        delegation: None,
         root_session_id: "s".into(),
         role: SessionRole::Main,
         title: Some("session".into()),

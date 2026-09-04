@@ -4,10 +4,12 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   documentTurns,
+  collaborationStamp,
   interleaveTeamCollaboration,
   participantPresentation,
   runtimeProfile,
   taskBoundedReportWork,
+  teamChronology,
   teamMemberPresentations,
   teamParticipants,
   teamSessionIds,
@@ -46,7 +48,7 @@ function entry(id, sessionId, ordinal, at, body, over = {}) {
   };
 }
 
-function session(id, parent, role, title) {
+function session(id, parent, role, title, over = {}) {
   return {
     id,
     native_session_id: `native-${id}`,
@@ -54,6 +56,7 @@ function session(id, parent, role, title) {
     project_id: "project",
     cwd: "/work",
     parent_session_id: parent,
+    delegation: over.delegation ?? null,
     root_session_id: parent ?? id,
     role,
     title,
@@ -79,6 +82,11 @@ function collaboration(kind, channel, body, over = {}) {
       task_id: over.taskId ?? null,
       delivery_id: over.deliveryId ?? null,
       status: over.status ?? null,
+      authored_at: over.authoredAt ?? null,
+      source_session_id: over.sourceSessionId ?? null,
+      source_response_id: over.sourceResponseId ?? null,
+      work_start_timeline_id: over.workStart ?? null,
+      work_end_timeline_id: over.workEnd ?? null,
     },
   };
 }
@@ -107,7 +115,7 @@ function delegate(id, childId, name, over = {}) {
       failure: null,
       timing: null,
     },
-  });
+  }, over);
 }
 
 describe("Agent Team view facts", () => {
@@ -144,6 +152,12 @@ describe("Agent Team view facts", () => {
     });
     assert.equal(runtimeProfile([], "opus").label, "configured opus · effort unknown");
     assert.equal(runtimeProfile([], null).label, "runtime not recorded");
+    assert.equal(
+      runtimeProfile([], null, [
+        { response_id: "r1", model: "claude-opus-5", effort: "max" },
+      ]).label,
+      "claude-opus-5 · max effort",
+    );
   });
 
   it("classifies the first member, later join, and exact resume separately", () => {
@@ -160,6 +174,11 @@ describe("Agent Team view facts", () => {
     assert.deepEqual(
       [...members.values()].map((member) => member.operation),
       ["start", "add", "resume"],
+    );
+    const partial = teamMemberPresentations(rows, sessions, new Map(), new Map(), false);
+    assert.deepEqual(
+      [...partial.values()].map((member) => member.operation),
+      ["known", "add", "resume"],
     );
   });
 
@@ -182,7 +201,7 @@ describe("Agent Team view facts", () => {
 });
 
 describe("team boundary chronology", () => {
-  it("interleaves by authored time, excludes private coordinator context, and dedupes only ids", () => {
+  it("interleaves by authored time with arrival fallback and excludes private context", () => {
     const parent = [
       entry("p1", "parent", 1, 100, { type: "agent", text: inline("start"), attachments: [], citations: [] }),
       entry("p2", "parent", 2, 300, { type: "agent", text: inline("end"), attachments: [], citations: [] }),
@@ -190,7 +209,10 @@ describe("team boundary chronology", () => {
     const child = [
       entry("private", "member", 1, 150, collaboration("assignment", "coordinator", "private")),
       entry("followup", "member", 2, 175, collaboration("message", "coordinator", "please verify")),
-      entry("shared", "member", 3, 200, collaboration("message", "peer", "hello", { sender: "w2" })),
+      entry("shared", "member", 3, 350, collaboration("message", "peer", "hello", {
+        sender: "w2",
+        authoredAt: 200,
+      })),
       entry("same-prose", "member", 4, 210, collaboration("message", "peer", "hello", { sender: "w2" })),
     ];
     assert.deepEqual(
@@ -232,6 +254,90 @@ describe("team boundary chronology", () => {
       ).map((row) => row.timeline_id),
       ["p1", "a-copy"],
     );
+    const chronology = teamChronology(
+      parent,
+      new Map([
+        ["z-member", [laterMapEntry]],
+        ["a-member", [stableWinner]],
+      ]),
+    );
+    assert.equal(chronology.duplicateRepresentatives.get("z-copy"), "a-copy");
+  });
+
+  it("folds a sender receipt only when an exact delivered id exists", () => {
+    const sender = entry("send", "parent", 1, 100, {
+      type: "tool_use",
+      tool: {
+        correlation: { key: "send", derivation: "native_id" },
+        native: { id: "send", namespace: null, name: "SendMessage", provider: null },
+        status: { value: "succeeded", basis: "native_terminal_record" },
+        action: {
+          type: "collaborate",
+          operation: "send",
+          recipient: "w1",
+          team: "team-a",
+          summary: "done",
+          body: inline("full body"),
+          linked_session_id: null,
+          delivery_id: "delivery-1",
+          outcome: null,
+        },
+        failure: null,
+        timing: null,
+      },
+    });
+    const delivered = entry(
+      "delivered",
+      "member",
+      1,
+      110,
+      collaboration("message", "team", "full body", { deliveryId: "delivery-1" }),
+    );
+    const exact = teamChronology([sender], new Map([["member", [delivered]]]));
+    assert.deepEqual(exact.rows.map((row) => row.timeline_id), ["delivered"]);
+    assert.equal(exact.duplicateRepresentatives.get("send"), "delivered");
+
+    const unresolved = teamChronology(
+      [{ ...sender, body: { ...sender.body, tool: { ...sender.body.tool, action: { ...sender.body.tool.action, delivery_id: null } } } }],
+      new Map([["member", [delivered]]]),
+    );
+    assert.deepEqual(unresolved.rows.map((row) => row.timeline_id), ["send", "delivered"]);
+
+    const sourceToolDelivery = entry(
+      "source-tool-delivery",
+      "member",
+      2,
+      120,
+      collaboration("message", "team", "full body", { deliveryId: "send" }),
+    );
+    const exactSourceTool = teamChronology(
+      [{ ...sender, body: { ...sender.body, tool: { ...sender.body.tool, action: { ...sender.body.tool.action, delivery_id: null } } } }],
+      new Map([["member", [sourceToolDelivery]]]),
+    );
+    assert.deepEqual(exactSourceTool.rows.map((row) => row.timeline_id), ["source-tool-delivery"]);
+    assert.equal(exactSourceTool.duplicateRepresentatives.get("send"), "source-tool-delivery");
+  });
+
+  it("distinguishes native authored time from arrival fallback", () => {
+    const authored = entry(
+      "authored",
+      "member",
+      1,
+      200,
+      collaboration("message", "team", "hello", { authoredAt: 150 }),
+    );
+    const arrival = entry(
+      "arrival",
+      "member",
+      2,
+      250,
+      collaboration("message", "team", "hello"),
+    );
+    assert.deepEqual(collaborationStamp(authored), { at: 150, basis: "authored" });
+    assert.deepEqual(collaborationStamp(arrival), {
+      at: 250,
+      basis: "observed_arrival",
+    });
   });
 
   it("keeps machine context in a worker prompt but team speech in the shared turn", () => {
@@ -267,7 +373,7 @@ describe("team boundary chronology", () => {
     assert.deepEqual(sharedTurn.segments.map((segment) => segment.kind), ["collaboration"]);
   });
 
-  it("offers nested report work only for an exact assignment task relation", () => {
+  it("offers nested report work only for exact source and inclusive bounds", () => {
     const assignment = entry(
       "assignment",
       "member",
@@ -279,6 +385,7 @@ describe("team boundary chronology", () => {
       ordinal: 2,
       at: 150,
       team: null,
+      responseId: "response-report",
     });
     action.session_id = "member";
     const report = entry(
@@ -286,7 +393,14 @@ describe("team boundary chronology", () => {
       "member",
       3,
       200,
-      collaboration("report", "team", "Done", { taskId: "7", sender: "w1" }),
+      collaboration("report", "team", "Done", {
+        taskId: "7",
+        sender: "w1",
+        sourceSessionId: "member",
+        sourceResponseId: "response-report",
+        workStart: "assignment",
+        workEnd: "action",
+      }),
     );
 
     const work = taskBoundedReportWork(report, [assignment, action, report]);
@@ -297,7 +411,14 @@ describe("team boundary chronology", () => {
       "parent",
       8,
       200,
-      collaboration("report", "team", "Done", { taskId: "7", sender: "w1" }),
+      collaboration("report", "team", "Done", {
+        taskId: "7",
+        sender: "w1",
+        sourceSessionId: "member",
+        sourceResponseId: "response-report",
+        workStart: "assignment",
+        workEnd: "action",
+      }),
     );
     assert.deepEqual(
       taskBoundedReportWork(deliveredCopy, [assignment, action])?.rows.map(
@@ -313,6 +434,14 @@ describe("team boundary chronology", () => {
       collaboration("report", "team", "Done", { taskId: "8" }),
     );
     assert.equal(taskBoundedReportWork(unmatched, [assignment, action, report, unmatched]), null);
+    const guessed = entry(
+      "guessed",
+      "member",
+      5,
+      300,
+      collaboration("report", "team", "Done", { taskId: "7" }),
+    );
+    assert.equal(taskBoundedReportWork(guessed, [assignment, action, guessed]), null);
   });
 });
 
@@ -359,5 +488,22 @@ describe("ordinary Agent worker ownership", () => {
     );
     assert.equal(links.anchorRowByChild.size, 0);
     assert.equal(links.childrenByRow.size, 0);
+  });
+
+  it("anchors an ordinary worker from exact sidecar tool ownership", () => {
+    const opener = delegate("toolu-sidecar", null, "explorer", { team: null });
+    const lines = documentTurns([opener]).flatMap((turn) =>
+      turn.segments.flatMap((segment) => (segment.kind === "ledger" ? segment.lines : [])),
+    );
+    const worker = session("worker", "parent", "subagent", "Explore", {
+      delegation: { parent_tool_native_id: "toolu-sidecar" },
+    });
+    const links = workerThreadLinks(
+      lines,
+      "parent",
+      new Map([[worker.id, worker]]),
+      new Set(),
+    );
+    assert.equal(links.anchorRowByChild.get("worker"), "toolu-sidecar");
   });
 });

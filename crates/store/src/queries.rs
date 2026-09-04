@@ -66,6 +66,16 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// Content-free response evidence used to describe a child session's actual
+/// runtime without shipping its private transcript into the parent document.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ResponseRuntime {
+    pub response_id: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
 /// Structured search filters. Filtering happens inside the ranked query —
 /// retrieving top K and filtering afterwards would be ranking-incorrect.
 #[derive(Debug, Clone, Default)]
@@ -455,6 +465,17 @@ fn parse_state(text: &str) -> StreamState {
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
     let role: String = row.get("role")?;
     let state: String = row.get("stream_state")?;
+    let delegation = row
+        .get::<_, Option<String>>("delegation")?
+        .map(|value| serde_json::from_str(&value))
+        .transpose()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
     Ok(SessionRow {
         id: row.get("id")?,
         native_session_id: row.get("native_session_id")?,
@@ -462,6 +483,7 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         project_id: row.get("project_id")?,
         cwd: row.get("cwd")?,
         parent_session_id: row.get("parent_session_id")?,
+        delegation,
         root_session_id: row.get("root_session_id")?,
         role: parse_role(&role),
         title: row.get("title")?,
@@ -676,6 +698,47 @@ pub fn timeline_page(
     }
     hydrate_workflows(conn, session_id, &mut out)?;
     Ok(out)
+}
+
+/// Complete shared-boundary history for one team member plus content-free
+/// runtime observations. Unlike the live tail this is deliberately unpaged:
+/// it selects only collaboration rows, never private worker prose/tools.
+pub fn collaboration_timeline(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<(Vec<TimelineEntry>, Vec<ResponseRuntime>), StoreError> {
+    let mut entries_stmt = conn.prepare_cached(
+        "SELECT * FROM message
+         WHERE session_id = ?1 AND type = 'collaboration'
+         ORDER BY ordinal ASC, timeline_id ASC",
+    )?;
+    let rows = entries_stmt.query_map(params![session_id], message_codec::decode)?;
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+
+    let mut runtime_stmt = conn.prepare_cached(
+        "SELECT response_id, model, effort
+         FROM message
+         WHERE session_id = ?1
+           AND response_id IS NOT NULL
+           AND (model IS NOT NULL OR effort IS NOT NULL)
+         GROUP BY response_id, model, effort
+         ORDER BY MIN(ordinal) ASC, response_id ASC, model ASC, effort ASC",
+    )?;
+    let rows = runtime_stmt.query_map(params![session_id], |row| {
+        Ok(ResponseRuntime {
+            response_id: row.get(0)?,
+            model: row.get(1)?,
+            effort: row.get(2)?,
+        })
+    })?;
+    let mut runtimes = Vec::new();
+    for row in rows {
+        runtimes.push(row?);
+    }
+    Ok((entries, runtimes))
 }
 
 /// One exact canonical timeline row, scoped to its owning session. This is
