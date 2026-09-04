@@ -36,13 +36,29 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > **Transcript work-index checkpoint (2026-09-03).** Schema 14 records only source-proven task
 > start/terminal transitions and adds a partial `(session_id, ordinal)` index containing only task,
 > plan, and artifact messages.
-> The Rust `timeline_meta` read composes the complete task board, latest openable plans, and
-> deduplicated openable artifacts from those canonical facts in one session-scoped boundary. The
-> protocol-v10 initial timeline snapshot carries that metadata beside the recent message window;
+> The Rust `timeline_meta` read composes the complete task board, unique Workflow-run summaries
+> with exact current and journaled worker-session references,
+> latest openable plans, and deduplicated openable artifacts from those canonical facts in one
+> session-scoped boundary. Resumed Workflow attempts collapse to their canonical run id and retain
+> the newest attempt as a transcript anchor; the rich run document is not copied into this index.
+> The protocol-v14 initial timeline snapshot carries that metadata beside the recent message window;
 > relevant commits coalesce to one replacement `timeline_meta_snapshot`. Plan/file bodies remain
-> lazy, and an exact session-scoped timeline-row read lands old tasks without paging through the
-> intervening transcript. This is a read model only: no second task/plan/artifact representation is
-> persisted, and the existing task messages remain the transcript record.
+> lazy, and an exact session-scoped timeline-row read lands old tasks or Workflow attempts without
+> paging through the intervening transcript. This is a read model only: no second
+> task/workflow/plan/artifact
+> representation is persisted, and the existing messages remain the transcript record.
+>
+> **Known task-namespace defect (2026-09-04).** Claude's `TaskCreate`, `TaskUpdate`,
+> `TaskList`, and `TaskGet` describe shared work items, but `TaskOutput` and `TaskStop`
+> address heterogeneous background execution handles. An execution may be a local
+> subagent, an in-process Agent Team teammate, or a background shell; it is not thereby
+> a task-board item or a workflow. The current Claude adapter classifies the latter two
+> tools as `ToolAction::Task`, and the `timeline_meta` query consequently admits stop
+> handles as empty task rows. The required boundary is fail-closed: only an explicit
+> work-item payload or an existing canonical task row may enter `timeline_meta.tasks`.
+> Execution output/stop belongs to process, delegation, or team lifecycle (or bounded
+> unknown when its kind is unproven), and cannot synthesize task status or timing. A
+> session containing only execution-control events has no Tasks launcher or Tasks tab.
 > Session ownership is closed during bounded metadata admission: one normalized primary cwd and
 > one optional local-checkout project link per session. Schema 13 uses folder identity by default,
 > closes native checkout-group/session-owner hints, and merges only linked worktrees. The stream

@@ -12,6 +12,12 @@ export type SessionDelegation = {
  */
 parent_tool_native_id?: string | null, 
 /**
+ * Exact native workflow run which owns this child. A workflow child is
+ * rendered only inside that run's phase/worker hierarchy; it is never an
+ * unanchored child in the parent transcript.
+ */
+workflow_run_id?: string | null, 
+/**
  * Persistent Agent Team identity. Absence means an ordinary subagent.
  */
 team?: string | null, 

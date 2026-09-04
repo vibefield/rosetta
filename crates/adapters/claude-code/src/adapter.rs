@@ -36,7 +36,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        21
+        22
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -113,13 +113,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 break;
             }
         }
-        let (session_id, parent_session_id, root_session_id, role) = match stream_id {
+        let (session_id, parent_session_id, root_session_id, role, delegation) = match stream_id {
             spec::TRANSCRIPT => (
                 skim.session_id
                     .or_else(|| file_stem(&stat.relative_path).map(str::to_owned)),
                 None,
                 None,
                 Some(SessionRole::Main),
+                None,
             ),
             spec::SUBAGENT_TRANSCRIPT => {
                 let parent = skim
@@ -131,6 +132,15 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     parent.clone(),
                     parent,
                     Some(SessionRole::Subagent),
+                    crate::workflow::run_id_from_path(&stat.relative_path).map(|run_id| {
+                        SessionDelegation {
+                            parent_tool_native_id: None,
+                            workflow_run_id: Some(run_id.to_owned()),
+                            team: None,
+                            color: None,
+                            configured_model: None,
+                        }
+                    }),
                 )
             }
             _ => unreachable!("unsupported streams returned above"),
@@ -144,7 +154,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             ops: Vec::new(),
             session_id,
             parent_session_id,
-            delegation: None,
+            delegation,
             root_session_id,
             role,
             cwd: skim.cwd,
@@ -375,6 +385,7 @@ fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
         .unwrap_or_else(|| root.clone());
     let delegation = SessionDelegation {
         parent_tool_native_id: meta.tool_use_id.filter(|value| !value.trim().is_empty()),
+        workflow_run_id: crate::workflow::run_id_from_path(&stat.relative_path).map(str::to_owned),
         team: meta.team_name.filter(|value| !value.trim().is_empty()),
         color: meta
             .color
@@ -545,6 +556,39 @@ mod tests {
         assert_eq!(result.parent_session_id.as_deref(), Some("parent-1"));
         assert_eq!(result.root_session_id.as_deref(), Some("parent-1"));
         assert_eq!(result.role, Some(SessionRole::Subagent));
+        assert_eq!(result.delegation, None);
+    }
+
+    #[test]
+    fn workflow_subagent_skim_preserves_its_owning_run() {
+        let path = "projects/p/parent-1/subagents/workflows/wf_review/agent-child-7.jsonl";
+        let result = ClaudeCodeAdapter.skim(
+            "subagent-transcript",
+            &stat(path),
+            br#"{"type":"assistant","agentId":"child-7","sessionId":"parent-1"}"#,
+            b"",
+        );
+        assert_eq!(
+            result
+                .delegation
+                .as_ref()
+                .and_then(|delegation| delegation.workflow_run_id.as_deref()),
+            Some("wf_review")
+        );
+
+        let sidecar = ClaudeCodeAdapter.skim(
+            spec::SUBAGENT_METADATA,
+            &stat("projects/p/parent-1/subagents/workflows/wf_review/agent-child-7.meta.json"),
+            br#"{"agentType":"workflow-subagent"}"#,
+            b"",
+        );
+        assert_eq!(
+            sidecar
+                .delegation
+                .as_ref()
+                .and_then(|delegation| delegation.workflow_run_id.as_deref()),
+            Some("wf_review")
+        );
     }
 
     #[test]
@@ -605,6 +649,7 @@ mod tests {
             delegation.parent_tool_native_id.as_deref(),
             Some("toolu-team-2")
         );
+        assert_eq!(delegation.workflow_run_id, None);
         assert_eq!(delegation.team.as_deref(), Some("refinement"));
         assert_eq!(delegation.color, Some(ParticipantColor::Green));
         assert_eq!(delegation.configured_model.as_deref(), Some("opus"));

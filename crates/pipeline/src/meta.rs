@@ -499,6 +499,7 @@ fn merge_delegation(
             parent_tool_native_id: incoming
                 .parent_tool_native_id
                 .or(existing.parent_tool_native_id),
+            workflow_run_id: incoming.workflow_run_id.or(existing.workflow_run_id),
             team: incoming.team.or(existing.team),
             color: incoming.color.or(existing.color),
             configured_model: incoming.configured_model.or(existing.configured_model),
@@ -1120,6 +1121,7 @@ mod tests {
         exact.parent_session_id = Some("worker-parent".into());
         exact.delegation = Some(rosetta_core::SessionDelegation {
             parent_tool_native_id: Some("toolu-child".into()),
+            workflow_run_id: None,
             team: None,
             color: None,
             configured_model: Some("opus".into()),

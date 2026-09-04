@@ -155,7 +155,7 @@ pub(crate) fn parent_session_from_path(relative_path: &str) -> Option<&str> {
     (!session.is_empty()).then_some(session)
 }
 
-fn run_id_from_path(relative_path: &str) -> Option<&str> {
+pub(crate) fn run_id_from_path(relative_path: &str) -> Option<&str> {
     let path = relative_path
         .split_once('#')
         .map_or(relative_path, |(path, _)| path);
@@ -455,7 +455,12 @@ fn normalize_run(ctx: &NormalizeCtx, raw: RawRun) -> Result<WorkflowRun, String>
         result,
         error,
         resources,
+        attempts: Vec::new(),
+        attempt_total_count: 0,
         journal: Vec::new(),
+        journal_total_count: 0,
+        journal_started_count: 0,
+        journal_result_count: 0,
     })
 }
 

@@ -74,7 +74,7 @@ pub enum Mutation {
     SessionSwept {
         session_id: String,
     },
-    /// A committed task, plan, or artifact fact changed. The marker carries
+    /// A committed task, Workflow, plan, or artifact fact changed. The marker carries
     /// no duplicated metadata; the WebSocket boundary resolves one fresh
     /// Rust-built `timeline_meta` snapshot for the watching session.
     TimelineMetaChanged {
@@ -194,7 +194,7 @@ pub struct Effects {
     pub touched_runtimes: BTreeSet<String>,
     /// Sessions whose light work index must be rebuilt after this commit.
     /// Kept as ids so a batch emits at most one refresh regardless of how
-    /// many task/plan/artifact facts it contained.
+    /// many task/workflow/plan/artifact facts it contained.
     pub timeline_meta_sessions: BTreeSet<String>,
     /// The mutation list hit [`EFFECTS_MUTATION_CAP`] and truncated;
     /// consumers must invalidate rings and rewarm the mirror.

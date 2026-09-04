@@ -2,5 +2,6 @@
 import type { TimelineMetaArtifact } from "./TimelineMetaArtifact";
 import type { TimelineMetaPlan } from "./TimelineMetaPlan";
 import type { TimelineMetaTask } from "./TimelineMetaTask";
+import type { TimelineMetaWorkflow } from "./TimelineMetaWorkflow";
 
-export type TimelineMeta = { tasks: Array<TimelineMetaTask>, plans: Array<TimelineMetaPlan>, artifacts: Array<TimelineMetaArtifact>, };
+export type TimelineMeta = { tasks: Array<TimelineMetaTask>, workflows: Array<TimelineMetaWorkflow>, plans: Array<TimelineMetaPlan>, artifacts: Array<TimelineMetaArtifact>, };

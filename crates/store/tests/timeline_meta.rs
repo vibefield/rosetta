@@ -6,7 +6,8 @@ use rosetta_core::timeline::{
     ArtifactKind, ArtifactOp, CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind,
     NativeToolRef, PlanOp, Provenance, ResourceRef, StatusBasis, TaskOp, TaskSnapshot,
     TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolCorrelation,
-    ToolInteraction, ToolStatus, ToolStatusFact,
+    ToolInteraction, ToolStatus, ToolStatusFact, WorkflowJournalKind, WorkflowJournalObservation,
+    WorkflowRun, WorkflowRunStatus, WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
 };
 use rosetta_core::{IngestOp, ids};
 use rosetta_store::timeline_meta::{
@@ -53,6 +54,25 @@ fn base_batch() -> Batch {
             }),
         ],
         ..Batch::default()
+    }
+}
+
+fn workflow_child(id: &str, native_id: &str) -> SessionRow {
+    SessionRow {
+        id: id.into(),
+        native_session_id: native_id.into(),
+        runtime_id: "rt1".into(),
+        project_id: Some("p1".into()),
+        cwd: Some("/w/project".into()),
+        parent_session_id: Some("s1".into()),
+        delegation: None,
+        root_session_id: "s1".into(),
+        role: SessionRole::Subagent,
+        title: Some("general-purpose".into()),
+        summary: None,
+        started_at: 1_250,
+        updated_at: 1_500,
+        stream_state: StreamState::Indexed,
     }
 }
 
@@ -138,6 +158,83 @@ fn artifact_action(name: &str) -> ToolAction {
             resolved: true,
         }],
         media: None,
+    }
+}
+
+fn workflow_action(run_id: &str, attempt: u64) -> ToolAction {
+    ToolAction::Workflow {
+        name: Some("parallel-review".into()),
+        path: None,
+        arguments: None,
+        objective: None,
+        resume_id: (attempt > 1).then(|| run_id.to_owned()),
+        background: true,
+        task_id: Some(format!("task-{attempt}")),
+        run_id: Some(run_id.into()),
+        attempt: Some(attempt),
+        callback_summary: None,
+        callback_result: None,
+        usage: None,
+        run: None,
+    }
+}
+
+fn workflow_run(run_id: &str) -> WorkflowRun {
+    WorkflowRun {
+        run_id: run_id.into(),
+        task_id: Some("task-2".into()),
+        name: Some("parallel-review".into()),
+        summary: None,
+        status: WorkflowRunStatus::Completed,
+        started_at: Some(1_200),
+        updated_at: Some(6_200),
+        usage: WorkflowUsage {
+            duration_ms: Some(5_000),
+            tokens: Some(42_000),
+            tool_calls: Some(12),
+            agent_count: Some(3),
+        },
+        default_model: None,
+        arguments: None,
+        script_path: None,
+        script: None,
+        phases: vec![],
+        workers: vec![WorkflowWorker {
+            index: 1,
+            key: Some("worker-1".into()),
+            label: "reader".into(),
+            phase_index: None,
+            phase_title: None,
+            state: WorkflowWorkerState::Done,
+            cached: false,
+            configured_model: None,
+            configured_effort: None,
+            observed_models: vec![],
+            observed_efforts: vec![],
+            child_session_id: Some("child-workflow".into()),
+            prompt_preview: None,
+            result_preview: None,
+            last_tool_name: None,
+            last_tool_summary: None,
+            queued_at: None,
+            started_at: None,
+            last_progress_at: None,
+            duration_ms: None,
+            tokens: None,
+            tool_calls: None,
+            error: None,
+        }],
+        logs: vec![],
+        result_kind: None,
+        result: None,
+        error: None,
+        resources: vec![],
+        attempts: vec![],
+        attempt_total_count: 0,
+        journal: vec![],
+        journal_total_count: 0,
+        journal_started_count: 0,
+        journal_result_count: 0,
     }
 }
 
@@ -409,6 +506,95 @@ fn task_snapshots_contribute_timing_and_do_not_hide_explicit_tasks() {
 }
 
 #[test]
+fn workflows_are_one_light_row_per_run_and_land_on_the_latest_attempt() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::SessionMeta(workflow_child("child-workflow", "native-current")),
+                IngestOp::SessionMeta(workflow_child("child-earlier", "native-earlier")),
+                IngestOp::WorkflowRun {
+                    session_id: "s1".into(),
+                    run: workflow_run("run-1"),
+                },
+                IngestOp::WorkflowJournal {
+                    session_id: "s1".into(),
+                    observation: WorkflowJournalObservation {
+                        observation_id: "journal-earlier".into(),
+                        run_id: "run-1".into(),
+                        source_offset: Some(12),
+                        kind: WorkflowJournalKind::Started,
+                        worker_key: "earlier-worker".into(),
+                        agent_id: Some("native-earlier".into()),
+                        result_kind: None,
+                        result_preview: None,
+                    },
+                },
+                IngestOp::Message(Box::new(tool_entry(
+                    "workflow-launch",
+                    0,
+                    1_200,
+                    workflow_action("run-1", 1),
+                ))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "workflow-resume",
+                    1,
+                    2_000,
+                    workflow_action("run-1", 2),
+                ))),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let meta = read(store.conn(), "s1").unwrap();
+    assert_eq!(meta.workflows.len(), 1, "a resume is not a second run");
+    let workflow = &meta.workflows[0];
+    assert_eq!(workflow.id, "run-1");
+    assert_eq!(workflow.name, "parallel-review");
+    assert_eq!(workflow.status, WorkflowRunStatus::Completed);
+    assert_eq!(workflow.started_at, Some(1_200));
+    assert_eq!(workflow.duration_ms, Some(5_000));
+    assert_eq!(workflow.worker_count, Some(1));
+    assert_eq!(
+        workflow.child_session_ids,
+        ["child-earlier", "child-workflow"],
+        "superseded journal workers remain owned by the workflow"
+    );
+    assert_eq!(workflow.timeline_id.as_deref(), Some("workflow-resume"));
+}
+
+#[test]
+fn a_source_proven_workflow_run_survives_a_missing_sidecar() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(tool_entry(
+                "workflow-launch",
+                0,
+                1_200,
+                workflow_action("run-without-sidecar", 1),
+            )))],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let meta = read(store.conn(), "s1").unwrap();
+    assert_eq!(meta.workflows.len(), 1);
+    let workflow = &meta.workflows[0];
+    assert_eq!(workflow.id, "run-without-sidecar");
+    assert_eq!(workflow.name, "parallel-review");
+    assert_eq!(workflow.status, WorkflowRunStatus::Unknown);
+    assert_eq!(workflow.started_at, Some(1_200));
+    assert_eq!(workflow.duration_ms, None);
+    assert_eq!(workflow.worker_count, None);
+    assert!(workflow.child_session_ids.is_empty());
+    assert_eq!(workflow.timeline_id.as_deref(), Some("workflow-launch"));
+}
+
+#[test]
 fn relevant_batch_coalesces_to_one_timeline_meta_session_touch() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
@@ -423,6 +609,10 @@ fn relevant_batch_coalesces_to_one_timeline_meta_session_touch() {
                     200,
                     artifact_action("report.md"),
                 ))),
+                IngestOp::WorkflowRun {
+                    session_id: "s1".into(),
+                    run: workflow_run("run-1"),
+                },
             ],
             ..Batch::default()
         })

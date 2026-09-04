@@ -25,10 +25,10 @@ use rosetta_core::rows::{
 use rosetta_core::timeline::{
     AssetRef, AttachmentKind, AttachmentRef, CollaborationChannel, CollaborationEvent,
     CorrelationDerivation, FAILURE_SUMMARY_MAX_BYTES, FailureKind, GroupDerivation, GroupKind,
-    Provenance, ResourceRef, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT, TaskOp, TaskSnapshot,
-    TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolFailure,
-    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
-    WorkflowUsage,
+    ID_MAX_BYTES, Notice, Provenance, ResourceRef, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT,
+    TaskOp, TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
+    ToolFailure, ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming,
+    ToolUpdatePatch, WorkflowUsage,
 };
 use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
 use serde::{Deserialize, Serialize};
@@ -96,12 +96,23 @@ pub struct ClaudeCodeState {
     /// Number of distinct accepted invocations observed for each durable run.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workflow_attempts: BTreeMap<String, u64>,
+    /// Non-Workflow calls stay here only between their opener and either a
+    /// normal result or a later async task notification. This lets a machine
+    /// callback update the exact act after an `async_launched` receipt.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    notification_calls: BTreeMap<String, NotificationCallState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowCallState {
     action: ToolAction,
     started_at: Option<Ms>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NotificationCallState {
+    started_at: Option<Ms>,
+    background: bool,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -216,6 +227,32 @@ impl ClaudeCodeState {
         let attempt = self.workflow_attempts.entry(run_id.to_owned()).or_default();
         *attempt = attempt.saturating_add(1);
         *attempt
+    }
+
+    fn remember_notification_call(
+        &mut self,
+        tool_use_id: &str,
+        action: &ToolAction,
+        started_at: Option<Ms>,
+    ) {
+        self.notification_calls.insert(
+            tool_use_id.to_owned(),
+            NotificationCallState {
+                started_at,
+                background: action_requests_background(action),
+            },
+        );
+        while self.notification_calls.len() > TASK_NOTIFICATION_CALL_LIMIT {
+            self.notification_calls.pop_first();
+        }
+    }
+
+    fn notification_call(&self, tool_use_id: &str) -> Option<NotificationCallState> {
+        self.notification_calls.get(tool_use_id).cloned()
+    }
+
+    fn forget_notification_call(&mut self, tool_use_id: &str) {
+        self.notification_calls.remove(tool_use_id);
     }
 
     fn resolve_task_call(
@@ -441,6 +478,7 @@ impl ClaudeCodeState {
 }
 
 const TASK_STATE_LIMIT: usize = 512;
+const TASK_NOTIFICATION_CALL_LIMIT: usize = 1_024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ClaudeResponseState {
@@ -649,9 +687,14 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
     // notification body and are never replayed as separate speech.
     let collaboration = if attachments.is_empty() && !has_other_block && !text.is_empty() {
         if let Some(notification) = crate::envelope::task_notification(&text) {
-            emit.workflow_notification(notification, ts);
-            // A recognized callback is transport, even when its opener is
-            // outside the available branch and cannot be correlated here.
+            let has_event = notification.task_id.is_some()
+                || notification.tool_use_id.is_some()
+                || notification.status.is_some()
+                || notification.summary.is_some();
+            if has_event && !emit.task_notification(notification.clone(), ts) {
+                emit.push_async_task_notice(&seed, &line.uuid, notification);
+            }
+            // A recognized callback is transport, never human-authored prose.
             Some(Vec::new())
         } else {
             crate::envelope::classify(
@@ -806,6 +849,8 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 }
                 if is_workflow {
                     emit.remember_workflow_call(id, &tool.action, ts);
+                } else {
+                    emit.remember_notification_call(id, &tool.action, ts);
                 }
                 row.tool = Some(tool);
                 // A native name is not enough to establish canonical
@@ -1287,6 +1332,59 @@ struct ToolResultBlock<'a> {
     delegate_child_native_id: Option<String>,
 }
 
+fn task_notification_status(value: Option<&str>) -> ToolStatus {
+    match value {
+        Some("completed" | "succeeded" | "success") => ToolStatus::Succeeded,
+        Some("failed" | "error") => ToolStatus::Failed,
+        Some("timed_out" | "timeout") => ToolStatus::TimedOut,
+        Some("killed" | "stopped" | "interrupted") => ToolStatus::Interrupted,
+        Some("cancelled" | "canceled") => ToolStatus::Cancelled,
+        Some("running" | "pending" | "queued") => ToolStatus::Running,
+        _ => ToolStatus::Unknown,
+    }
+}
+
+fn task_notification_terminal(status: ToolStatus) -> bool {
+    !matches!(status, ToolStatus::Pending | ToolStatus::Running)
+}
+
+fn action_requests_background(action: &ToolAction) -> bool {
+    matches!(
+        action,
+        ToolAction::Shell {
+            background: true,
+            ..
+        } | ToolAction::Delegate {
+            background: true,
+            ..
+        }
+    )
+}
+
+fn task_result_is_async(result: &ToolResultBlock<'_>) -> bool {
+    let native = result.tool_use_result;
+    let status = native
+        .and_then(|value| value.get("status").or_else(|| value.get("state")))
+        .and_then(Value::as_str);
+    if matches!(
+        status,
+        Some("async_launched" | "running" | "pending" | "queued")
+    ) {
+        return true;
+    }
+    if native
+        .and_then(|value| value.get("isAsync").or_else(|| value.get("is_async")))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return true;
+    }
+    result_text(result.content).is_some_and(|text| {
+        let text = text.to_ascii_lowercase();
+        text.contains("launched in background") || text.contains("running in background")
+    })
+}
+
 /// The per-line fields every row from that line inherits.
 struct Seed<'a> {
     uuid: Option<&'a str>,
@@ -1423,6 +1521,57 @@ impl<'a> Emit<'a> {
         self.ops.push(IngestOp::Message(Box::new(entry)));
     }
 
+    fn push_async_task_notice(
+        &mut self,
+        seed: &Seed,
+        discriminator: &str,
+        notification: crate::envelope::TaskNotificationDraft,
+    ) {
+        let row = self.row(seed, MessageKind::System, discriminator);
+        let entry = TimelineEntry {
+            timeline_id: row.timeline_id,
+            session_id: row.session_id,
+            ordinal: row.ordinal,
+            group: TimelineGroup {
+                id: discriminator.to_owned(),
+                kind: GroupKind::SystemCycle,
+                derivation: GroupDerivation::Native,
+            },
+            response: None,
+            block_index: None,
+            native_id: row.uuid,
+            parent_native_id: row.parent_uuid,
+            at: row.ts,
+            model: None,
+            effort: None,
+            body: TimelineBody::Notice {
+                notice: Notice::AsyncTask {
+                    task_id: notification
+                        .task_id
+                        .map(|value| bounded_utf8(value, ID_MAX_BYTES)),
+                    tool_use_id: notification
+                        .tool_use_id
+                        .map(|value| bounded_utf8(value, ID_MAX_BYTES)),
+                    status: task_notification_status(notification.status.as_deref()),
+                    summary: notification
+                        .summary
+                        .map(|value| bounded_utf8(value, FAILURE_SUMMARY_MAX_BYTES)),
+                    duration_ms: notification.duration_ms,
+                },
+            },
+            parent_tool_native_id: None,
+            usage: TokenSnapshot::default(),
+            provenance: Provenance {
+                agent_version: row.agent_version,
+                src_cursor: row.src_cursor,
+                src_offset: row.src_offset,
+            },
+        };
+        if entry.validate().is_ok() {
+            self.ops.push(IngestOp::Message(Box::new(entry)));
+        }
+    }
+
     fn response_projection(
         &mut self,
         response_id: &str,
@@ -1535,6 +1684,41 @@ impl<'a> Emit<'a> {
         }
     }
 
+    fn remember_notification_call(
+        &mut self,
+        tool_use_id: &str,
+        action: &ToolAction,
+        started_at: Option<Ms>,
+    ) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_notification_call(tool_use_id, action, started_at);
+        }
+    }
+
+    fn notification_call(&mut self, tool_use_id: &str) -> Option<NotificationCallState> {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.notification_call(tool_use_id))
+    }
+
+    fn forget_notification_call(&mut self, tool_use_id: &str) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.forget_notification_call(tool_use_id);
+        }
+    }
+
     fn workflow_call(&mut self, tool_use_id: &str) -> Option<WorkflowCallState> {
         self.ctx
             .state
@@ -1620,12 +1804,12 @@ impl<'a> Emit<'a> {
         &mut self,
         notification: crate::envelope::TaskNotificationDraft,
         at: Option<Ms>,
-    ) {
+    ) -> bool {
         let Some(tool_use_id) = notification.tool_use_id.as_deref() else {
-            return;
+            return false;
         };
         let Some(call) = self.workflow_call(tool_use_id) else {
-            return;
+            return false;
         };
         let mut action = call.action;
         let ToolAction::Workflow {
@@ -1636,7 +1820,7 @@ impl<'a> Emit<'a> {
             ..
         } = &mut action
         else {
-            return;
+            return false;
         };
         if notification.task_id.is_some() {
             *task_id = notification.task_id;
@@ -1657,14 +1841,8 @@ impl<'a> Emit<'a> {
             *usage = Some(callback_usage.clone());
         }
 
-        let status = match notification.status.as_deref() {
-            Some("completed") => ToolStatus::Succeeded,
-            Some("failed") => ToolStatus::Failed,
-            Some("killed" | "stopped") => ToolStatus::Interrupted,
-            Some("cancelled" | "canceled") => ToolStatus::Cancelled,
-            Some("running" | "pending") => ToolStatus::Running,
-            _ => ToolStatus::Unknown,
-        };
+        let status = task_notification_status(notification.status.as_deref());
+        let terminal = task_notification_terminal(status);
         let failure = (status == ToolStatus::Failed).then(|| ToolFailure {
             kind: FailureKind::Provider,
             summary: callback_summary.clone(),
@@ -1681,12 +1859,16 @@ impl<'a> Emit<'a> {
             failure,
             timing: Some(ToolTiming {
                 started_at: call.started_at,
-                completed_at: at,
+                completed_at: terminal.then_some(at).flatten(),
                 duration_ms: callback_usage.duration_ms,
             }),
             ..ToolUpdatePatch::default()
         };
-        self.update_workflow_call(tool_use_id, action);
+        if terminal {
+            self.forget_workflow_call(tool_use_id);
+        } else {
+            self.update_workflow_call(tool_use_id, action);
+        }
         IngestOp::push_tool_update(
             &mut self.ops,
             self.session_id.clone(),
@@ -1695,6 +1877,67 @@ impl<'a> Emit<'a> {
             patch,
             at,
         );
+        true
+    }
+
+    fn task_notification(
+        &mut self,
+        notification: crate::envelope::TaskNotificationDraft,
+        at: Option<Ms>,
+    ) -> bool {
+        if self.workflow_notification(notification.clone(), at) {
+            return true;
+        }
+        let Some(tool_use_id) = notification.tool_use_id.as_deref() else {
+            return false;
+        };
+        let Some(call) = self.notification_call(tool_use_id) else {
+            return false;
+        };
+        let status = task_notification_status(notification.status.as_deref());
+        let terminal = task_notification_terminal(status);
+        let summary = notification
+            .summary
+            .as_deref()
+            .map(|value| bounded_utf8(value.to_owned(), FAILURE_SUMMARY_MAX_BYTES));
+        let failure = match status {
+            ToolStatus::Failed => Some(ToolFailure {
+                kind: FailureKind::Provider,
+                summary: summary.clone(),
+                diagnostic: None,
+            }),
+            ToolStatus::TimedOut => Some(ToolFailure {
+                kind: FailureKind::Timeout,
+                summary: summary.clone(),
+                diagnostic: None,
+            }),
+            _ => None,
+        };
+        let patch = ToolUpdatePatch {
+            status: Some(ToolStatusFact {
+                value: status,
+                basis: StatusBasis::GroundTruthProtocol,
+            }),
+            failure,
+            timing: Some(ToolTiming {
+                started_at: call.started_at,
+                completed_at: terminal.then_some(at).flatten(),
+                duration_ms: notification.duration_ms,
+            }),
+            ..ToolUpdatePatch::default()
+        };
+        if terminal {
+            self.forget_notification_call(tool_use_id);
+        }
+        IngestOp::push_tool_update(
+            &mut self.ops,
+            self.session_id.clone(),
+            tool_use_id.to_owned(),
+            self.ctx.evidence(0),
+            patch,
+            at,
+        );
+        true
     }
 
     fn resolve_task_call(
@@ -1731,6 +1974,11 @@ impl<'a> Emit<'a> {
         };
         let failed = effective_error == Some(true);
         let diagnostic = failed.then(|| result_text(result.content)).flatten();
+        let notification_call = self.notification_call(result.tool_use_id);
+        let notification_continues = notification_call
+            .as_ref()
+            .is_some_and(|call| call.background)
+            || task_result_is_async(result);
         if self.workflow_call(result.tool_use_id).is_some() {
             if !failed && let Some((action, started_at)) = self.resolve_workflow_launch(result) {
                 let patch = ToolUpdatePatch {
@@ -1767,6 +2015,17 @@ impl<'a> Emit<'a> {
             at,
             diagnostic.as_deref(),
         );
+        if notification_continues && !failed {
+            patch.status = Some(ToolStatusFact {
+                value: ToolStatus::Running,
+                basis: StatusBasis::GroundTruthProtocol,
+            });
+            patch.timing = Some(ToolTiming {
+                started_at: notification_call.and_then(|call| call.started_at),
+                completed_at: None,
+                duration_ms: None,
+            });
+        }
         if self.take_delegate_call(result.tool_use_id) {
             let child_session_id = result
                 .delegate_child_native_id
@@ -1804,6 +2063,9 @@ impl<'a> Emit<'a> {
                 action: action.clone(),
             });
             patch.outcome = Some(ToolOutcomePatch { action });
+        }
+        if failed || !notification_continues {
+            self.forget_notification_call(result.tool_use_id);
         }
         IngestOp::push_tool_update(
             &mut self.ops,

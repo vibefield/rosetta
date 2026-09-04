@@ -55,8 +55,8 @@ struct Envelope<'a> {
 }
 
 /// `Some` means the record is machine-delivered and must not become a human
-/// prompt.  An empty vector is a recognized notification deliberately left to
-/// another projector (currently Workflow task notifications).
+/// prompt. An empty vector is a task notification handled by the lifecycle
+/// projector before this general collaboration classifier runs.
 pub(crate) fn classify(
     text: &str,
     origin: Option<&UserOrigin>,
@@ -69,9 +69,8 @@ pub(crate) fn classify(
             match envelope.name {
                 "agent-message" => drafts.push(agent_message(envelope, origin)),
                 "teammate-message" => drafts.push(teammate_message(envelope, team_name)),
-                // Workflow callbacks share this wrapper with ordinary async
-                // workers.  Until a task/run join proves ownership, consume
-                // the transport wrapper without inventing a team report.
+                // Async callbacks share this wrapper across Workflow, Agent,
+                // shell, and other tools. The lifecycle projector owns them.
                 "task-notification" => {}
                 _ => unreachable!("top_level_envelopes is a closed recognizer"),
             }

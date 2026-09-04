@@ -38,6 +38,7 @@ pub const TASK_SNAPSHOT_LIMIT: usize = 128;
 /// payload while still preserving the complete observed roster.
 pub const WORKFLOW_PHASE_LIMIT: usize = 64;
 pub const WORKFLOW_WORKER_LIMIT: usize = 256;
+pub const WORKFLOW_ATTEMPT_LIMIT: usize = 256;
 pub const WORKFLOW_JOURNAL_LIMIT: usize = 2_048;
 pub const WORKFLOW_LOG_LIMIT: usize = 128;
 pub const WORKFLOW_RUNTIME_PROFILE_LIMIT: usize = 16;
@@ -739,6 +740,17 @@ pub enum Notice {
     CommandOutput {
         output: CanonicalText,
     },
+    /// A top-level async task callback whose originating tool is not present
+    /// in this branch. Correlated callbacks patch their tool row instead; this
+    /// marker keeps an otherwise orphaned machine event out of human prose.
+    AsyncTask {
+        task_id: Option<String>,
+        tool_use_id: Option<String>,
+        status: ToolStatus,
+        summary: Option<String>,
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+        duration_ms: Option<u64>,
+    },
     RuntimeError {
         kind: RuntimeErrorKind,
         summary: String,
@@ -773,6 +785,20 @@ impl Notice {
                 bounded_option("handoff agent", to_agent.as_deref(), ID_MAX_BYTES)?;
             }
             Self::CommandOutput { output } => output.validate()?,
+            Self::AsyncTask {
+                task_id,
+                tool_use_id,
+                summary,
+                ..
+            } => {
+                bounded_option("async task id", task_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("async tool-use id", tool_use_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option(
+                    "async task summary",
+                    summary.as_deref(),
+                    FAILURE_SUMMARY_MAX_BYTES,
+                )?;
+            }
             Self::RuntimeError { summary, .. } => {
                 required_bounded("runtime error summary", summary, FAILURE_SUMMARY_MAX_BYTES)?;
             }
@@ -1215,9 +1241,27 @@ pub struct WorkflowJournalObservation {
     pub result_preview: Option<String>,
 }
 
-/// The durable current view of one Workflow run. Attempts deliberately do not
-/// live here: each invocation remains a chronological tool row, and all rows
-/// carrying this `run_id` hydrate the same current document.
+/// One chronological invocation of a Workflow run, hydrated from its ordinary
+/// tool row. These are read facts, not fields persisted in `workflow_run`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkflowAttempt {
+    pub timeline_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub attempt: u64,
+    pub task_id: Option<String>,
+    pub resumed: bool,
+    pub status: ToolStatus,
+    pub at: Option<Ms>,
+    pub completed_at: Option<Ms>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub duration_ms: Option<u64>,
+    pub summary: Option<String>,
+}
+
+/// The durable current view of one Workflow run. Each invocation remains a
+/// chronological tool row; query hydration attaches the complete ordinary
+/// attempt history plus a bounded journal window to the shared run document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct WorkflowRun {
@@ -1240,8 +1284,26 @@ pub struct WorkflowRun {
     pub result: Option<CanonicalText>,
     pub error: Option<CanonicalText>,
     pub resources: Vec<ResourceRef>,
+    /// Read-time facts from all Workflow tool rows carrying this run id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<WorkflowAttempt>,
+    /// Exact count even if a pathological run exceeds the wire safety bound.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub attempt_total_count: u64,
+    /// Read-time journal window and exact aggregate counts. The durable
+    /// append-only observations stay in `workflow_journal`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub journal: Vec<WorkflowJournalObservation>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub journal_total_count: u64,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub journal_started_count: u64,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub journal_result_count: u64,
 }
 
 impl WorkflowRun {
@@ -1353,10 +1415,56 @@ impl WorkflowRun {
         )?;
         validate_resources(&self.resources)?;
         bounded_collection(
+            "workflow attempts",
+            self.attempts.len(),
+            WORKFLOW_ATTEMPT_LIMIT,
+        )?;
+        if u64::try_from(self.attempts.len()).unwrap_or(u64::MAX) > self.attempt_total_count {
+            return Err(CanonicalError::Invalid(
+                "workflow attempt window exceeds its total count".into(),
+            ));
+        }
+        for attempt in &self.attempts {
+            required_bounded(
+                "workflow attempt timeline id",
+                &attempt.timeline_id,
+                ID_MAX_BYTES,
+            )?;
+            if attempt.attempt == 0 {
+                return Err(CanonicalError::Invalid(
+                    "workflow attempt number must be positive".into(),
+                ));
+            }
+            bounded_option(
+                "workflow attempt task id",
+                attempt.task_id.as_deref(),
+                ID_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow attempt summary",
+                attempt.summary.as_deref(),
+                FAILURE_SUMMARY_MAX_BYTES,
+            )?;
+        }
+        bounded_collection(
             "workflow journal",
             self.journal.len(),
             WORKFLOW_JOURNAL_LIMIT,
         )?;
+        if u64::try_from(self.journal.len()).unwrap_or(u64::MAX) > self.journal_total_count {
+            return Err(CanonicalError::Invalid(
+                "workflow journal window exceeds its total count".into(),
+            ));
+        }
+        if self
+            .journal_started_count
+            .saturating_add(self.journal_result_count)
+            != self.journal_total_count
+        {
+            return Err(CanonicalError::Invalid(
+                "workflow journal aggregate counts disagree".into(),
+            ));
+        }
         for observation in &self.journal {
             required_bounded(
                 "workflow observation id",
@@ -4321,6 +4429,25 @@ impl TimelineEntry {
             TimelineBody::Notice {
                 notice: Notice::CommandOutput { output },
             } => lanes.push_text(SearchLane::Prose, output),
+            TimelineBody::Notice {
+                notice:
+                    Notice::AsyncTask {
+                        task_id,
+                        tool_use_id,
+                        summary,
+                        ..
+                    },
+            } => {
+                for value in [task_id.as_deref(), tool_use_id.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    SearchLanes::push(&mut lanes.target, value);
+                }
+                if let Some(summary) = summary {
+                    SearchLanes::push(&mut lanes.intent, summary);
+                }
+            }
             TimelineBody::Notice { .. } => {}
             TimelineBody::ToolUse { tool } => {
                 let tool_lanes = tool.search_lanes();

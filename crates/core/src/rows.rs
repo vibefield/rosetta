@@ -196,6 +196,11 @@ pub struct SessionDelegation {
     /// Exact native tool-use id from the child sidecar, when recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_tool_native_id: Option<String>,
+    /// Exact native workflow run which owns this child. A workflow child is
+    /// rendered only inside that run's phase/worker hierarchy; it is never an
+    /// unanchored child in the parent transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
     /// Persistent Agent Team identity. Absence means an ordinary subagent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,

@@ -156,6 +156,50 @@ ReportFindings ScheduleWakeup SendUserFile Workflow StructuredOutput — plus
 `mcp__<server>__<tool>` (split on `__`: server = part 1, tool = rest).
 Treat as open vocabulary; never an exhaustive enum.
 
+### 2.4.1 `task` is an overloaded product word
+
+Native spelling does not establish canonical identity. Claude Code has at least
+two unrelated namespaces that use the word `task`, plus separate workflow and
+team rails:
+
+| Native evidence | Meaning | Canonical treatment |
+|---|---|---|
+| `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet` | Shared work-item/task-board state: subject, status, dependencies, and ownership | Eligible for canonical task projection and `timeline_meta.tasks` when the payload proves a work item |
+| `TodoWrite` | Legacy/session TODO state | Eligible only through its evidence-backed TODO/task projection |
+| `TaskOutput`, `TaskStop` | Read or terminate a **background execution handle** | Process/delegate/team lifecycle; never a task-board row merely because the tool name begins with `Task` |
+| `Agent`, `ListAgents`, `SendMessage`, `TeamCreate`, `TeamDelete` | Worker or team lifecycle and communication | Delegation/team rails |
+| `Workflow` | Workflow orchestration | Workflow rail |
+
+`TaskStop` does not identify one kind of entity. Its result carries the native
+`task_type`; observed values include `local_agent` (ordinary background
+subagent), `in_process_teammate` (an Agent Team member), and `local_bash`
+(background shell execution). It is therefore an execution-control primitive,
+not a synonym for workflows, subagents, teams, or shared tasks. The discriminator
+and relationship joins decide which lifecycle rail owns the event. A stop also
+does not prove that a shared work item became completed, cancelled, or otherwise
+changed state. For teams, the shared task list and teammate lifecycle remain
+separate; a teammate shutdown request is distinct from updating its work item.
+
+**Evidence scar (2026-09-04).** Native session
+`becd74f6-09e8-414f-8862-36094340c0be` contained eight `TaskStop` calls and no
+`TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, `TodoWrite`, or canonical task
+rows. The stop results classified two handles as `local_agent` and six as
+`in_process_teammate`. Some request handles were readable aliases while the
+result supplied a different runtime id (for example `spag-rust-miner` →
+`tz6wjatgk`). Treating every adapter `ToolAction::Task` as a work item produced
+exactly the bad UI signature: eight id-as-title rows with no state, start time,
+or duration.
+
+**Projection law.** `timeline_meta.tasks` admits only source-proven work items or
+rows already present in the canonical task table. `TaskOutput` and `TaskStop`
+must normalize as execution/delegation control, or remain bounded unknowns when
+their kind cannot be proven. They must not enter the task-board candidate set.
+This rule is semantic and payload-driven; a tool-name prefix is insufficient.
+
+Official semantic cross-checks: [tools reference](https://code.claude.com/docs/en/tools-reference),
+[subagents and background tasks](https://code.claude.com/docs/en/sub-agents), and
+[agent teams](https://code.claude.com/docs/en/agent-teams).
+
 ### 2.5 Usage (as recorded — superset of the API response)
 
 input_tokens, output_tokens, cache_creation_input_tokens,
@@ -263,7 +307,12 @@ have different native ownership and messaging evidence.
   Their 760 sidecars comprise 655 `{agentType, spawnDepth}` shapes and 105
   `{agentType}` shapes; the observed agent types are 672 `workflow-subagent`, 87
   `general-purpose`, and one `Explore`. Every journaled start has a corresponding child
-  transcript.
+  transcript. The `<workflow>` directory segment is the exact owning run id and survives
+  bounded metadata normalization on the child relation. It is stronger than the generic
+  parent-session fallback: even while pagination leaves the run message off-page, a workflow
+  child must wait for and render inside that run's phase/worker row, never as a standalone
+  subthread in the parent chronology. Current roster references and journal agent ids jointly
+  retain ownership across resumed runs, including workers from superseded attempts.
 - The child transcript is the authoritative worker chronology, not the preview fields in
   the run snapshot. Seven hundred forty-one children contain a real assistant model; 19
   contain only synthetic API-error assistant records, all stale workers from an earlier

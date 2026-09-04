@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -117,13 +117,13 @@ CREATE INDEX IF NOT EXISTS task_src ON task(src_cursor);
 -- run_id at read time, so a resume does not duplicate the worker roster and
 -- structured result into every invocation.
 CREATE TABLE IF NOT EXISTS workflow_run (
-  run_id      TEXT PRIMARY KEY,
   session_id  TEXT NOT NULL REFERENCES session(id),
+  run_id      TEXT NOT NULL,
   detail      TEXT NOT NULL CHECK (json_valid(detail)),
   updated_at  INTEGER,
-  src_cursor  INTEGER REFERENCES ingest_cursor(id)
+  src_cursor  INTEGER REFERENCES ingest_cursor(id),
+  PRIMARY KEY (session_id, run_id)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS workflow_run_session ON workflow_run(session_id);
 CREATE INDEX IF NOT EXISTS workflow_run_src ON workflow_run(src_cursor);
 
 -- The coordinator journal is append-only evidence and may arrive before its
@@ -136,8 +136,7 @@ CREATE TABLE IF NOT EXISTS workflow_journal (
   detail          TEXT NOT NULL CHECK (json_valid(detail)),
   src_cursor      INTEGER REFERENCES ingest_cursor(id)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS workflow_journal_run ON workflow_journal(run_id);
-CREATE INDEX IF NOT EXISTS workflow_journal_session ON workflow_journal(session_id);
+CREATE INDEX IF NOT EXISTS workflow_journal_run ON workflow_journal(session_id, run_id);
 CREATE INDEX IF NOT EXISTS workflow_journal_src ON workflow_journal(src_cursor);
 
 -- ————— phase 3 · stream —————————————————————————————————————————
@@ -252,6 +251,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS message_tool_correlation
   ON message(session_id, tool_correlation_key) WHERE type = 'tool_use';
 CREATE UNIQUE INDEX IF NOT EXISTS message_response_block
   ON message(session_id, response_id, block_index) WHERE response_id IS NOT NULL;
+-- Workflow attempts are ordinary tool rows. This expression index lets the
+-- read-time run join recover all attempts without scanning every tool in a
+-- long session or persisting a second attempt representation.
+CREATE INDEX IF NOT EXISTS message_workflow_run
+  ON message(session_id, json_extract(tool_detail, '$.run_id'), ordinal)
+  WHERE type = 'tool_use' AND tool_kind = 'workflow';
 
 -- Generation activation and rewrite reconciliation are provenance lookups.
 -- Without this index, activating each source scans the entire growing table.

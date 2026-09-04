@@ -5,6 +5,7 @@
 // Consumers render; they never re-implement protocol semantics.
 
 import type { ApiError } from "./generated/ApiError";
+import type { AssetRef } from "./generated/AssetRef";
 import type { BoostResponse } from "./generated/BoostResponse";
 import type { ContributionResponse } from "./generated/ContributionResponse";
 import type { CommandResponse } from "./generated/CommandResponse";
@@ -30,6 +31,7 @@ import type { TimelinePage } from "./generated/TimelinePage";
 import type { TimelineEntry } from "./generated/TimelineEntry";
 import type { TimelineMeta } from "./generated/TimelineMeta";
 import type { TimelineMetaPlanSource } from "./generated/TimelineMetaPlanSource";
+import type { ToolInteraction } from "./generated/ToolInteraction";
 import type { UsageResponse } from "./generated/UsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
@@ -101,6 +103,37 @@ function queryString(params: QueryParams): string {
 
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
+
+/** Keep additive timeline-meta fields safe across a daemon/client rolling
+ * restart. The protocol handshake still owns incompatible changes; a missing
+ * newly-added collection is the one backwards-compatible case we accept. */
+function normalizeTimelineMeta(meta: TimelineMeta): TimelineMeta {
+  return {
+    tasks: meta.tasks ?? [],
+    workflows: meta.workflows ?? [],
+    plans: meta.plans ?? [],
+    artifacts: meta.artifacts ?? [],
+  };
+}
+
+/** `run` is a query-time join and therefore absent from row-level mutations.
+ * Keep it only while both canonical actions still identify the same run. A
+ * replacement snapshot starts from an empty map and remains authoritative. */
+function retainHydratedWorkflowRun(
+  current: ToolInteraction,
+  incoming: ToolInteraction,
+): ToolInteraction {
+  const before = current.action;
+  const after = incoming.action;
+  return before.type === "workflow"
+    && after.type === "workflow"
+    && before.run !== null
+    && after.run === null
+    && before.run_id !== null
+    && after.run_id === before.run_id
+      ? { ...incoming, action: { ...after, run: before.run } }
+      : incoming;
+}
 
 export class RosettaClient {
   readonly baseUrl: string;
@@ -234,6 +267,20 @@ export class RosettaClient {
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/read/${targetIndex}`,
     );
     return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /** Resolve a canonical oversized-text member only when its disclosure is
+   * opened. Asset references are daemon-owned and may not redirect this
+   * authenticated/local client to another origin. */
+  async readTextAsset(asset: AssetRef, signal?: AbortSignal): Promise<string> {
+    const base = new URL(`${this.baseUrl}/`);
+    const url = new URL(asset.url, base);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== base.origin) {
+      throw new Error("the stored text has an unsupported address");
+    }
+    const response = await this.fetchFn(url, { signal, redirect: "error" });
+    if (!response.ok) throw new Error(`stored text read failed · HTTP ${response.status}`);
+    return response.text();
   }
 
   /** Read one exact plan document selected from timeline_meta. */
@@ -397,7 +444,7 @@ abstract class BaseSubscription {
 export class SessionSubscription extends BaseSubscription {
   private readonly handlers: SessionSubscriptionHandlers;
   private readonly rows = new Map<string, TimelineEntry>();
-  private timelineMeta: TimelineMeta = { tasks: [], plans: [], artifacts: [] };
+  private timelineMeta: TimelineMeta = { tasks: [], workflows: [], plans: [], artifacts: [] };
 
   constructor(
     url: string,
@@ -426,14 +473,14 @@ export class SessionSubscription extends BaseSubscription {
         for (const row of frame.entries) {
           this.rows.set(row.timeline_id, row);
         }
-        this.timelineMeta = frame.timeline_meta;
+        this.timelineMeta = normalizeTimelineMeta(frame.timeline_meta);
         this.stamp = frame.stamp;
         this.emitStatus("live");
         this.emitChange();
         this.emitTimelineMetaChange();
         break;
       case "timeline_meta_snapshot":
-        this.timelineMeta = frame.timeline_meta;
+        this.timelineMeta = normalizeTimelineMeta(frame.timeline_meta);
         if (frame.stamp !== null) {
           this.stamp = frame.stamp;
         }
@@ -468,7 +515,17 @@ export class SessionSubscription extends BaseSubscription {
     switch (mutation.type) {
       case "message": {
         const { type: _tag, ...row } = mutation;
-        this.rows.set(row.timeline_id, row);
+        const current = this.rows.get(row.timeline_id);
+        const replacement = current?.body.type === "tool_use" && row.body.type === "tool_use"
+          ? {
+              ...row,
+              body: {
+                ...row.body,
+                tool: retainHydratedWorkflowRun(current.body.tool, row.body.tool),
+              },
+            }
+          : row;
+        this.rows.set(row.timeline_id, replacement);
         break;
       }
       case "tool_updated": {
@@ -476,7 +533,10 @@ export class SessionSubscription extends BaseSubscription {
         if (row?.body.type === "tool_use") {
           this.rows.set(row.timeline_id, {
             ...row,
-            body: { ...row.body, tool: mutation.tool },
+            body: {
+              ...row.body,
+              tool: retainHydratedWorkflowRun(row.body.tool, mutation.tool),
+            },
           });
         }
         break;

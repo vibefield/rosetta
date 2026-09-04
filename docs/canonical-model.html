@@ -515,6 +515,7 @@
         <span class="f">project_id</span><span class="n">→ project, settled once during bounded meta ingest</span>
         <span class="f">cwd</span><span class="n">one normalized primary working directory; nullable when native metadata cannot prove it</span>
         <span class="f cu">parent_session_id</span><span class="n">nullable, recursive — one entity covers subagents and teams</span>
+        <span class="f">delegation</span><span class="n">bounded native ownership: parent tool, workflow run, team address/color, configured model</span>
         <span class="f cu">root_session_id</span><span class="n">denormalized root of the subagent tree (= id for top-level sessions); contribution rolls up here</span>
         <span class="f">role</span><span class="n">main | subagent | team-member</span>
         <span class="f">title · summary</span><span class="n">ranked bounded evidence + native sidecars/databases</span>
@@ -547,7 +548,9 @@
       tool call. When the native source proves only the parent relationship, the child is interleaved
       among that parent's document blocks by <span class="f">started_at</span>. Its muted, unanchored
       presentation makes clear that timestamp placement is reading order only and does not invent a
-      spawn edge.</div>
+      spawn edge. A workflow-owned child is never eligible for this fallback: its retained
+      <span class="f">delegation.workflow_run_id</span> keeps it inside the exact run's
+      phase/worker hierarchy, including while pagination leaves that run off-page.</div>
       <div class="consumers-line"><span class="cchip">agent-view</span></div>
     </div>
 
@@ -846,6 +849,10 @@ enum Notice {
   PermissionRequested { request_id: Option&lt;String&gt;, scope: Option&lt;String&gt; },
   PermissionDecision { decision: PermissionOutcome, scope: Option&lt;String&gt; },
   Handoff { to_session_id: Option&lt;SessionId&gt;, to_agent: Option&lt;String&gt; },
+  CommandOutput { output: CanonicalText },
+  AsyncTask { task_id: Option&lt;String&gt;, tool_use_id: Option&lt;String&gt;,
+              status: ToolStatus, summary: Option&lt;String&gt;,
+              duration_ms: Option&lt;u64&gt; },       <span class="comment">// orphaned machine callback, never human prose</span>
   RuntimeError { kind: RuntimeErrorKind, summary: String }, <span class="comment">// summary ≤ 512 bytes</span>
 }
 enum SummaryPurpose { Compaction, Branch, Handoff, Session }</pre>

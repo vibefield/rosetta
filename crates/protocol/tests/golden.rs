@@ -11,7 +11,7 @@ use rosetta_core::timeline::{
     CollaborationEventKind, CollaborationStatus, CorrelationDerivation, GroupDerivation, GroupKind,
     NativeToolRef, Notice, ParticipantColor, Provenance, ResponseGroup, ShellOutcome, StatusBasis,
     TaskOp, TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
-    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact, WorkflowRunStatus,
 };
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
@@ -22,7 +22,8 @@ use rosetta_protocol::{
     RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState,
     ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse,
     StreamState, TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
-    TimelineMetaPlanSource, TimelineMetaTask, TimelinePage, TokenSnapshot, UsageResponse,
+    TimelineMetaPlanSource, TimelineMetaTask, TimelineMetaWorkflow, TimelinePage, TokenSnapshot,
+    UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -263,6 +264,16 @@ fn timeline_meta() -> TimelineMeta {
             started_at: Some(3_600_000),
             terminal_at: Some(3_610_000),
             timeline_id: Some("task-message-1".into()),
+        }],
+        workflows: vec![TimelineMetaWorkflow {
+            id: "workflow-run-1".into(),
+            name: "Review in parallel".into(),
+            status: WorkflowRunStatus::Completed,
+            started_at: Some(3_601_000),
+            duration_ms: Some(8_000),
+            worker_count: Some(3),
+            child_session_ids: vec!["workflow-child-1".into()],
+            timeline_id: Some("workflow-message-1".into()),
         }],
         plans: vec![
             TimelineMetaPlan {

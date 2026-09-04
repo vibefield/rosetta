@@ -74,6 +74,21 @@ fn run_with_checkpoint(lines: &[Value], split: usize) -> Vec<IngestOp> {
     ops
 }
 
+fn checkpoint_after(lines: &[Value]) -> Value {
+    let adapter = ClaudeCodeAdapter;
+    let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
+    let session_id = ids::session_id(&runtime_id, "session-under-test");
+    let mut ctx = NormalizeCtx::new(&runtime_id, &session_id);
+    ctx.state = adapter.init_state();
+    for line in lines {
+        let _ = adapter.ingest_line(&mut ctx, "transcript", line.to_string().as_bytes());
+    }
+    adapter
+        .checkpoint_state(ctx.state.as_deref())
+        .unwrap()
+        .expect("claude checkpoint")
+}
+
 /// An assistant record with the given content blocks, in the shape the
 /// canonical records for the `assistant` type.
 fn assistant(content: Value, usage: Option<Value>) -> Value {
@@ -960,6 +975,103 @@ fn workflow_launch_stays_running_until_its_exact_machine_callback() {
         Some(1_123_053)
     );
     assert_eq!(run_with_checkpoint(&lines, 2), ops);
+    let checkpoint = checkpoint_after(&lines);
+    assert!(
+        checkpoint.get("workflow_calls").is_none(),
+        "terminal callbacks must retire their heavyweight call state"
+    );
+    assert!(
+        !checkpoint.to_string().contains("finalDoc"),
+        "callback results belong in canonical ops, not the restart checkpoint"
+    );
+}
+
+#[test]
+fn non_workflow_task_notification_terminalizes_its_background_tool() {
+    let lines = vec![
+        assistant(
+            json!([{"type": "tool_use", "id": "toolu_bash", "name": "Bash",
+                    "input": {"command": "sleep 1", "run_in_background": true}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_bash",
+                    "content": "Command running in background", "is_error": false}]),
+            json!({"toolUseResult": {"status": "async_launched"}}),
+        ),
+        user(
+            json!(concat!(
+                "<task-notification><task-id>bash-1</task-id>",
+                "<tool-use-id>toolu_bash</tool-use-id><status>completed</status>",
+                "<summary>Background command completed</summary>",
+                "<usage><duration_ms>1200</duration_ms></usage>",
+                "</task-notification>"
+            )),
+            json!({"origin": {"kind": "task-notification"}}),
+        ),
+    ];
+    let (ops, statuses) = run(&lines);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    assert_eq!(messages(&ops).len(), 1, "the callback is not a second row");
+    let updates = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(&**patch),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(
+        updates[0].status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Running)
+    );
+    assert_eq!(
+        updates[1].status.as_ref().map(|status| status.value),
+        Some(ToolStatus::Succeeded)
+    );
+    assert_eq!(
+        updates[1]
+            .timing
+            .as_ref()
+            .and_then(|timing| timing.duration_ms),
+        Some(1_200)
+    );
+    assert_eq!(run_with_checkpoint(&lines, 2), ops);
+    assert!(checkpoint_after(&lines).get("notification_calls").is_none());
+}
+
+#[test]
+fn orphan_task_notification_is_a_system_marker_not_human_prose() {
+    let line = user(
+        json!(concat!(
+            "<task-notification><task-id>orphan-1</task-id>",
+            "<tool-use-id>missing-tool</tool-use-id><status>failed</status>",
+            "<summary>Worker disappeared</summary>",
+            "</task-notification>"
+        )),
+        json!({"origin": {"kind": "task-notification"}}),
+    );
+    let (ops, statuses) = run(&[line]);
+    assert_eq!(statuses, [LineStatus::Parsed]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    let TimelineBody::Notice {
+        notice:
+            Notice::AsyncTask {
+                task_id,
+                tool_use_id,
+                status,
+                summary,
+                ..
+            },
+    } = &rows[0].body
+    else {
+        panic!("orphan callback must be one typed async marker")
+    };
+    assert_eq!(task_id.as_deref(), Some("orphan-1"));
+    assert_eq!(tool_use_id.as_deref(), Some("missing-tool"));
+    assert_eq!(*status, ToolStatus::Failed);
+    assert_eq!(summary.as_deref(), Some("Worker disappeared"));
 }
 
 #[test]

@@ -8,9 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
-use rosetta_core::timeline::{ResourceRef, SearchMember, WORKFLOW_RUNTIME_PROFILE_LIMIT};
+use rosetta_core::timeline::{
+    ResourceRef, SearchMember, WORKFLOW_ATTEMPT_LIMIT, WORKFLOW_JOURNAL_LIMIT,
+    WORKFLOW_RUNTIME_PROFILE_LIMIT,
+};
 use rosetta_core::{
-    TimelineBody, TimelineEntry, ToolAction, WorkflowJournalObservation, WorkflowRun,
+    TimelineBody, TimelineEntry, ToolAction, WorkflowAttempt, WorkflowJournalObservation,
+    WorkflowRun,
 };
 
 use crate::{StoreError, message_codec};
@@ -789,38 +793,23 @@ fn hydrate_workflows(
     }
 
     let mut runs = BTreeMap::<String, WorkflowRun>::new();
-    let mut statement = conn
-        .prepare_cached("SELECT detail FROM workflow_run WHERE session_id = ?1 ORDER BY run_id")?;
-    let rows = statement.query_map(params![session_id], |row| row.get::<_, String>(0))?;
-    for row in rows {
-        let run = serde_json::from_str::<WorkflowRun>(&row?)?;
-        if wanted.contains(&run.run_id) {
-            runs.insert(run.run_id.clone(), run);
-        }
+    for run_id in &wanted {
+        let detail = conn
+            .prepare_cached(
+                "SELECT detail FROM workflow_run WHERE session_id = ?1 AND run_id = ?2",
+            )?
+            .query_row(params![session_id, run_id], |row| row.get::<_, String>(0))
+            .optional()?;
+        let Some(detail) = detail else {
+            continue;
+        };
+        let mut run = serde_json::from_str::<WorkflowRun>(&detail)?;
+        hydrate_workflow_attempts(conn, session_id, &mut run)?;
+        hydrate_workflow_journal(conn, session_id, &mut run)?;
+        runs.insert(run_id.clone(), run);
     }
-    drop(statement);
     if runs.is_empty() {
         return Ok(());
-    }
-
-    let mut statement = conn.prepare_cached(
-        "SELECT detail FROM workflow_journal
-         WHERE session_id = ?1 ORDER BY run_id, observation_id",
-    )?;
-    let rows = statement.query_map(params![session_id], |row| row.get::<_, String>(0))?;
-    for row in rows {
-        let observation = serde_json::from_str::<WorkflowJournalObservation>(&row?)?;
-        if let Some(run) = runs.get_mut(&observation.run_id) {
-            run.journal.push(observation);
-        }
-    }
-    drop(statement);
-    for run in runs.values_mut() {
-        run.journal.sort_by(|left, right| {
-            left.source_offset
-                .cmp(&right.source_offset)
-                .then_with(|| left.observation_id.cmp(&right.observation_id))
-        });
     }
 
     let mut profiles = BTreeMap::<String, (Vec<String>, Vec<String>)>::new();
@@ -876,6 +865,147 @@ fn hydrate_workflows(
         };
         *run = run_id.as_ref().and_then(|run_id| runs.get(run_id)).cloned();
     }
+    Ok(())
+}
+
+/// Hydrate every ordinary attempt independent of the caller's timeline page.
+/// A pathological native history is capped for wire safety while the exact
+/// total remains visible; real Workflow runs are far below this boundary.
+fn hydrate_workflow_attempts(
+    conn: &Connection,
+    session_id: &str,
+    run: &mut WorkflowRun,
+) -> Result<(), StoreError> {
+    let total = conn
+        .prepare_cached(
+            "SELECT COUNT(*) FROM message
+         WHERE session_id = ?1 AND type = 'tool_use' AND tool_kind = 'workflow'
+           AND json_extract(tool_detail, '$.run_id') = ?2",
+        )?
+        .query_row(params![session_id, run.run_id], |row| row.get::<_, i64>(0))?;
+    run.attempt_total_count = u64::try_from(total).map_err(|_| StoreError::ProjectionInvalid {
+        message: "workflow attempt count is negative".into(),
+    })?;
+
+    let mut statement = conn.prepare_cached(
+        "SELECT * FROM (
+           SELECT * FROM message
+           WHERE session_id = ?1 AND type = 'tool_use' AND tool_kind = 'workflow'
+             AND json_extract(tool_detail, '$.run_id') = ?2
+           ORDER BY ordinal DESC LIMIT ?3
+         ) ORDER BY ordinal ASC",
+    )?;
+    let rows = statement.query_map(
+        params![
+            session_id,
+            run.run_id,
+            i64::try_from(WORKFLOW_ATTEMPT_LIMIT).unwrap_or(i64::MAX),
+        ],
+        message_codec::decode,
+    )?;
+    run.attempts.clear();
+    for row in rows {
+        let entry = row?;
+        let TimelineBody::ToolUse { tool } = &entry.body else {
+            continue;
+        };
+        let ToolAction::Workflow {
+            task_id,
+            resume_id,
+            attempt,
+            callback_summary,
+            ..
+        } = &tool.action
+        else {
+            continue;
+        };
+        let started_at = tool
+            .timing
+            .as_ref()
+            .and_then(|timing| timing.started_at)
+            .or(entry.at);
+        let completed_at = tool.timing.as_ref().and_then(|timing| timing.completed_at);
+        let duration_ms = tool
+            .timing
+            .as_ref()
+            .and_then(|timing| timing.duration_ms)
+            .or_else(|| {
+                completed_at
+                    .zip(started_at)
+                    .and_then(|(completed, started)| completed.checked_sub(started))
+                    .and_then(|value| u64::try_from(value).ok())
+            });
+        let attempt = attempt.unwrap_or(1);
+        run.attempts.push(WorkflowAttempt {
+            timeline_id: entry.timeline_id,
+            attempt,
+            task_id: task_id.clone(),
+            resumed: attempt > 1 || resume_id.is_some(),
+            status: tool.status.value,
+            at: started_at,
+            completed_at,
+            duration_ms,
+            summary: callback_summary.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Keep only the latest bounded observation window on the wire. Aggregate
+/// counts come from all durable observations, so a large journal never makes
+/// the whole timeline unreadable and never under-reports progress.
+fn hydrate_workflow_journal(
+    conn: &Connection,
+    session_id: &str,
+    run: &mut WorkflowRun,
+) -> Result<(), StoreError> {
+    let (total, started, result) = conn.prepare_cached(
+        "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN json_extract(detail, '$.kind') = 'started' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN json_extract(detail, '$.kind') = 'result' THEN 1 ELSE 0 END), 0)
+         FROM workflow_journal WHERE session_id = ?1 AND run_id = ?2",
+    )?
+    .query_row(params![session_id, run.run_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    let count = |value: i64, label: &str| {
+        u64::try_from(value).map_err(|_| StoreError::ProjectionInvalid {
+            message: format!("workflow journal {label} count is negative"),
+        })
+    };
+    run.journal_total_count = count(total, "total")?;
+    run.journal_started_count = count(started, "started")?;
+    run.journal_result_count = count(result, "result")?;
+
+    let mut statement = conn.prepare_cached(
+        "SELECT detail FROM workflow_journal
+         WHERE session_id = ?1 AND run_id = ?2
+         ORDER BY COALESCE(CAST(json_extract(detail, '$.source_offset') AS INTEGER), -1) DESC,
+                  observation_id DESC
+         LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![
+            session_id,
+            run.run_id,
+            i64::try_from(WORKFLOW_JOURNAL_LIMIT).unwrap_or(i64::MAX),
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    run.journal.clear();
+    for row in rows {
+        run.journal
+            .push(serde_json::from_str::<WorkflowJournalObservation>(&row?)?);
+    }
+    run.journal.sort_by(|left, right| {
+        left.source_offset
+            .cmp(&right.source_offset)
+            .then_with(|| left.observation_id.cmp(&right.observation_id))
+    });
     Ok(())
 }
 

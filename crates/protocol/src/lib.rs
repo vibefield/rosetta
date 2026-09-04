@@ -27,11 +27,11 @@ pub use rosetta_store::queries::{
 };
 pub use rosetta_store::timeline_meta::{
     TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
-    TimelineMetaPlanSource, TimelineMetaTask,
+    TimelineMetaPlanSource, TimelineMetaTask, TimelineMetaWorkflow,
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

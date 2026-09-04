@@ -1,14 +1,14 @@
 //! One light, session-scoped index over work already present in the canonical
 //! projection. The transcript remains the record: this query returns anchors
-//! and safe open references, never a second copy of task, plan, or artifact
-//! bodies.
+//! and safe open references, never a second copy of task, workflow, plan, or
+//! artifact bodies.
 
 use std::collections::BTreeMap;
 
 use rosetta_core::rows::{Ms, TaskStatus};
 use rosetta_core::timeline::{
     ArtifactKind, ArtifactOp, AssetRef, PlanOp, ResourceRef, TaskSnapshotItem, TimelineBody,
-    ToolAction,
+    ToolAction, WorkflowRunStatus,
 };
 use rosetta_core::{TimelineEntry, ids};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -20,6 +20,7 @@ use crate::{StoreError, message_codec};
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TimelineMeta {
     pub tasks: Vec<TimelineMetaTask>,
+    pub workflows: Vec<TimelineMetaWorkflow>,
     pub plans: Vec<TimelineMetaPlan>,
     pub artifacts: Vec<TimelineMetaArtifact>,
 }
@@ -36,6 +37,34 @@ pub struct TimelineMetaTask {
     pub terminal_at: Option<Ms>,
     /// Exact task-family row to land on. `None` is honest for native task
     /// tables that have no corresponding transcript act.
+    pub timeline_id: Option<String>,
+}
+
+/// One canonical Workflow run. Attempts remain chronological transcript rows;
+/// this summary counts a resumed run once and points at its latest attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TimelineMetaWorkflow {
+    pub id: String,
+    pub name: String,
+    pub status: WorkflowRunStatus,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub started_at: Option<Ms>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub duration_ms: Option<u64>,
+    /// Exact current roster length from the durable run document. A run id
+    /// observed before its sidecar keeps this unknown instead of claiming 0.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub worker_count: Option<u64>,
+    /// Exact child-session references from the durable worker roster and its
+    /// append-only journal. These are relation metadata, not copied child
+    /// bodies; they let a client suppress the generic unanchored-child
+    /// fallback even when the owning workflow message is outside its loaded
+    /// transcript page or an earlier attempt is no longer in the live roster.
+    #[serde(default)]
+    pub child_session_ids: Vec<String>,
+    /// Latest Workflow attempt carrying this run id. `None` is honest for a
+    /// sidecar that arrived before its transcript invocation.
     pub timeline_id: Option<String>,
 }
 
@@ -347,6 +376,150 @@ fn task_meta(
     Ok(ordered.into_iter().map(|task| task.item).collect())
 }
 
+fn parse_workflow_status(value: &str) -> WorkflowRunStatus {
+    match value {
+        "running" => WorkflowRunStatus::Running,
+        "completed" => WorkflowRunStatus::Completed,
+        "failed" => WorkflowRunStatus::Failed,
+        "killed" => WorkflowRunStatus::Killed,
+        "cancelled" => WorkflowRunStatus::Cancelled,
+        "stopped" => WorkflowRunStatus::Stopped,
+        _ => WorkflowRunStatus::Unknown,
+    }
+}
+
+fn workflow_meta(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<TimelineMetaWorkflow>, StoreError> {
+    // Keep the wire light: SQLite extracts only list fields from the durable
+    // run document and merges any source-proven run id whose sidecar has not
+    // arrived. message_workflow_run bounds the attempt fold. Resumes collapse
+    // by run id and the newest one becomes the landing anchor.
+    let mut statement = conn.prepare_cached(
+        "WITH attempts AS (
+           SELECT json_extract(tool_detail, '$.run_id') AS run_id,
+                  MIN(ordinal) AS first_ordinal,
+                  MAX(ordinal) AS last_ordinal
+             FROM message
+            WHERE session_id = ?1
+              AND type = 'tool_use'
+              AND tool_kind = 'workflow'
+              AND json_type(tool_detail, '$.run_id') = 'text'
+            GROUP BY json_extract(tool_detail, '$.run_id')
+         ), workflow_ids AS (
+           SELECT run_id FROM workflow_run WHERE session_id = ?1
+           UNION
+           SELECT run_id FROM attempts
+         )
+         SELECT ids.run_id,
+                COALESCE(
+                  NULLIF(TRIM(json_extract(wr.detail, '$.name')), ''),
+                  NULLIF(TRIM(json_extract(last.tool_detail, '$.name')), '')
+                ),
+                COALESCE(json_extract(wr.detail, '$.status'), 'unknown'),
+                COALESCE(
+                  json_extract(wr.detail, '$.started_at'),
+                  first.tool_started_at,
+                  first.ts
+                ),
+                json_extract(wr.detail, '$.usage.duration_ms'),
+                CASE WHEN wr.detail IS NULL THEN NULL
+                     ELSE COALESCE(json_array_length(wr.detail, '$.workers'), 0)
+                END,
+                COALESCE(
+                  (SELECT json_group_array(owned.child_id)
+                     FROM (
+                       SELECT json_extract(worker.value, '$.child_session_id') AS child_id
+                         FROM json_each(wr.detail, '$.workers') worker
+                        WHERE json_type(worker.value, '$.child_session_id') = 'text'
+                          AND NULLIF(TRIM(json_extract(worker.value, '$.child_session_id')), '') IS NOT NULL
+                       UNION
+                       SELECT child.id AS child_id
+                         FROM workflow_journal journal
+                         JOIN session child
+                           ON child.parent_session_id = ?1
+                          AND child.native_session_id = json_extract(journal.detail, '$.agent_id')
+                        WHERE journal.session_id = ?1
+                          AND journal.run_id = ids.run_id
+                          AND json_type(journal.detail, '$.agent_id') = 'text'
+                          AND NULLIF(TRIM(json_extract(journal.detail, '$.agent_id')), '') IS NOT NULL
+                     ) owned),
+                  '[]'
+                ),
+                last.timeline_id
+           FROM workflow_ids ids
+           LEFT JOIN workflow_run wr
+             ON wr.session_id = ?1 AND wr.run_id = ids.run_id
+           LEFT JOIN attempts a ON a.run_id = ids.run_id
+           LEFT JOIN message first
+             ON first.session_id = ?1 AND first.ordinal = a.first_ordinal
+           LEFT JOIN message last
+             ON last.session_id = ?1 AND last.ordinal = a.last_ordinal
+          ORDER BY COALESCE(
+                     CAST(json_extract(wr.detail, '$.started_at') AS INTEGER),
+                     first.tool_started_at,
+                     first.ts,
+                     wr.updated_at,
+                     9223372036854775807
+                   ), ids.run_id",
+    )?;
+    let rows = statement.query_map(params![session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<Ms>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, Option<String>>(7)?,
+        ))
+    })?;
+    let mut workflows = Vec::new();
+    for row in rows {
+        let (
+            id,
+            name,
+            status,
+            started_at,
+            duration_ms,
+            worker_count,
+            child_session_ids,
+            timeline_id,
+        ) = row?;
+        let duration_ms = duration_ms.map(u64::try_from).transpose().map_err(|_| {
+            StoreError::ProjectionInvalid {
+                message: format!("workflow {id} has a negative duration"),
+            }
+        })?;
+        let worker_count = worker_count.map(u64::try_from).transpose().map_err(|_| {
+            StoreError::ProjectionInvalid {
+                message: format!("workflow {id} has a negative worker count"),
+            }
+        })?;
+        let mut child_session_ids = serde_json::from_str::<Vec<String>>(&child_session_ids)
+            .map_err(|error| StoreError::ProjectionInvalid {
+                message: format!("workflow {id} has invalid child session ids: {error}"),
+            })?;
+        child_session_ids.sort();
+        child_session_ids.dedup();
+        workflows.push(TimelineMetaWorkflow {
+            name: name
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| id.clone()),
+            id,
+            status: parse_workflow_status(&status),
+            started_at,
+            duration_ms,
+            worker_count,
+            child_session_ids,
+            timeline_id,
+        });
+    }
+    Ok(workflows)
+}
+
 fn plan_filename(title: Option<&str>, fallback: &str) -> String {
     let raw = title
         .map(str::trim)
@@ -606,13 +779,15 @@ fn artifact_meta(entries: &[TimelineEntry]) -> Vec<TimelineMetaArtifact> {
     artifacts
 }
 
-/// Read all three indexes through one Rust boundary. SQLite performs one
-/// indexed task lookup, one latest-plan lookup, and one narrow tool-kind scan;
-/// file and plan bodies remain lazy.
+/// Read all four indexes through one Rust boundary. SQLite performs one
+/// indexed task lookup, one light Workflow summary lookup, one latest-plan
+/// lookup, and one narrow tool-kind scan; rich Workflow documents plus file
+/// and plan bodies remain lazy.
 pub fn read(conn: &Connection, session_id: &str) -> Result<TimelineMeta, StoreError> {
     let entries = tool_entries(conn, session_id)?;
     Ok(TimelineMeta {
         tasks: task_meta(conn, session_id, &entries)?,
+        workflows: workflow_meta(conn, session_id)?,
         plans: plan_meta(conn, session_id, &entries)?,
         artifacts: artifact_meta(&entries),
     })

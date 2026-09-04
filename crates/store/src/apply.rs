@@ -403,16 +403,26 @@ fn apply_workflow_run(
     run: &WorkflowRun,
     src_cursor: Option<i64>,
 ) -> Result<(), StoreError> {
-    run.validate()
+    // Attempts and journal windows are query-owned joins. Never copy them
+    // back into the generation-owned sidecar document if a hydrated run is
+    // reapplied by a caller.
+    let mut stored = run.clone();
+    stored.attempts.clear();
+    stored.attempt_total_count = 0;
+    stored.journal.clear();
+    stored.journal_total_count = 0;
+    stored.journal_started_count = 0;
+    stored.journal_result_count = 0;
+    stored
+        .validate()
         .map_err(|error| StoreError::ProjectionInvalid {
             message: error.to_string(),
         })?;
-    let detail = serde_json::to_string(run)?;
+    let detail = serde_json::to_string(&stored)?;
     tx.prepare_cached(
         "INSERT INTO workflow_run (run_id, session_id, detail, updated_at, src_cursor)
          VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(run_id) DO UPDATE SET
-           session_id = excluded.session_id,
+         ON CONFLICT(session_id, run_id) DO UPDATE SET
            detail = excluded.detail,
            updated_at = excluded.updated_at,
            src_cursor = excluded.src_cursor",

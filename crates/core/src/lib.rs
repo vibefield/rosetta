@@ -24,7 +24,7 @@ pub use timeline::{
     ResponseGroup, SearchLanes, SourceIdentity, StatusBasis, TaskSnapshot, TaskSnapshotItem,
     TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation,
     ToolFailure, ToolFoldState, ToolInteraction, ToolOutcomePatch, ToolRequestPatch, ToolStatus,
-    ToolStatusFact, ToolTiming, ToolUpdatePatch, WorkflowJournalKind, WorkflowJournalObservation,
-    WorkflowPhase, WorkflowResultKind, WorkflowRun, WorkflowRunStatus, WorkflowUsage,
-    WorkflowWorker, WorkflowWorkerState,
+    ToolStatusFact, ToolTiming, ToolUpdatePatch, WorkflowAttempt, WorkflowJournalKind,
+    WorkflowJournalObservation, WorkflowPhase, WorkflowResultKind, WorkflowRun, WorkflowRunStatus,
+    WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
 };

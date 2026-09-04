@@ -10,8 +10,9 @@ use rosetta_core::timeline::{
     AttachmentKind, AttachmentRef, CitationRef, CollaborationChannel, CollaborationEvent,
     CollaborationEventKind, CollaborationStatus, INLINE_TEXT_MAX_BYTES, ParticipantColor,
     ReadTarget, ResourceRef, ResponseGroup, TextRange, TimelineBody, TimelineEntry,
-    WorkflowJournalKind, WorkflowJournalObservation, WorkflowPhase, WorkflowResultKind,
-    WorkflowRun, WorkflowRunStatus, WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
+    WORKFLOW_JOURNAL_LIMIT, WorkflowJournalKind, WorkflowJournalObservation, WorkflowPhase,
+    WorkflowResultKind, WorkflowRun, WorkflowRunStatus, WorkflowUsage, WorkflowWorker,
+    WorkflowWorkerState,
 };
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, EvidenceOrder, IngestOp, NativeToolRef, ProjectionAsset,
@@ -186,7 +187,12 @@ fn workflow_run() -> WorkflowRun {
             path: "/w/rosetta/api.md".into(),
             resolved: true,
         }],
+        attempts: vec![],
+        attempt_total_count: 0,
         journal: vec![],
+        journal_total_count: 0,
+        journal_started_count: 0,
+        journal_result_count: 0,
     }
 }
 
@@ -2452,6 +2458,7 @@ fn metadata_merges_are_independent_of_arrival_order() {
         child.parent_session_id = Some("s3".into());
         child.delegation = Some(SessionDelegation {
             parent_tool_native_id: Some("toolu-child".into()),
+            workflow_run_id: None,
             team: None,
             color: None,
             configured_model: Some("opus".into()),
@@ -3156,6 +3163,27 @@ fn workflow_attempt_hydrates_one_run_journal_and_observed_worker_runtime() {
             run: None,
         },
     ));
+    let mut resume = message("workflow-resume", 1, MessageKind::ToolUse);
+    resume.content = None;
+    resume.tool = Some(pending_tool(
+        "toolu-workflow-resume",
+        "Workflow",
+        ToolAction::Workflow {
+            name: Some("api-design".into()),
+            path: None,
+            arguments: None,
+            objective: Some(CanonicalText::inline("Refine the API").unwrap()),
+            resume_id: Some("wf_test".into()),
+            background: true,
+            task_id: Some("task-resume".into()),
+            run_id: Some("wf_test".into()),
+            attempt: Some(2),
+            callback_summary: None,
+            callback_result: None,
+            usage: None,
+            run: None,
+        },
+    ));
     let mut child_message = message("child-response", 0, MessageKind::Agent);
     child_message.session_id = "child-workflow".into();
     child_message.model = Some("claude-opus-5".into());
@@ -3168,6 +3196,7 @@ fn workflow_attempt_hydrates_one_run_journal_and_observed_worker_runtime() {
                 IngestOp::SessionMeta(session("s1")),
                 IngestOp::SessionMeta(child),
                 message_op(opener),
+                message_op(resume),
                 message_op(child_message),
                 IngestOp::WorkflowRun {
                     session_id: "s1".into(),
@@ -3191,13 +3220,24 @@ fn workflow_attempt_hydrates_one_run_journal_and_observed_worker_runtime() {
         })
         .unwrap();
 
-    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let page = queries::timeline_page(store.conn(), "s1", None, 1).unwrap();
     let tool = entry_tool(&page[0]).unwrap();
     let ToolAction::Workflow { run: Some(run), .. } = &tool.action else {
         panic!("workflow run must hydrate onto its attempt")
     };
     assert_eq!(run.run_id, "wf_test");
+    assert_eq!(run.attempt_total_count, 2);
+    assert_eq!(
+        run.attempts
+            .iter()
+            .map(|attempt| attempt.attempt)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
     assert_eq!(run.journal.len(), 1);
+    assert_eq!(run.journal_total_count, 1);
+    assert_eq!(run.journal_started_count, 0);
+    assert_eq!(run.journal_result_count, 1);
     assert_eq!(run.workers[0].observed_models, ["claude-opus-5"]);
     assert_eq!(run.workers[0].observed_efforts, ["max"]);
     assert_eq!(
@@ -3213,6 +3253,132 @@ fn workflow_attempt_hydrates_one_run_journal_and_observed_worker_runtime() {
             .unwrap()
             .path,
         "/w/rosetta/api.md"
+    );
+}
+
+#[test]
+fn workflow_run_identity_is_scoped_to_its_session() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let mut second_session = session("s2");
+    second_session.root_session_id = "s2".into();
+    let first = workflow_run();
+    let mut second = workflow_run();
+    second.name = Some("same-native-id-in-another-session".into());
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::SessionMeta(second_session),
+                IngestOp::WorkflowRun {
+                    session_id: "s1".into(),
+                    run: first,
+                },
+                IngestOp::WorkflowRun {
+                    session_id: "s2".into(),
+                    run: second,
+                },
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_run WHERE run_id = 'wf_test'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        2
+    );
+    let names = ["s1", "s2"].map(|session_id| {
+        let detail = store
+            .conn()
+            .query_row(
+                "SELECT detail FROM workflow_run WHERE session_id = ?1 AND run_id = 'wf_test'",
+                [session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        serde_json::from_str::<WorkflowRun>(&detail)
+            .unwrap()
+            .name
+            .unwrap()
+    });
+    assert_eq!(names, ["api-design", "same-native-id-in-another-session"]);
+}
+
+#[test]
+fn oversized_workflow_journal_hydrates_a_bounded_window_with_exact_counts() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let mut opener = message("large-workflow", 0, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(pending_tool(
+        "toolu-large-workflow",
+        "Workflow",
+        ToolAction::Workflow {
+            name: Some("api-design".into()),
+            path: None,
+            arguments: None,
+            objective: None,
+            resume_id: None,
+            background: true,
+            task_id: Some("task-large".into()),
+            run_id: Some("wf_test".into()),
+            attempt: Some(1),
+            callback_summary: None,
+            callback_result: None,
+            usage: None,
+            run: None,
+        },
+    ));
+    let total = WORKFLOW_JOURNAL_LIMIT + 1;
+    let mut ops = vec![
+        message_op(opener),
+        IngestOp::WorkflowRun {
+            session_id: "s1".into(),
+            run: workflow_run(),
+        },
+    ];
+    ops.extend((0..total).map(|index| IngestOp::WorkflowJournal {
+        session_id: "s1".into(),
+        observation: WorkflowJournalObservation {
+            observation_id: format!("large-journal-{index}"),
+            run_id: "wf_test".into(),
+            source_offset: Some(u64::try_from(index).unwrap()),
+            kind: WorkflowJournalKind::Started,
+            worker_key: format!("worker-{index}"),
+            agent_id: None,
+            result_kind: None,
+            result_preview: None,
+        },
+    }));
+    store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let page = queries::timeline_page(store.conn(), "s1", None, 1).unwrap();
+    let tool = entry_tool(&page[0]).unwrap();
+    let ToolAction::Workflow { run: Some(run), .. } = &tool.action else {
+        panic!("workflow run must hydrate")
+    };
+    assert_eq!(run.journal.len(), WORKFLOW_JOURNAL_LIMIT);
+    assert_eq!(run.journal_total_count, u64::try_from(total).unwrap());
+    assert_eq!(run.journal_started_count, u64::try_from(total).unwrap());
+    assert_eq!(run.journal_result_count, 0);
+    assert_eq!(
+        run.journal.first().and_then(|item| item.source_offset),
+        Some(1)
+    );
+    assert_eq!(
+        run.journal.last().and_then(|item| item.source_offset),
+        Some(u64::try_from(total - 1).unwrap())
     );
 }
 
