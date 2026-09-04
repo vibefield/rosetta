@@ -926,7 +926,18 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   explicit legacy artifact sets under the projection lock.
   Existing/live projections retain ledger-sync-before-visible-SQLite ordering. The frozen
   pair measured segment syncs at 7,435 → 66 and ledger time at 96.64 s → 18.02 s; twelve
-  directory barriers cost 0.0005 s. Search is independently disposable and may never
+  directory barriers cost 0.0005 s. The zstd container's pair (2026-09-04; synthetic
+  claude-code corpus of 400 files / 113,006 records / 1.114 GB with a sha256 manifest, seed
+  20260904; release builds of de8f074 vs ac4f142 in separate worktrees; Apple M1 Max carrying
+  unrelated load 67→15; three alternating rounds, page cache warmed): ledger on disk
+  1,118,207,122 → 199,120,503 bytes (5.62×); ingest wall 42.2/39.6/43.7 s → 47.9/40.1/42.8 s
+  (rounds 2–3 within ±2%), ledger worker time 2.4–4.0 s → 4.5–5.3 s, user CPU +3.5 s,
+  peak RSS 2,410 → 2,408 MiB; rebuild 34.9/35.8/37.8 s → 54.5/37.4/38.9 s with ledger read
+  2.4 s → 3.7–5.1 s per replay (the decode; the raw side read from cache); 113,807 frames,
+  146,636 ops, and every projection table equal on all six runs. So: storage 5.6× smaller,
+  ingest unchanged within noise because the work lands on the ledger worker, and a
+  warm-cache rebuild a few percent slower — the cold-cache case, where 5.6× fewer bytes
+  come off disk, was not measured. Search is independently disposable and may never
   delay canonical correctness validation.
 - Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
   these indexes because one missing provenance index turns source activation quadratic.
