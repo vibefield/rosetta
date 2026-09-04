@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
@@ -27,9 +27,9 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::segment::{MAGIC_LEN, SegmentCodec, SegmentReader, SegmentWriter};
 use crate::{CaptureError, io_error};
 
-const SEGMENT_MAGIC: &[u8] = b"RLG1";
 const CHECKSUM_BYTES: usize = 8;
 
 const TAG_DEFINE: u8 = 1;
@@ -90,6 +90,9 @@ pub enum LedgerEntry {
 /// each durable ledger batch so profiling never changes the write ordering.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LedgerWriteStats {
+    /// Bytes that reached segment files, container included. Below
+    /// `frame_bytes` whenever the segment codec compresses.
+    pub disk_bytes: u64,
     pub frames: u64,
     pub frame_bytes: u64,
     pub flushes: u64,
@@ -117,7 +120,10 @@ pub struct Ledger {
     dir: PathBuf,
     max_segment_bytes: u64,
     segment_seq: u64,
-    writer: Option<BufWriter<File>>,
+    writer: Option<SegmentWriter>,
+    codec: SegmentCodec,
+    /// Container bytes of the open segment already folded into `write_stats`.
+    disk_sampled: u64,
     written: u64,
     /// Sources already defined in the CURRENT segment → their local id.
     defined: HashMap<SourceDef, u32>,
@@ -176,6 +182,8 @@ impl Ledger {
             max_segment_bytes: 128 * 1024 * 1024,
             segment_seq: next,
             writer: None,
+            codec: SegmentCodec::default(),
+            disk_sampled: 0,
             written: 0,
             defined: HashMap::new(),
             defer_checkpoint_sync: false,
@@ -200,6 +208,7 @@ impl Ledger {
         let max_segment_bytes = self.max_segment_bytes;
         let segment_seq = self.segment_seq;
         let defer_checkpoint_sync = self.defer_checkpoint_sync;
+        let codec = self.codec;
         let (sender, receiver) = sync_channel(queue_capacity.max(1));
         let worker = std::thread::spawn(move || {
             let mut ledger = self;
@@ -236,6 +245,8 @@ impl Ledger {
             max_segment_bytes,
             segment_seq,
             writer: None,
+            codec,
+            disk_sampled: 0,
             written: 0,
             defined: HashMap::new(),
             defer_checkpoint_sync,
@@ -251,6 +262,13 @@ impl Ledger {
 
     pub fn with_max_segment_bytes(mut self, max: u64) -> Self {
         self.max_segment_bytes = max.max(1);
+        self
+    }
+
+    /// Choose the container for segments this ledger creates from now on.
+    /// Existing segments keep theirs; readers accept every container.
+    pub fn with_codec(mut self, codec: SegmentCodec) -> Self {
+        self.codec = codec;
         self
     }
 
@@ -431,8 +449,7 @@ impl Ledger {
             return self.flush();
         }
         self.flush_buffer()?;
-        self.rotate_if_needed(false);
-        Ok(())
+        self.rotate_if_needed(false)
     }
 
     /// Durably flush every segment appended so far. This is always a physical
@@ -443,10 +460,15 @@ impl Ledger {
         }
         self.flush_buffer()?;
 
+        // A segment due for rotation closes before the barrier so its
+        // container epilogue is inside the sync, not after it.
         let current = self
             .writer
             .as_ref()
             .map(|_| self.dir.join(segment_name(self.segment_seq)));
+        if self.written >= self.max_segment_bytes {
+            self.close_segment()?;
+        }
         for path in self.unsynced_segments.iter().chain(current.iter()) {
             let file =
                 File::open(path).map_err(|error| io_error("opening for sync", path, error))?;
@@ -472,8 +494,7 @@ impl Ledger {
             synced.map_err(|error| io_error("syncing directory", path, error))?;
         }
         self.unsynced_directories.clear();
-        self.rotate_if_needed(true);
-        Ok(())
+        self.rotate_if_needed(true)
     }
 
     fn send_async(&mut self, command: AsyncCommand) -> Result<(), CaptureError> {
@@ -511,6 +532,8 @@ impl Ledger {
         self.segment_seq = finished.segment_seq;
         self.writer = finished.writer.take();
         self.written = finished.written;
+        self.codec = finished.codec;
+        self.disk_sampled = finished.disk_sampled;
         self.defined = std::mem::take(&mut finished.defined);
         self.defer_checkpoint_sync = finished.defer_checkpoint_sync;
         self.unsynced_segments = std::mem::take(&mut finished.unsynced_segments);
@@ -531,20 +554,58 @@ impl Ledger {
             .flush_nanos
             .saturating_add(elapsed_nanos(started));
         flushed.map_err(|error| io_error("flushing", &path, error))?;
+        self.sample_disk_bytes();
         Ok(())
     }
 
-    fn rotate_if_needed(&mut self, current_is_synced: bool) {
-        if self.written >= self.max_segment_bytes {
-            let path = self.dir.join(segment_name(self.segment_seq));
-            self.writer = None;
-            if !current_is_synced {
-                self.unsynced_segments.push(path);
-            }
-            self.defined.clear();
-            self.segment_seq += 1;
-            self.written = 0;
+    /// Fold container bytes written since the last sample into the stats.
+    fn sample_disk_bytes(&mut self) {
+        let Some(writer) = &self.writer else {
+            return;
+        };
+        let now = writer.disk_bytes();
+        self.write_stats.disk_bytes = self
+            .write_stats
+            .disk_bytes
+            .saturating_add(now.saturating_sub(self.disk_sampled));
+        self.disk_sampled = now;
+    }
+
+    /// Close the open segment's container (a zstd epilogue, a plain drain).
+    /// Idempotent; the next append opens the next segment.
+    fn close_segment(&mut self) -> Result<(), CaptureError> {
+        let Some(writer) = self.writer.take() else {
+            return Ok(());
+        };
+        let path = self.dir.join(segment_name(self.segment_seq));
+        let started = Instant::now();
+        let finished = writer.finish();
+        self.write_stats.flush_nanos = self
+            .write_stats
+            .flush_nanos
+            .saturating_add(elapsed_nanos(started));
+        let total = finished.map_err(|error| io_error("closing segment", &path, error))?;
+        self.write_stats.disk_bytes = self
+            .write_stats
+            .disk_bytes
+            .saturating_add(total.saturating_sub(self.disk_sampled));
+        self.disk_sampled = 0;
+        Ok(())
+    }
+
+    fn rotate_if_needed(&mut self, current_is_synced: bool) -> Result<(), CaptureError> {
+        if self.written < self.max_segment_bytes {
+            return Ok(());
         }
+        let path = self.dir.join(segment_name(self.segment_seq));
+        self.close_segment()?;
+        if !current_is_synced {
+            self.unsynced_segments.push(path);
+        }
+        self.defined.clear();
+        self.segment_seq += 1;
+        self.written = 0;
+        Ok(())
     }
 
     fn define(&mut self, source: &SourceDef) -> Result<u32, CaptureError> {
@@ -687,25 +748,19 @@ impl Ledger {
         }
         let path = self.dir.join(segment_name(self.segment_seq));
         let started = Instant::now();
-        let opened = (|| {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .append(true)
-                .open(&path)
-                .map_err(|error| io_error("creating segment", &path, error))?;
-            file.write_all(SEGMENT_MAGIC)
-                .map_err(|error| io_error("writing segment header to", &path, error))?;
-            Ok::<_, CaptureError>(file)
-        })();
+        let opened = SegmentWriter::create(&path, self.codec, LEDGER_WRITE_BUFFER_BYTES)
+            .map_err(|error| io_error("creating segment", &path, error));
         self.write_stats.segment_open_nanos = self
             .write_stats
             .segment_open_nanos
             .saturating_add(elapsed_nanos(started));
-        let file = opened?;
+        let writer = opened?;
         self.queue_directory_sync(self.dir.clone());
         self.write_stats.segments_opened = self.write_stats.segments_opened.saturating_add(1);
-        self.written = SEGMENT_MAGIC.len() as u64;
-        self.writer = Some(BufWriter::with_capacity(LEDGER_WRITE_BUFFER_BYTES, file));
+        self.write_stats.disk_bytes = self.write_stats.disk_bytes.saturating_add(MAGIC_LEN as u64);
+        self.disk_sampled = MAGIC_LEN as u64;
+        self.written = MAGIC_LEN as u64;
+        self.writer = Some(writer);
         Ok(())
     }
 
@@ -723,6 +778,11 @@ impl Drop for Ledger {
         // staging directory after its owner starts cleanup.
         if self.async_backend.is_some() {
             let _ = self.finish_async();
+        }
+        // A synchronous ledger dropped mid-segment drains as a buffered file
+        // always did; a compressed container additionally needs its epilogue.
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.finish();
         }
     }
 }
@@ -798,13 +858,30 @@ pub struct LedgerVisit {
 
 /// Visit every ledger entry in segment order without retaining payloads.
 /// Torn/corrupt tails stop only their segment; callback errors are propagated.
-pub fn visit<E, F>(dir: &Path, mut visitor: F) -> Result<LedgerVisit, E>
+pub fn visit<E, F>(dir: &Path, visitor: F) -> Result<LedgerVisit, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
+    visit_segments(dir, |_| true, visitor)
+}
+
+/// [`visit`] restricted to the segments `keep` admits by sequence number,
+/// still in ascending order. `report.segments` counts only the visited ones.
+pub fn visit_segments<E, F>(
+    dir: &Path,
+    keep: impl Fn(u64) -> bool,
+    mut visitor: F,
+) -> Result<LedgerVisit, E>
 where
     E: From<CaptureError>,
     F: FnMut(LedgerEntry) -> Result<(), E>,
 {
     let mut report = LedgerVisit::default();
-    for (_, path) in segment_files(dir).map_err(E::from)? {
+    for (seq, path) in segment_files(dir).map_err(E::from)? {
+        if !keep(seq) {
+            continue;
+        }
         report.segments += 1;
         let mut counted = |entry| {
             report.entries += 1;
@@ -823,13 +900,94 @@ where
     E: From<CaptureError>,
     F: FnMut(LedgerEntry) -> Result<(), E>,
 {
-    let file =
-        File::open(path).map_err(|error| E::from(io_error("opening segment", path, error)))?;
-    let mut reader = BufReader::new(file);
-    let mut magic = vec![0_u8; SEGMENT_MAGIC.len()];
-    if !read_frame_part(&mut reader, &mut magic, path)? || magic != SEGMENT_MAGIC {
+    let Some(mut reader) = SegmentReader::open(path)
+        .map_err(|error| E::from(io_error("opening segment", path, error)))?
+    else {
         return Ok(false);
+    };
+    let clean = scan_frames(&mut reader, path, visitor)?;
+    Ok(clean && !reader.corrupt())
+}
+
+/// What a frame walk finds before the first torn or corrupt frame: how many
+/// container-decoded bytes were intact, whether the walk ended cleanly on a
+/// frame boundary, and a digest of those bytes — segment recompression proves
+/// its copy against it.
+pub(crate) struct FramePrefix {
+    pub bytes: u64,
+    pub clean: bool,
+    pub digest: blake3::Hash,
+}
+
+pub(crate) fn frame_prefix(reader: &mut impl Read) -> std::io::Result<FramePrefix> {
+    let mut digest = blake3::Hasher::new();
+    let mut bytes = 0_u64;
+    let torn = |bytes, digest: blake3::Hasher| FramePrefix {
+        bytes,
+        clean: false,
+        digest: digest.finalize(),
+    };
+    loop {
+        let mut head = [0_u8; 5];
+        if reader.read(&mut head[..1])? == 0 {
+            return Ok(FramePrefix {
+                bytes,
+                clean: true,
+                digest: digest.finalize(),
+            });
+        }
+        if !read_exact_or_short(reader, &mut head[1..])? {
+            return Ok(torn(bytes, digest));
+        }
+        let body_len = u32::from_be_bytes(head[1..5].try_into().expect("4 bytes")) as usize;
+        let known = matches!(
+            head[0],
+            TAG_DEFINE
+                | TAG_RAW
+                | TAG_META
+                | TAG_GENERATION_COMPLETE
+                | TAG_META_VERSIONED
+                | TAG_RAW_BATCH
+        );
+        if !known || body_len > MAX_FRAME_BYTES {
+            return Ok(torn(bytes, digest));
+        }
+        let mut body = vec![0_u8; body_len];
+        if !read_exact_or_short(reader, &mut body)? {
+            return Ok(torn(bytes, digest));
+        }
+        let mut checksum = [0_u8; CHECKSUM_BYTES];
+        if !read_exact_or_short(reader, &mut checksum)? {
+            return Ok(torn(bytes, digest));
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&head);
+        hasher.update(&body);
+        if hasher.finalize().as_bytes()[..CHECKSUM_BYTES] != checksum {
+            return Ok(torn(bytes, digest));
+        }
+        digest.update(&head);
+        digest.update(&body);
+        digest.update(&checksum);
+        bytes += (head.len() + body_len + CHECKSUM_BYTES) as u64;
     }
+}
+
+fn read_exact_or_short(reader: &mut impl Read, buffer: &mut [u8]) -> std::io::Result<bool> {
+    match reader.read_exact(buffer) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// The frame loop over any container. Returns false at a torn or corrupt
+/// frame; the caller folds in the container's own verdict.
+fn scan_frames<E, F>(reader: &mut impl Read, path: &Path, visitor: &mut F) -> Result<bool, E>
+where
+    E: From<CaptureError>,
+    F: FnMut(LedgerEntry) -> Result<(), E>,
+{
     let mut defined: HashMap<u32, SourceDef> = HashMap::new();
     loop {
         let mut head = [0_u8; 5];
@@ -841,7 +999,7 @@ where
                 return Err(E::from(io_error("reading segment", path, error)));
             }
         }
-        if !read_frame_part(&mut reader, &mut head[1..], path)? {
+        if !read_frame_part(reader, &mut head[1..], path)? {
             return Ok(false);
         }
         let tag = head[0];
@@ -850,11 +1008,11 @@ where
             return Ok(false);
         }
         let mut body = vec![0_u8; body_len];
-        if !read_frame_part(&mut reader, &mut body, path)? {
+        if !read_frame_part(reader, &mut body, path)? {
             return Ok(false);
         }
         let mut checksum = [0_u8; CHECKSUM_BYTES];
-        if !read_frame_part(&mut reader, &mut checksum, path)? {
+        if !read_frame_part(reader, &mut checksum, path)? {
             return Ok(false);
         }
         let mut hasher = blake3::Hasher::new();
@@ -1410,7 +1568,9 @@ mod tests {
     #[test]
     fn a_torn_tail_is_harmless_and_prior_entries_survive() {
         let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let mut ledger = Ledger::open(dir.path())
+            .unwrap()
+            .with_codec(SegmentCodec::Plain);
         ledger
             .append_raw(&source("a.jsonl"), 1, [(0_u64, b"intact".as_slice())])
             .unwrap();
@@ -1428,7 +1588,7 @@ mod tests {
 
         // A checksum flip inside a frame also just stops the segment.
         let mut bytes = std::fs::read(&segment).unwrap();
-        let flip_at = SEGMENT_MAGIC.len() + 7;
+        let flip_at = MAGIC_LEN + 7;
         bytes[flip_at] ^= 0xFF;
         std::fs::write(&segment, &bytes).unwrap();
         let scanned = scan(dir.path()).unwrap();

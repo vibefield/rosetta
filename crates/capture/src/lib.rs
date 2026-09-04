@@ -7,6 +7,7 @@
 pub mod discovery;
 pub mod document;
 pub mod ledger;
+pub mod segment;
 pub mod sqlite;
 pub mod tailer;
 pub mod watch;
@@ -18,8 +19,9 @@ pub use discovery::{
 pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{
     Ledger, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef, scan as scan_ledger,
-    visit as visit_ledger,
+    visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
+pub use segment::{RecompressOutcome, SegmentCodec, recompress_segment, sniff_segment};
 pub use sqlite::{
     DbSnapshot, DbStamp, SnapshotOutcome, SqliteFileStatus, db_stamp, is_db_sidecar,
     snapshot as snapshot_db, sqlite_file_status,

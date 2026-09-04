@@ -1,0 +1,750 @@
+//! Segment containers for the raw ledger.
+//!
+//! A segment is the frame stream `ledger.rs` describes — `tag ∙ u32 body-len ∙
+//! body ∙ 8-byte blake3` — landing either plain (`RLG1`) or inside one zstd
+//! stream (`RLZ1`). The magic decides; the frame loop never learns which.
+//! Readers keep both forever, so one ledger may mix containers segment by
+//! segment and nothing is ever rebuilt for the format's sake.
+//!
+//! Why one stream per segment, flushed at every checkpoint, rather than one
+//! compressed unit per record: on real ledgers the median frame is under a
+//! kilobyte, and compressing it alone yields about half the ratio (2.1× against
+//! 4.6× on claude-code segments, 3.9× against 7.2× on codex). A stream keeps
+//! its match window across records, and a flush at each checkpoint closes a
+//! zstd block without closing the frame, so everything up to the last
+//! checkpoint is decodable while the window survives. Measured at the
+//! checkpoint cadence the stream gives up nothing against whole-segment
+//! compression.
+//!
+//! The crash contract is the plain one. A process that dies after a checkpoint
+//! leaves a stream without its epilogue; the decoder yields every complete
+//! block and then reports end of input, and the frame loop applies the
+//! frame-boundary rule exactly as it does to a plain file. A corrupt block is
+//! different: the decoder rejects it while input remains, and the segment is
+//! reported torn wherever the decoded prefix happens to end — which is what a
+//! checksum mismatch inside a plain frame reports.
+
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
+use std::path::Path;
+
+use crate::{CaptureError, io_error, ledger};
+
+pub const MAGIC_PLAIN: &[u8; 4] = b"RLG1";
+pub const MAGIC_ZSTD: &[u8; 4] = b"RLZ1";
+pub const MAGIC_LEN: usize = 4;
+/// The write-path level: 1.0–1.6 GB/s on an M1 Max, which is dozens of times
+/// the rate the pipeline produces ledger bytes, at 5.6× on a real archive.
+pub const DEFAULT_ZSTD_LEVEL: i32 = 3;
+/// The widest window a stock zstd decoder accepts without configuration
+/// (`ZSTD_WINDOWLOG_LIMIT_DEFAULT`). Offline recompression may use it; the
+/// write path never does — it costs 128 MiB per open stream and half the speed
+/// for about 7% of ratio.
+pub const MAX_WINDOW_LOG: u32 = 27;
+
+const READ_BUFFER_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentCodec {
+    Plain,
+    Zstd { level: i32, long_window: bool },
+}
+
+impl Default for SegmentCodec {
+    fn default() -> Self {
+        Self::Zstd {
+            level: DEFAULT_ZSTD_LEVEL,
+            long_window: false,
+        }
+    }
+}
+
+impl SegmentCodec {
+    pub fn zstd(level: i32) -> Self {
+        Self::Zstd {
+            level,
+            long_window: false,
+        }
+    }
+
+    pub fn magic(self) -> &'static [u8; 4] {
+        match self {
+            Self::Plain => MAGIC_PLAIN,
+            Self::Zstd { .. } => MAGIC_ZSTD,
+        }
+    }
+
+    pub fn is_compressed(self) -> bool {
+        matches!(self, Self::Zstd { .. })
+    }
+}
+
+/// Counts bytes reaching the file so write stats can report on-disk size.
+pub(crate) struct CountingFile {
+    file: File,
+    bytes: u64,
+}
+
+impl Write for CountingFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.file.write(buf)?;
+        self.bytes = self.bytes.saturating_add(written as u64);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// The append side of one segment. The raw-byte buffer sits in front of the
+/// container so a compressed segment sees the same amortized writes a plain
+/// one does; `flush` drains it and, for zstd, ends the current block.
+pub(crate) enum SegmentWriter {
+    Plain(BufWriter<CountingFile>),
+    Zstd(BufWriter<zstd::Encoder<'static, CountingFile>>),
+}
+
+impl SegmentWriter {
+    /// Create the segment (it must not exist) and write its magic.
+    pub(crate) fn create(
+        path: &Path,
+        codec: SegmentCodec,
+        buffer_bytes: usize,
+    ) -> io::Result<Self> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .open(path)?;
+        file.write_all(codec.magic())?;
+        let file = CountingFile {
+            file,
+            bytes: MAGIC_LEN as u64,
+        };
+        match codec {
+            SegmentCodec::Plain => Ok(Self::Plain(BufWriter::with_capacity(buffer_bytes, file))),
+            SegmentCodec::Zstd { level, long_window } => {
+                let mut encoder = zstd::Encoder::new(file, level)?;
+                if long_window {
+                    encoder.long_distance_matching(true)?;
+                    encoder.window_log(MAX_WINDOW_LOG)?;
+                }
+                Ok(Self::Zstd(BufWriter::with_capacity(buffer_bytes, encoder)))
+            }
+        }
+    }
+
+    /// Bytes that have reached the file so far (not necessarily durable).
+    pub(crate) fn disk_bytes(&self) -> u64 {
+        match self {
+            Self::Plain(writer) => writer.get_ref().bytes,
+            Self::Zstd(writer) => writer.get_ref().get_ref().bytes,
+        }
+    }
+
+    /// Close the container: a plain segment drains, a zstd segment writes its
+    /// frame epilogue. Returns the segment's final size on disk.
+    pub(crate) fn finish(self) -> io::Result<u64> {
+        match self {
+            Self::Plain(mut writer) => {
+                writer.flush()?;
+                Ok(writer.get_ref().bytes)
+            }
+            Self::Zstd(writer) => {
+                let encoder = writer.into_inner().map_err(|error| error.into_error())?;
+                let file = encoder.finish()?;
+                Ok(file.bytes)
+            }
+        }
+    }
+}
+
+impl Write for SegmentWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(writer) => writer.write(buf),
+            Self::Zstd(writer) => writer.write(buf),
+        }
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Plain(writer) => writer.write_all(buf),
+            Self::Zstd(writer) => writer.write_all(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(writer) => writer.flush(),
+            Self::Zstd(writer) => writer.flush(),
+        }
+    }
+}
+
+/// Turns a zstd decoder's end-of-data conditions into what the frame loop
+/// expects. A truncated stream reads as end of file (the decoded prefix ends
+/// at the last complete block). A corrupt stream also reads as end of file
+/// but is flagged, so the scan reports the segment torn wherever the prefix
+/// ends. Genuine I/O errors pass through untouched.
+pub(crate) struct DecodeGuard<R> {
+    inner: R,
+    corrupt: bool,
+}
+
+impl<R: Read> Read for DecodeGuard<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.corrupt {
+            return Ok(0);
+        }
+        match self.inner.read(buf) {
+            Ok(read) => Ok(read),
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(0),
+            // zstd reports its own failures as `Other`; the operating system
+            // never does for a read that was going fine until now.
+            Err(error) if error.kind() == ErrorKind::Other => {
+                self.corrupt = true;
+                Ok(0)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// The read side of one segment, container decided by its magic.
+pub(crate) enum SegmentReader {
+    Plain(BufReader<File>),
+    Zstd(BufReader<DecodeGuard<zstd::Decoder<'static, BufReader<File>>>>),
+}
+
+impl SegmentReader {
+    /// `Ok(None)` when the header is short or unknown: the segment is torn
+    /// from its first byte and nothing in it can be trusted.
+    pub(crate) fn open(path: &Path) -> io::Result<Option<Self>> {
+        let mut file = File::open(path)?;
+        let mut magic = [0_u8; MAGIC_LEN];
+        match file.read_exact(&mut magic) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        if &magic == MAGIC_PLAIN {
+            return Ok(Some(Self::Plain(BufReader::with_capacity(
+                READ_BUFFER_BYTES,
+                file,
+            ))));
+        }
+        if &magic == MAGIC_ZSTD {
+            let decoder =
+                zstd::Decoder::with_buffer(BufReader::with_capacity(READ_BUFFER_BYTES, file))?;
+            // Small frame heads read from this buffer; a body larger than it
+            // bypasses straight into the caller's allocation.
+            return Ok(Some(Self::Zstd(BufReader::with_capacity(
+                READ_BUFFER_BYTES,
+                DecodeGuard {
+                    inner: decoder,
+                    corrupt: false,
+                },
+            ))));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn is_compressed(&self) -> bool {
+        matches!(self, Self::Zstd(_))
+    }
+
+    /// True once the decoder rejected its input: the scan must report torn.
+    pub(crate) fn corrupt(&self) -> bool {
+        match self {
+            Self::Plain(_) => false,
+            Self::Zstd(reader) => reader.get_ref().corrupt,
+        }
+    }
+}
+
+impl Read for SegmentReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(reader) => reader.read(buf),
+            Self::Zstd(reader) => reader.read(buf),
+        }
+    }
+}
+
+/// Which container a segment file uses, from its magic alone. `None` when the
+/// header is short or unknown. Cheap: four bytes, no decoding.
+pub fn sniff_segment(path: &Path) -> io::Result<Option<SegmentCodec>> {
+    let mut file = File::open(path)?;
+    let mut magic = [0_u8; MAGIC_LEN];
+    match file.read_exact(&mut magic) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    Ok(if &magic == MAGIC_PLAIN {
+        Some(SegmentCodec::Plain)
+    } else if &magic == MAGIC_ZSTD {
+        Some(SegmentCodec::default())
+    } else {
+        None
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecompressOutcome {
+    /// Rewritten in place; sizes on disk before and after.
+    Rewritten { before: u64, after: u64 },
+    /// Already in the requested container.
+    Unchanged { bytes: u64 },
+    /// The segment ends in a torn or corrupt frame and was left untouched: a
+    /// rewrite could only keep the intact prefix, and dropping a tail is a
+    /// decision for a person, not a compaction pass.
+    Torn { bytes: u64 },
+}
+
+/// Rewrite one closed segment into `codec`, in place and verified. The copy
+/// goes to a sibling temp file, is synced, decoded again and compared frame
+/// by frame and by digest against the source, and only then renamed over it.
+/// Callers hold the projection lock; a segment the daemon is appending to must
+/// never be passed here.
+pub fn recompress_segment(
+    path: &Path,
+    codec: SegmentCodec,
+    force: bool,
+) -> Result<RecompressOutcome, CaptureError> {
+    let before = std::fs::metadata(path)
+        .map_err(|error| io_error("stating segment", path, error))?
+        .len();
+    let Some(mut source) =
+        SegmentReader::open(path).map_err(|error| io_error("opening segment", path, error))?
+    else {
+        return Ok(RecompressOutcome::Torn { bytes: before });
+    };
+    if !force && source.is_compressed() == codec.is_compressed() {
+        return Ok(RecompressOutcome::Unchanged { bytes: before });
+    }
+    let expected = ledger::frame_prefix(&mut source)
+        .map_err(|error| io_error("reading segment", path, error))?;
+    if !expected.clean || source.corrupt() {
+        return Ok(RecompressOutcome::Torn { bytes: before });
+    }
+    drop(source);
+
+    let temporary = path.with_extension("rledger.compact");
+    match std::fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(io_error(
+                "removing stale compaction file",
+                &temporary,
+                error,
+            ));
+        }
+    }
+    let written = write_copy(path, &temporary, codec, expected.bytes);
+    let verified = written.and_then(|()| verify_copy(&temporary, &expected));
+    if let Err(error) = verified {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    std::fs::rename(&temporary, path)
+        .map_err(|error| io_error("installing compacted segment", path, error))?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| io_error("syncing segment directory", parent, error))?;
+    }
+    let after = std::fs::metadata(path)
+        .map_err(|error| io_error("stating segment", path, error))?
+        .len();
+    Ok(RecompressOutcome::Rewritten { before, after })
+}
+
+fn write_copy(
+    path: &Path,
+    temporary: &Path,
+    codec: SegmentCodec,
+    bytes: u64,
+) -> Result<(), CaptureError> {
+    let Some(source) =
+        SegmentReader::open(path).map_err(|error| io_error("opening segment", path, error))?
+    else {
+        return Err(CaptureError::InvalidConfig(format!(
+            "segment {} changed under compaction",
+            path.display()
+        )));
+    };
+    let mut writer = SegmentWriter::create(temporary, codec, 1024 * 1024)
+        .map_err(|error| io_error("creating compacted segment", temporary, error))?;
+    let copied = io::copy(&mut source.take(bytes), &mut writer)
+        .map_err(|error| io_error("copying segment", path, error))?;
+    if copied != bytes {
+        return Err(CaptureError::InvalidConfig(format!(
+            "segment {} shrank under compaction",
+            path.display()
+        )));
+    }
+    writer
+        .finish()
+        .map_err(|error| io_error("closing compacted segment", temporary, error))?;
+    File::open(temporary)
+        .and_then(|file| file.sync_data())
+        .map_err(|error| io_error("syncing compacted segment", temporary, error))?;
+    Ok(())
+}
+
+fn verify_copy(temporary: &Path, expected: &ledger::FramePrefix) -> Result<(), CaptureError> {
+    let Some(mut copy) = SegmentReader::open(temporary)
+        .map_err(|error| io_error("opening compacted segment", temporary, error))?
+    else {
+        return Err(CaptureError::InvalidConfig(format!(
+            "compacted segment {} has no readable header",
+            temporary.display()
+        )));
+    };
+    let actual = ledger::frame_prefix(&mut copy)
+        .map_err(|error| io_error("verifying compacted segment", temporary, error))?;
+    if copy.corrupt()
+        || !actual.clean
+        || actual.bytes != expected.bytes
+        || actual.digest != expected.digest
+    {
+        return Err(CaptureError::InvalidConfig(format!(
+            "compacted segment {} does not decode to its source ({} of {} bytes, clean {})",
+            temporary.display(),
+            actual.bytes,
+            expected.bytes,
+            actual.clean
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::ledger::{Ledger, LedgerEntry, SourceDef, scan};
+
+    fn source(path: &str) -> SourceDef {
+        SourceDef {
+            relative_path: path.to_string(),
+            stream_id: format!("stream:{path}"),
+            session_id: format!("session:{path}"),
+            native_session_id: format!("native:{path}"),
+            agent_version: Some("1.0".to_string()),
+        }
+    }
+
+    fn payloads(dir: &Path) -> (Vec<Vec<u8>>, usize, usize) {
+        let scanned = scan(dir).unwrap();
+        let raw = scanned
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                LedgerEntry::Raw { payload, .. } => Some(payload.clone()),
+                _ => None,
+            })
+            .collect();
+        (raw, scanned.segments, scanned.torn_segments)
+    }
+
+    /// Records with enough repetition that the container actually shrinks.
+    fn record(index: u64) -> Vec<u8> {
+        format!(
+            "{{\"type\":\"assistant\",\"index\":{index},\"text\":\"the quick brown fox jumps over the lazy dog {index}\"}}\n"
+        )
+        .into_bytes()
+    }
+
+    fn magic_of(path: &Path) -> [u8; 4] {
+        let bytes = std::fs::read(path).unwrap();
+        bytes[..MAGIC_LEN].try_into().unwrap()
+    }
+
+    #[test]
+    fn default_container_is_zstd_and_round_trips_every_entry_kind() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        for index in 0..200_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+            if index % 50 == 0 {
+                ledger.checkpoint().unwrap();
+            }
+        }
+        ledger.append_meta(7, "{\"ops\":[]}").unwrap();
+        ledger
+            .complete_generation(&source("a.jsonl"), 1, 3, true)
+            .unwrap();
+        ledger.flush().unwrap();
+        let stats = ledger.take_write_stats();
+        drop(ledger);
+
+        let segment = dir.path().join("00000000.rledger");
+        assert_eq!(&magic_of(&segment), MAGIC_ZSTD);
+        let on_disk = std::fs::metadata(&segment).unwrap().len();
+        assert!(
+            on_disk * 3 < stats.frame_bytes,
+            "expected real compression: {on_disk} on disk for {} frame bytes",
+            stats.frame_bytes
+        );
+        // The stats were sampled at the barrier; the drop then wrote the
+        // stream's epilogue (a 3-byte empty block), which is the only thing a
+        // still-open segment has not reported yet.
+        assert!(
+            stats.disk_bytes <= on_disk && on_disk - stats.disk_bytes <= 8,
+            "disk_bytes {} should trail the container {on_disk} by at most an epilogue",
+            stats.disk_bytes
+        );
+
+        let scanned = scan(dir.path()).unwrap();
+        assert_eq!(scanned.torn_segments, 0);
+        let raw: Vec<_> = scanned
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
+            .collect();
+        assert_eq!(raw.len(), 200);
+        assert!(matches!(
+            raw[199],
+            LedgerEntry::Raw {
+                start_offset: 19_900,
+                ..
+            }
+        ));
+        assert!(scanned.entries.iter().any(|entry| matches!(
+            entry,
+            LedgerEntry::Meta {
+                schema_version: 7,
+                ..
+            }
+        )));
+        assert!(scanned.entries.iter().any(|entry| matches!(
+            entry,
+            LedgerEntry::GenerationComplete {
+                normalizer_version: 3,
+                normalized_clean: true,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn a_kill_after_a_checkpoint_keeps_every_checkpointed_record() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        for index in 0..100_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+        }
+        ledger.checkpoint().unwrap();
+        for index in 100..140_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+        }
+        ledger.checkpoint().unwrap();
+        // Buffered, never checkpointed — and the process "dies" here: no
+        // finish, no epilogue.
+        for index in 140..160_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+        }
+        std::mem::forget(ledger);
+
+        let (raw, segments, torn) = payloads(dir.path());
+        assert_eq!(segments, 1);
+        assert_eq!(torn, 0, "a stream cut at a flush ends at a frame boundary");
+        assert_eq!(raw.len(), 140);
+        assert_eq!(raw[139], record(139));
+    }
+
+    #[test]
+    fn a_truncated_stream_keeps_a_prefix_and_a_corrupt_one_is_torn() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        for index in 0..400_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+            if index % 40 == 39 {
+                ledger.checkpoint().unwrap();
+            }
+        }
+        ledger.flush().unwrap();
+        drop(ledger);
+
+        let segment = dir.path().join("00000000.rledger");
+        let whole = std::fs::read(&segment).unwrap();
+        let (all, _, torn) = payloads(dir.path());
+        assert_eq!(torn, 0);
+        assert_eq!(all.len(), 400);
+
+        // Cut the container at several points: the visible records are always
+        // a prefix, in order, and never fabricated.
+        for cut in [
+            MAGIC_LEN + 1,
+            whole.len() / 3,
+            whole.len() / 2,
+            whole.len() - 3,
+        ] {
+            std::fs::write(&segment, &whole[..cut]).unwrap();
+            let (raw, _, _) = payloads(dir.path());
+            assert!(raw.len() <= 400);
+            assert_eq!(raw, all[..raw.len()], "cut at {cut}");
+        }
+
+        // Flip a byte deep inside the stream: whatever survives is a prefix,
+        // and the segment is torn even though the decoded bytes may end on a
+        // frame boundary.
+        let mut flipped = whole.clone();
+        let at = whole.len() / 2;
+        flipped[at] ^= 0x5A;
+        std::fs::write(&segment, &flipped).unwrap();
+        let (raw, _, torn) = payloads(dir.path());
+        assert_eq!(torn, 1);
+        assert!(raw.len() < 400);
+        assert_eq!(raw, all[..raw.len()]);
+    }
+
+    #[test]
+    fn rotation_finishes_each_container_and_readers_accept_mixed_ledgers() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path())
+            .unwrap()
+            .with_codec(SegmentCodec::Plain)
+            .with_max_segment_bytes(256);
+        for index in 0..6_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+            ledger.flush().unwrap();
+        }
+        drop(ledger);
+        let plain_segments = scan(dir.path()).unwrap().segments;
+        assert!(plain_segments > 1);
+
+        let mut ledger = Ledger::open(dir.path())
+            .unwrap()
+            .with_max_segment_bytes(256);
+        for index in 6..12_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+            ledger.flush().unwrap();
+        }
+        drop(ledger);
+
+        let (raw, segments, torn) = payloads(dir.path());
+        assert!(segments > plain_segments);
+        assert_eq!(torn, 0, "every rotated container carries its epilogue");
+        assert_eq!(raw, (0..12).map(record).collect::<Vec<_>>());
+        let magics: Vec<[u8; 4]> = (0..segments)
+            .map(|seq| magic_of(&dir.path().join(format!("{seq:08}.rledger"))))
+            .collect();
+        assert_eq!(&magics[0], MAGIC_PLAIN);
+        assert_eq!(magics.last().unwrap(), MAGIC_ZSTD);
+    }
+
+    #[test]
+    fn asynchronous_writer_compresses_and_joins_at_flush() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap().into_async(2);
+        for index in 0..50_u64 {
+            ledger
+                .append_raw_owned(&source("a.jsonl"), 1, vec![(index * 100, record(index))])
+                .unwrap();
+            ledger.checkpoint().unwrap();
+        }
+        ledger.flush().unwrap();
+        drop(ledger);
+        assert_eq!(&magic_of(&dir.path().join("00000000.rledger")), MAGIC_ZSTD);
+        let (raw, _, torn) = payloads(dir.path());
+        assert_eq!(torn, 0);
+        assert_eq!(raw, (0..50).map(record).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn recompression_rewrites_plain_segments_in_place_and_leaves_torn_ones() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path())
+            .unwrap()
+            .with_codec(SegmentCodec::Plain)
+            .with_max_segment_bytes(8 * 1024);
+        for index in 0..300_u64 {
+            ledger
+                .append_raw(&source("a.jsonl"), 1, [(index * 100, record(index))])
+                .unwrap();
+            if index % 50 == 49 {
+                ledger.checkpoint().unwrap(); // rotation happens at checkpoints
+            }
+        }
+        ledger.append_meta(7, "{\"ops\":[]}").unwrap();
+        ledger.flush().unwrap();
+        drop(ledger);
+        let before = scan(dir.path()).unwrap();
+        assert!(before.segments > 1);
+
+        // Tear the last segment: a truncated frame header after the durable tail.
+        let last = dir
+            .path()
+            .join(format!("{:08}.rledger", before.segments - 1));
+        let mut file = OpenOptions::new().append(true).open(&last).unwrap();
+        file.write_all(&[2, 0, 0, 1]).unwrap();
+        drop(file);
+
+        let mut rewritten = 0;
+        let mut torn = 0;
+        for seq in 0..before.segments {
+            let path = dir.path().join(format!("{seq:08}.rledger"));
+            match recompress_segment(&path, SegmentCodec::default(), false).unwrap() {
+                RecompressOutcome::Rewritten { before, after } => {
+                    assert!(after < before, "{seq}: {after} vs {before}");
+                    assert_eq!(&magic_of(&path), MAGIC_ZSTD);
+                    rewritten += 1;
+                }
+                RecompressOutcome::Torn { .. } => {
+                    assert_eq!(&magic_of(&path), MAGIC_PLAIN);
+                    torn += 1;
+                }
+                RecompressOutcome::Unchanged { .. } => panic!("plain segments must be rewritten"),
+            }
+            assert!(!path.with_extension("rledger.compact").exists());
+        }
+        assert_eq!(torn, 1);
+        assert_eq!(rewritten, before.segments - 1);
+
+        let after = scan(dir.path()).unwrap();
+        assert_eq!(
+            after.entries, before.entries,
+            "compaction is byte-transparent"
+        );
+        assert_eq!(after.torn_segments, 1);
+
+        // Idempotent unless forced; forced rewrites again (e.g. a wider window).
+        let first = dir.path().join("00000000.rledger");
+        assert!(matches!(
+            recompress_segment(&first, SegmentCodec::default(), false).unwrap(),
+            RecompressOutcome::Unchanged { .. }
+        ));
+        let wide = SegmentCodec::Zstd {
+            level: 10,
+            long_window: true,
+        };
+        assert!(matches!(
+            recompress_segment(&first, wide, true).unwrap(),
+            RecompressOutcome::Rewritten { .. }
+        ));
+        assert_eq!(scan(dir.path()).unwrap().entries, before.entries);
+    }
+}
