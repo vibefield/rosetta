@@ -58,8 +58,12 @@ export function FileViewerDialog({
   // view actually has — so opening a `.md` after an image does not land on a
   // switch position that no longer exists.
   const [chosen, setChosen] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const fileKey = handle?.key ?? null;
-  useEffect(() => setChosen(null), [fileKey]);
+  useEffect(() => {
+    setChosen(null);
+    setFullscreen(false);
+  }, [fileKey]);
 
   if (handle === null) return null;
 
@@ -122,6 +126,8 @@ export function FileViewerDialog({
     <DialogShell
       title={`${handle.name}${handle.path !== null ? ` — ${handle.path}` : ""}`}
       onClose={onClose}
+      fullscreen={fullscreen}
+      onExitFullscreen={() => setFullscreen(false)}
     >
           <FileViewerHeader
             handle={handle}
@@ -132,6 +138,8 @@ export function FileViewerDialog({
             mode={mode}
             onModeChange={setChosen}
             actions={actions}
+            fullscreen={fullscreen}
+            onToggleFullscreen={() => setFullscreen((current) => !current)}
             onClose={onClose}
           />
 

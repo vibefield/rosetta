@@ -130,6 +130,40 @@ export function ExternalGlyph() {
   );
 }
 
+/** Four outward corners: let the current surface occupy the viewport. */
+export function FullscreenGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" />
+    </svg>
+  );
+}
+
+/** The inverse fullscreen mark: four corners returning toward the centre. */
+export function ExitFullscreenGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" />
+    </svg>
+  );
+}
+
 export function CloseGlyph() {
   return (
     <svg

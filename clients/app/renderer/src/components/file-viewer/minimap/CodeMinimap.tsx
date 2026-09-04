@@ -11,8 +11,8 @@ import {
   computeScrollbarInsets,
   computeThumbGeometry,
   createRasterLayout,
+  lineIndexForMapOffset,
   needsMinimap,
-  scrollTopForMapOffset,
   scrollTopForThumbDelta,
   wheelDeltaPixels,
 } from "./layout";
@@ -27,6 +27,7 @@ export interface CodeMinimapProps {
   readonly lineHeight: number;
   readonly tabColumns: number;
   readonly scrollerRef: RefObject<HTMLDivElement | null>;
+  readonly scrollToLine: (lineIndex: number) => void;
 }
 
 interface DragState {
@@ -47,6 +48,7 @@ export function CodeMinimap({
   lineHeight,
   tabColumns,
   scrollerRef,
+  scrollToLine,
 }: CodeMinimapProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -230,12 +232,13 @@ export function CodeMinimap({
       const bounds = stage.getBoundingClientRect();
       if (bounds.height <= 0 || trackHeight <= 0) return;
       const offset = (event.clientY - bounds.top) * (trackHeight / bounds.height);
-      scroller.scrollTop = scrollTopForMapOffset({
-        offset,
-        trackHeight,
-        scrollHeight: scroller.scrollHeight,
-        clientHeight: scroller.clientHeight,
-      });
+      scrollToLine(
+        lineIndexForMapOffset({
+          offset,
+          trackHeight,
+          lineCount: lines.length,
+        }),
+      );
       schedule();
     };
     const onThumbPointerDown = (event: PointerEvent): void => {
@@ -288,9 +291,22 @@ export function CodeMinimap({
     thumb.addEventListener("lostpointercapture", onThumbLostCapture);
 
     const resizeObserver =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedulePaint);
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver((entries) => {
+            if (entries.some((entry) => entry.target === host || entry.target === scroller)) {
+              schedulePaint();
+            } else {
+              // Dynamically measured wrapped rows change scrollHeight, but not
+              // the immutable source raster. Only the viewport thumb moves.
+              schedule();
+            }
+          });
     resizeObserver?.observe(host);
     resizeObserver?.observe(scroller);
+    if (scroller.firstElementChild instanceof HTMLElement) {
+      resizeObserver?.observe(scroller.firstElementChild);
+    }
 
     const themeObserver =
       typeof MutationObserver === "undefined"
@@ -331,7 +347,7 @@ export function CodeMinimap({
       window.removeEventListener("resize", schedulePaint);
       if (frame !== 0) cancelAnimationFrame(frame);
     };
-  }, [lineHeight, lines, scrollerRef, supported, tabColumns, visible]);
+  }, [lineHeight, lines, scrollerRef, scrollToLine, supported, tabColumns, visible]);
 
   if (!visible || !supported) return null;
 

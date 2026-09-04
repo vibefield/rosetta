@@ -1,8 +1,8 @@
 // Geometry for a full-file, pane-bounded minimap.
 //
-// Sampling belongs only to the raster. Navigation is a continuous projection
-// of the real scroll element, which keeps the thumb and pointer correct even
-// when no representative sampled line happens to be inside the viewport.
+// Sampling belongs only to the raster. The thumb and drag are projections of
+// the real scroll element; a track click names a logical source line so the
+// virtualizer can account for measured wrapping.
 
 export const MINIMAP_ROW_DEVICE_PIXELS = 2;
 export const MINIMAP_MIN_THUMB_CSS_PIXELS = 8;
@@ -144,22 +144,19 @@ export function computeThumbGeometry(args: {
   };
 }
 
-/** Warp so the source position under the pointer lands in the viewport's
- * centre. The clamps make the first and last source positions reachable. */
-export function scrollTopForMapOffset(args: {
+/** Source-line navigation stays independent of raster sampling. The
+ * virtualizer resolves this index against measured wrapped-row heights. */
+export function lineIndexForMapOffset(args: {
   readonly offset: number;
   readonly trackHeight: number;
-  readonly scrollHeight: number;
-  readonly clientHeight: number;
+  readonly lineCount: number;
 }): number {
   const trackHeight = positive(args.trackHeight);
-  const scrollHeight = positive(args.scrollHeight);
-  const clientHeight = positive(args.clientHeight);
-  const maxScroll = Math.max(0, scrollHeight - clientHeight);
-  if (trackHeight === 0 || maxScroll === 0) return 0;
+  const lineCount = Math.max(0, Math.floor(args.lineCount));
+  if (trackHeight === 0 || lineCount === 0) return 0;
 
   const fraction = clamp(positive(args.offset) / trackHeight, 0, 1);
-  return clamp(fraction * scrollHeight - clientHeight / 2, 0, maxScroll);
+  return Math.min(lineCount - 1, Math.floor(fraction * lineCount));
 }
 
 export function scrollTopForThumbDelta(

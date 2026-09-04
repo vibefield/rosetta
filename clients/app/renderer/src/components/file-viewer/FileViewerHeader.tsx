@@ -8,7 +8,13 @@
 
 import { ColumnHeading } from "../ui";
 import { SegmentedControl } from "../ui";
-import { CloseGlyph, CopyGlyph, ExternalGlyph } from "../../lib/icons";
+import {
+  CloseGlyph,
+  CopyGlyph,
+  ExitFullscreenGlyph,
+  ExternalGlyph,
+  FullscreenGlyph,
+} from "../../lib/icons";
 import { fmtBytes, tildePath } from "../../lib/format";
 import type { FileHandle, FileKind, ViewMode } from "./types";
 
@@ -30,6 +36,8 @@ export interface FileViewerHeaderProps {
   readonly mode: string;
   readonly onModeChange: (mode: string) => void;
   readonly actions: readonly HeaderAction[];
+  readonly fullscreen: boolean;
+  readonly onToggleFullscreen: () => void;
   readonly onClose: () => void;
 }
 
@@ -50,6 +58,8 @@ export function FileViewerHeader({
   mode,
   onModeChange,
   actions,
+  fullscreen,
+  onToggleFullscreen,
   onClose,
 }: FileViewerHeaderProps) {
   const directory = directoryOf(handle.path, homeDirectory);
@@ -89,6 +99,16 @@ export function FileViewerHeader({
             {action.glyph === "copy" ? <CopyGlyph /> : <ExternalGlyph />}
           </button>
         ))}
+        <button
+          className="ah-iconbtn"
+          type="button"
+          title={fullscreen ? "Exit full screen (Esc)" : "View full screen"}
+          aria-label={fullscreen ? "Exit full screen" : "View full screen"}
+          aria-pressed={fullscreen}
+          onClick={onToggleFullscreen}
+        >
+          {fullscreen ? <ExitFullscreenGlyph /> : <FullscreenGlyph />}
+        </button>
         <button
           className="ah-iconbtn"
           type="button"

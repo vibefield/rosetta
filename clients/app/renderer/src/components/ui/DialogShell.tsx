@@ -18,10 +18,23 @@ export interface DialogShellProps {
   readonly onClose: () => void;
   /** Wider than the default, for a surface that holds two panes. */
   readonly wide?: boolean;
+  /** Fill the application viewport while preserving the dialog's focus and
+   * accessibility mechanics. */
+  readonly fullscreen?: boolean;
+  /** In fullscreen, the first Escape restores the dialog instead of closing
+   * it. */
+  readonly onExitFullscreen?: () => void;
   readonly children: ReactNode;
 }
 
-export function DialogShell({ title, onClose, wide = false, children }: DialogShellProps) {
+export function DialogShell({
+  title,
+  onClose,
+  wide = false,
+  fullscreen = false,
+  onExitFullscreen,
+  children,
+}: DialogShellProps) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
@@ -31,6 +44,7 @@ export function DialogShell({ title, onClose, wide = false, children }: DialogSh
         <Dialog.Content
           className="ah-fileview"
           data-wide={wide ? "" : undefined}
+          data-fullscreen={fullscreen ? "" : undefined}
           aria-describedby={undefined}
           // Radix focuses the first tabbable child, which lights a focus ring
           // on a control nobody pressed. The dialog itself takes focus
@@ -39,6 +53,11 @@ export function DialogShell({ title, onClose, wide = false, children }: DialogSh
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             (event.currentTarget as HTMLElement | null)?.focus();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (!fullscreen) return;
+            event.preventDefault();
+            onExitFullscreen?.();
           }}
         >
           <Dialog.Title className="ah-visually-hidden">{title}</Dialog.Title>

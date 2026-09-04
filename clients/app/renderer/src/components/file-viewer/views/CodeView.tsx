@@ -2,42 +2,23 @@
 //
 // Virtualized, because a viewer that will open any file in a worktree will be
 // handed a 60,000-line lockfile eventually, and 60,000 rows of spans is a
-// frozen window. The row height is declared HERE and applied as an inline
-// style rather than left to the stylesheet: the virtualizer has to know the
-// pitch it is scrolling, and two sources for one number is how a virtual list
-// ends up drifting away from its own scrollbar.
+// frozen window. Nineteen pixels is the estimate and minimum row pitch; the
+// virtualizer measures wrapped rows from their DOM boxes and corrects every
+// following offset when the available width changes.
 
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CodeMinimap } from "../minimap/CodeMinimap";
 import { highlight, PLAIN_TEXT } from "../syntax";
-import type { TokenLine } from "../syntax";
 import type { ViewBodyProps } from "../types";
 
-/** One line's box, in px. Matches `--ah-code-line` in room.css, and wins. */
+/** One visual row's minimum and unmeasured estimate, in CSS px. */
 const LINE_HEIGHT = 19;
 /** Rows drawn beyond the viewport, so a flick does not show blank bands. */
 const OVERSCAN = 30;
-/** A tab is drawn at this width, and counted at it for the scroll extent. */
+/** A tab uses the same stop width in the source listing and minimap. */
 const TAB_COLUMNS = 2;
-
-/** How wide the widest line is, in monospace columns. Measured up front so
- * the horizontal extent is the document's, not "the widest row currently on
- * screen" — which changes as you scroll, and takes the scrollbar with it. */
-function widestLine(lines: readonly TokenLine[]): number {
-  let widest = 0;
-  for (const line of lines) {
-    let columns = 0;
-    for (const token of line) {
-      for (const char of token.text) {
-        columns += char === "\t" ? TAB_COLUMNS - (columns % TAB_COLUMNS) : 1;
-      }
-    }
-    if (columns > widest) widest = columns;
-  }
-  return widest;
-}
 
 export function CodeView({ file }: ViewBodyProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -52,11 +33,8 @@ export function CodeView({ file }: ViewBodyProps) {
       : highlighted;
   }, [file]);
 
-  const columns = useMemo(() => widestLine(lines), [lines]);
-  // Handed to CSS as a variable rather than set as a width here: the room
-  // resets everything to `border-box`, so a width in `ch` with padding inside
-  // it leaves the digits no room at all and the code lands on top of them.
-  // The stylesheet adds the padding to this; nobody has to remember both.
+  // Handed to CSS as a variable so the wrapped source measure begins at one
+  // stable gutter edge regardless of the number of lines in the file.
   const digits = `${String(lines.length).length}ch`;
 
   const virtualizer = useVirtualizer({
@@ -65,6 +43,12 @@ export function CodeView({ file }: ViewBodyProps) {
     estimateSize: () => LINE_HEIGHT,
     overscan: OVERSCAN,
   });
+  const scrollToLine = useCallback(
+    (lineIndex: number): void => {
+      virtualizer.scrollToIndex(lineIndex, { align: "center" });
+    },
+    [virtualizer],
+  );
 
   return (
     <div className="ah-code-shell">
@@ -75,16 +59,15 @@ export function CodeView({ file }: ViewBodyProps) {
       >
         <div
           className="ah-code__sizer"
-          style={{
-            height: virtualizer.getTotalSize(),
-            minWidth: `calc(${columns}ch + var(--ah-code-gutter) + var(--ah-code-trail))`,
-          }}
+          style={{ height: virtualizer.getTotalSize() }}
         >
           {virtualizer.getVirtualItems().map((row) => (
             <div
               className="ah-code__line"
+              data-index={row.index}
               key={row.key}
-              style={{ height: LINE_HEIGHT, transform: `translateY(${row.start}px)` }}
+              ref={virtualizer.measureElement}
+              style={{ transform: `translateY(${row.start}px)` }}
             >
               <span className="ah-code__num">{row.index + 1}</span>
               <code>
@@ -109,6 +92,7 @@ export function CodeView({ file }: ViewBodyProps) {
         lineHeight={LINE_HEIGHT}
         tabColumns={TAB_COLUMNS}
         scrollerRef={scrollerRef}
+        scrollToLine={scrollToLine}
       />
     </div>
   );

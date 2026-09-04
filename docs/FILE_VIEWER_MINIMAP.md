@@ -44,7 +44,7 @@ failed, image, binary, and rendered-document states never mount it.
 
 | Fact | Value |
 |---|---:|
-| source row height | 19 CSS px |
+| source row height | 19 CSS px minimum and virtualizer estimate |
 | tab stops | every 2 columns |
 | virtualizer overscan | 30 rows |
 | text read limit | 2 MiB |
@@ -54,11 +54,11 @@ uses the same array for its visible virtual rows and the minimap. Markdown
 `Source` and SVG `Source` already render `CodeView`, so they inherit the map
 without special cases.
 
-The scroll element is `.ah-fileview__scroll.ah-code`. It has native
-`overflow: auto`, 8 px top padding, 16 px bottom padding, and may have a
-horizontal scrollbar. Its `scrollTop`, `scrollHeight`, and `clientHeight` are
-therefore authoritative. Line-count arithmetic is not a substitute for its
-geometry.
+The scroll element is `.ah-fileview__scroll.ah-code`. It has native vertical
+overflow, hidden horizontal overflow, 8 px top padding, and 16 px bottom
+padding. Its `scrollTop`, `scrollHeight`, and `clientHeight` are authoritative.
+Line-count arithmetic is not a substitute for its geometry because one source
+line may occupy several measured visual rows.
 
 ---
 
@@ -112,17 +112,31 @@ bottom insets come from `offsetWidth - clientWidth` and
 `offsetHeight - clientHeight`; platforms with overlay scrollbars naturally
 report zero. The scroller is borderless, so no border correction is needed.
 
-When the map is present, the code sizer gains a 72 px trailing margin. Long
-lines can therefore scroll completely to the left of the opaque map instead of
-ending underneath it. The map does not own, replace, or cover either native
-scrollbar. The scrollbar corner is explicitly painted with
-`--vf-chrome-solid`, avoiding Chromium's light default where both axes meet.
+When the map is present, each visible code row gains 72 px of right padding.
+That makes its text measure end at the map instead of underneath it. The map
+does not own, replace, or cover the native vertical scrollbar. The generic
+file-viewer scrollbar corner is explicitly painted with `--vf-chrome-solid`
+as a defensive rule for any other two-axis body.
 
 The stage is only as tall as the painted map. This distinction matters for an
 unsampled medium file: at 2× density, 100 source lines occupy 100 CSS px, not
 the entire 700 px host. The thumb must never travel through the blank ground
 below those pixels. The host is absent when hidden, so the source listing has
 no 72 px overlay or trailing clearance.
+
+### Wrapping and virtualization
+
+Horizontal source scrolling is deliberately disabled. The code flex item uses
+`white-space: pre-wrap` and `overflow-wrap: anywhere`, preserving indentation
+and ordinary spaces while still containing a pathological URL or minified
+identifier.
+
+One logical source line remains one virtual item. Nineteen pixels is its
+estimate and minimum height, not a fixed height. Every mounted row carries its
+source index and is registered with the virtualizer's `measureElement`; its
+`ResizeObserver` corrects that row's height and every following offset after
+initial paint, map appearance, or a window-width change. This preserves the
+60,000-line DOM bound without allowing wrapped rows to overlap.
 
 ### Visibility
 
@@ -279,7 +293,7 @@ thumbTop = maxScroll > 0 ? scrollTop / maxScroll * maxTop : 0
 ```
 
 This formula is identical in identity and sampled modes. It includes source
-padding and horizontal-scrollbar effects because it uses the browser's real
+padding and measured wrapped-row heights because it uses the browser's real
 scroll metrics.
 
 The scroll listener coalesces work with `requestAnimationFrame` and changes
@@ -289,13 +303,17 @@ no competing optimistic thumb position.
 
 ### Click
 
-A primary pointer press outside the thumb warps the corresponding source
-position into the centre of the viewport:
+A primary pointer press outside the thumb selects a logical source line:
 
 ```
-fraction = clamp(pointerY / trackH, 0, 1)
-target   = clamp(fraction * contentH - viewportH / 2, 0, maxScroll)
+fraction  = clamp(pointerY / trackH, 0, 1)
+lineIndex = min(lineCount - 1, floor(fraction * lineCount))
 ```
+
+The virtualizer scrolls that line to the centre using its measured and
+estimated row offsets. Mapping to a line rather than multiplying by
+`scrollHeight` is required once different source lines wrap to different
+heights. Sampling still has no role in navigation.
 
 The pointer coordinate is corrected by `trackH / getBoundingClientRect().height`
 so the dialog's opening transform cannot skew an early interaction. A map
@@ -330,10 +348,12 @@ The immutable source model keeps invalidation small:
 | theme mutation | resolve palette and rebuild raster |
 | display-density change | resize backing store and rebuild raster |
 | source scroll | update DOM thumb only |
+| wrapped-row measurement | correct virtual offsets and update DOM thumb only |
 
-`ResizeObserver` watches the host and scroller. A resolution media query is
-re-armed after each density change; window resize is a fallback. Canvas work
-is coalesced into one animation frame.
+`ResizeObserver` watches the host, scroller, sizer, and mounted virtual rows.
+Sizer-height changes update geometry without repainting the immutable raster.
+A resolution media query is re-armed after each density change; window resize
+is a fallback. Canvas work is coalesced into one animation frame.
 
 If Canvas 2D or palette resolution is unavailable, the component removes the
 map and leaves the native viewer intact.
@@ -381,13 +401,17 @@ Browser acceptance covers:
 - click, drag, wheel, native scroll, and window resize stay aligned;
 - the native scrollbar stays on the outer edge and its corner matches the
   viewer ground;
+- long and unbroken lines wrap before the minimap with no horizontal scroll;
+- uneven wrapped rows remain separated after deep virtual scrolling;
+- a map click targets the requested source line despite unequal row heights;
 - scrolling does not call `putImageData`.
 
 At the default pane and the 2× render cap, one 72×700 CSS px ImageData is about
 0.77 MiB; the canvas backing store brings peak pixel memory to about 1.54 MiB.
 The target for the bounded raster and its one `putImageData` remains under
 8 ms in the packaged Electron renderer. Measure total file-open time
-separately: tokenization and `widestLine` are existing costs, not minimap work.
+separately: tokenization and incremental wrapped-row measurement are different
+costs from the minimap raster.
 
 ---
 
@@ -398,10 +422,11 @@ separately: tokenization and `widestLine` are existing costs, not minimap work.
 The first shippable unit includes all correctness paths:
 
 1. full-width scroll shell, inset overlay, and hide-when-fits behavior;
-2. identity and sampled raster;
-3. continuous thumb, click, drag, and wheel geometry;
-4. live light/dark palette and density invalidation;
-5. pure layout/raster tests and browser smoke verification.
+2. dynamically measured source wrapping with no horizontal overflow;
+3. identity and sampled raster;
+4. continuous thumb, source-line click, drag, and wheel geometry;
+5. live light/dark palette and density invalidation;
+6. pure layout/raster tests and browser smoke verification.
 
 Sampling is not a later enhancement. The existing 2 MiB contract permits
 files far beyond the pane capacity, so an identity-only release would need to

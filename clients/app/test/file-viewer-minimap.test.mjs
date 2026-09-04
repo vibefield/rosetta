@@ -4,9 +4,9 @@ import {
   computeScrollbarInsets,
   computeThumbGeometry,
   createRasterLayout,
+  lineIndexForMapOffset,
   needsMinimap,
   sampleLineIndexes,
-  scrollTopForMapOffset,
   scrollTopForThumbDelta,
   wheelDeltaPixels,
 } from "../renderer/src/components/file-viewer/minimap/layout.ts";
@@ -144,26 +144,16 @@ describe("file viewer minimap layout", () => {
     closeTo(middle.top, middle.maxTop / 2);
 
     assert.equal(
-      scrollTopForMapOffset({ offset: 0, trackHeight: 700, scrollHeight, clientHeight: 700 }),
+      lineIndexForMapOffset({ offset: 0, trackHeight: 700, lineCount: 60_000 }),
       0,
     );
-    closeTo(
-      scrollTopForMapOffset({
-        offset: 350,
-        trackHeight: 700,
-        scrollHeight,
-        clientHeight: 700,
-      }),
-      maxScroll / 2,
+    assert.equal(
+      lineIndexForMapOffset({ offset: 350, trackHeight: 700, lineCount: 60_000 }),
+      30_000,
     );
     assert.equal(
-      scrollTopForMapOffset({
-        offset: 700,
-        trackHeight: 700,
-        scrollHeight,
-        clientHeight: 700,
-      }),
-      maxScroll,
+      lineIndexForMapOffset({ offset: 700, trackHeight: 700, lineCount: 60_000 }),
+      59_999,
     );
     closeTo(scrollTopForThumbDelta(0, middle.maxTop, middle), maxScroll);
   });

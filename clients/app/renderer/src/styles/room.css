@@ -807,6 +807,13 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 }
 .ah-fileview[data-state="closed"] { animation: ah-fileview-out 160ms ease forwards; }
 .ah-fileview:focus-visible, .ah-fileview:focus { outline: none; }
+.ah-fileview[data-fullscreen] {
+  inset: 0;
+  width: 100vw; height: 100vh; height: 100dvh;
+  border-radius: 0;
+  transform: none;
+  animation: none;
+}
 
 @keyframes ah-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ah-fade-out { to { opacity: 0; } }
@@ -893,8 +900,8 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   position: relative; flex: 1; min-width: 0; min-height: 0; display: flex;
 }
 .ah-code-shell > .ah-code { min-width: 0; }
-.ah-code-shell:has(> .ah-code-minimap) .ah-code__sizer {
-  margin-right: var(--ah-code-minimap-width);
+.ah-code-shell:has(> .ah-code-minimap) .ah-code__line {
+  padding-right: var(--ah-code-minimap-width);
 }
 
 .ah-code-minimap {
@@ -926,20 +933,23 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 
 .ah-code {
   padding: 8px 0 16px;
+  overflow-x: hidden;
   font-family: var(--vf-font-mono); font-size: 12.5px;
-  /* Must equal LINE_HEIGHT in CodeView.tsx, which the virtualizer scrolls by
-     and which therefore owns the number. */
+  /* Must equal LINE_HEIGHT in CodeView.tsx. It is the estimate and minimum
+     pitch; wrapped rows are measured by the virtualizer at their real height. */
   --ah-code-line: 19px;
   /* The gutter's digits come from the view (`--ah-code-digits`, widest line
-     number); the space around them is the stylesheet's. Adding them here
-     keeps `border-box` honest and keeps the sizer's own width in step. */
+     number); the space around them is the stylesheet's. */
   --ah-code-gutter: calc(var(--ah-code-digits, 3ch) + 30px);
   --ah-code-trail: 24px;
   line-height: var(--ah-code-line);
   tab-size: 2;
 }
-.ah-code__sizer { position: relative; width: max-content; }
-.ah-code__line { position: absolute; top: 0; left: 0; display: flex; min-width: 100%; }
+.ah-code__sizer { position: relative; width: 100%; }
+.ah-code__line {
+  position: absolute; top: 0; left: 0; display: flex; width: 100%;
+  min-height: var(--ah-code-line);
+}
 .ah-code__num {
   position: sticky; left: 0; z-index: 1; flex: none;
   width: var(--ah-code-gutter); padding: 0 14px 0 16px; text-align: right;
@@ -948,7 +958,8 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   user-select: none;
 }
 .ah-code__line code {
-  padding-right: var(--ah-code-trail); white-space: pre; color: var(--vf-text-secondary);
+  flex: 1; min-width: 0; padding-right: var(--ah-code-trail);
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--vf-text-secondary);
 }
 
 /* ── the syntax palette ────────────────────────────────────────────────────
