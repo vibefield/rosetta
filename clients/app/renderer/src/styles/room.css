@@ -862,6 +862,9 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 }
 .ah-fileview__acts { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 4px; }
 .ah-fileview__acts .ah-seg { margin: 0 6px 0 0; }
+.ah-fileview__acts .ah-iconbtn:disabled {
+  cursor: default; opacity: .38; color: var(--vf-text-tertiary); background: var(--vf-fill);
+}
 /* A long path truncates at its HEAD: the folder you are in is the end of the
    string, and it is the end that identifies the file. `direction: rtl` is
    what moves the ellipsis there — and the `<bdi>` inside is not optional,

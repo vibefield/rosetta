@@ -1,9 +1,8 @@
 // The room's one bridge out of the web world: git facts for the open worktree
 // root, the act of pointing the worktree column at a project, the engine
-// MessagePort relay, and handing one HTML file to the browser. Nothing here
-// can write to disk, and nothing here decides anything — every argument is
-// re-validated by the main process, which is the only side that knows which
-// root is open.
+// MessagePort relay, and handing one viewed document to the browser. Nothing
+// here chooses a destination or writes directly, and nothing here decides
+// anything — every argument is re-validated by the main process.
 const { contextBridge, ipcRenderer } = require("electron");
 const os = require("node:os");
 
@@ -36,10 +35,10 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
   /** Branch · dirty count · worktrees for the open worktree root, or null. */
   gitFacts: (root, generation) =>
     ipcRenderer.invoke("ah-worktree-git-facts", root, generation),
-  /** Open one HTML file from the open worktree in the default browser.
-   * Resolves false whenever main refuses — a wrong extension, a path outside
-   * the root, a file that has since gone. */
-  openInBrowser: (path) => ipcRenderer.invoke("ah-file-open-external", path),
+  /** Open the exact HTML/SVG bytes shown by the viewer in the default
+   * browser. Main validates and materializes its own private snapshot. */
+  openInBrowser: (name, bytes) =>
+    ipcRenderer.invoke("ah-file-open-browser-preview", { name, bytes }),
   /** One site's own icon as a `data:` URL, or null. Main validates the host
    * and fetches from the site itself — never a favicon service. */
   favicon: (host) => ipcRenderer.invoke("ah-favicon", host),

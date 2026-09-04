@@ -18,6 +18,13 @@ export type FileContent =
 
 const READING: FileContent = { status: "reading" };
 
+interface FileContentState {
+  readonly handleKey: string | null;
+  readonly source: FileSource | null;
+  readonly asDiff: boolean;
+  readonly value: FileContent;
+}
+
 /** What a failed read can be told about itself. mille raises a
  * `FileSystemError` carrying a POSIX code, which is the most useful half. */
 function describe(error: unknown): string {
@@ -50,46 +57,55 @@ export function useFileContent(
    * decision the registry cannot make from a name. */
   asDiff = false,
 ): FileContent {
-  const [content, setContent] = useState<FileContent>(READING);
+  const [state, setState] = useState<FileContentState>({
+    handleKey: null,
+    source: null,
+    asDiff: false,
+    value: READING,
+  });
 
   useEffect(() => {
     if (handle === null) return;
+
+    const publish = (value: FileContent) => {
+      setState({ handleKey: handle.key, source, asDiff, value });
+    };
 
     const kind = asDiff ? diffKind(handle.name) : resolveKind(handle.name);
 
     if (kind.viewer.payload === "compare") {
       if (source.compare === undefined) {
-        setContent({ status: "failed", reason: "this source has nothing to compare against" });
+        publish({ status: "failed", reason: "this source has nothing to compare against" });
         return;
       }
-      setContent(READING);
+      publish(READING);
       const comparing = new AbortController();
       void source
         .compare(handle, comparing.signal)
         .then(({ unified }) => {
           if (comparing.signal.aborted) return;
-          setContent({
+          publish({
             status: "ready",
             file: { handle, kind, bytes: new Uint8Array(0), text: null, unified },
           });
         })
         .catch((error) => {
           if (comparing.signal.aborted) return;
-          setContent({ status: "failed", reason: describe(error) });
+          publish({ status: "failed", reason: describe(error) });
         });
       return () => comparing.abort();
     }
 
     if (handle.size === 0) {
-      setContent({ status: "empty" });
+      publish({ status: "empty" });
       return;
     }
     if (handle.size > kind.viewer.maxBytes) {
-      setContent({ status: "too-large", limit: kind.viewer.maxBytes });
+      publish({ status: "too-large", limit: kind.viewer.maxBytes });
       return;
     }
 
-    setContent(READING);
+    publish(READING);
     const controller = new AbortController();
 
     void (async () => {
@@ -103,7 +119,7 @@ export function useFileContent(
         const binary = kind.viewer.payload === "text" && looksBinary(bytes);
         const resolved = binary ? BINARY_KIND : kind;
 
-        setContent({
+        publish({
           status: "ready",
           file: {
             handle,
@@ -115,12 +131,19 @@ export function useFileContent(
         });
       } catch (error) {
         if (controller.signal.aborted) return;
-        setContent({ status: "failed", reason: describe(error) });
+        publish({ status: "failed", reason: describe(error) });
       }
     })();
 
     return () => controller.abort();
   }, [handle, source, asDiff]);
 
-  return content;
+  // Effects change after render. Without an identity check, the first frame
+  // after switching files carries the previous file's state — harmlessly
+  // visible before, but unacceptable once an action can export those bytes.
+  return state.handleKey === (handle?.key ?? null) &&
+    state.source === source &&
+    state.asDiff === asDiff
+    ? state.value
+    : READING;
 }

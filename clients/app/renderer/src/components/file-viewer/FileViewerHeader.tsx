@@ -22,6 +22,7 @@ export interface HeaderAction {
   readonly id: string;
   readonly label: string;
   readonly glyph: "copy" | "external";
+  readonly disabled?: boolean;
   readonly run: () => void;
 }
 
@@ -94,6 +95,7 @@ export function FileViewerHeader({
             type="button"
             title={action.label}
             aria-label={action.label}
+            disabled={action.disabled}
             onClick={action.run}
           >
             {action.glyph === "copy" ? <CopyGlyph /> : <ExternalGlyph />}

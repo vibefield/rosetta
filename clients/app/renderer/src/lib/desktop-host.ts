@@ -2,12 +2,12 @@
 //
 // Everything here is answered by the Electron main process: the home
 // directory, the act of pointing the worktree engine at a project, read-only
-// git facts for the root it is showing, and handing one HTML file to the
+// git facts for the root it is showing, and handing one viewed document to the
 // browser. A browser tab has no bridge at all, which is a state the room
 // states rather than papers over.
 //
-// Nothing here writes to disk, and the one act that leaves the app is
-// validated on the far side rather than here — see `openInBrowser`.
+// Nothing here chooses a destination or writes directly, and the one act that
+// leaves the app is validated on the far side — see `openInBrowser`.
 
 /** One checkout of the repository a root belongs to. */
 export interface GitWorktree {
@@ -40,17 +40,14 @@ export interface DesktopHost {
    * folder is not a repository. */
   gitFacts(root: string, generation: number): Promise<GitFacts | null>;
   /**
-   * Hand a file in the open worktree to the OS — for the one file kind this
-   * room will not render itself, HTML.
+   * Hand the exact HTML/SVG bytes shown by the viewer to the OS browser.
    *
-   * The renderer ASKS; the shell decides. It re-derives the extension and
-   * re-checks the path against the root it forked the engine for, because a
-   * renderer showing untrusted repository content is exactly the process
-   * whose word on "which file should the system open" is worth least.
-   * Resolves false when it refuses, which the room reports rather than
-   * swallowing.
+   * The shell validates the extension and byte limit, writes an app-owned
+   * private snapshot, and opens that path. Supplying bytes rather than a path
+   * makes this work for transcript resources and prevents a changed source
+   * file from becoming a different document between reading and opening.
    */
-  openInBrowser(path: string): Promise<boolean>;
+  openInBrowser(name: string, bytes: Uint8Array): Promise<boolean>;
   /**
    * One site's own icon, for a web line in the transcript.
    *

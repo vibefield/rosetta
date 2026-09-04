@@ -16,12 +16,13 @@
 // renderer itself never touches node:fs or a shell.
 //
 // The file viewer adds exactly one act that leaves the app, and it is gated
-// here rather than there: see `ah-file-open-external`.
+// here rather than there: see `ah-file-open-browser-preview`.
 import { execFile, spawn } from "node:child_process";
-import { mkdirSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, MessageChannelMain, app, ipcMain, net, shell, utilityProcess } from "electron";
+import { createBrowserPreviewService } from "./browser-preview.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -174,6 +175,7 @@ function withDaemonParam(url, origin) {
 let worktreeRoot = null;
 let worktreeGeneration = 0;
 let fxSession = null;
+let browserPreviews = null;
 const WORKTREE_READY_TIMEOUT_MS = 10_000;
 
 function forkFxHost(root) {
@@ -449,36 +451,18 @@ app.whenReady().then(async () => {
     return gitFacts(raw);
   });
 
-  // The file viewer's one outward act: hand an HTML or SVG file to the
-  // browser. Four gates, in this order, because the renderer is showing
-  // content from a repository nobody here wrote and is therefore the process
-  // whose word on "open this" is worth least:
-  //
-  //   1. the extension is one the OS opens in a browser and never executes;
-  //   2. the real path — symlinks resolved — is inside the open worktree,
-  //      so a link in a repo cannot walk out of it;
-  //   3. it is a regular file;
-  //   4. `shell.openPath`, which respects the default handler and, for these
-  //      extensions, cannot launch anything.
-  //
-  // Anything else answers false, which the room reports to the reader. A
-  // silent no-op would read as a broken button — which is also why the
-  // OS's own answer is awaited rather than discarded: `openPath` resolves to
-  // a reason when nothing opened, and reporting success over it would be the
-  // one place this gate lied.
-  ipcMain.handle("ah-file-open-external", async (_evt, raw) => {
-    if (typeof raw !== "string" || raw === "" || worktreeRoot === null) return false;
-    if (!/\.(html?|svg)$/i.test(raw)) return false;
-    try {
-      const target = realpathSync(raw);
-      const root = realpathSync(worktreeRoot);
-      const inside = target === root || target.startsWith(root + path.sep);
-      if (!inside || !statSync(target).isFile()) return false;
-      return (await shell.openPath(target)) === "";
-    } catch {
-      return false;
-    }
+  // The file viewer's one outward act. Main writes the exact HTML or SVG
+  // bytes already shown into a private, app-owned temporary directory, then
+  // asks the OS to open that snapshot. This works for transcript resources
+  // with no usable local path and prevents a changed path from opening bytes
+  // other than the ones the reader chose. The service independently limits
+  // the extension and byte count; the renderer's registry is presentation,
+  // not a security boundary.
+  browserPreviews = createBrowserPreviewService({
+    tempDirectory: app.getPath("temp"),
+    openPath: (target) => shell.openPath(target),
   });
+  ipcMain.handle("ah-file-open-browser-preview", (_event, raw) => browserPreviews?.open(raw) ?? false);
 
   // A web line's site icon. The renderer names a host it read out of a
   // transcript and asks; this side decides whether that host is dialled at
@@ -524,5 +508,7 @@ app.on("before-quit", () => {
   fxSession = null;
   worktreeRoot = null;
   stopFxSession(session);
+  browserPreviews?.dispose();
+  browserPreviews = null;
   stopDaemon();
 });

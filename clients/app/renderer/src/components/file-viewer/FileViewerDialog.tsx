@@ -33,9 +33,10 @@ export interface FileViewerDialogProps {
   readonly onClose: () => void;
   /** The room's receipt line, so an act is never silent. */
   readonly onReceipt?: (text: string) => void;
-  /** Hand a path to the OS. Absent in a browser tab, and absent is why the
-   * act is offered as a capability rather than assumed. */
-  readonly openInBrowser?: ((path: string) => Promise<boolean>) | null;
+  /** Hand the currently displayed bytes to the OS browser. Absent in a
+   * browser tab, and absent is why the act is a capability rather than an
+   * assumption. */
+  readonly openInBrowser: ((name: string, bytes: Uint8Array) => Promise<boolean>) | null;
   /** Open this handle as a CHANGE rather than as a file. The registry reads
    * kinds off a name, and a name cannot say which of the two acts is being
    * served. */
@@ -80,15 +81,10 @@ export function FileViewerDialog({
   const modes = kind.viewer.modes ?? [];
   const mode = chosen !== null && modes.some((m) => m.id === chosen) ? chosen : (modes[0]?.id ?? "");
 
-  const canAct = (action: ViewerActionId): boolean => {
-    if (handle.path === null) return false;
-    return action !== "open-in-browser" || (openInBrowser ?? null) !== null;
-  };
-
   const perform = (action: ViewerActionId): HeaderAction | null => {
-    const path = handle.path;
-    if (path === null || !canAct(action)) return null;
     if (action === "copy-path") {
+      const path = handle.path;
+      if (path === null) return null;
       return {
         id: action,
         label: "Copy path",
@@ -101,17 +97,29 @@ export function FileViewerDialog({
         },
       };
     }
+    const open = openInBrowser ?? null;
+    if (open === null) return null;
+    const bytes =
+      content.status === "ready" && content.file.handle.key === handle.key
+        ? content.file.bytes
+        : content.status === "empty"
+          ? new Uint8Array(0)
+          : null;
     return {
       id: action,
       label: "Open in browser",
       glyph: "external",
+      disabled: bytes === null,
       run: () => {
-        void openInBrowser?.(path).then((opened) => {
-          // The shell decides, not this room: it re-checks the extension and
-          // the root before handing anything to the OS. A refusal is a fact
-          // the reader is told, not a silent no-op.
-          onReceipt?.(opened ? "opened in your browser" : "the shell would not open that");
-        });
+        if (bytes === null) return;
+        void open(handle.name, bytes)
+          .then((opened) => {
+            // The shell decides, not this room: it re-checks the extension
+            // and byte limit before handing its snapshot to the OS. A
+            // refusal is a fact the reader is told, not a silent no-op.
+            onReceipt?.(opened ? "opened in your browser" : "the shell would not open that");
+          })
+          .catch(() => onReceipt?.("the shell would not open that"));
       },
     };
   };

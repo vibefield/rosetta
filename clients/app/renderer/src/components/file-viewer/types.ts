@@ -16,7 +16,7 @@ export interface FileHandle {
   readonly key: string;
   readonly name: string;
   /** Absolute path, when the caller can derive one. `null` costs the reader
-   * the path line and the acts that need a path; it never costs them the
+   * the path line and path-only acts; it never costs them the
    * file, because reading goes through the source, not the path. */
   readonly path: string | null;
   /** Bytes on disk, known from the tree BEFORE any read — which is how the

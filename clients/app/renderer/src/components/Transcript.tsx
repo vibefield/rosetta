@@ -22,6 +22,7 @@ import type {
   TimelineMetaWorkflow,
 } from "@rosetta/protocol";
 import { clockShort } from "../lib/format";
+import { desktopHost } from "../lib/desktop-host";
 import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
 import type { AttachmentFact, PathFact } from "../lib/transcript";
@@ -540,6 +541,7 @@ export function TranscriptColumn({
           setViewerTarget(null);
         }}
         onReceipt={onReceipt}
+        openInBrowser={desktopHost()?.openInBrowser ?? null}
       />
     </div>
   );
