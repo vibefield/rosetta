@@ -7,6 +7,7 @@ import {
   COMMAND_PREVIEW_CHARACTER_LIMIT,
   FOLD_NAME_LIMIT,
   RUN_FOLD_THRESHOLD,
+  TASK_PREVIEW_LIMIT,
   commandDirectoryContext,
   commandPreviewText,
   commandName,
@@ -15,6 +16,7 @@ import {
   linkedChildSessionIds,
   objectText,
   runSummary,
+  taskDisplayRows,
 } from "../renderer/src/lib/transcript/index.ts";
 
 /* ── factories ───────────────────────────────────────────────────────────── */
@@ -92,7 +94,7 @@ const read = (path, over = {}) =>
   tool(
     {
       type: "file_read",
-      targets: [{ resource: file(path), range: null, media_kind: null }],
+      targets: [{ resource: file(path), range: over.range ?? null, media_kind: null }],
       outcome: over.readOutcome ?? { truncated: false },
     },
     over,
@@ -101,7 +103,7 @@ const read = (path, over = {}) =>
 /* ── §04, family by family ───────────────────────────────────────────────── */
 
 describe("§04 — the twenty-eight families", () => {
-  it("file_read states the path with its range", () => {
+  it("file_read names the file and carries its range into the file detail", () => {
     const l = line({
       type: "file_read",
       targets: [
@@ -110,16 +112,17 @@ describe("§04 — the twenty-eight families", () => {
       outcome: { truncated: false },
     });
     assert.equal(l.verb, "Read");
-    assert.equal(objectText(l.object), "src/CardShell.tsx");
+    assert.equal(objectText(l.object), "CardShell.tsx");
     assert.deepEqual(
       l.object.map((p) => [p.text, p.tone]),
-      [["src/", "dir"], ["CardShell.tsx", "plain"]],
+      [["CardShell.tsx", "plain"]],
     );
-    assert.equal(l.result, "L1–180");
+    assert.equal(l.result, null);
     assert.equal(l.glyph, "read");
     assert.equal(l.cls, "look");
     assert.equal(l.detail.kind, "paths");
     assert.equal(l.detail.paths.length, 1);
+    assert.equal(l.detail.paths[0].range, "L1–180");
     assert.deepEqual(l.detail.paths[0].read, {
       sessionId: "s1",
       timelineId: l.rows[0].timeline_id,
@@ -589,6 +592,23 @@ describe("§04 — the twenty-eight families", () => {
     assert.equal(l.detail.kind, "participants");
   });
 
+  it("renders a shutdown request distinctly and keeps its body", () => {
+    const l = line({
+      type: "collaborate",
+      operation: "request_stop",
+      recipient: "researcher",
+      team: null,
+      summary: null,
+      body: inline("The assigned work is complete."),
+      linked_session_id: null,
+      delivery_id: null,
+      outcome: null,
+    });
+    assert.equal(sentence(l), "Asked to stop researcher · The assigned work is complete.");
+    assert.equal(l.detail.kind, "text");
+    assert.equal(l.detail.text, "The assigned work is complete.");
+  });
+
   it("question opens by default — it is conversation", () => {
     const l = line({
       type: "question",
@@ -646,12 +666,21 @@ describe("§04 — the twenty-eight families", () => {
       operation: "create",
       artifact_kind: "document",
       name: "deck.pdf",
-      description: null,
+      description: inline("Two exported slides"),
       resources: [file("/w/a.pdf"), file("/w/b.pdf")],
       media: null,
     });
     assert.equal(sentence(l), "Made an artifact deck.pdf · document");
     assert.equal(l.result, "2 files");
+    assert.equal(l.detail.kind, "paths");
+    assert.equal(l.detail.description, "Two exported slides");
+    assert.deepEqual(
+      l.detail.paths.map((path) => path.read),
+      [
+        { sessionId: "s1", timelineId: l.rows[0].timeline_id, targetIndex: 0 },
+        { sessionId: "s1", timelineId: l.rows[0].timeline_id, targetIndex: 1 },
+      ],
+    );
   });
 
   it("notification routes channel to destination", () => {
@@ -679,19 +708,79 @@ describe("§04 — the twenty-eight families", () => {
     assert.equal(sentence(left), "Left worktree mode · tree");
   });
 
-  it("task and plan lead with the operation", () => {
+  it("task actions name the delta and open to their point-in-time board", () => {
     const task = line({
       type: "task",
       operation: "create",
       task_id: "T-1",
       subject: "Ship the ledger",
       description: inline("all twenty-eight"),
-      status: "in_progress",
+      status: "pending",
       owner: null,
       blocker_ids: [],
+      snapshot: {
+        tasks: [
+          {
+            task_id: "T-1",
+            subject: "Ship the ledger",
+            status: "pending",
+            owner: null,
+            blocker_ids: [],
+          },
+        ],
+        total_count: 1,
+      },
     });
-    assert.equal(sentence(task), "Task create Ship the ledger");
-    assert.equal(task.result, "in progress");
+    assert.equal(sentence(task), "Added Ship the ledger");
+    assert.equal(task.result, "0 of 1 done");
+    assert.equal(task.openByDefault, true);
+    assert.equal(task.detail.kind, "tasks");
+    assert.equal(task.detail.change, "added");
+
+    const completed = line({
+      type: "task",
+      operation: "update",
+      task_id: "T-1",
+      subject: "Ship the ledger",
+      description: null,
+      status: "completed",
+      owner: null,
+      blocker_ids: [],
+      snapshot: {
+        tasks: [
+          {
+            task_id: "T-1",
+            subject: "Ship the ledger",
+            status: "completed",
+            owner: null,
+            blocker_ids: [],
+          },
+        ],
+        total_count: 1,
+      },
+    });
+    assert.equal(sentence(completed), "Completed Ship the ledger");
+    assert.equal(completed.result, "1 of 1 done");
+    assert.equal(completed.detail.change, "done");
+
+    const board = ["1", "2", "3", "4", "5"].map((task_id) => ({
+      task_id,
+      subject: `Task ${task_id}`,
+      status: task_id === "1" ? "completed" : "pending",
+      owner: null,
+      blocker_ids: [],
+    }));
+    assert.equal(TASK_PREVIEW_LIMIT, 3);
+    assert.deepEqual(
+      taskDisplayRows(board, "4", false).map((item) => item.task_id),
+      ["2", "3", "4"],
+      "the current task follows its two nearest preceding peers",
+    );
+    assert.deepEqual(
+      taskDisplayRows(board, "4", true).map((item) => item.task_id),
+      ["1", "2", "3", "5", "4"],
+      "full disclosure keeps every task and still pins the current one last",
+    );
 
     const plan = line({
       type: "plan",
@@ -964,11 +1053,11 @@ describe("T-3 — fold by class, not by run", () => {
     assert.deepEqual(lines.map((l) => l.foldCount), [1, 1, 2]);
   });
 
-  it("consecutive reads fold to `N files` and aggregate the truncations", () => {
+  it("consecutive reads keep their names and ranges while aggregating truncations", () => {
     const lines = ledgerLines(
       [
-        read("/w/src/CardShell.tsx"),
-        read("/w/src/silhouette.ts"),
+        read("/w/src/CardShell.tsx", { range: { unit: "line", start: 1, count: 180 } }),
+        read("/w/src/silhouette.ts", { range: { unit: "line", start: 40, count: 12 } }),
         read("/w/src/tokens.css"),
         read("/w/DESIGN.md", { readOutcome: { truncated: true } }),
       ],
@@ -978,13 +1067,17 @@ describe("T-3 — fold by class, not by run", () => {
     assert.equal(lines[0].verb, "Read");
     assert.equal(
       objectText(lines[0].object),
-      "4 files · CardShell.tsx, silhouette.ts, tokens.css, DESIGN.md",
+      "CardShell.tsx, silhouette.ts, tokens.css, DESIGN.md",
     );
     assert.equal(lines[0].result, "1 truncated");
     assert.equal(lines[0].detail.kind, "paths");
     assert.deepEqual(
       lines[0].detail.paths.map((path) => path.name),
       ["CardShell.tsx", "silhouette.ts", "tokens.css", "DESIGN.md"],
+    );
+    assert.deepEqual(
+      lines[0].detail.paths.map((path) => path.range ?? null),
+      ["L1–180", "L40–51", null, null],
     );
     assert.ok(lines[0].detail.paths.every((path) => path.read?.sessionId === "s1"));
   });
@@ -1119,6 +1212,52 @@ describe("the run summary", () => {
     assert.equal(nine.closedByDefault, true);
   });
 
+  it("keeps a long run open when it contains point-in-time task state", () => {
+    const task = tool({
+      type: "task",
+      operation: "create",
+      task_id: "1",
+      subject: "Audit the renderer",
+      description: null,
+      status: "pending",
+      owner: null,
+      blocker_ids: [],
+      snapshot: {
+        tasks: [
+          {
+            task_id: "1",
+            subject: "Audit the renderer",
+            status: "pending",
+            owner: null,
+            blocker_ids: [],
+          },
+        ],
+        total_count: 1,
+      },
+    });
+    const longRun = [
+      task,
+      ...Array.from({ length: RUN_FOLD_THRESHOLD }, (_, at) =>
+        tool({
+          type: "file_change",
+          changes: [
+            {
+              operation: "update",
+              path: file(`/w/f${at}.ts`),
+              destination: null,
+              diff: null,
+              lines_added: 1,
+              lines_removed: 0,
+            },
+          ],
+        }),
+      ),
+    ];
+    const summary = runSummary(ledgerLines(longRun, CTX));
+    assert.ok(summary.lineCount > RUN_FOLD_THRESHOLD);
+    assert.equal(summary.closedByDefault, false);
+  });
+
   it("an empty run says nothing", () => {
     const summary = runSummary([]);
     assert.deepEqual(summary.nouns, []);
@@ -1130,17 +1269,19 @@ describe("the run summary", () => {
 /* ── paths ───────────────────────────────────────────────────────────────── */
 
 describe("paths draw relative to where the reading happened", () => {
-  it("shortens against the session's cwd, then home, then leaves it whole", () => {
-    assert.equal(objectText(line({ type: "file_read", targets: [{ resource: file("/w/a/b.ts"), range: null, media_kind: null }], outcome: null }).object), "a/b.ts");
+  it("shows read basenames while retaining contextual paths in their details", () => {
+    const cwdRead = line({ type: "file_read", targets: [{ resource: file("/w/a/b.ts"), range: null, media_kind: null }], outcome: null });
+    assert.equal(objectText(cwdRead.object), "b.ts");
+    assert.equal(cwdRead.detail.paths[0].label, "a/b.ts");
     assert.equal(
       objectText(
         ledgerLine(read("/Users/x/notes/todo.md"), { cwd: "/w", home: "/Users/x" }).object,
       ),
-      "~/notes/todo.md",
+      "todo.md",
     );
     assert.equal(
       objectText(ledgerLine(read("/elsewhere/z.ts"), { cwd: "/w", home: "/Users/x" }).object),
-      "/elsewhere/z.ts",
+      "z.ts",
     );
   });
 });

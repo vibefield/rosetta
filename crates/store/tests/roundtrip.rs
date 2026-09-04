@@ -2541,6 +2541,8 @@ fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
             content: "gen-one task".into(),
             created_at: Some(3_600_000),
             updated_at: Some(3_600_500),
+            started_at: Some(3_600_000),
+            terminal_at: Some(3_600_500),
         }),
         IngestOp::SessionUsage(SessionUsageRow {
             session_id: "s1".into(),

@@ -13,7 +13,13 @@
 // relative to the session's cwd, then home-relative — never the eleven leading
 // characters that are the same on every line).
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SearchHit, SessionRow } from "@rosetta/protocol";
+import type {
+  SearchHit,
+  SessionRow,
+  TimelineMetaArtifact,
+  TimelineMetaPlan,
+  TimelineMetaTask,
+} from "@rosetta/protocol";
 import { clockShort } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
@@ -30,6 +36,7 @@ import { useFoldPreference } from "./transcript/fold-preference";
 import { ActivityGlyph } from "./transcript/glyphs";
 import { HeadOfDocument, TopFade } from "./transcript/HeadOfDocument";
 import { ReceiptPill } from "./transcript/ReceiptPill";
+import { TimelineMeta } from "./transcript/TimelineMeta";
 import { buildThreadIndex, messageDomId } from "./transcript/thread-index";
 import type { ThreadFocus } from "./transcript/thread-index";
 import { ColumnHeading, EmptyState, ResultGroupHeader } from "./ui";
@@ -43,6 +50,11 @@ import {
   handleForReadPath,
   transcriptReadFileSource,
 } from "./transcript/read-file-source";
+import {
+  handleForTimelineMetaArtifact,
+  handleForTimelineMetaPlan,
+  timelineMetaFileSource,
+} from "./transcript/timeline-meta-file-source";
 
 export type { ThreadFocus } from "./transcript/thread-index";
 
@@ -96,7 +108,9 @@ export function TranscriptColumn({
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
   const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
+  const [metaFocus, setMetaFocus] = useState<{ timelineId: string; subject: string } | null>(null);
   const viewerRequest = useRef(0);
+  const anchorRequest = useRef(0);
   const focusTries = useRef(0);
   const index = useMemo(() => buildThreadIndex(sessions), [sessions]);
   const fold = useFoldPreference();
@@ -104,8 +118,10 @@ export function TranscriptColumn({
   const searching = searchResults !== null;
   const maxOrdinal = feed.rows.length ? feed.rows[feed.rows.length - 1].ordinal : -1;
   const live = session?.stream_state === "streaming";
-  const targetTimelineId =
+  const requestedTimelineId =
     focus !== null && focus.sessionId === session?.id ? focus.timelineId : null;
+  const targetTimelineId = requestedTimelineId ?? metaFocus?.timelineId ?? null;
+  const targetIsMeta = requestedTimelineId === null && metaFocus !== null;
 
   const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now());
 
@@ -148,7 +164,9 @@ export function TranscriptColumn({
     setHighlightedTimelineId(null);
     setMenu(null);
     viewerRequest.current += 1;
+    anchorRequest.current += 1;
     setViewerTarget(null);
+    setMetaFocus(null);
     focusTries.current = 0;
   }, [session?.id]);
 
@@ -168,7 +186,7 @@ export function TranscriptColumn({
       .then((handle) => {
         if (request !== viewerRequest.current) return;
         if (handle === null) {
-          onReceipt("That read did not record an openable file");
+          onReceipt("That row did not record an openable file");
           return;
         }
         setViewerTarget({ handle, source: transcriptReadFileSource });
@@ -176,6 +194,64 @@ export function TranscriptColumn({
       .catch((error: unknown) => {
         if (request !== viewerRequest.current) return;
         onReceipt(error instanceof Error ? error.message : "Could not open that recorded file");
+      });
+  };
+
+  const openMetaFile = (
+    load: () => Promise<FileHandle>,
+    unavailable: string,
+  ) => {
+    const request = (viewerRequest.current += 1);
+    void load()
+      .then((handle) => {
+        if (request !== viewerRequest.current) return;
+        setViewerTarget({ handle, source: timelineMetaFileSource });
+      })
+      .catch((error: unknown) => {
+        if (request !== viewerRequest.current) return;
+        onReceipt(error instanceof Error ? error.message : unavailable);
+      });
+  };
+
+  const openMetaPlan = (plan: TimelineMetaPlan) => {
+    if (session === null) return;
+    openMetaFile(
+      () => handleForTimelineMetaPlan(session.id, plan),
+      "Could not open that recorded plan",
+    );
+  };
+
+  const openMetaArtifact = (artifact: TimelineMetaArtifact) => {
+    if (session === null) return;
+    openMetaFile(
+      () => handleForTimelineMetaArtifact(session.id, artifact),
+      "Could not open that recorded artifact",
+    );
+  };
+
+  const openMetaTask = (task: TimelineMetaTask) => {
+    const timelineId = task.timeline_id;
+    if (timelineId === null) {
+      onReceipt("That task has no recorded message anchor");
+      return;
+    }
+    const land = () => {
+      focusTries.current = 0;
+      setMetaFocus({ timelineId, subject: task.subject });
+    };
+    if (model.representatives.has(timelineId)) {
+      land();
+      return;
+    }
+    const request = (anchorRequest.current += 1);
+    void feed.loadAnchor(timelineId)
+      .then((loaded) => {
+        if (request !== anchorRequest.current || !loaded) return;
+        land();
+      })
+      .catch((error: unknown) => {
+        if (request !== anchorRequest.current) return;
+        onReceipt(error instanceof Error ? error.message : "Could not load that task message");
       });
   };
 
@@ -209,20 +285,32 @@ export function TranscriptColumn({
         wasAtFoot.current = false;
         element.scrollIntoView({ block: "center" });
         setHighlightedTimelineId(drawnBy);
-        onFocusConsumed();
+        if (targetIsMeta) {
+          onReceipt(`Landed on the task message · ${metaFocus.subject}`);
+          setMetaFocus(null);
+        } else {
+          onFocusConsumed();
+        }
         window.setTimeout(() => setHighlightedTimelineId(null), 1500);
       }
       return;
     }
-    // The anchor search pages blindly upward; `loadEarlier` is kept for it.
+    // timeline_meta resolves exact anchors before setting focus. The bounded
+    // blind walk remains only for external search landings.
+    if (targetIsMeta) {
+      setMetaFocus(null);
+      onReceipt("That task message is no longer available");
+      return;
+    }
     if (feed.earlier.kind !== "none" && focusTries.current < 8) {
       focusTries.current += 1;
       feed.loadEarlier();
     } else if (feed.earlier.kind === "none") {
-      onFocusConsumed();
+      if (targetIsMeta) setMetaFocus(null);
+      else onFocusConsumed();
       onReceipt("That message is older than the loaded history");
     }
-  }, [targetTimelineId, session, feed, model, searching, onFocusConsumed, onReceipt]);
+  }, [targetTimelineId, targetIsMeta, metaFocus, session, feed, model, searching, onFocusConsumed, onReceipt]);
 
   // The pill pins while the reader is inside its day, and returns to its
   // hairline the moment that day scrolls back into view.
@@ -301,6 +389,14 @@ export function TranscriptColumn({
           )}
         </span>
       </header>
+      {!searching && session !== null && feed.timelineMeta !== null && (
+        <TimelineMeta
+          meta={feed.timelineMeta}
+          onOpenTask={openMetaTask}
+          onOpenPlan={openMetaPlan}
+          onOpenArtifact={openMetaArtifact}
+        />
+      )}
       <div
         className="ah-scroll tr-scroll"
         data-flush=""

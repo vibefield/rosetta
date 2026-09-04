@@ -24,7 +24,9 @@
 //     own `… 12 more commands` and the time slot carries the fold's LAST stamp
 //     (the component draws the `→` prefix; `elided` says so).
 //  5. Past RUN_FOLD_THRESHOLD lines the whole run closes by default to one
-//     sentence of NOUNS — never of verbs. See `runSummary`.
+//     sentence of NOUNS — never of verbs. A run containing task state stays
+//     open: its checklist is an always-visible status board, not activity
+//     exhaust. See `runSummary`.
 import type {
   StatusBasis,
   TimelineEntry,
@@ -472,18 +474,29 @@ function fold(lines: readonly LedgerLine[]): LedgerLine {
   const names: string[] = [];
   for (const row of rows) {
     const action = actionOf(row);
-    const name = action === null ? null : memberName(action);
-    if (name !== null && name !== "" && !names.includes(name)) names.push(name);
+    const members =
+      action?.type === "file_read"
+        ? action.targets.map((target) => basename(resourceLabel(target.resource)))
+        : [action === null ? null : memberName(action)];
+    for (const name of members) {
+      if (name !== null && name !== "" && !names.includes(name)) names.push(name);
+    }
   }
-  const elided = names.length > FOLD_NAME_LIMIT;
+  // A read line is the file names in both its single and folded forms. The
+  // object column already ellipsizes visually, so removing names from the
+  // model would make the closed line less useful without saving any space.
+  const elided = family !== "file_read" && names.length > FOLD_NAME_LIMIT;
   const [one, many] = FOLD_NOUN[family];
   const noun = rows.length === 1 ? one : many;
-  const object: ObjectPart[] = elided
-    ? [part(`… ${rows.length} more ${many}`)]
-    : [
-        part(`${rows.length} ${noun}`),
-        ...(names.length === 0 ? [] : [part(` · ${names.join(", ")}`, "aside")]),
-      ];
+  const object: ObjectPart[] =
+    family === "file_read" && names.length > 0
+      ? [part(names.join(", "))]
+      : elided
+        ? [part(`… ${rows.length} more ${many}`)]
+        : [
+            part(`${rows.length} ${noun}`),
+            ...(names.length === 0 ? [] : [part(` · ${names.join(", ")}`, "aside")]),
+          ];
 
   const stamps = rows.flatMap(rowStamps);
   const first = stamps.length === 0 ? null : Math.min(...stamps);
@@ -570,6 +583,7 @@ export interface RunSummary {
 
 export function runSummary(lines: readonly LedgerLine[]): RunSummary {
   const rows = lines.flatMap((line) => [...line.rows]);
+  const containsTaskState = rows.some((row) => actionOf(row)?.type === "task");
   const order: ToolFamily[] = [];
   const counts = new Map<ToolFamily, number>();
   for (const row of rows) {
@@ -584,6 +598,6 @@ export function runSummary(lines: readonly LedgerLine[]): RunSummary {
     spanMs: stampSpan(rows),
     lineCount: lines.length,
     rowCount: rows.length,
-    closedByDefault: lines.length > RUN_FOLD_THRESHOLD,
+    closedByDefault: lines.length > RUN_FOLD_THRESHOLD && !containsTaskState,
   };
 }

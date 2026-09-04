@@ -27,6 +27,8 @@ import type { Stamp } from "./generated/Stamp";
 import type { StatusResponse } from "./generated/StatusResponse";
 import type { TimelinePage } from "./generated/TimelinePage";
 import type { TimelineEntry } from "./generated/TimelineEntry";
+import type { TimelineMeta } from "./generated/TimelineMeta";
+import type { TimelineMetaPlanSource } from "./generated/TimelineMetaPlanSource";
 import type { UsageResponse } from "./generated/UsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
@@ -63,6 +65,8 @@ export type SubscriptionStatus = "connecting" | "syncing" | "live" | "resyncing"
 export interface SessionSubscriptionHandlers {
   /** The full ordered timeline after each change. */
   onChange?: (entries: TimelineEntry[]) => void;
+  /** The complete light work index. Bodies remain behind lazy references. */
+  onTimelineMetaChange?: (timelineMeta: TimelineMeta) => void;
   onStatus?: (status: SubscriptionStatus) => void;
   onError?: (error: ApiError) => void;
 }
@@ -194,6 +198,13 @@ export class RosettaClient {
     );
   }
 
+  /** Fetch one exact canonical row for a lazy transcript landing. */
+  timelineEntry(sessionId: string, timelineId: string): Promise<TimelineEntry> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}`,
+    );
+  }
+
   /** Recover one deliberately omitted command body from its raw-ledger
    * record. Nothing is fetched until the reader opens the disclosure. */
   command(sessionId: string, timelineId: string): Promise<CommandResponse> {
@@ -202,7 +213,7 @@ export class RosettaClient {
     );
   }
 
-  /** Read the live file named by one canonical file-read target. The caller
+  /** Read the live file named by one canonical file-bearing target. The caller
    * supplies identities and an index, never a path; the daemon resolves the
    * exact path already stored on that timeline row. */
   async readFileTarget(
@@ -213,6 +224,19 @@ export class RosettaClient {
     const response = await this.response(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/read/${targetIndex}`,
     );
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /** Read one exact plan document selected from timeline_meta. */
+  async readPlan(
+    sessionId: string,
+    source: TimelineMetaPlanSource,
+  ): Promise<Uint8Array> {
+    const path =
+      source.type === "revision"
+        ? `/api/sessions/${encodeURIComponent(sessionId)}/plans/revisions/${source.revision}`
+        : `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(source.timeline_id)}/plan`;
+    const response = await this.response(path);
     return new Uint8Array(await response.arrayBuffer());
   }
 
@@ -364,6 +388,7 @@ abstract class BaseSubscription {
 export class SessionSubscription extends BaseSubscription {
   private readonly handlers: SessionSubscriptionHandlers;
   private readonly rows = new Map<string, TimelineEntry>();
+  private timelineMeta: TimelineMeta = { tasks: [], plans: [], artifacts: [] };
 
   constructor(
     url: string,
@@ -392,9 +417,19 @@ export class SessionSubscription extends BaseSubscription {
         for (const row of frame.entries) {
           this.rows.set(row.timeline_id, row);
         }
+        this.timelineMeta = frame.timeline_meta;
         this.stamp = frame.stamp;
         this.emitStatus("live");
         this.emitChange();
+        this.emitTimelineMetaChange();
+        break;
+      case "timeline_meta_snapshot":
+        this.timelineMeta = frame.timeline_meta;
+        if (frame.stamp !== null) {
+          this.stamp = frame.stamp;
+        }
+        this.emitStatus("live");
+        this.emitTimelineMetaChange();
         break;
       case "mutation":
         this.apply(frame.mutation);
@@ -454,6 +489,10 @@ export class SessionSubscription extends BaseSubscription {
         // a direct sweep as "everything you hold is void".
         this.rows.clear();
         break;
+      case "timeline_meta_changed":
+        // rosettad resolves this internal ring marker into a typed metadata
+        // snapshot. Ignore it defensively if an older server forwards it.
+        break;
       case "session":
       case "project":
       case "runtime":
@@ -463,6 +502,10 @@ export class SessionSubscription extends BaseSubscription {
 
   private emitChange(): void {
     this.handlers.onChange?.(this.entries());
+  }
+
+  private emitTimelineMetaChange(): void {
+    this.handlers.onTimelineMetaChange?.(this.timelineMeta);
   }
 
   protected emitStatus(status: SubscriptionStatus): void {
@@ -533,6 +576,7 @@ export class MetaSubscription extends BaseSubscription {
         this.emitStatus("resyncing");
         break;
       case "timeline_snapshot":
+      case "timeline_meta_snapshot":
         break;
       case "error":
         this.handlers.onError?.(frame.error);

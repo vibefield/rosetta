@@ -292,6 +292,19 @@ fn reconciliation_and_bucket_queries_have_matching_indexes() {
            AND type = 'tool_use'",
         "message_tool_correlation",
     );
+    assert_plan_uses(
+        store.conn(),
+        "SELECT id FROM message
+         WHERE session_id = 's1'
+           AND tool_kind IN ('task', 'plan', 'artifact')
+         ORDER BY ordinal",
+        "timeline_meta_message",
+    );
+    assert_plan_uses(
+        store.conn(),
+        "SELECT id FROM task WHERE session_id = 's1' ORDER BY created_at, id",
+        "task_session",
+    );
     assert_ram_only_reconciliation_schema(store.conn());
 }
 

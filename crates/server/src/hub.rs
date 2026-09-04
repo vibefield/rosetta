@@ -371,8 +371,10 @@ impl Hub {
 
         let meta_events = state.mirror.refresh(conn, &effects)?;
 
+        let mut swept_sessions = BTreeSet::new();
         for mutation in effects.mutations {
             if let Mutation::SessionSwept { session_id } = &mutation {
+                swept_sessions.insert(session_id.clone());
                 state.rings.invalidate(session_id, now);
                 for entry in state.subs.values() {
                     if let Topic::Session(topic_session) = &entry.topic
@@ -401,6 +403,36 @@ impl Hub {
                             mutation: item.clone(),
                         },
                     ));
+                }
+            }
+        }
+
+        // A sweep already forces a replacement timeline snapshot, which now
+        // includes timeline_meta. Every other affected session gets exactly
+        // one lightweight marker after its row mutations for this drain.
+        if !effects.overflowed {
+            for session_id in effects.timeline_meta_sessions {
+                if swept_sessions.contains(&session_id) {
+                    continue;
+                }
+                let item = Arc::new(Mutation::TimelineMetaChanged {
+                    session_id: session_id.clone(),
+                });
+                let stamp = state.rings.push(&session_id, item.clone());
+                report.session_mutations += 1;
+                for entry in state.subs.values() {
+                    if let Topic::Session(topic_session) = &entry.topic
+                        && topic_session == &session_id
+                    {
+                        report.resyncs += u64::from(deliver(
+                            &entry.shared,
+                            self.config.subscriber_queue,
+                            HubItem::Mutation {
+                                stamp,
+                                mutation: item.clone(),
+                            },
+                        ));
+                    }
                 }
             }
         }

@@ -12,9 +12,9 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use rosetta_core::rows::{
-    MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+    MessageKind, MessageRow, PlanRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
-use rosetta_core::timeline::{ReadTarget, ResourceRef};
+use rosetta_core::timeline::{ArtifactKind, ArtifactOp, ReadTarget, ResourceRef};
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, IngestOp, NativeToolRef, ProjectionAsset, StatusBasis,
     TimelineBody, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
@@ -198,6 +198,70 @@ impl Harness {
 }
 
 #[tokio::test]
+async fn plan_body_is_loaded_only_after_its_scoped_revision_is_opened() {
+    let mut h = harness();
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::Plan(PlanRow {
+                session_id: "s1".into(),
+                revision: 7,
+                content: "# Exact plan\n\nShip it.\n".into(),
+                updated_at: 12_000,
+            })],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/s1/plans/revisions/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "# Exact plan\n\nShip it.\n"
+    );
+
+    let missing = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/s2/plans/revisions/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn exact_timeline_row_is_scoped_and_does_not_require_paging() {
+    let mut h = harness();
+    h.append(vec![message(
+        "old-task-anchor",
+        MessageKind::Agent,
+        "anchored row",
+    )]);
+
+    let (status, body) = h.get("/api/sessions/s1/timeline/old-task-anchor").await;
+    assert_eq!(status, StatusCode::OK);
+    let entry: rosetta_core::TimelineEntry = serde_json::from_value(body).unwrap();
+    assert_eq!(entry.timeline_id, "old-task-anchor");
+
+    let (wrong_session, _) = h.get("/api/sessions/s2/timeline/old-task-anchor").await;
+    assert_eq!(wrong_session, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn content_addressed_images_are_served_without_exposing_filesystem_paths() {
     let mut h = harness();
     let asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
@@ -324,6 +388,81 @@ async fn recorded_file_read_serves_only_the_addressed_canonical_target() {
     assert_eq!(bytes.as_ref(), contents);
 
     let (status, _) = h.get("/api/sessions/s1/timeline/read-target/read/1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn recorded_artifact_serves_each_addressed_file_resource() {
+    let mut h = harness();
+    let first = h._dir.path().join("artifact-first.txt");
+    let second = h._dir.path().join("artifact-second.txt");
+    std::fs::write(&first, b"first artifact\n").unwrap();
+    std::fs::write(&second, b"second artifact\n").unwrap();
+
+    let mut row = message("artifact-target", MessageKind::ToolUse, "");
+    row.content = None;
+    row.tool = Some(ToolInteraction {
+        correlation: ToolCorrelation {
+            key: "tool-artifact".into(),
+            derivation: CorrelationDerivation::NativeId,
+        },
+        native: NativeToolRef {
+            id: Some("tool-artifact".into()),
+            namespace: None,
+            name: "SendUserFile".into(),
+            provider: None,
+        },
+        status: ToolStatusFact {
+            value: ToolStatus::Succeeded,
+            basis: StatusBasis::NativeTerminalRecord,
+        },
+        action: ToolAction::Artifact {
+            operation: ArtifactOp::Send,
+            artifact_kind: ArtifactKind::File,
+            name: None,
+            description: None,
+            resources: vec![
+                ResourceRef::File {
+                    path: first.to_string_lossy().into_owned(),
+                    resolved: true,
+                },
+                ResourceRef::File {
+                    path: second.to_string_lossy().into_owned(),
+                    resolved: true,
+                },
+            ],
+            media: None,
+        },
+        failure: None,
+        timing: None,
+    });
+    h.append(vec![row]);
+
+    for (index, expected) in [b"first artifact\n".as_slice(), b"second artifact\n"]
+        .into_iter()
+        .enumerate()
+    {
+        let response = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/sessions/s1/timeline/artifact-target/read/{index}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(bytes.as_ref(), expected);
+    }
+
+    let (status, _) = h
+        .get("/api/sessions/s1/timeline/artifact-target/read/2")
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 

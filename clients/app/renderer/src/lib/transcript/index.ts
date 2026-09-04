@@ -51,13 +51,16 @@ export type {
   LedgerDetail,
   PathFact,
   SourceFact,
+  TaskChange,
 } from "./families.ts";
 export {
   COMMAND_PREVIEW_CHARACTER_LIMIT,
+  TASK_PREVIEW_LIMIT,
   commandDirectoryContext,
   commandPreviewText,
   diffstatText,
   projectAction,
+  taskDisplayRows,
 } from "./families.ts";
 
 export type { LedgerLine, LedgerState, ResultTone, RunSummary } from "./ledger.ts";

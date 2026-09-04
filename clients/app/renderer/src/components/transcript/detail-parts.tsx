@@ -9,13 +9,19 @@
 // scroll trap inside the measure.
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { CommandFact, Diffstat, PathFact } from "../../lib/transcript";
+import { FileIcon } from "@vibecook/mille-ui/icons";
+import { vibefieldIconTheme } from "@vibecook/mille-ui/icons/vibefield";
+import type { TaskSnapshotItem } from "@rosetta/protocol";
+import type { CommandFact, Diffstat, PathFact, TaskChange } from "../../lib/transcript";
 import {
   canonicalText,
   commandDirectoryContext,
   commandPreviewText,
   diffstatText,
   resourceDisplay,
+  splitPath,
+  TASK_PREVIEW_LIMIT,
+  taskDisplayRows,
 } from "../../lib/transcript";
 import type {
   CanonicalDocument,
@@ -166,31 +172,139 @@ export function PathList({
     <ul className="tr-paths" data-openable={hasOpenablePath || undefined}>
       {shown.map((path, at) => {
         const openable = onOpenPath !== undefined && path.read !== undefined;
+        const name = splitPath(path.label).name || path.name || path.label;
+        const entryKind =
+          path.resource.type === "directory" ? 1 : path.resource.type === "file" ? 0 : null;
         const label = (
           <>
-            <span className="dir">{path.dir}</span>
-            <span className="name">{path.name}</span>
+            {entryKind !== null && (
+              <FileIcon
+                ariaLabel={`${name} ${entryKind === 1 ? "folder" : "file"}`}
+                className="tr-paths__icon"
+                entry={{ name, kind: entryKind }}
+                expanded={false}
+                theme={vibefieldIconTheme}
+              />
+            )}
+            <span className="name">{name}</span>
+            {path.range !== undefined && <span className="tr-paths__range">{path.range}</span>}
           </>
         );
         return (
-          <li key={`${path.label}-${at}`}>
+          <li key={`${path.label}-${at}`} title={path.label}>
             {openable ? (
               <button
                 type="button"
                 className="tr-paths__file"
                 title={path.label}
-                aria-label={`Open ${path.label}`}
+                aria-label={`Open ${path.label}${path.range === undefined ? "" : `, ${path.range}`}`}
                 onClick={() => onOpenPath?.(path)}
               >
                 {label}
               </button>
             ) : (
-              label
+              <span className="tr-paths__entry">{label}</span>
             )}
           </li>
         );
       })}
       {total > shown.length && <li className="tr-more">… {total - shown.length} more</li>}
+    </ul>
+  );
+}
+
+const TASK_STATUS_LABEL: Readonly<Record<string, string>> = {
+  pending: "pending",
+  in_progress: "in progress",
+  completed: "done",
+  failed: "failed",
+  cancelled: "cancelled",
+  unknown: "status unknown",
+};
+
+const TASK_CHANGE_LABEL: Readonly<Record<TaskChange, string>> = {
+  added: "added",
+  started: "started",
+  done: "done",
+  reopened: "reopened",
+  failed: "failed",
+  cancelled: "cancelled",
+  updated: "updated",
+};
+
+/** A task action opens to a three-row glimpse immediately after that action.
+ * The changed row stays last; the reader can disclose the complete board. */
+export function Tasks({
+  tasks,
+  total,
+  changedTaskId,
+  change,
+}: {
+  readonly tasks: readonly TaskSnapshotItem[];
+  readonly total: number;
+  readonly changedTaskId: string | null;
+  readonly change: TaskChange | null;
+}) {
+  const [showFull, setShowFull] = useState(false);
+  const all = useMemo(
+    () => taskDisplayRows(tasks, changedTaskId, true),
+    [tasks, changedTaskId],
+  );
+  const shown = useMemo(
+    () => (showFull ? all : taskDisplayRows(tasks, changedTaskId, false)),
+    [all, changedTaskId, showFull, tasks],
+  );
+  const canToggle = all.length > TASK_PREVIEW_LIMIT;
+  const unrecorded = Math.max(0, total - all.length);
+  return (
+    <ul className="tr-tasks" aria-label="Task list">
+      {shown.length === 0 && <li className="tr-tasks__empty">No tasks at this point</li>}
+      {shown.map((task) => {
+        const status = task.status ?? "unknown";
+        const changed = task.task_id === changedTaskId ? change : null;
+        const metadata = [
+          `#${task.task_id}`,
+          task.owner === null ? null : task.owner,
+          task.blocker_ids.length === 0
+            ? null
+            : `blocked by ${task.blocker_ids.map((id) => `#${id}`).join(", ")}`,
+        ].filter((item): item is string => item !== null);
+        return (
+          <li
+            className="tr-task"
+            data-change={changed ?? undefined}
+            data-status={status}
+            key={task.task_id}
+          >
+            <span
+              aria-label={TASK_STATUS_LABEL[status]}
+              className="tr-task__check"
+              role="img"
+              title={TASK_STATUS_LABEL[status]}
+            />
+            <span className="tr-task__subject" title={task.subject ?? `Task #${task.task_id}`}>
+              {task.subject ?? `Task #${task.task_id}`}
+            </span>
+            <span className="tr-task__meta">{metadata.join(" · ")}</span>
+            {changed !== null && <span className="tr-task__delta">{TASK_CHANGE_LABEL[changed]}</span>}
+          </li>
+        );
+      })}
+      {canToggle && (
+        <li className="tr-tasks__toggle">
+          <button
+            type="button"
+            aria-expanded={showFull}
+            aria-label={showFull ? "Show less" : `Show all ${total} tasks`}
+            onClick={() => setShowFull((value) => !value)}
+          >
+            {showFull ? "show less" : "show full tasks"}
+          </button>
+        </li>
+      )}
+      {showFull && unrecorded > 0 && (
+        <li className="tr-more">… {unrecorded} more not recorded</li>
+      )}
     </ul>
   );
 }

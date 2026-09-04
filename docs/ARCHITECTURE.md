@@ -23,7 +23,7 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > that an older ledger never captured, one fresh source ingest is required before future ledger-only
 > rebuilds become complete again.
 >
-> Projection schema 13 separates the one canonical SQLite projection from a disposable SQLite
+> Projection schema 14 keeps the one canonical SQLite projection separate from a disposable SQLite
 > FTS5 sidecar. `projection_state`, the coalesced `search_dirty` repair set, and their asynchronous
 > worker landed together. Full generations publish through an atomic `CURRENT` manifest; epoch,
 > revision, acknowledgement, corruption, and crash tests prevent cross-generation results.
@@ -32,6 +32,17 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > Verified inline images are immutable, content-addressed members of that canonical projection.
 > SQLite carries relocatable service URLs, not Base64; the lossless ledger remains the replay
 > source.
+>
+> **Transcript work-index checkpoint (2026-09-03).** Schema 14 records only source-proven task
+> start/terminal transitions and adds a partial `(session_id, ordinal)` index containing only task,
+> plan, and artifact messages.
+> The Rust `timeline_meta` read composes the complete task board, latest openable plans, and
+> deduplicated openable artifacts from those canonical facts in one session-scoped boundary. The
+> protocol-v10 initial timeline snapshot carries that metadata beside the recent message window;
+> relevant commits coalesce to one replacement `timeline_meta_snapshot`. Plan/file bodies remain
+> lazy, and an exact session-scoped timeline-row read lands old tasks without paging through the
+> intervening transcript. This is a read model only: no second task/plan/artifact representation is
+> persisted, and the existing task messages remain the transcript record.
 > Session ownership is closed during bounded metadata admission: one normalized primary cwd and
 > one optional local-checkout project link per session. Schema 13 uses folder identity by default,
 > closes native checkout-group/session-owner hints, and merges only linked worktrees. The stream
@@ -606,10 +617,11 @@ selectors, and inverted ranges are HTTP 400 errors rather than successful empty 
 
 ```
 WS /ws/sessions/<id>?resume=<stamp>
-  server → { hello, protocol: "rosetta-observe/1", epoch, seq }
-  server → { snapshot }                       # full session state at seq
-  server → { delta, seq: n } …                # monotonic per-epoch
-  server → { resync }                         # client gap or epoch change → resnapshot
+  server → { frame: "hello", protocol_version: 10, stamp }
+  server → { frame: "timeline_snapshot", stamp, entries, timeline_meta }
+  server → { frame: "mutation", stamp, mutation } …
+  server → { frame: "timeline_meta_snapshot", stamp, timeline_meta }
+  server → { frame: "resync" }                # gap/epoch change → replacement snapshot
 ```
 
 Snapshot-then-delta with resumable `(epoch, seq)` cursors, same concepts chopsticks
@@ -622,6 +634,8 @@ format per protocol version.
 `GET /api/runtimes`, `/api/projects`, root-only `/api/sessions`, and addressable
 `/api/sessions/{id}` serve the metadata/browse side of the agent-view app; `/ws/meta`
 streams the complete topology so descendant timelines can be embedded recursively.
+`GET /api/sessions/{id}/timeline/{timeline_id}` resolves one exact canonical landing row;
+scoped plan and file routes resolve bytes only after an explicit open action.
 
 **Metrics (job 3):**
 `WS /v1/metrics?families=usage,lifecycle&agent=…` — live distilled feed. Hot path is

@@ -145,6 +145,7 @@ fn shape(mutations: &[Mutation]) -> Vec<(&'static str, String)> {
             Mutation::ToolUpdated { session_id, .. } => ("tool", session_id.clone()),
             Mutation::Usage { session_id, .. } => ("usage", session_id.clone()),
             Mutation::SessionSwept { session_id } => ("swept", session_id.clone()),
+            Mutation::TimelineMetaChanged { session_id } => ("timeline_meta", session_id.clone()),
             Mutation::Session(row) => ("session", row.id.clone()),
             Mutation::Project(row) => ("project", row.id.clone()),
             Mutation::Runtime(row) => ("runtime", row.id.clone()),

@@ -9,6 +9,7 @@ import type {
   SearchResponse,
   SubscriptionStatus,
   TimelineEntry,
+  TimelineMeta,
   UsageResponse,
 } from "@rosetta/protocol";
 import { CursorExpiredError } from "@rosetta/protocol";
@@ -208,6 +209,8 @@ export function useProjectUsage(
 export interface TimelineFeed {
   /** Ordinal-ordered rows: paged history + the live tail, deduplicated. */
   rows: TimelineEntry[];
+  /** Complete task/plan/artifact index delivered beside the tail snapshot. */
+  timelineMeta: TimelineMeta | null;
   status: SubscriptionStatus;
   /** Rows with ordinal > watermark arrived after you did (D33's line). */
   watermark: number | null;
@@ -234,13 +237,19 @@ export interface TimelineFeed {
    *  AND inserts in one act, for the anchor search that still pages blindly.
    *  Use `holdEarlier()` then `revealEarlier()`. */
   loadEarlier: () => void;
+  /** Load one exact canonical row without walking intervening history pages. */
+  loadAnchor: (timelineId: string) => Promise<boolean>;
 }
 
 export function useTimeline(sessionId: string | null): TimelineFeed {
   const [tail, setTail] = useState<TimelineEntry[]>([]);
+  const [anchors, setAnchors] = useState<TimelineEntry[]>([]);
+  const [timelineMeta, setTimelineMeta] = useState<TimelineMeta | null>(null);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [watermark, setWatermark] = useState<number | null>(null);
   const sawSnapshot = useRef(false);
+  const activeSession = useRef(sessionId);
+  activeSession.current = sessionId;
 
   // The head of the document is a state machine, not a boolean: it holds a
   // page beside the document until the reader pulls (§08, Q7 B). The ref is
@@ -270,6 +279,8 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
 
   useEffect(() => {
     setTail([]);
+    setAnchors([]);
+    setTimelineMeta(null);
     setWatermark(null);
     setStatus("connecting");
     sawSnapshot.current = false;
@@ -285,6 +296,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
           setWatermark(entries.length ? Math.max(...entries.map((entry) => entry.ordinal)) : null);
         }
       },
+      onTimelineMetaChange: setTimelineMeta,
       onStatus: setStatus,
     });
     return () => sub.close();
@@ -341,12 +353,24 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     apply({ type: "reveal" });
   }, [startFetch, apply]);
 
+  const loadAnchor = useCallback(async (timelineId: string): Promise<boolean> => {
+    if (sessionId === null) return false;
+    const entry = await client.timelineEntry(sessionId, timelineId);
+    if (activeSession.current !== sessionId || entry.session_id !== sessionId) return false;
+    setAnchors((current) => [
+      ...current.filter((row) => row.timeline_id !== entry.timeline_id),
+      entry,
+    ]);
+    return true;
+  }, [sessionId]);
+
   const rows = useMemo(() => {
     const seen = new Map<string, TimelineEntry>();
     for (const row of model.older) seen.set(row.timeline_id, row);
+    for (const row of anchors) seen.set(row.timeline_id, row);
     for (const row of tail) seen.set(row.timeline_id, row);
     return [...seen.values()].sort((a, b) => a.ordinal - b.ordinal);
-  }, [model.older, tail]);
+  }, [model.older, anchors, tail]);
 
   const earlier = useMemo(() => earlierState(model, ctx), [model, ctx]);
 
@@ -358,6 +382,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
 
   return {
     rows,
+    timelineMeta,
     status,
     watermark,
     earlier,
@@ -370,6 +395,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     dismissEarlierNotice,
     canLoadEarlier: earlier.kind !== "none",
     loadEarlier,
+    loadAnchor,
   };
 }
 

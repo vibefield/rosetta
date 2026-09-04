@@ -176,6 +176,19 @@ fn tool(row: &TimelineEntry) -> Option<&rosetta_core::ToolInteraction> {
     }
 }
 
+fn task_update_actions(ops: &[IngestOp]) -> Vec<&ToolAction> {
+    ops.iter()
+        .filter_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => patch
+                .request
+                .as_ref()
+                .map(|request| &request.action)
+                .filter(|action| matches!(action, ToolAction::Task { .. })),
+            _ => None,
+        })
+        .collect()
+}
+
 fn edits(ops: &[IngestOp]) -> Vec<&FileEditRow> {
     ops.iter()
         .filter_map(|op| match op {
@@ -645,6 +658,260 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     );
     assert!(patch.failure.is_none(), "successful output is noise");
     assert_eq!(*at, Some(1787625320000));
+}
+
+#[test]
+fn task_results_attach_an_after_state_and_recover_native_identity() {
+    let lines = vec![
+        assistant_record(
+            "msg_tasks_1",
+            "11111111-1111-1111-1111-111111111401",
+            json!([{"type": "tool_use", "id": "task_create_1", "name": "TaskCreate",
+                    "input": {"subject": "Build the registry", "description": "First milestone",
+                              "activeForm": "Building the registry"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_create_1",
+                    "content": "Task #1 created successfully"}]),
+            json!({"toolUseResult": {"task": {"id": "1", "subject": "Build the registry"}}}),
+        ),
+        assistant_record(
+            "msg_tasks_2",
+            "11111111-1111-1111-1111-111111111402",
+            json!([{"type": "tool_use", "id": "task_create_2", "name": "TaskCreate",
+                    "input": {"subject": "Ship the renderer", "description": "Second milestone",
+                              "activeForm": "Shipping the renderer"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_create_2",
+                    "content": "Task #2 created successfully"}]),
+            json!({"toolUseResult": {"task": {"id": "2", "subject": "Ship the renderer"}}}),
+        ),
+        assistant_record(
+            "msg_tasks_3",
+            "11111111-1111-1111-1111-111111111403",
+            json!([{"type": "tool_use", "id": "task_done_1", "name": "TaskUpdate",
+                    "input": {"taskId": "1", "status": "completed"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_done_1", "content": "updated"}]),
+            json!({"toolUseResult": {"success": true, "taskId": "1",
+                  "updatedFields": ["status"],
+                  "statusChange": {"from": "pending", "to": "completed"}}}),
+        ),
+    ];
+
+    let (ops, statuses) = run(&lines);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    let actions = task_update_actions(&ops);
+    assert_eq!(actions.len(), 3);
+
+    let ToolAction::Task {
+        task_id,
+        status,
+        snapshot: Some(snapshot),
+        ..
+    } = actions[0]
+    else {
+        panic!("create result must carry a task board")
+    };
+    assert_eq!(task_id.as_deref(), Some("1"));
+    assert_eq!(*status, Some(rosetta_core::TaskStatus::Pending));
+    assert_eq!(snapshot.total_count, 1);
+    assert_eq!(
+        snapshot.tasks[0].subject.as_deref(),
+        Some("Build the registry")
+    );
+
+    let ToolAction::Task {
+        snapshot: Some(snapshot),
+        ..
+    } = actions[1]
+    else {
+        panic!("second create result must carry a task board")
+    };
+    assert_eq!(snapshot.total_count, 2);
+    assert_eq!(snapshot.tasks.len(), 2);
+
+    let ToolAction::Task {
+        task_id,
+        subject,
+        status,
+        snapshot: Some(snapshot),
+        ..
+    } = actions[2]
+    else {
+        panic!("update result must carry a task board")
+    };
+    assert_eq!(
+        task_id.as_deref(),
+        Some("1"),
+        "camelCase taskId is canonical"
+    );
+    assert_eq!(subject.as_deref(), Some("Build the registry"));
+    assert_eq!(*status, Some(rosetta_core::TaskStatus::Completed));
+    assert_eq!(snapshot.total_count, 2);
+    assert_eq!(
+        snapshot.tasks[0].status,
+        Some(rosetta_core::TaskStatus::Completed)
+    );
+    assert_eq!(
+        snapshot.tasks[1].status,
+        Some(rosetta_core::TaskStatus::Pending)
+    );
+
+    assert_eq!(run_with_checkpoint(&lines, 3), ops);
+}
+
+#[test]
+fn task_list_is_an_authoritative_board_snapshot_including_empty() {
+    let lines = vec![
+        assistant_record(
+            "msg_list_1",
+            "11111111-1111-1111-1111-111111111411",
+            json!([{"type": "tool_use", "id": "task_list_1", "name": "TaskList", "input": {}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_list_1", "content": "2 tasks"}]),
+            json!({"toolUseResult": {"tasks": [
+                {"id": "7", "subject": "Audit", "status": "in_progress",
+                 "owner": "architect", "blockedBy": ["8"]},
+                {"id": "8", "subject": "Verify", "status": "pending", "blockedBy": []}
+            ]}}),
+        ),
+        assistant_record(
+            "msg_list_2",
+            "11111111-1111-1111-1111-111111111412",
+            json!([{"type": "tool_use", "id": "task_list_2", "name": "TaskList", "input": {}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_list_2", "content": "No tasks"}]),
+            json!({"toolUseResult": {"tasks": []}}),
+        ),
+    ];
+
+    let (ops, _) = run(&lines);
+    let actions = task_update_actions(&ops);
+    let ToolAction::Task {
+        snapshot: Some(first),
+        ..
+    } = actions[0]
+    else {
+        panic!("list result must carry its board")
+    };
+    assert_eq!(first.total_count, 2);
+    assert_eq!(first.tasks[0].owner.as_deref(), Some("architect"));
+    assert_eq!(first.tasks[0].blocker_ids, ["8"]);
+
+    let ToolAction::Task {
+        snapshot: Some(second),
+        ..
+    } = actions[1]
+    else {
+        panic!("empty list must remain an explicit board")
+    };
+    assert_eq!(second.total_count, 0);
+    assert!(second.tasks.is_empty());
+    assert_eq!(run_with_checkpoint(&lines, 2), ops);
+}
+
+#[test]
+fn task_snapshot_retains_the_full_observed_board_beyond_generic_preview_limits() {
+    let native_tasks: Vec<_> = (1..=25)
+        .map(|id| {
+            json!({
+                "id": id.to_string(),
+                "subject": format!("Task {id}"),
+                "status": if id <= 10 { "completed" } else { "pending" },
+                "blockedBy": []
+            })
+        })
+        .collect();
+    let lines = vec![
+        assistant_record(
+            "msg_list_full",
+            "11111111-1111-1111-1111-111111111413",
+            json!([{"type": "tool_use", "id": "task_list_full", "name": "TaskList", "input": {}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_list_full", "content": "25 tasks"}]),
+            json!({"toolUseResult": {"tasks": native_tasks}}),
+        ),
+    ];
+
+    let (ops, _) = run(&lines);
+    let actions = task_update_actions(&ops);
+    let ToolAction::Task {
+        snapshot: Some(snapshot),
+        ..
+    } = actions[0]
+    else {
+        panic!("task list must carry its complete observed board")
+    };
+    assert_eq!(snapshot.total_count, 25);
+    assert_eq!(snapshot.tasks.len(), 25);
+    assert_eq!(snapshot.tasks[24].subject.as_deref(), Some("Task 25"));
+    assert_eq!(run_with_checkpoint(&lines, 1), ops);
+}
+
+#[test]
+fn reused_created_task_id_starts_a_fresh_board() {
+    let lines = vec![
+        assistant_record(
+            "msg_board_1",
+            "11111111-1111-1111-1111-111111111421",
+            json!([{"type": "tool_use", "id": "task_old_1", "name": "TaskCreate",
+                    "input": {"subject": "Old milestone"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_old_1", "content": "created"}]),
+            json!({"toolUseResult": {"task": {"id": "1", "subject": "Old milestone"}}}),
+        ),
+        assistant_record(
+            "msg_board_2",
+            "11111111-1111-1111-1111-111111111422",
+            json!([{"type": "tool_use", "id": "task_old_2", "name": "TaskCreate",
+                    "input": {"subject": "Old follow-up"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_old_2", "content": "created"}]),
+            json!({"toolUseResult": {"task": {"id": "2", "subject": "Old follow-up"}}}),
+        ),
+        assistant_record(
+            "msg_board_3",
+            "11111111-1111-1111-1111-111111111423",
+            json!([{"type": "tool_use", "id": "task_new_1", "name": "TaskCreate",
+                    "input": {"subject": "New board"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "task_new_1", "content": "created"}]),
+            json!({"toolUseResult": {"task": {"id": "1", "subject": "New board"}}}),
+        ),
+    ];
+
+    let (ops, _) = run(&lines);
+    let actions = task_update_actions(&ops);
+    let ToolAction::Task {
+        snapshot: Some(snapshot),
+        ..
+    } = actions[2]
+    else {
+        panic!("reused create id must carry the fresh board")
+    };
+    assert_eq!(snapshot.total_count, 1);
+    assert_eq!(snapshot.tasks.len(), 1);
+    assert_eq!(snapshot.tasks[0].task_id, "1");
+    assert_eq!(snapshot.tasks[0].subject.as_deref(), Some("New board"));
+    assert_eq!(run_with_checkpoint(&lines, 5), ops);
 }
 
 #[test]

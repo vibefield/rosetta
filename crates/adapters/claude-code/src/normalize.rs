@@ -23,7 +23,8 @@ use rosetta_core::rows::{
 };
 use rosetta_core::timeline::{
     AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
-    ResourceRef, ResponseGroup, StatusBasis, TimelineGroup, ToolAction, ToolRequestPatch,
+    ResourceRef, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT, TaskOp, TaskSnapshot,
+    TaskSnapshotItem, TimelineGroup, ToolAction, ToolRequestPatch,
 };
 use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,21 @@ pub struct ClaudeCodeState {
     /// other tool can never change its canonical family.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     file_change_calls: BTreeSet<String>,
+    /// Task results carry the created id/list state, while updates carry their
+    /// intent only on the opener. Keep the bounded typed request until its
+    /// terminal record so the final timeline row can hold an after-state.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    task_calls: BTreeMap<String, ToolAction>,
+    /// Transient point-in-time task board. This is checkpointed normalizer
+    /// state, never a second durable task store; the raw ledger recreates it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tasks: Vec<TaskSnapshotItem>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    task_total_count: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl ClaudeCodeState {
@@ -119,7 +135,235 @@ impl ClaudeCodeState {
     fn take_file_change_call(&mut self, tool_use_id: &str) -> bool {
         self.file_change_calls.remove(tool_use_id)
     }
+
+    fn remember_task_call(&mut self, tool_use_id: &str, action: &ToolAction) {
+        self.task_calls
+            .insert(tool_use_id.to_owned(), action.clone());
+    }
+
+    fn resolve_task_call(
+        &mut self,
+        tool_use_id: &str,
+        result: Option<&Value>,
+        failed: bool,
+    ) -> Option<ToolAction> {
+        let mut action = self.task_calls.remove(tool_use_id)?;
+        if failed {
+            return None;
+        }
+
+        let changed_task_id = self.apply_task_result(&mut action, result)?;
+        let snapshot = self.task_snapshot(changed_task_id.as_deref());
+        if let ToolAction::Task {
+            snapshot: action_snapshot,
+            ..
+        } = &mut action
+        {
+            *action_snapshot = Some(snapshot);
+        }
+        Some(action)
+    }
+
+    /// Apply the successful native operation to the transient board. `Some`
+    /// means an after-state is honest; the inner id names the changed row when
+    /// there is one. A malformed create/list result returns `None` rather than
+    /// drawing a board that pretends the operation was represented.
+    fn apply_task_result(
+        &mut self,
+        action: &mut ToolAction,
+        result: Option<&Value>,
+    ) -> Option<Option<String>> {
+        let ToolAction::Task {
+            operation,
+            task_id,
+            subject,
+            status,
+            owner,
+            blocker_ids,
+            ..
+        } = action
+        else {
+            return None;
+        };
+
+        match operation {
+            TaskOp::Create => {
+                let created = result
+                    .and_then(|value| value.get("task"))
+                    .and_then(crate::tool::project_task_item)?;
+                // A successful create cannot refer to an existing task. Claude
+                // reuses its small numeric ids whenever it starts a fresh task
+                // board (including more than once in a single JSONL session),
+                // so an id collision is the only native reset marker we get.
+                // Clear the old namespace before drawing the new after-state;
+                // otherwise completed work from an earlier board leaks into it.
+                if self
+                    .tasks
+                    .iter()
+                    .any(|task| task.task_id == created.task_id)
+                {
+                    self.tasks.clear();
+                    self.task_total_count = 0;
+                }
+                task_id.clone_from(&Some(created.task_id.clone()));
+                if subject.is_none() {
+                    subject.clone_from(&created.subject);
+                }
+                if status.is_none() {
+                    status.clone_from(&created.status);
+                }
+                if owner.is_none() {
+                    owner.clone_from(&created.owner);
+                }
+                if blocker_ids.is_empty() {
+                    blocker_ids.clone_from(&created.blocker_ids);
+                }
+                let item = TaskSnapshotItem {
+                    task_id: created.task_id.clone(),
+                    subject: subject.clone().or(created.subject),
+                    status: (*status).or(created.status),
+                    owner: owner.clone().or(created.owner),
+                    blocker_ids: if blocker_ids.is_empty() {
+                        created.blocker_ids
+                    } else {
+                        blocker_ids.clone()
+                    },
+                };
+                self.upsert_task(item);
+                Some(Some(created.task_id))
+            }
+            TaskOp::Update => {
+                if task_id.is_none() {
+                    *task_id = result
+                        .and_then(|value| value.get("taskId"))
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned);
+                }
+                if status.is_none() {
+                    *status = result
+                        .and_then(|value| value.get("statusChange"))
+                        .and_then(|change| change.get("to"))
+                        .and_then(Value::as_str)
+                        .and_then(crate::tool::task_status);
+                }
+                let id = task_id.clone()?;
+                let mut item = self
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == id)
+                    .cloned()
+                    .unwrap_or(TaskSnapshotItem {
+                        task_id: id.clone(),
+                        subject: None,
+                        status: None,
+                        owner: None,
+                        blocker_ids: Vec::new(),
+                    });
+                if subject.is_some() {
+                    item.subject.clone_from(subject);
+                }
+                if status.is_some() {
+                    item.status = *status;
+                }
+                if owner.is_some() {
+                    item.owner.clone_from(owner);
+                }
+                for blocker in blocker_ids.iter() {
+                    if !item.blocker_ids.contains(blocker) {
+                        item.blocker_ids.push(blocker.clone());
+                    }
+                }
+                if subject.is_none() {
+                    subject.clone_from(&item.subject);
+                }
+                if owner.is_none() {
+                    owner.clone_from(&item.owner);
+                }
+                self.upsert_task(item);
+                Some(Some(id))
+            }
+            TaskOp::List => {
+                let (tasks, total_count) = crate::tool::project_task_list_result(result?)?;
+                self.tasks = tasks.into_iter().take(TASK_STATE_LIMIT).collect();
+                self.task_total_count = total_count;
+                Some(None)
+            }
+            TaskOp::Get => {
+                if let Some(item) = result
+                    .and_then(|value| value.get("task").or(Some(value)))
+                    .and_then(crate::tool::project_task_item)
+                {
+                    let id = item.task_id.clone();
+                    if subject.is_none() {
+                        subject.clone_from(&item.subject);
+                    }
+                    if status.is_none() {
+                        *status = item.status;
+                    }
+                    if owner.is_none() {
+                        owner.clone_from(&item.owner);
+                    }
+                    self.upsert_task(item);
+                    if task_id.is_none() {
+                        *task_id = Some(id.clone());
+                    }
+                    Some(Some(id))
+                } else if self.tasks.is_empty() {
+                    None
+                } else {
+                    Some(task_id.clone())
+                }
+            }
+            TaskOp::Stop | TaskOp::Output => None,
+        }
+    }
+
+    fn upsert_task(&mut self, item: TaskSnapshotItem) {
+        if let Some(existing) = self
+            .tasks
+            .iter_mut()
+            .find(|task| task.task_id == item.task_id)
+        {
+            *existing = item;
+            return;
+        }
+        self.task_total_count = self.task_total_count.saturating_add(1);
+        if self.tasks.len() < TASK_STATE_LIMIT {
+            self.tasks.push(item);
+        }
+    }
+
+    fn task_snapshot(&self, changed_task_id: Option<&str>) -> TaskSnapshot {
+        let mut tasks: Vec<_> = self
+            .tasks
+            .iter()
+            .take(TASK_SNAPSHOT_LIMIT)
+            .cloned()
+            .collect();
+        if let Some(changed_task_id) = changed_task_id
+            && !tasks.iter().any(|task| task.task_id == changed_task_id)
+            && let Some(changed) = self
+                .tasks
+                .iter()
+                .find(|task| task.task_id == changed_task_id)
+                .cloned()
+        {
+            if tasks.len() == TASK_SNAPSHOT_LIMIT {
+                tasks.pop();
+            }
+            tasks.push(changed);
+        }
+        TaskSnapshot {
+            tasks,
+            total_count: self
+                .task_total_count
+                .max(u64::try_from(self.tasks.len()).unwrap_or(u64::MAX)),
+        }
+    }
 }
+
+const TASK_STATE_LIMIT: usize = 512;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ClaudeResponseState {
@@ -390,11 +634,12 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     Some(id),
                     None,
                 );
-                let (tool, is_delegate, is_file_change) = match projected {
+                let (tool, is_delegate, is_file_change, is_task) = match projected {
                     Ok(tool) => {
                         let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
                         let is_file_change = matches!(&tool.action, ToolAction::FileChange { .. });
-                        (tool, is_delegate, is_file_change)
+                        let is_task = matches!(&tool.action, ToolAction::Task { .. });
+                        (tool, is_delegate, is_file_change, is_task)
                     }
                     Err(error) => {
                         emit.drift(
@@ -415,9 +660,13 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                             ),
                             false,
                             false,
+                            false,
                         )
                     }
                 };
+                if is_task {
+                    emit.remember_task_call(id, &tool.action);
+                }
                 row.tool = Some(tool);
                 // A native name is not enough to establish canonical
                 // delegation. In particular, an unpinned writer is projected
@@ -962,14 +1211,45 @@ impl<'a> Emit<'a> {
             .is_some_and(|state| state.take_file_change_call(tool_use_id))
     }
 
+    fn remember_task_call(&mut self, tool_use_id: &str, action: &ToolAction) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_task_call(tool_use_id, action);
+        }
+    }
+
+    fn resolve_task_call(
+        &mut self,
+        tool_use_id: &str,
+        result: Option<&Value>,
+        failed: bool,
+    ) -> Option<ToolAction> {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.resolve_task_call(tool_use_id, result, failed))
+    }
+
     fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
-        let diagnostic = result
-            .is_error
-            .is_some_and(|is_error| is_error)
-            .then(|| result_text(result.content))
-            .flatten();
+        let native_failure = result
+            .tool_use_result
+            .and_then(|value| value.get("success"))
+            .and_then(Value::as_bool)
+            == Some(false);
+        let effective_error = if native_failure {
+            Some(true)
+        } else {
+            result.is_error
+        };
+        let failed = effective_error == Some(true);
+        let diagnostic = failed.then(|| result_text(result.content)).flatten();
         let mut patch = terminal_update(
-            result.is_error,
+            effective_error,
             true,
             StatusBasis::NativeTerminalRecord,
             at,
@@ -982,11 +1262,16 @@ impl<'a> Emit<'a> {
                 .map(|native| ids::session_id(&self.ctx.runtime_id, native));
         }
         if self.take_file_change_call(result.tool_use_id)
-            && result.is_error != Some(true)
+            && !failed
             && let Some(action) = result
                 .tool_use_result
                 .and_then(|value| crate::tool::project_change_result(value, result.cwd).ok())
                 .flatten()
+        {
+            patch.request = Some(ToolRequestPatch { action });
+        }
+        if let Some(action) =
+            self.resolve_task_call(result.tool_use_id, result.tool_use_result, failed)
         {
             patch.request = Some(ToolRequestPatch { action });
         }

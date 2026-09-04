@@ -139,11 +139,11 @@ pub struct CommandSource {
     pub correlation_key: String,
 }
 
-/// The live file named by one canonical `file_read` target.
+/// The live file named by one canonical file-bearing target.
 ///
 /// The transport addresses this by session, timeline row and target index;
 /// callers never submit a path of their own. `cwd` is retained only so a
-/// relative target can be resolved exactly where the recorded read happened.
+/// relative target can be resolved exactly where the recorded action happened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReadTarget {
     pub path: String,
@@ -178,19 +178,26 @@ pub fn file_read_target(
     let TimelineBody::ToolUse { tool } = entry.body else {
         return Ok(None);
     };
-    let rosetta_core::ToolAction::FileRead { targets, .. } = tool.action else {
+    let path =
+        match tool.action {
+            rosetta_core::ToolAction::FileRead { targets, .. } => targets
+                .get(target_index)
+                .and_then(|target| match &target.resource {
+                    ResourceRef::File { path, .. } => Some(path.clone()),
+                    _ => None,
+                }),
+            rosetta_core::ToolAction::Artifact { resources, .. } => resources
+                .get(target_index)
+                .and_then(|resource| match resource {
+                    ResourceRef::File { path, .. } => Some(path.clone()),
+                    _ => None,
+                }),
+            _ => None,
+        };
+    let Some(path) = path else {
         return Ok(None);
     };
-    let Some(target) = targets.get(target_index) else {
-        return Ok(None);
-    };
-    let ResourceRef::File { path, .. } = &target.resource else {
-        return Ok(None);
-    };
-    Ok(Some(FileReadTarget {
-        path: path.clone(),
-        cwd,
-    }))
+    Ok(Some(FileReadTarget { path, cwd }))
 }
 
 pub fn command_source(
@@ -636,6 +643,20 @@ pub fn timeline_page(
         out.push(row?);
     }
     Ok(out)
+}
+
+/// One exact canonical timeline row, scoped to its owning session. This is
+/// the lazy landing path for indexes such as `timeline_meta`; callers do not
+/// need to walk every intervening history page to reach an old anchor.
+pub fn timeline_entry(
+    conn: &Connection,
+    session_id: &str,
+    timeline_id: &str,
+) -> Result<Option<TimelineEntry>, StoreError> {
+    conn.prepare_cached("SELECT * FROM message WHERE session_id = ?1 AND timeline_id = ?2")?
+        .query_row(params![session_id, timeline_id], message_codec::decode)
+        .optional()
+        .map_err(StoreError::from)
 }
 
 /// Deterministic UTC compatibility wrapper for a GitHub-style activity

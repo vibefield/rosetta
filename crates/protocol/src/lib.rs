@@ -23,9 +23,13 @@ pub use rosetta_core::{TimelineBody, TimelineEntry};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{ContributionRow, HeatmapDay, HourTotal, ModelDay};
+pub use rosetta_store::timeline_meta::{
+    TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
+    TimelineMetaPlanSource, TimelineMetaTask,
+};
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -404,6 +408,13 @@ pub enum ServerFrame {
     TimelineSnapshot {
         stamp: Stamp,
         entries: Vec<TimelineEntry>,
+        timeline_meta: TimelineMeta,
+    },
+    /// A coalesced replacement of the session work index after a relevant
+    /// committed mutation. Bodies remain behind their lazy read references.
+    TimelineMetaSnapshot {
+        stamp: Option<Stamp>,
+        timeline_meta: TimelineMeta,
     },
     /// The full metadata surface, served from the resident mirror.
     MetaSnapshot {

@@ -25,6 +25,7 @@ import {
   Participants,
   PathList,
   Questions,
+  Tasks,
   LIST_CAP,
 } from "./detail-parts";
 import { Favicon } from "./Favicon";
@@ -123,7 +124,12 @@ export function LineDetail({ detail, diagnostic, subthread, onOpenPath }: LineDe
       case "none":
         return null;
       case "paths":
-        return <PathList paths={detail.paths} total={detail.total} onOpenPath={onOpenPath} />;
+        return (
+          <>
+            {detail.description !== undefined && <p className="tr-text">{detail.description}</p>}
+            <PathList paths={detail.paths} total={detail.total} onOpenPath={onOpenPath} />
+          </>
+        );
       case "locations":
         return <LocationList locations={detail.locations} total={detail.total} />;
       case "sources":
@@ -148,6 +154,15 @@ export function LineDetail({ detail, diagnostic, subthread, onOpenPath }: LineDe
               </li>
             )}
           </ul>
+        );
+      case "tasks":
+        return (
+          <Tasks
+            tasks={detail.tasks}
+            total={detail.total}
+            changedTaskId={detail.changedTaskId}
+            change={detail.change}
+          />
         );
       case "text":
         return <p className="tr-text">{detail.text}</p>;

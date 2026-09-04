@@ -74,6 +74,12 @@ pub enum Mutation {
     SessionSwept {
         session_id: String,
     },
+    /// A committed task, plan, or artifact fact changed. The marker carries
+    /// no duplicated metadata; the WebSocket boundary resolves one fresh
+    /// Rust-built `timeline_meta` snapshot for the watching session.
+    TimelineMetaChanged {
+        session_id: String,
+    },
     /// Metadata-mirror diffs — emitted by [`MetaMirror::refresh`], never
     /// collected during apply.
     Session(Box<SessionRow>),
@@ -89,7 +95,8 @@ impl Mutation {
             Self::Message(row) => Some(&row.session_id),
             Self::ToolUpdated { session_id, .. }
             | Self::Usage { session_id, .. }
-            | Self::SessionSwept { session_id } => Some(session_id),
+            | Self::SessionSwept { session_id }
+            | Self::TimelineMetaChanged { session_id } => Some(session_id),
             Self::Session(_) | Self::Project(_) | Self::Runtime(_) => None,
         }
     }
@@ -133,7 +140,10 @@ impl Mutation {
                     + row.summary.as_deref().map_or(0, str::len)
             }
             Self::Project(row) => row.root_paths.iter().map(String::len).sum(),
-            Self::Usage { .. } | Self::SessionSwept { .. } | Self::Runtime(_) => 0,
+            Self::Usage { .. }
+            | Self::SessionSwept { .. }
+            | Self::TimelineMetaChanged { .. }
+            | Self::Runtime(_) => 0,
         };
         BASE + strings
     }
@@ -178,6 +188,10 @@ pub struct Effects {
     pub touched_sessions: BTreeSet<String>,
     pub touched_projects: BTreeSet<String>,
     pub touched_runtimes: BTreeSet<String>,
+    /// Sessions whose light work index must be rebuilt after this commit.
+    /// Kept as ids so a batch emits at most one refresh regardless of how
+    /// many task/plan/artifact facts it contained.
+    pub timeline_meta_sessions: BTreeSet<String>,
     /// The mutation list hit [`EFFECTS_MUTATION_CAP`] and truncated;
     /// consumers must invalidate rings and rewarm the mirror.
     pub overflowed: bool,
@@ -202,6 +216,7 @@ impl Effects {
             && self.touched_sessions.is_empty()
             && self.touched_projects.is_empty()
             && self.touched_runtimes.is_empty()
+            && self.timeline_meta_sessions.is_empty()
             && !self.overflowed
     }
 
@@ -226,6 +241,12 @@ impl Effects {
         }
     }
 
+    pub(crate) fn touch_timeline_meta(&mut self, session_id: &str) {
+        if self.scope.admits(session_id) {
+            note_id(&mut self.timeline_meta_sessions, session_id);
+        }
+    }
+
     /// Fold a committed transient into the armed accumulator. The transient
     /// was collected under `self`'s scope ([`Effects::scoped_like`]), so its
     /// content needs no re-filtering and its scope copy is dropped.
@@ -233,6 +254,8 @@ impl Effects {
         self.touched_sessions.extend(other.touched_sessions);
         self.touched_projects.extend(other.touched_projects);
         self.touched_runtimes.extend(other.touched_runtimes);
+        self.timeline_meta_sessions
+            .extend(other.timeline_meta_sessions);
         self.overflowed |= other.overflowed;
         let room = EFFECTS_MUTATION_CAP.saturating_sub(self.mutations.len());
         if other.mutations.len() > room {

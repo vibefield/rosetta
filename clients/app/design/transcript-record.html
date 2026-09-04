@@ -174,6 +174,7 @@ blockquote.claim p { margin: 0; color: inherit; font-size: inherit; }
 .tr-head { display: flex; align-items: center; gap: 8px; height: 22px; margin-bottom: 6px; color: var(--vf-text-tertiary); font-size: 10.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; }
 .tr-head .mark { display: inline-flex; width: 14px; height: 14px; color: var(--vf-text-secondary); }
 .tr-head .mark svg { width: 14px; height: 14px; }
+.tr-head .mark.tm-avatar { color: var(--member-color); }
 .tr-head .model { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--vf-text-faint); }
 .tr-head .facts { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
 .tr-head .facts b { font-weight: 400; color: var(--vf-text-tertiary); }
@@ -439,6 +440,232 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
   background: linear-gradient(to bottom, var(--vf-sheet-surface) 0%, color-mix(in srgb, var(--vf-sheet-surface) 88%, transparent) 38%, transparent 100%);
   transition: opacity 120ms ease; }
 .tr-prompt.is-landed { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+
+/* ═══ §04A — delegated work has three geometries ═══
+   An Agent worker is invocation-rooted and keeps one durable child document,
+   even when later messages or a resume extend it. A teammate belongs to a team,
+   so its boundary messages enter shared chronology. A Workflow run owns a set
+   of journaled workers. Member hue is an address, never a state. */
+[data-member-color="blue"] { --member-color: #3b82f6; }
+[data-member-color="green"] { --member-color: #22c55e; }
+[data-member-color="yellow"] { --member-color: #ffd60a; }
+[data-member-color="purple"] { --member-color: #8b5cf6; }
+[data-member-color="orange"] { --member-color: #f59e0b; }
+[data-member-color="pink"] { --member-color: #ec4899; }
+[data-member-color="cyan"] { --member-color: #06b6d4; }
+[data-member-color="red"] { --member-color: #ef4444; }
+.tr-assignment { margin: 5px 0 10px; padding: 6px 0 7px 11px; border-left: 2px solid var(--vf-hairline-strong); color: var(--vf-text-secondary); font-size: 12.5px; line-height: 1.5; }
+.tr-assignment__head { display: block; margin-bottom: 2px; color: var(--vf-text-tertiary); font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; }
+.tm-avatar { display: inline-flex; flex: none; width: 14px; height: 14px; color: var(--member-color, var(--vf-text-tertiary)); }
+.tm-avatar svg { display: block; width: 100%; height: 100%; }
+.tm-mention { display: inline-flex; align-items: center; gap: 5px; min-height: 20px; padding: 0 7px 0 6px; border-radius: 999px; background: var(--vf-fill); color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 10.5px; line-height: 20px; white-space: nowrap; }
+.tm-mention .tm-avatar { width: 11px; height: 11px; }
+.tm-roster { margin: 2px 0 10px 26px; padding: 4px 0 5px 12px; border-left: 1px solid var(--vf-hairline-strong); }
+.tm-roster[hidden] { display: none; }
+.tm-roster__row { display: grid; grid-template-columns: 14px minmax(118px, max-content) minmax(0, 1fr) auto; gap: 9px; align-items: center; min-height: 28px; color: var(--vf-text-secondary); font-size: 11.5px; }
+.tm-roster__name { color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 10.5px; white-space: nowrap; }
+.tm-roster__job { min-width: 0; overflow: hidden; color: var(--vf-text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
+.tm-runtime { color: var(--vf-text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tm-message { position: relative; margin: 14px 0 15px; padding: 1px 0 2px; }
+.tm-message__head { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 7px; min-height: 18px; color: var(--vf-text-tertiary); font-size: 10.5px; }
+.tm-message__head .mark { display: inline-flex; width: 12px; height: 12px; color: var(--vf-text-tertiary); }
+.tm-message__head .mark svg { width: 12px; height: 12px; }
+.tm-message[data-member-color] .tm-message__head .mark { color: var(--member-color); }
+.tm-message__who { color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 10.5px; font-weight: 500; }
+.tm-message__route { color: var(--vf-text-tertiary); }
+.tm-message__kind { margin-left: auto; color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; }
+.tm-message__time { color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+.tm-message__body { margin: 4px 0 0 21px; color: var(--vf-text-primary); font-size: 13.5px; line-height: 1.55; }
+.tm-message__body p + p { margin-top: 8px; }
+.tm-message__foot { display: flex; align-items: center; gap: 8px; margin: 5px 0 0 21px; color: var(--vf-text-faint); font-size: 10.5px; }
+.tm-report { margin-top: 14px; margin-bottom: 15px; }
+.tm-report__line .tm-avatar { color: var(--member-color); }
+.tm-report__detail .tm-message__body { margin: 0; padding: 9px 12px 4px; }
+.tm-report__detail .tm-message__body:last-child { padding-bottom: 10px; }
+.tm-report__detail .tm-message__foot { margin: 0; padding: 0 12px 9px; }
+.tm-report__detail > .tm-workthread { margin: 0 10px 10px 22px; }
+.tm-work { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; border-bottom: 1px dotted var(--vf-hairline-strong); background: none; color: var(--vf-text-tertiary); font: inherit; cursor: pointer; }
+.tm-work:hover { color: var(--vf-text-primary); }
+.tm-work .chev { width: 10px; height: 10px; }
+.tm-work .chev svg { display: block; width: 10px; height: 10px; transition: transform 160ms var(--vf-ease-island); }
+.tm-work[aria-expanded="true"] .chev svg { transform: rotate(90deg); }
+.tm-work:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+.tm-note { margin: 7px 0 0 14px; color: var(--vf-text-faint); font-size: 10.5px; }
+.tm-workthread { margin-top: 7px; margin-bottom: 15px; }
+.tm-workthread .tr-sub__head .tm-avatar { width: 13px; height: 13px; }
+.tm-workthread__name { color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 10.5px; }
+.tr-head .tm-workthread__name { text-transform: none; letter-spacing: 0; }
+.tm-workthread__kind { color: var(--vf-text-tertiary); }
+.tm-workthread .tr-assignment { margin-top: 4px; margin-bottom: 9px; }
+.tm-workthread__end { display: flex; align-items: center; gap: 7px; margin: 8px 0 1px; color: var(--vf-text-faint); font-size: 10.5px; }
+.tm-workthread__end::before { content: ""; width: 16px; height: 1px; background: var(--vf-hairline-strong); }
+.tm-workthread__end time { margin-left: auto; font-family: var(--vf-font-mono); font-variant-numeric: tabular-nums; }
+.wf-run__detail { padding: 0; }
+.wf-run__mast { padding: 12px 14px 11px; }
+.wf-run__title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.wf-run__title strong { min-width: 0; overflow: hidden; color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.wf-run__id { color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 9.5px; white-space: nowrap; }
+.wf-run__finished { margin-left: auto; color: var(--vf-text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-run__objective { margin: 4px 0 9px; color: var(--vf-text-secondary); font-size: 11.5px; line-height: 1.45; }
+.wf-run__facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--vf-text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.wf-run__facts b { color: var(--vf-text-secondary); font-weight: 500; }
+.wf-run__actions { display: inline-flex; gap: 10px; margin-left: auto; }
+.wf-action { padding: 0; border: 0; background: none; color: var(--vf-text-tertiary); font-family: inherit; font-size: 10.5px; cursor: pointer; }
+.wf-action:hover { color: var(--vf-text-primary); }
+.wf-section-label { display: block; padding: 8px 14px 5px; color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase; }
+.wf-attempts, .wf-phases, .wf-result { border-top: 1px solid var(--vf-hairline); }
+.wf-attempt { display: grid; grid-template-columns: 8px 62px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 27px; padding: 0 14px 7px; color: var(--vf-text-tertiary); font-size: 10.5px; }
+.wf-attempt__dot { width: 6px; height: 6px; border-radius: 999px; background: var(--vf-text-tertiary); }
+.wf-attempt strong { color: var(--vf-text-secondary); font-weight: 500; }
+.wf-attempt__launch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-attempt__outcome { color: var(--vf-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-attempt[data-state="running"] .wf-attempt__dot { background: var(--vf-green); animation: breathe 1.6s ease-in-out infinite; }
+.wf-attempt[data-state="failed"] .wf-attempt__dot { background: var(--vf-red); }
+.wf-attempt[data-state="failed"] .wf-attempt__outcome { color: var(--vf-red); }
+.wf-phase { border-top: 1px solid var(--vf-hairline); }
+.wf-phase:first-of-type { border-top: 0; }
+.wf-phase > summary, .wf-worker-thread > summary { list-style: none; }
+.wf-phase > summary::-webkit-details-marker, .wf-worker-thread > summary::-webkit-details-marker { display: none; }
+.wf-phase__head { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto 12px; gap: 9px; align-items: center; width: 100%; min-height: 37px; padding: 5px 14px; color: var(--vf-text-secondary); cursor: pointer; }
+.wf-phase__head:hover { background: var(--vf-fill); }
+.wf-phase__head:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.wf-phase__index { display: grid; place-items: center; width: 18px; height: 18px; border: 1px solid var(--vf-hairline-strong); border-radius: 999px; color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.wf-phase__name { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.wf-phase__name strong { flex: none; color: var(--vf-text-primary); font-size: 11.5px; font-weight: 500; }
+.wf-phase__name span { overflow: hidden; color: var(--vf-text-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.wf-phase__count { color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-phase__head .chev { display: inline-flex; width: 12px; height: 12px; color: var(--vf-text-faint); transition: transform 160ms var(--vf-ease-island); }
+.wf-phase__head .chev svg { width: 12px; height: 12px; }
+.wf-phase[open] > .wf-phase__head .chev { transform: rotate(90deg); }
+.wf-phase__workers { margin: 0 12px 8px 23px; padding: 2px 0 2px 12px; border-left: 1px solid var(--vf-hairline-strong); }
+.wf-worker-thread { margin: 0; }
+.wf-worker { grid-template-columns: 16px minmax(92px, max-content) minmax(0, 1fr) auto; grid-template-rows: 20px 18px; row-gap: 0; min-height: 42px; margin-right: 0; margin-left: -8px; padding-top: 2px; padding-bottom: 2px; }
+.wf-worker .tr-line__g { grid-column: 1; grid-row: 1 / 3; }
+.wf-worker .tr-line__v { grid-column: 2; grid-row: 1; color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 11px; }
+.wf-worker .tr-line__o { grid-column: 3; grid-row: 1; color: var(--vf-text-tertiary); font-family: var(--vf-font-sans); font-size: 10.5px; }
+.wf-worker .tr-line__r { grid-column: 4; grid-row: 1; }
+.wf-worker__runtime { grid-column: 2 / 4; grid-row: 2; min-width: 0; overflow: hidden; color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.wf-worker__runtime .wf-worker__basis { margin-right: 5px; color: var(--vf-text-faint); font-size: 9.5px; }
+.wf-worker__runtime b { color: var(--vf-text-secondary); font-weight: 500; }
+.wf-worker__runtime > span:last-child { margin-left: 4px; color: var(--vf-text-secondary); }
+.wf-worker__usage { grid-column: 4; grid-row: 2; color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-worker-thread[open] > .wf-worker .chev { transform: rotate(90deg); }
+.wf-worker__detail { margin: 2px 0 8px 18px; }
+.wf-worker__result { padding: 7px 10px 8px; color: var(--vf-text-secondary); font-size: 11.5px; line-height: 1.45; }
+.wf-worker__result p { margin: 0; }
+.wf-worker__result .wf-action { display: block; margin-top: 5px; }
+.wf-result { padding: 0 14px 11px; }
+.wf-result .wf-section-label { padding-right: 0; padding-left: 0; }
+.wf-output { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 5px 10px; margin: 0; font-size: 10.5px; line-height: 1.45; }
+.wf-output dt { margin: 0; color: var(--vf-text-tertiary); }
+.wf-output dd { min-width: 0; margin: 0; color: var(--vf-text-secondary); }
+.wf-output__verdict { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.wf-resource { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 0; border: 0; background: none; color: var(--vf-text-primary); font-family: var(--vf-font-mono); font-size: 10.5px; cursor: pointer; vertical-align: top; }
+.wf-resource svg { flex: none; width: 12px; height: 12px; color: var(--vf-text-tertiary); }
+.wf-resource span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-resource:hover span { text-decoration: underline; text-underline-offset: 2px; }
+.wf-result__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; color: var(--vf-text-faint); font-size: 10px; }
+.wf-result__foot .wf-action { margin-left: auto; }
+.wf-state-spec .spec__body { padding-top: 8px; padding-bottom: 9px; }
+.wf-state-spec .tr { padding-top: 5px; padding-bottom: 5px; }
+.wf-state-spec .tr-ledger { margin-top: 0; margin-bottom: 0; }
+.wf-state-spec .tr-kv dd { overflow-wrap: anywhere; }
+.wf-state-spec .tr-line[data-state="muted"] .tr-line__r .why { color: var(--vf-text-tertiary); }
+.wf-state-spec .tr-line[data-state="muted"] .tr-line__o { color: var(--vf-text-secondary); font-style: normal; }
+.wf-state-key { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 3px 10px; margin: 8px 20px 0 42px; padding-top: 8px; border-top: 1px solid var(--vf-hairline); color: var(--vf-text-faint); font-size: 10px; line-height: 1.45; }
+.wf-state-key b { color: var(--vf-text-tertiary); font-weight: 500; }
+@container measure (max-width: 560px) {
+  .tm-roster__row { grid-template-columns: 14px minmax(0, 1fr); padding: 5px 0; }
+  .tm-roster__row .tm-runtime { grid-column: 2; grid-row: 2; }
+  .tm-roster__job { grid-column: 2; grid-row: 3; white-space: normal; }
+  .tm-message__kind { margin-left: 0; }
+  .tm-message__time { margin-left: auto; }
+  .tm-workthread .tr-sub__head { grid-template-columns: 13px minmax(0, 1fr); height: auto; min-height: 26px; padding: 4px 0; }
+  .tm-workthread .tr-sub__head .when { grid-column: 2; }
+  .tm-workthread .tr-head { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; row-gap: 0; height: auto; min-height: 22px; }
+  .tm-workthread .tr-head .model { grid-column: 2 / -1; grid-row: 2; }
+  .tm-workthread .tr-head .facts { grid-column: 3; grid-row: 1; }
+  .wf-run__title { flex-wrap: wrap; }
+  .wf-run__finished { width: 100%; margin-left: 0; }
+  .wf-run__actions { width: 100%; margin: 3px 0 0; }
+  .wf-attempt { grid-template-columns: 8px 62px minmax(0, 1fr); }
+  .wf-attempt__outcome { grid-column: 3; }
+  .wf-phase__name span, .wf-worker .tr-line__o { display: none; }
+  .wf-worker { grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-rows: 19px 18px 16px; align-items: center; min-height: 57px; padding-top: 3px; padding-bottom: 3px; }
+  .wf-worker .tr-line__g { grid-column: 1; grid-row: 1 / 4; }
+  .wf-worker .tr-line__v { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .wf-worker .tr-line__r { grid-column: 3; grid-row: 1; min-width: 0; font-size: 10px; }
+  .wf-worker__runtime { grid-column: 2 / 4; grid-row: 2; font-size: 10px; }
+  .wf-worker__runtime .wf-worker__basis { display: none; }
+  .wf-worker__usage { grid-column: 2 / 4; grid-row: 3; justify-self: start; font-size: 9.5px; }
+  .wf-output { grid-template-columns: 1fr; gap: 1px; }
+  .wf-output dd + dt { margin-top: 5px; }
+  .wf-state-spec .tr-line { grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-rows: auto auto; min-height: 42px; padding-top: 3px; padding-bottom: 3px; }
+  .wf-state-spec .tr-line__g { grid-column: 1; grid-row: 1 / 3; }
+  .wf-state-spec .tr-line__v { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .wf-state-spec .tr-line__o { grid-column: 2 / 4; grid-row: 2; min-width: 0; }
+  .wf-state-spec .tr-line__r { grid-column: 3; grid-row: 1; font-size: 10px; }
+  .wf-state-key { grid-template-columns: 1fr; margin-left: 32px; }
+}
+
+/* ═══ §05A — timeline_meta: three floating indexes, one island ═══
+   These controls belong to the message-view wrapper, not its grid. They sit
+   above the document, spend the existing narrow-layout anchor gutter, and
+   never move the 68ch measure. The island is an index; task messages remain
+   in chronology and file bodies remain in the shared viewer. */
+.tr-meta-stage { position: relative; min-height: 560px; overflow: hidden; }
+.tr-meta-stage > .tr { min-height: 560px; }
+.tr-meta-launchers { position: absolute; z-index: 7; top: 14px; left: 14px; display: grid; gap: 7px; }
+.tr-meta-launch { display: grid; grid-template-columns: 15px auto; gap: 4px; align-items: center; justify-content: center; width: 42px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: var(--vf-chrome-surface); backdrop-filter: blur(20px); box-shadow: 0 3px 14px rgb(0 0 0 / 7%), 0 0 0 1px var(--vf-hairline-strong); color: var(--vf-text-tertiary); cursor: pointer; transition: transform 140ms ease, color 160ms ease, background-color 160ms ease; }
+.tr-meta-launch:hover { color: var(--vf-text-primary); transform: translateY(-1px); }
+.tr-meta-launch:active { transform: scale(0.95); }
+.tr-meta-launch[aria-expanded="true"] { background: var(--vf-foreground); color: var(--vf-foreground-inverse); }
+.tr-meta-launch svg { display: block; width: 14px; height: 14px; }
+.tr-meta-launch__count { font-family: var(--vf-font-mono); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1; }
+.tr-meta-popover { position: absolute; z-index: 6; top: 14px; left: 64px; width: min(430px, calc(100% - 78px)); border-radius: 12px; background: var(--vf-chrome-surface); backdrop-filter: blur(24px); box-shadow: var(--vf-shadow-island), 0 0 0 1px var(--vf-hairline-strong); overflow: hidden; transform-origin: top left; animation: tr-meta-in 180ms var(--vf-ease-pop); }
+.tr-meta-popover[hidden], .tr-meta-panel[hidden] { display: none; }
+@keyframes tr-meta-in { from { opacity: 0; transform: translateY(-3px) scale(0.98); } }
+.tr-meta-top { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; min-height: 39px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--vf-hairline); }
+.tr-meta-tabs { display: flex; align-self: stretch; min-width: 0; }
+.tr-meta-tab { position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 0; height: 39px; padding: 0 12px; border: 0; background: none; color: var(--vf-text-tertiary); font-family: inherit; font-size: 11.5px; cursor: pointer; }
+.tr-meta-tab:hover { color: var(--vf-text-primary); }
+.tr-meta-tab[aria-selected="true"] { color: var(--vf-text-primary); font-weight: 600; }
+.tr-meta-tab[aria-selected="true"]::after { position: absolute; right: 11px; bottom: -1px; left: 11px; height: 2px; border-radius: 999px 999px 0 0; background: currentColor; content: ""; }
+.tr-meta-close { display: grid; width: 26px; height: 26px; place-items: center; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--vf-text-faint); cursor: pointer; }
+.tr-meta-close:hover { background: var(--vf-fill); color: var(--vf-text-primary); }
+.tr-meta-close svg { width: 13px; height: 13px; }
+.tr-meta-panel { max-height: 382px; overflow-y: auto; scrollbar-width: thin; }
+.tr-meta-listhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; height: 30px; padding: 0 34px 0 43px; color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; }
+.tr-meta-list { margin: 0; padding: 0 7px 7px; list-style: none; }
+.tr-meta-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 12px; gap: 9px; align-items: center; width: 100%; min-height: 49px; padding: 6px 8px; border: 0; border-top: 1px solid var(--vf-hairline); border-radius: 7px; background: none; color: var(--vf-text-secondary); text-align: left; cursor: pointer; transition: background-color 120ms ease; }
+.tr-meta-list li:first-child .tr-meta-row { border-top-color: transparent; }
+.tr-meta-row:hover { background: var(--vf-fill); }
+.tr-meta-row__body { min-width: 0; }
+.tr-meta-row__name { display: block; overflow: hidden; color: var(--vf-text-primary); font-size: 11.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.tr-meta-row__meta { display: block; overflow: hidden; margin-top: 1px; color: var(--vf-text-tertiary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.tr-meta-row__value { color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tr-meta-row__chev { display: inline-flex; width: 12px; height: 12px; color: var(--vf-text-faint); }
+.tr-meta-row__chev svg { width: 12px; height: 12px; }
+.tr-meta-status { position: relative; display: grid; width: 14px; height: 14px; place-items: center; border: 1px solid var(--vf-hairline-strong); border-radius: 4px; color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 9px; line-height: 1; }
+.tr-meta-row[data-state="completed"] .tr-meta-status { border-color: var(--vf-text-tertiary); }
+.tr-meta-row[data-state="completed"] .tr-meta-row__name { color: var(--vf-text-tertiary); text-decoration: line-through; }
+.tr-meta-row[data-state="running"] .tr-meta-status { border-color: var(--vf-green); }
+.tr-meta-row[data-state="running"] .tr-meta-status::after { width: 6px; height: 6px; border-radius: 999px; background: var(--vf-green); content: ""; animation: breathe 1.6s ease-in-out infinite; }
+.tr-meta-row[data-state="running"] .tr-meta-row__value { color: var(--vf-green); }
+.tr-meta-row[data-state="failed"] .tr-meta-status, .tr-meta-row[data-state="failed"] .tr-meta-row__value { border-color: var(--vf-red); color: var(--vf-red); }
+.tr-meta-file { display: inline-flex; width: 15px; height: 15px; color: var(--vf-text-tertiary); }
+.tr-meta-file svg { width: 15px; height: 15px; }
+.tr-meta-source.is-landed { background: var(--vf-fill); box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+@container measure (max-width: 759.98px) {
+  .tr-meta-stage > .tr { --tr-action-gap: 10px; padding-right: 60px; padding-left: 60px; }
+}
+@container measure (max-width: 560px) {
+  .tr-meta-launchers { top: 10px; left: 10px; }
+  .tr-meta-popover { top: 10px; left: 58px; width: calc(100% - 66px); }
+  .tr-meta-tab { flex: 1; padding-right: 5px; padding-left: 5px; }
+  .tr-meta-listhead { padding-right: 27px; padding-left: 41px; }
+  .tr-meta-row { gap: 7px; padding-right: 6px; padding-left: 6px; }
+}
 </style>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -449,6 +676,7 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
     <symbol id="g-shell" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 4.5 3.5 3.5L3 11.5"/><path d="M8.5 12h4.5"/></symbol>
     <symbol id="g-web" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2.2 2.2 2.2 8.8 0 11M8 2.5c-2.2 2.2-2.2 8.8 0 11"/></symbol>
     <symbol id="g-delegate" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5v6.5a2 2 0 0 0 2 2h7"/><path d="m10.5 8.5 2.5 2.5-2.5 2.5"/></symbol>
+    <symbol id="g-team" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5.5" r="2.2"/><circle cx="11.5" cy="6.5" r="1.6"/><path d="M2.5 13c.3-2.5 1.7-3.8 3.5-3.8s3.2 1.3 3.5 3.8M9.3 10c2.2-.5 3.7.5 4.2 2.5"/></symbol>
     <symbol id="g-task" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="m5.5 8 2 2 3.5-4"/></symbol>
     <symbol id="g-question" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M6.3 6.6a1.7 1.7 0 1 1 2.6 1.4c-.6.4-.9.7-.9 1.3"/><path d="M8 11.3v.1"/></symbol>
     <symbol id="g-reason" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/></symbol>
@@ -464,6 +692,7 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
     <symbol id="g-plug" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5v3M10 2.5v3M4 5.5h8v2a4 4 0 0 1-8 0z"/><path d="M8 11.5v2"/></symbol>
     <symbol id="g-help" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6.3 6.6a1.7 1.7 0 1 1 2.6 1.4c-.6.4-.9.7-.9 1.3"/><path d="M8 11.3v.1"/></symbol>
     <symbol id="g-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="2"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></symbol>
+    <symbol id="g-close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></symbol>
     <symbol id="g-theme" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor" stroke="none"/></symbol>
     <symbol id="g-activity" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h2.5l2-4.5 2 9 2-4.5h2.5"/></symbol>
     <symbol id="m-claude" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"/></symbol>
@@ -475,13 +704,13 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
 
 <div class="page">
 <header class="rec">
-  <span class="eyebrow">Design record · locked 2026-09-02</span>
+  <span class="eyebrow">Design record · locked 2026-09-02 · delegation addendum grounded 2026-09-03</span>
   <h1>The Transcript, Revisited</h1>
   <p class="lead">The History room's message view, one level down: what a turn is, what the human's prompt looks like, and what the agent's machinery reads as when it is a footnote you can read <em>without</em> opening.</p>
   <div class="meta">
     <span><b>Parent</b> <code>protos/agent-history-proto/design-agent-history.md</code> §5 · <code>vibe-field/DESIGN.md</code></span>
     <span><b>Companion code</b> <code>clients/app/renderer/src/components/Transcript.tsx</code> · <code>lib/model.ts</code> · <code>styles/room.css</code></span>
-    <span><b>Status</b> locked 2026-09-02 — every choice on this page is decided (§12); the §10 deltas are the ones to land in DESIGN.md, then §11 builds it</span>
+    <span><b>Status</b> the original record is locked (§12); §04A is revised against the Claude delegated-work census—Agent workers, Agent Teams and Workflows—and its standing-doc delta is appended in §10</span>
   </div>
 </header>
 
@@ -606,8 +835,8 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   <tr><td>T-1</td><td>One container, one meaning.</td><td>The human's prompt is the only filled panel in the document. The reply is bare and the machinery is typography on a rail. When the fill means <em>a person said this</em>, a page of prompts and replies scans in one pass — the same reason Claude, ChatGPT and T3 all converged on it. Left-aligned and full-measure, never a tailed bubble: a document has one margin.</td></tr>
   <tr><td>T-2</td><td>Machinery is a sentence, not a count.</td><td><code>verb · object · result</code>. <em>Read</em> a file, <em>Searched</em> a query, <em>Edited</em> a path with its diffstat, <em>Ran</em> a command with its exit. The protocol's closed action union already carries exactly these fields (§04), so the sentence is a projection, never a parse.</td></tr>
   <tr><td>T-3</td><td>Fold by class, not by run.</td><td><em>Looking</em> (reads, lists, searches, fetches — and, decided 2026-09-01, shell commands) is high-volume and low-stakes: consecutive looks fold to one line, opened on demand — <code>Ran 3 commands · ls, cat, grep</code>. <em>Acts</em> (edits, delegations, questions) are the session's work product and stay one line each, and a <em>failed</em> command is an act: it breaks the fold and stands alone in red. Past eight lines the whole run closes to one sentence of nouns — <code>17 commands · 3 edits · 4 reads</code> — never of verbs.</td></tr>
-  <tr><td>T-4</td><td>One head per response; anchors live in the margin.</td><td>The agent's eyebrow appears once per reply, with the agent's name and mark, the model as a quiet caption, and the span and tokens at the right. Every later segment is still pointable-at: its time sits in the left margin when the column has one, and appears on hover when it does not.</td></tr>
-  <tr><td>T-5</td><td>Hue only for what did not complete, or is still happening.</td><td>Red for failed, denied and timed out; green for a call still running in a live session; everything else on the ramp. Success is the absence of red. Cancelled is muted, not red — nothing failed. Diff lines take §2.5's green and red washes at 11%: <em>positive delta, negative delta</em> are that palette's own words.</td></tr>
+  <tr><td>T-4</td><td>One head per response; anchors live in the margin.</td><td>The agent's eyebrow appears once per reply, with the agent's name and mark, the observed model and effort as a quiet caption when recorded, and the span and tokens at the right. These are facts about that response, not permanent properties of the worker. Every later segment is still pointable-at: its time sits in the left margin when the column has one, and appears on hover when it does not.</td></tr>
+  <tr><td>T-5</td><td>Hue has a grammar: state, content, or address.</td><td>Red for failed, denied and timed out; green for work still running; everything else about status stays on the ramp. Success is the absence of red. Content may keep its own colour (site icons, diff washes), and §04A lets a teammate keep a small organizational accent because it is how that participant is addressed. Provider branding, prose, glyphs and whole message surfaces stay monochrome.</td></tr>
 </table>
 
 <section class="rec">
@@ -678,11 +907,11 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
 </div>
 <ul class="legend">
   <li><i>A</i><span><b>The prompt.</b> <code>--vf-fill</code>, radius 10, primary ink, hugs its content up to the measure. No eyebrow: the panel is the label. Attachments are tiles inside it (16:10, radius 8, hairline), caption in tabular figures. The time is the margin anchor; copy, <code>→ chip</code> and <code>⊕ canvas</code> on hover.</span></li>
-  <li><i>B</i><span><b>The response head.</b> Once per reply: the agent's monochrome mark and name as the eyebrow, the model and effort as a caption (not shouted), and at the right the span and the reported tokens. Never per message.</span></li>
+  <li><i>B</i><span><b>The response head.</b> Once per reply: the agent's monochrome mark and name as the eyebrow, its observed model and effort as a caption (not shouted), and at the right the span and the reported tokens. Never infer missing runtime facts from the parent or repeat them per message.</span></li>
   <li><i>C</i><span><b>Prose.</b> Primary ink, 14/1.55, markdown. Every segment after the head keeps its own anchor in the margin (hover-only when the column has no margin).</span></li>
   <li><i>D</i><span><b>The ledger, folded.</b> Inside it, consecutive commands fold to one line and a failed one breaks the fold. A run past eight lines closes to one sentence of nouns with the failure count in red and the span at the right. It opens to the ladder; the head stays as its title. The room's <em>activity</em> act in the column head flips every fold at once.</span></li>
   <li><i>E</i><span><b>Prose with structure.</b> Headings, lists and code keep the markdown renderer that exists; code gains the language bar and a copy act.</span></li>
-  <li><i>F</i><span><b>The delegate line and its child run.</b> A proven <code>child_session_id</code> opens the subthread under its own line — the whole grammar one size down (13px), on the ledger's rail, headed by the child's mark, name, role and range.</span></li>
+  <li><i>F</i><span><b>The Agent worker and its durable child thread.</b> A proven invocation opens one canonical worker document under the calling line — the whole grammar one size down (13px), on the ledger's rail, headed by the child's mark, name, role and range. Follow-ups, peer deliveries and resumes append there. Agent Teams and Workflow runs use the other §04A geometries.</span></li>
   <li><i>G</i><span><b>A system marker.</b> Every <code>Notice</code> joins the watermark and the gap as a drawn hairline line: compaction, model change, mode change, permission, handoff. Runtime errors take red text — still a line, never a filled alarm.</span></li>
   <li><i>H</i><span><b>The command pill.</b> A prompt that is a local command wears a pill instead of a panel, and its <code>command_output</code> rides beside it in the caption ramp. The pair is one object.</span></li>
 </ul>
@@ -695,7 +924,7 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   <thead><tr><th>family</th><th>class</th><th>line</th><th>result</th><th>opens into</th></tr></thead>
   <tbody>
     <tr class="grp"><td colspan="5">Looking — folds when consecutive</td></tr>
-    <tr><td>file_read</td><td>look</td><td><span class="g"><svg><use href="#g-read"/></svg></span><span class="v">Read</span> · <span class="m">path</span> (directory dim, name bright) · <span class="m">L12–80</span> when ranged</td><td><code>truncated</code>; media kind for images</td><td>nothing — reads keep no content by rule; the path is pressable into the viewer</td></tr>
+    <tr><td>file_read</td><td>look</td><td><span class="g"><svg><use href="#g-read"/></svg></span><span class="v">Read</span> · <span class="m">file names</span>, in both single and folded reads</td><td><code>truncated</code>; media kind for images</td><td>one type-aware file row per target, with <code>L12–80</code> or the page range at the right; the full path is retained as context and the row opens the viewer (refined 2026-09-03)</td></tr>
     <tr><td>file_list</td><td>look</td><td><span class="g"><svg><use href="#g-list"/></svg></span><span class="v">Listed</span> · <span class="m">directory</span></td><td><code>24 entries</code></td><td>nothing</td></tr>
     <tr><td>file_search</td><td>look</td><td><span class="g"><svg><use href="#g-search"/></svg></span><span class="v">Searched</span> · <span class="m">query</span> · <em>in files</em> / <em>for files</em> (mode)</td><td><code>14 matches · 6 files</code>; <code>found nothing</code> at zero</td><td>the matched paths with per-file counts</td></tr>
     <tr><td>code_lookup</td><td>look</td><td><span class="g"><svg><use href="#g-search"/></svg></span><span class="v">Looked up</span> · <span class="m">query</span> · <em>definition / references / symbols / diagnostics / hover</em></td><td><code>3 locations</code></td><td>the locations, file:line with their summaries</td></tr>
@@ -709,17 +938,17 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
     <tr><td>code_execute</td><td>act</td><td><span class="g"><svg><use href="#g-shell"/></svg></span><span class="v">Ran</span> · <em>python</em> · <span class="m">code</span>, first line</td><td>as shell</td><td>the code block, then the diagnostic</td></tr>
     <tr><td>process</td><td>act</td><td><span class="g"><svg><use href="#g-shell"/></svg></span><span class="v">Waited for</span> / <span class="v">Sent input to</span> / <span class="v">Stopped</span> / <span class="v">Inspected</span> · <span class="m">process id</span></td><td>the state word: <code>exited</code>, <code>running</code></td><td>the input sent, if any</td></tr>
     <tr><td>orchestration</td><td>act</td><td><span class="g"><svg><use href="#g-delegate"/></svg></span><span class="v">Executed</span> · <span class="m">runtime</span></td><td><code>3 children</code>; <code>trace unavailable</code> muted</td><td>the executed children by name</td></tr>
-    <tr><td>delegate</td><td>act</td><td><span class="g"><svg><use href="#g-delegate"/></svg></span><span class="v">Delegated</span> · <span class="m">name or agent kind</span> · <em>objective, first line</em></td><td><code>14 messages · 48s</code> once the child is known; <code>in background</code></td><td>the child run, in place (§03 F); orphaned → its result summary as prose</td></tr>
-    <tr><td>collaborate</td><td>act</td><td><span class="g"><svg><use href="#g-bell"/></svg></span><span class="v">Sent to</span> · <span class="m">recipient / team</span> · <em>summary</em></td><td><code>3 participants</code></td><td>the body, and the participants with their states</td></tr>
+    <tr><td>delegate</td><td>act</td><td><span class="g"><svg><use href="#g-delegate"/></svg></span><span class="v">Delegated</span> / <span class="v">Resumed</span> · <span class="m">agent kind</span> · <em>objective, first line</em>; a proven team operation instead updates a <span class="v">Started team</span> / <span class="v">Added teammate</span> / <span class="v">Resumed teammate</span> roster</td><td>Agent worker: response/contact count · span; team: known-response model · effort</td><td>Agent worker: one durable child thread (§03 F); team: roster and shared boundary events (§04A); unresolved relation → honest plain ledger line</td></tr>
+    <tr><td>collaborate</td><td>act / message</td><td><span class="g"><svg><use href="#g-bell"/></svg></span>an unresolved send stays <span class="v">Sent to</span>; a correlated delivered message projects once as <span class="m">author → @recipient</span>; only a task-linked result becomes <span class="v">Reported</span> · <span class="m">@author</span> · <em>summary</em></td><td>messages: native kind; task-linked results: observed model · effort</td><td>full <code>message</code> body in place; sender, routing, inbox and recipient copies collapse to one event; proven result work may open as a subthread</td></tr>
     <tr><td>question</td><td>act</td><td><span class="g"><svg><use href="#g-question"/></svg></span><span class="v">Asked</span> · <em>the prompt</em></td><td><code>answered</code> · the chosen option in primary ink</td><td>the questions with their options; the answer marked — this is conversation, so it opens by default</td></tr>
     <tr><td>skill</td><td>act</td><td><span class="g"><svg><use href="#g-bolt"/></svg></span><span class="v">Used skill</span> · <span class="m">name</span></td><td>—</td><td>the arguments</td></tr>
-    <tr><td>workflow</td><td>act</td><td><span class="g"><svg><use href="#g-bolt"/></svg></span><span class="v">Ran workflow</span> · <span class="m">name or path</span></td><td><code>in background</code></td><td>objective and arguments</td></tr>
+    <tr><td>workflow</td><td>act</td><td><span class="g"><svg><use href="#g-bolt"/></svg></span><span class="v">Ran workflow</span> / <span class="v">Resumed workflow</span> · <span class="m">workflow name</span> (request name → script basename → <em>dynamic workflow</em>)</td><td><code>running · 7/12</code>, or the exact terminal word · resolved/current workers; an immediate validation error says <code>did not start</code></td><td>one attempt-aware run document: purpose and metrics, attempts, declared phases, current worker rows and child transcripts, structured result/resources and workflow script; a launch error has no invented run</td></tr>
     <tr><td>schedule</td><td>act</td><td><span class="g"><svg><use href="#g-clock"/></svg></span><span class="v">Scheduled a wake-up</span> / <span class="v">Cancelled</span> / <span class="v">Woke</span> · <em>reason</em></td><td><code>in 20m</code> / <code>at 14:02</code></td><td>the objective</td></tr>
     <tr><td>artifact</td><td>act</td><td><span class="g"><svg><use href="#g-box"/></svg></span><span class="v">Made</span> / <span class="v">Edited</span> / <span class="v">Sent</span> an artifact · <span class="m">name</span> · <em>kind</em></td><td><code>2 files</code>; media dimensions</td><td>the description and its resources</td></tr>
     <tr><td>notification</td><td>act</td><td><span class="g"><svg><use href="#g-bell"/></svg></span><span class="v">Notified</span> · <span class="m">channel → destination</span></td><td>—</td><td>the summary</td></tr>
     <tr><td>mode</td><td>act</td><td><span class="g"><svg><use href="#g-sliders"/></svg></span><span class="v">Entered</span> / <span class="v">Left</span> · <em>plan / review / worktree</em> mode · <span class="m">workspace</span></td><td>—</td><td>nothing — and the matching <code>mode_changed</code> notice is a marker, not a second line</td></tr>
     <tr class="grp"><td colspan="5">Structure — one line each; some open by default</td></tr>
-    <tr><td>task</td><td>act</td><td><span class="g"><svg><use href="#g-task"/></svg></span><span class="v">Task</span> · <em>create / update / list / get / stop / output</em> · <span class="m">subject</span></td><td>the status word</td><td>description, owner, blockers</td></tr>
+    <tr><td>task</td><td>act</td><td><span class="g"><svg><use href="#g-task"/></svg></span><span class="v">Added</span> / <span class="v">Started</span> / <span class="v">Completed</span> / <span class="v">Reopened</span> · <span class="m">subject</span>; list/get read <span class="v">Checked</span></td><td><code>3 of 7 done</code></td><td>a three-task point-in-time preview with the changed row last and labelled; completed subjects are struck through and <em>show full tasks</em> toggles the complete recorded board — open by default, and its containing run stays open (decided 2026-09-03)</td></tr>
     <tr><td>plan</td><td>act</td><td><span class="g"><svg><use href="#g-task"/></svg></span><span class="v">Plan</span> · <em>create / update / clear / show</em> · <span class="m">title</span></td><td><code>7 steps</code></td><td>the summary</td></tr>
     <tr><td>finding</td><td>act</td><td><span class="g"><svg><use href="#g-flag"/></svg></span><span class="v">Reported</span> · <code>4 findings</code></td><td>the highest severity as a word</td><td>the findings, severity first, resources as pressable paths — open by default</td></tr>
     <tr><td>structured_output</td><td>act</td><td><span class="g"><svg><use href="#g-doc"/></svg></span><span class="v">Produced</span> · <span class="m">title</span></td><td>—</td><td>the document blocks (fields, lists, tables, sections) — open by default</td></tr>
@@ -765,6 +994,300 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
 <section class="rec">
   <p class="cap"><b>Where the icon comes from.</b> The protocol keeps a source's <code>url</code> and <code>title</code> and nothing else, so the icon is the renderer's to fetch: <code>https://&lt;host&gt;/favicon.ico</code> from the site itself, cached per host in the app, 14px, rounded 4, on a hairline ring. Not from a favicon service — asking Google or DuckDuckGo for the icon of every site an agent ever searched tells them your whole agentic past one host at a time, and §9's voice is that where your words go is your business. It is still a network act, so it gets a named setting (<em>fetch site icons</em>, on by default) beside the recogniser's, and the globe is what a site wears when the answer was no, or 404.</p>
 </section>
+
+<section class="rec" id="delegated-work">
+  <span class="eyebrow">§04A · revised from ground truth 2026-09-03</span>
+  <h2>Delegation has three geometries</h2>
+  <p><em>Subagent</em> is a product word, not one storage relation. An ordinary Agent worker is rooted in one invocation but may later receive coordinator follow-ups, peer messages and a resume. An Agent Team teammate is a persistent, addressable participant with optional native colour. A Workflow run is a coordinator-owned fan-out with its own run document, journal and worker set.</p>
+  <blockquote class="claim"><p><strong>Anchor an Agent worker once. Interleave addressable teammates. Group workflow fan-out by run.</strong> The renderer follows native ownership instead of making every child look like a team member—or every team member look like one long tool result.</p></blockquote>
+  <p>This is chronology as well as styling. Opening an Agent worker reveals one durable child document, including later follow-ups and resumes, without cloning it at each contact. Team boundary messages keep their authored time in the shared transcript. Workflow workers remain grouped under their coordinator run. In every case, copied transport envelopes are provenance, not additional speech.</p>
+</section>
+
+<div class="tablebox"><table class="cmp">
+  <thead><tr><th>Question</th><th>Agent worker</th><th>Agent Team teammate</th><th>Workflow worker</th><th>Transcript consequence</th></tr></thead>
+  <tbody>
+    <tr><td>What owns it?</td><td>The earliest proven Agent invocation; exact sidecar links strengthen the join.</td><td>Membership in a named team.</td><td>One Workflow run and journal key.</td><td class="take">One worker thread, one shared team timeline, or one fan-out run.</td></tr>
+    <tr><td>How long does it live?</td><td>Launch → zero or more contacts/resumes → last recorded event. A terminal result is not guaranteed.</td><td>Join or resume → many work/message cycles → termination or retained open state.</td><td>One or more launch/resume attempts → phase progress → terminal run snapshot; journal entries may remain unmatched.</td><td class="take">Missing endings remain visibly unresolved; no synthetic completion.</td></tr>
+    <tr><td>How does it speak?</td><td>Tool result, peer delivery or coordinator follow-up, all kept in its child thread.</td><td>Lead ↔ teammate, teammate ↔ teammate, broadcast and lifecycle envelopes.</td><td>Coordinator journal plus each worker transcript.</td><td class="take">Render one canonical observation and retain the other copies as provenance.</td></tr>
+    <tr><td>What appears in the parent?</td><td>One Delegated line opening the durable worker subthread; later contacts point back to it.</td><td>Roster changes and delivered top-level boundary messages in shared time. A task-linked completion may fold as Reported.</td><td>One chronological Ran/Resumed line per attempt; every correlated line points to the same run document.</td><td class="take">Each relation gets one stable disclosure root without erasing real chronology.</td></tr>
+    <tr><td>What identifies it?</td><td>Agent id/type and optional name; no identity hue.</td><td>A stable <code>@name</code> and, only when stored, a coloured Claude Code mark.</td><td>Run id for the document; tool-use/task id for each attempt; progress agent id and journal key for workers.</td><td class="take">Missing colour stays neutral, never synthesized.</td></tr>
+    <tr><td>Which model ran it?</td><td colspan="3">Each assistant response carries the authoritative model and effort. Config/sidecar values are labelled configuration facts; some workers have no response evidence and some vary across responses.</td><td class="take">Response heads show the exact pair. Every roster/Workflow worker row reserves a visible runtime slot: exact pair, <em>varies</em>, <em>configured …</em>, or explicit <em>model/effort unknown</em>—never an inherited lead setting.</td></tr>
+    <tr><td>Where is its work?</td><td>Inside its invocation-rooted subthread.</td><td>Private work stays in the member transcript; only an exactly proven slice may be disclosed beneath a correlated result.</td><td>Under the run, grouped by declared phase; current progress supplies the roster and each available child transcript supplies the work.</td><td class="take">Nested documents keep their own chronology; parent chronology keeps boundary events.</td></tr>
+  </tbody>
+</table></div>
+
+<section class="rec">
+  <h3>An Agent worker — one durable child thread</h3>
+  <p>The first proven invocation owns the disclosure, not the assumption that the worker is one-shot. Its assignment, coordinator follow-ups, peer deliveries, resumes, responses and tools append to the same child document. Later parent-side contacts link back to this thread instead of opening copies. Machine context is labelled, never drawn as another human prompt.</p>
+</section>
+<div class="spec"><div class="spec__bar">Agent worker · invocation-rooted, message-capable<span class="note">press the delegate line</span></div>
+  <div class="spec__body tr-col"><div class="tr">
+    <div class="tr-turn"><div class="tr-resp">
+      <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">3m 24s</span></div>
+      <div class="tr-seg tr-prose"><span class="tr-anchor">22:32:35</span><p>I need the grouping semantics before I lock the view model, so I am sending one bounded exploration.</p></div>
+      <div class="tr-ledger">
+        <div class="tr-line" tabindex="0" aria-expanded="true" data-detail="delegation-subagent"><span class="tr-line__g"><svg><use href="#g-delegate"/></svg></span><span class="tr-line__v">Delegated</span><span class="tr-line__o">Explore <span class="in">· find group-kind semantics</span></span><span class="tr-line__r"><span>2 responses · 2 contacts · resumed</span><span class="t">22:32:40</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+        <div class="tr-sub" id="delegation-subagent">
+          <div class="tr-sub__head"><span class="mark"><svg><use href="#m-claude"/></svg></span><span>Explore · Agent worker · one thread</span><span class="when">22:32:40 → 22:35:59</span></div>
+          <div class="tr-assignment"><span class="tr-assignment__head">Assignment · from Claude Code</span>Find where <code>parent_invocation</code> and the other group kinds are produced and consumed. Report the semantics; do not edit.</div>
+          <div class="tr">
+            <div class="tr-turn"><div class="tr-resp" style="margin-top:0">
+              <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Explore <span class="model">claude-opus-5 · max effort</span><span class="facts">1m 38s</span></div>
+              <div class="tr-ledger"><div class="tr-line tr-fold" tabindex="0" aria-expanded="false"><span class="tr-line__g chev"><svg><use href="#g-chev"/></svg></span><span class="tr-line__v">8 actions · 5 reads · 2 searches</span><span class="tr-line__r"><span>1m 21s</span></span></div><div class="tr-ladder"><div class="tr-line"><span class="tr-line__g"><svg><use href="#g-search"/></svg></span><span class="tr-line__v">Searched</span><span class="tr-line__o"><span class="q">parent_invocation</span> <span class="in">in files</span></span><span class="tr-line__r"><span>6 matches</span></span></div></div></div>
+              <div class="tr-seg tr-prose"><p><code>parent_invocation</code> is consumed by turn grouping, but the direct worker sidecar is the stronger relation.</p></div>
+            </div></div>
+            <div class="tr-turn">
+              <div class="tr-assignment"><span class="tr-assignment__head">Coordinator follow-up · 22:34:18</span>Also check whether later Agent calls resume the same worker, and whether peer messages can reach it.</div>
+              <div class="tr-assignment"><span class="tr-assignment__head">Peer message · from schema-audit · 22:34:41</span>I found wrapperless peer origins as well as <code>&lt;agent-message&gt;</code>; do not require the tag to recognize delivery.</div>
+              <div class="tr-mark">resumed by exact Agent request · 22:35:02</div>
+              <div class="tr-resp" style="margin-top:0">
+                <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Explore <span class="model">claude-sonnet-5 · high effort</span><span class="facts">57s</span></div>
+                <div class="tr-ledger"><div class="tr-line"><span class="tr-line__g"><svg><use href="#g-search"/></svg></span><span class="tr-line__v">Searched</span><span class="tr-line__o"><span class="q">origin.kind = peer|coordinator</span></span><span class="tr-line__r"><span>29 records</span><span class="t">22:35:22</span></span></div></div>
+                <div class="tr-seg tr-prose"><p>The worker survives the first result: coordinator follow-ups and peer deliveries append to its transcript, and an exact resume request reopens the same identity. Keep one child thread and show its model change on this response.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tr-seg tr-prose"><span class="tr-anchor">22:36:04</span><p>That gives the model a strict root without pretending the worker ended at the first result. An unproven child still gets no empty expander.</p></div>
+    </div></div>
+  </div></div>
+</div>
+
+<section class="rec">
+  <h3>An Agent Team — conversation in time, provenance underneath</h3>
+  <p>A proven burst of members for one native team becomes one roster event. Each stored colour maps to the organizational-accent palette; absent colour leaves the Claude Code mark neutral. The right edge summarizes only response evidence: one model/effort pair, <em>varies</em>, an explicitly configured model with unknown effort, or no runtime fact. Later joins, resumes and terminations keep their own times.</p>
+  <p>Only one canonical delivered event enters shared chronology. For envelope-backed team traffic, only top-level envelopes speak; nested tags are copies. Sender request, routing result, inbox copy and recipient envelope can be four observations of one communication, so the full <code>message</code> body wins over its short <code>content</code> preview and renders once. There is no native <em>report</em> message kind: <em>Reported</em> is reserved for a message/result joined to an exact task-completion relation. Everything else remains addressed conversation, however report-like its prose sounds.</p>
+</section>
+<div class="spec spec--wide" id="team-subthread-demo"><div class="spec__bar">Agent Team · interleaved messages, task-linked folded result<span class="note">press a report, then its proven work disclosure</span></div>
+  <div class="spec__body tr-col"><div class="tr">
+    <div class="tr-turn"><div class="tr-resp" style="margin-top:10px">
+      <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">54m 02s</span></div>
+      <div class="tr-seg tr-prose"><span class="tr-anchor">22:30:54</span><p>I split the refinement by ownership so the model, docs and renderer can move independently.</p></div>
+      <div class="tr-ledger">
+        <div class="tr-line" tabindex="0" aria-expanded="true" data-detail="delegation-team"><span class="tr-line__g"><svg><use href="#g-team"/></svg></span><span class="tr-line__v">Started team</span><span class="tr-line__o">session-ce09d936</span><span class="tr-line__r"><span>5 teammates</span><span class="t">22:31–22:34</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+        <div class="tm-roster" id="delegation-team">
+          <div class="tm-roster__row" data-member-color="blue"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tm-roster__name">@w1-rust-tools</span><span class="tm-roster__job">Fix typed tool actions lost in reconciliation</span><span class="tm-runtime">claude-opus-5 · max effort</span></div>
+          <div class="tm-roster__row" data-member-color="green"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tm-roster__name">@w2-docs-deltas</span><span class="tm-roster__job">Land the §10 design deltas in the docs</span><span class="tm-runtime">claude-opus-5 · max effort</span></div>
+          <div class="tm-roster__row" data-member-color="yellow"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tm-roster__name">@w3-app-model</span><span class="tm-roster__job">Build the transcript view model and tests</span><span class="tm-runtime">varies · 2 response profiles</span></div>
+          <div class="tm-roster__row" data-member-color="purple"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tm-roster__name">@w5-app-head</span><span class="tm-roster__job">Build held-page paging and head of document</span><span class="tm-runtime">configured opus · effort unknown</span></div>
+          <div class="tm-roster__row" data-member-color="orange"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tm-roster__name">@w6-app-favicons</span><span class="tm-roster__job">Build the site-icon service and component</span><span class="tm-runtime">runtime not recorded</span></div>
+          <div class="tm-note">A missing native colour uses the same Claude mark in neutral ink; it never borrows a teammate’s hue.</div>
+        </div>
+      </div>
+
+      <div class="tr-ledger tm-report" data-member-color="green">
+        <div class="tr-line tm-report__line" tabindex="0" aria-expanded="false" data-detail="team-report-w2"><span class="tr-line__g tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">Reported</span><span class="tr-line__o">@w2-docs-deltas <span class="in">→ Claude Code · standing design docs updated</span></span><span class="tr-line__r"><span class="tm-runtime">claude-opus-5 · max effort</span><span class="t">22:46:49</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+        <div class="tr-detail tm-report__detail" id="team-report-w2" role="region" aria-label="Report from @w2-docs-deltas at 22:46:49" hidden>
+          <div class="tr-detail__bar"><span class="path">task result · correlated by native task and tool ids</span><span>one rendered delivery</span></div>
+          <div class="tm-message__body"><p>The standing design docs now carry all ten transcript deltas. I replaced the old work-block, per-message-hairline and load-earlier rules rather than leaving contradictions beside them.</p></div>
+          <div class="tm-message__foot"><button class="tm-work" type="button" data-workthread="w2-report-work" aria-controls="w2-report-work" aria-expanded="false"><span class="chev" aria-hidden="true"><svg><use href="#g-chev"/></svg></span><span>proven work behind this result</span></button><span>6 actions · 15m 13s</span></div>
+          <div class="tr-sub tm-workthread" id="w2-report-work" role="region" aria-label="Proven work behind @w2-docs-deltas result at 22:46:49" data-member-color="green" hidden>
+            <div class="tr-sub__head"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span><span class="tm-workthread__name">@w2-docs-deltas</span><span class="tm-workthread__kind"> · exact task-bounded work slice</span></span><span class="when">22:31:36 → 22:46:49</span></div>
+            <div class="tr-assignment"><span class="tr-assignment__head">Assignment · from Claude Code · configured model opus</span>Update the standing design documents with the ten agreed transcript deltas. Replace contradictory guidance; do not leave an addendum beside an obsolete rule.</div>
+            <div class="tr"><div class="tr-turn"><div class="tr-resp" style="margin-top:0">
+              <div class="tr-head"><span class="mark tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tm-workthread__name">@w2-docs-deltas</span><span class="model">claude-opus-5 · max effort</span><span class="facts">15m 13s</span></div>
+              <div class="tr-seg tr-prose"><p>I’ll trace every standing rule the new record supersedes, then revise the source sections in place.</p></div>
+              <div class="tr-ledger">
+                <div class="tr-line"><span class="tr-line__g"><svg><use href="#g-read"/></svg></span><span class="tr-line__v">Read</span><span class="tr-line__o">DESIGN.md <span class="in">· §2.6, §5, §8, §9</span></span><span class="tr-line__r"><span class="t">22:32:04</span></span></div>
+                <div class="tr-line"><span class="tr-line__g"><svg><use href="#g-read"/></svg></span><span class="tr-line__v">Read</span><span class="tr-line__o">design-agent-history.md <span class="in">· §5, §11</span></span><span class="tr-line__r"><span class="t">22:33:18</span></span></div>
+                <div class="tr-line"><span class="tr-line__g"><svg><use href="#g-search"/></svg></span><span class="tr-line__v">Searched</span><span class="tr-line__o"><span class="q">work block|hairline|load earlier</span> <span class="in">in docs</span></span><span class="tr-line__r"><span>17 matches</span><span class="t">22:35:02</span></span></div>
+              </div>
+              <div class="tr-seg tr-prose"><p>The deltas touch voice and hierarchy as well as the transcript section. I’m replacing those rules at their owning sections so the document has one answer.</p></div>
+              <div class="tr-ledger">
+                <div class="tr-line"><span class="tr-line__g"><svg><use href="#g-delta"/></svg></span><span class="tr-line__v">Edited</span><span class="tr-line__o">DESIGN.md</span><span class="tr-line__r"><span>+31 −18</span><span class="t">22:41:27</span></span></div>
+                <div class="tr-line"><span class="tr-line__g"><svg><use href="#g-delta"/></svg></span><span class="tr-line__v">Edited</span><span class="tr-line__o">design-agent-history.md</span><span class="tr-line__r"><span>+23 −14</span><span class="t">22:44:09</span></span></div>
+                <div class="tr-line"><span class="tr-line__g"><svg><use href="#g-shell"/></svg></span><span class="tr-line__v">Ran</span><span class="tr-line__o">documentation consistency checks</span><span class="tr-line__r"><span>passed</span><span class="t">22:45:58</span></span></div>
+              </div>
+              <div class="tm-workthread__end"><span>result rendered above · nested envelope copy suppressed</span><time>22:46:49</time></div>
+            </div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <article class="tm-message" data-member-color="yellow">
+        <div class="tm-message__head"><span class="mark"><svg><use href="#m-claude"/></svg></span><span class="tm-message__who">@w3-app-model</span><span class="tm-message__route">→ <span class="tm-mention"><span class="tm-avatar" aria-hidden="true"><svg><use href="#g-team"/></svg></span>@team</span></span><span class="tm-message__kind">message</span><time class="tm-message__time">22:47:02</time></div>
+        <div class="tm-message__body"><p>The model now keeps invocation workers, team members and workflow workers distinct. I found two response profiles in my own thread, so the roster correctly says <em>varies</em>.</p></div>
+        <div class="tm-message__foot"><span>top-level delivery · routing and inbox copies collapsed</span></div>
+      </article>
+
+      <div class="tr-seg tr-prose"><span class="tr-anchor">22:47:10</span><p>The docs are settled. I can keep reviewing the app work while the Rust investigation continues.</p></div>
+      <div class="tr-ledger">
+        <div class="tr-line"><span class="tr-line__g tm-avatar" data-member-color="pink" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">Added teammate</span><span class="tr-line__o"><span class="tm-mention" data-member-color="pink"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span>@w4-app-components</span> <span class="in">· build transcript components and styles</span></span><span class="tr-line__r"><span class="tm-runtime">claude-opus-5 · max effort</span><span class="t">23:13:16</span></span></div>
+        <div class="tr-line"><span class="tr-line__g tm-avatar" data-member-color="green" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">Resumed teammate</span><span class="tr-line__o"><span class="tm-mention" data-member-color="green"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span>@w2-docs-deltas</span> <span class="in">· exact resume request, same member</span></span><span class="tr-line__r"><span class="tm-runtime">claude-opus-5 · max effort</span><span class="t">23:18:04</span></span></div>
+      </div>
+
+      <article class="tm-message">
+        <div class="tm-message__head"><span class="mark"><svg><use href="#m-claude"/></svg></span><span class="tm-message__who">Claude Code</span><span class="tm-message__route">→ <span class="tm-mention" data-member-color="blue"><span class="tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span>@w1-rust-tools</span></span><span class="tm-message__kind">message</span><time class="tm-message__time">23:22:42</time></div>
+        <div class="tm-message__body"><p>Your idle notice only said “Finished.” Please send the root cause, before/after counts, and gate results to the team lead.</p></div>
+      </article>
+
+      <div class="tr-ledger"><div class="tr-line"><span class="tr-line__g"><svg><use href="#g-read"/></svg></span><span class="tr-line__v">Read</span><span class="tr-line__o">clients/app/renderer/src/lib/transcript/turns.ts</span><span class="tr-line__r"><span class="t">23:23:08</span></span></div></div>
+
+      <div class="tr-ledger tm-report" data-member-color="blue">
+        <div class="tr-line tm-report__line" tabindex="0" aria-expanded="false" data-detail="team-report-w1"><span class="tr-line__g tm-avatar" aria-hidden="true"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">Reported</span><span class="tr-line__o">@w1-rust-tools <span class="in">→ Claude Code · typed tool actions restored</span></span><span class="tr-line__r"><span class="tm-runtime">claude-opus-5 · max effort</span><span class="t">23:24:30</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+        <div class="tr-detail tm-report__detail" id="team-report-w1" role="region" aria-label="Report from @w1-rust-tools at 23:24:30" hidden><div class="tr-detail__bar"><span class="path">task result · native completion relation</span><span>message body preferred</span></div><div class="tm-message__body"><p>Typed actions were lost to a writer-version gate in the projector registries, not to reconciliation. The adapters now cover the writer release line; the hermetic Claude and Codex regressions pass.</p></div></div>
+      </div>
+    </div></div>
+  </div></div>
+</div>
+<section class="rec"><p class="cap"><b>What is deliberately collapsed.</b> A task-correlated teammate result occupies one readable ledger line; its full body opens underneath like any other recorded act. The teammate's tools and reasoning remain a second disclosure only when exact ids prove that work slice. Plain messages that merely sound final stay messages. <code>idle_notification</code> changes lifecycle quietly; “Done.”, “Complete.” and repeated idle pings do not manufacture reports. Nested envelope copies, sender previews and inbox copies never replay the body.</p></section>
+
+<section class="rec">
+  <h3>A Workflow — the run is the document; attempts are its timeline</h3>
+  <p>A Workflow request first creates an attempt. Once <code>async_launched</code> returns a run id, that attempt points to one durable run document. A later resume is another chronological line pointing to the same run—not a replacement run and not a second copy of its workers. Opening the run reads in human order: purpose and outcome, attempt history, phase progress, worker threads, then the structured result.</p>
+  <p>Every worker reserves a second line for <strong>model · effort</strong>, matching the Agent response head and Team roster. An observed response pair wins; otherwise the line says <em>configured</em>, and a missing value says <em>unknown</em>. Duration, tokens and tools sit opposite as secondary accounting—not in place of the runtime choice.</p>
+</section>
+<div class="spec" id="workflow-run-demo"><div class="spec__bar">Workflow · run-owned fan-out<span class="note">open · completed from real sidecar evidence</span></div>
+  <div class="spec__body tr-col"><div class="tr">
+    <div class="tr-turn"><div class="tr-resp" style="margin-top:10px">
+      <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">31m 30s</span></div>
+      <div class="tr-seg tr-prose"><p>I’m using a workflow to draft the API surfaces in parallel, synthesize them, run a critique, and finalize one coherent document.</p></div>
+      <div class="tr-ledger">
+        <div class="tr-line" tabindex="0" aria-expanded="true" data-detail="workflow-api-sketch"><span class="tr-line__g"><svg><use href="#g-bolt"/></svg></span><span class="tr-line__v">Ran workflow</span><span class="tr-line__o">api-sketch-design <span class="in">· design the v3 collaborative-editor API</span></span><span class="tr-line__r"><span class="why">completed · 12/12</span><span class="t">09:13:29</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+        <div class="tr-detail wf-run__detail" id="workflow-api-sketch" role="region" aria-label="api-sketch-design workflow run">
+          <div class="wf-run__mast">
+            <div class="wf-run__title"><strong>api-sketch-design</strong><span class="wf-run__id">wf_1cff8115-de4</span><span class="wf-run__finished">finished 09:44:59</span></div>
+            <p class="wf-run__objective">Design the v3 collaborative-editor framework API sketch, grounded in architecture.md, thinking, and the v2 reactive-ECS surface.</p>
+            <div class="wf-run__facts"><span><b>12</b> workers</span><span><b>5</b> phases</span><span><b>1.12M</b> tokens</span><span><b>73</b> tools</span><span class="wf-run__actions"><button class="wf-action" type="button">view workflow script</button><button class="wf-action" type="button">1 log</button></span></div>
+          </div>
+
+          <div class="wf-attempts">
+            <span class="wf-section-label">Attempts</span>
+            <div class="wf-attempt"><i class="wf-attempt__dot" aria-hidden="true"></i><strong>Attempt 1</strong><span class="wf-attempt__launch">async launch · 09:13:29</span><span class="wf-attempt__outcome">completed · 31m 30s</span></div>
+          </div>
+
+          <div class="wf-phases">
+            <span class="wf-section-label">Phases</span>
+            <details class="wf-phase">
+              <summary class="wf-phase__head"><span class="wf-phase__index">1</span><span class="wf-phase__name"><strong>Spine</strong><span>decide shared API vocabulary</span></span><span class="wf-phase__count">1/1</span><span class="chev"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="wf-phase__workers">
+                <details class="wf-worker-thread">
+                  <summary class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">spine</span><span class="tr-line__o">binding decisions for every section</span><span class="tr-line__r"><span>done</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· high effort</span></span><span class="wf-worker__usage">4m 45s · 68.8K · 2 tools</span></summary>
+                  <div class="tr-sub wf-worker__detail"><div class="tr-sub__head"><span class="mark"><svg><use href="#m-claude"/></svg></span><span>spine · workflow worker</span><span class="when">4m 45s</span></div><div class="wf-worker__result"><p>Established the construction, channel, ownership, identity, and change-algebra vocabulary that every later section follows.</p><button class="wf-action" type="button">open child transcript</button></div></div>
+                </details>
+              </div>
+            </details>
+            <details class="wf-phase">
+              <summary class="wf-phase__head"><span class="wf-phase__index">2</span><span class="wf-phase__name"><strong>Sections</strong><span>draft eight surfaces against the spine</span></span><span class="wf-phase__count">8/8</span><span class="chev"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="wf-phase__workers">
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">ecs-substrate</span><span class="tr-line__o">runtime channel</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">9m 20s · 94.2K · 2 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">durable-schema</span><span class="tr-line__o">bindings and durable cells</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">7m 36s · 91.7K · 3 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">commit-lifecycle</span><span class="tr-line__o">commit, revert, restore</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">8m 47s · 91.0K · 2 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">change-algebra</span><span class="tr-line__o">document ↔ CRDT seam</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">8m 22s · 97.6K · 3 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">projection</span><span class="tr-line__o">reconcile and identity</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">8m 48s · 93.6K · 3 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">conflict-hooks</span><span class="tr-line__o">conflict and casualty hooks</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">4m 29s · 77.4K · 3 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">presence-backend</span><span class="tr-line__o">presence and CRDT boundary</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">8m 39s · 98.1K · 3 tools</span></div>
+                <div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">feature-example</span><span class="tr-line__o">worked Rectangle feature</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· effort unknown</span></span><span class="wf-worker__usage">10m 13s · 104K · 3 tools</span></div>
+              </div>
+            </details>
+            <details class="wf-phase">
+              <summary class="wf-phase__head"><span class="wf-phase__index">3</span><span class="wf-phase__name"><strong>Synthesis</strong><span>merge the sections into one document</span></span><span class="wf-phase__count">1/1</span><span class="chev"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="wf-phase__workers"><div class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">synthesize</span><span class="tr-line__o">wrote api-sketch.md</span><span class="tr-line__r"><span>done</span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· high effort</span></span><span class="wf-worker__usage">6m 06s · 91.7K · 1 tool</span></div></div>
+            </details>
+            <details class="wf-phase">
+              <summary class="wf-phase__head"><span class="wf-phase__index">4</span><span class="wf-phase__name"><strong>Critique</strong><span>adversarial invariant check</span></span><span class="wf-phase__count">1/1</span><span class="chev"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="wf-phase__workers">
+                <details class="wf-worker-thread">
+                  <summary class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">critique</span><span class="tr-line__o">found two build blockers</span><span class="tr-line__r"><span>done</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· high effort</span></span><span class="wf-worker__usage">2m 25s · 90.5K · 7 tools</span></summary>
+                  <div class="tr-sub wf-worker__detail"><div class="tr-sub__head"><span class="mark"><svg><use href="#m-claude"/></svg></span><span>critique · workflow worker</span><span class="when">2m 25s</span></div><div class="wf-worker__result"><p>The sketch is largely sound, but local durable deletion and the three-level opcode spine still block an end-to-end build.</p><button class="wf-action" type="button">open child transcript</button></div></div>
+                </details>
+              </div>
+            </details>
+            <details class="wf-phase" open>
+              <summary class="wf-phase__head"><span class="wf-phase__index">5</span><span class="wf-phase__name"><strong>Finalize</strong><span>apply critique and produce the final doc</span></span><span class="wf-phase__count">1/1</span><span class="chev"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="wf-phase__workers">
+                <details class="wf-worker-thread">
+                  <summary class="tr-line wf-worker"><span class="tr-line__g"><svg><use href="#m-claude"/></svg></span><span class="tr-line__v">finalize</span><span class="tr-line__o">produced api-sketch.md</span><span class="tr-line__r"><span>done</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span><span class="wf-worker__runtime"><span class="wf-worker__basis">configured</span><b>Opus 4.8 (1M)</b><span>· high effort</span></span><span class="wf-worker__usage">8m 02s · 124K · 41 tools</span></summary>
+                  <div class="tr-sub wf-worker__detail"><div class="tr-sub__head"><span class="mark"><svg><use href="#m-claude"/></svg></span><span>finalize · workflow worker</span><span class="when">8m 02s</span></div><div class="wf-worker__result"><p>Applied the critic’s fixes and wrote the final eight-section API sketch.</p><button class="wf-action" type="button">open child transcript</button></div></div>
+                </details>
+              </div>
+            </details>
+          </div>
+
+          <div class="wf-result">
+            <span class="wf-section-label">Result</span>
+            <dl class="wf-output">
+              <dt>final document</dt><dd><button class="wf-resource" type="button"><svg><use href="#g-doc"/></svg><span>…/new-thinking/api-sketch.md</span></button></dd>
+              <dt>verdict</dt><dd class="wf-output__verdict">The sketch is largely sound and faithfully encodes the architecture’s load-bearing rules, but it is not yet buildable end to end without the two blocker fixes.</dd>
+              <dt>findings</dt><dd>10 · 8 sections</dd>
+            </dl>
+            <div class="wf-result__foot"><span>terminal evidence · run snapshot + correlated task notification</span><button class="wf-action" type="button">view full result</button></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div></div>
+</div>
+<section class="rec"><p class="cap"><b>The result does not become a user message.</b> The top-level <code>&lt;task-notification&gt;</code> is a machine callback correlated by <code>tool-use-id</code>. It terminalizes the exact attempt and enriches this run’s result; a notification nested inside another result remains provenance. The run snapshot is durable enough to recover the same outcome when the callback is missing, while an expired <code>/private/tmp/…output</code> path is never the only route to the full result.</p></section>
+
+<div class="spec wf-state-spec"><div class="spec__bar">Workflow lifecycle · exact words, one geometry<span class="note">launch, resume, failure, cancellation</span></div>
+  <div class="spec__body tr-col"><div class="tr"><div class="tr-ledger">
+    <div class="tr-line" tabindex="0" data-state="running" aria-expanded="false" data-detail="workflow-running-state"><span class="tr-line__g"><i class="tr-dot"></i></span><span class="tr-line__v">Ran workflow</span><span class="tr-line__o">contract-map <span class="in">· phase 2 of 5</span></span><span class="tr-line__r"><span class="why">running · 7/12</span><span class="t">14:02:11</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+    <div class="tr-detail" id="workflow-running-state" hidden><dl class="tr-kv"><dt>current phase</dt><dd>Sections · 6/8 done · 1 running · 1 queued</dd><dt>current worker</dt><dd>projection · searching files</dd><dt>observed from</dt><dd>workflowProgress · 14:06:38</dd></dl></div>
+    <div class="tr-line" data-state="running"><span class="tr-line__g"><i class="tr-dot"></i></span><span class="tr-line__v">Resumed workflow</span><span class="tr-line__o">api-sketch-design <span class="in">· attempt 2, same run</span></span><span class="tr-line__r"><span class="why">running · 4/37</span><span class="t">14:08:46</span></span></div>
+    <div class="tr-line" tabindex="0" data-state="failed" aria-expanded="false" data-detail="workflow-launch-error"><span class="tr-line__g"><svg><use href="#g-fail"/></svg></span><span class="tr-line__v">Ran workflow</span><span class="tr-line__o">dynamic workflow</span><span class="tr-line__r"><span class="why">did not start · invalid option</span><span class="t">14:11:03</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+    <div class="tr-detail" id="workflow-launch-error" hidden><pre class="tr-diag"><span class="hi">Invalid workflow request</span>
+Unknown option: run_in_background
+No task id or run id was created.</pre></div>
+    <div class="tr-line" tabindex="0" data-state="failed" aria-expanded="false" data-detail="workflow-failed-state"><span class="tr-line__g"><svg><use href="#g-fail"/></svg></span><span class="tr-line__v">Ran workflow</span><span class="tr-line__o">migration-audit <span class="in">· phase 4 of 5</span></span><span class="tr-line__r"><span class="why">failed · 9/12</span><span class="t">14:19:22</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+    <div class="tr-detail" id="workflow-failed-state" hidden><dl class="tr-kv"><dt>failed in</dt><dd>Critique · worker critique-schema</dd><dt>error</dt><dd>structured result did not match the declared schema</dd><dt>retained</dt><dd>9 worker results · 12 child transcripts</dd></dl></div>
+    <div class="tr-line" tabindex="0" data-state="muted" aria-expanded="false" data-detail="workflow-killed-state"><span class="tr-line__g"><svg><use href="#g-clock"/></svg></span><span class="tr-line__v">Ran workflow</span><span class="tr-line__o">stress-matrix <span class="in">· phase 2 of 6</span></span><span class="tr-line__r"><span class="why">killed · 10/45</span><span class="t">14:27:50</span><span class="chev"><svg><use href="#g-chev"/></svg></span></span></div>
+    <div class="tr-detail" id="workflow-killed-state" hidden><dl class="tr-kv"><dt>current roster</dt><dd>45 workers · 10 done · 7 active · 28 queued</dd><dt>journal</dt><dd>17 started · 10 results</dd><dt>last observed</dt><dd>phase 2 · 14:27:50</dd></dl></div>
+  </div>
+  <div class="wf-state-key"><b><code>async_launched</code></b><span>Running, never succeeded.</span><b>Resume</b><span>A new attempt line and attempt metrics; the original run root survives.</span><b>Immediate error</b><span>A failed attempt with no invented run.</span><b>Killed / cancelled</b><span>Exact terminal word in muted ink, not failure red.</span></div>
+  </div></div>
+</div>
+
+<section class="rec">
+  <h3>Eleven projection rules</h3>
+</section>
+<table class="laws">
+  <tr><td>D-1</td><td>Classify ownership before drawing.</td><td><code>invocation</code> means an Agent-rooted worker, <code>team_member</code> an addressable participant, and <code>workflow_run</code> a coordinated worker set. Storage path, Agent request, sidecar, team config/inbox, structured origin and workflow journal contribute exact evidence. The broad role word <code>subagent</code> cannot choose the geometry.</td></tr>
+  <tr><td>D-2</td><td>An Agent worker gets one durable thread.</td><td>The earliest proven invocation owns one expander. Assignment, responses, tools, coordinator follow-ups, peer deliveries and exact resumes stay in that child document. A later parent contact may focus the relevant event there but never clones the transcript. <code>teammate_spawned</code> is not a terminal result, and an absent sidecar or assistant response does not erase the worker.</td></tr>
+  <tr><td>D-3</td><td>Team boundary traffic interleaves.</td><td>Joins, resumes, terminations, explicit messages, broadcasts and task-linked results enter shared chronology at native authored/sent time; observed arrival is a labelled fallback. Conversation keeps <code>from → @to</code> authorship. Private tools and reasoning stay in the member transcript unless an exact relation proves a bounded disclosure.</td></tr>
+  <tr><td>D-4</td><td>One communication, one rendering.</td><td>A sender request, routing result, inbox entry and recipient envelope can be four observations of one event. Correlate native ids, routing and timestamps—not text equality. Prefer full <code>message</code> over preview <code>content</code>. Among embedded tags, only root sibling envelopes count; nested copies remain provenance. A structured wrapperless <code>origin.kind=peer</code> delivery is still real. Unresolved copies stay inspectable but do not speak twice.</td></tr>
+  <tr><td>D-5</td><td>Colour is stored address, not mood.</td><td>Support all eight observed team colours and preserve one only when native evidence stores it. Missing colour leaves the small Claude Code mark neutral; never manufacture a deterministic fallback. Spend hue only on that mark beside roster rows, teammate bylines, report lines, proven work heads and resolved <code>@mentions</code>—never on dots, bars, written names or status. A broadcast uses the neutral team glyph.</td></tr>
+  <tr><td>D-6</td><td>Request plus relation names lifecycle.</td><td><code>teammate_spawned</code> says transport accepted; it does not establish team membership or first launch. Within an already proven relation, <code>Agent(launch)</code> starts and <code>Agent(resume)</code> resumes the same identity; a SendMessage result with <code>resumedAgentId</code> also proves resume. Idle is muted availability, not completion; <code>failed</code>, <code>killed</code>, <code>stopped</code> and missing status remain distinct.</td></tr>
+  <tr><td>D-7</td><td><em>Reported</em> requires a result relation.</td><td>Claude has no native report message type, so prose alone never earns this verb. An exact task/tool/result correlation may project one folded <em>Reported</em> line with author, route, summary, observed model/effort and time. One press reveals the full body; a second disclosure appears only for an exactly bounded work slice. Otherwise the same body remains an ordinary addressed message.</td></tr>
+  <tr><td>D-8</td><td>Mailbox state is not chronology.</td><td>A delivered top-level envelope can enter the transcript. An unread inbox-only item is pending state with no justified position, so it belongs in activity/inbox chrome until delivery evidence arrives. Pages loaded after team creation say <em>Team active · 5 known teammates</em>; they never invent a historical <em>Started team</em> line.</td></tr>
+  <tr><td>D-9</td><td>Runtime facts originate on responses.</td><td><code>assistant.message.model</code> and response <code>effort</code> are authoritative for that response. Response heads show the pair. Roster, join and task-linked report lines summarize known responses: the pair when uniform, <em>varies</em> when mixed, or an explicitly labelled configuration before response evidence. A Workflow worker always keeps this slot visible because model/effort is part of comparing parallel work; missing fields read <em>model unknown</em> or <em>effort unknown</em>. Never inherit from the lead.</td></tr>
+  <tr><td>D-10</td><td>A workflow run survives its attempts.</td><td>Every request creates a chronological attempt anchored at invocation time; finish time and duration remain separate facts. <code>async_launched</code> makes it running and binds its tool/task ids to the run id; an immediate error fails that attempt without inventing a run. Exact resumes add attempt lines that point to the original run document. The newest run snapshot owns terminal state, declared phases, current <code>workflowProgress</code>, metrics, logs and structured result; journal <code>started/result</code> pairs are lifecycle evidence and carry no time of their own; child transcripts supply worker chronology. A correlated task notification patches the attempt/run once, never becomes a human message, and never overwrites richer durable evidence. <code>pendingWorkflowCount</code> is live session chrome only—not a historical row.</td></tr>
+  <tr><td>D-11</td><td>Fail closed, then compose.</td><td>No relation by nearby timestamps, shared <code>promptId</code>, filename alone or non-unique name. Unlinked work has no empty expander. An Agent worker may own a team; a teammate may contain an ordinary Agent child; historical runtimes disagree about recursive teams, so render the stored topology instead of enforcing a flat one. At visual depth three, <em>open child transcript</em> replaces another inset rail.</td></tr>
+</table>
+
+<section class="rec">
+  <h3>What the Claude records mean</h3>
+  <p>The 2026-09-03 census makes the edge cases structural rather than hypothetical. It found 258 peer-origin user records and 25 coordinator follow-ups in ordinary worker transcripts; four explicit Agent resumes whose result still said <code>teammate_spawned</code>; and 88 SendMessage results that resumed an existing agent. Seventy-five worker files contain multiple response model/effort pairs, while 82 direct workers contain no assistant response at all. Team configs contain every native colour and real colour absence. Across 53 Workflow invocations, 50 launched asynchronously and three failed validation immediately; 48 run snapshots ended 45 completed, one failed and two killed. Their progress records describe 761 current workers, while journals contain 760 starts and only 714 results, and resumed/killed runs prove those are different populations. All 761 Workflow progress workers carry a configured model, but none carries an effort field; explicit effort survives only in some agent requests today. Forty-six delivered Workflow callbacks were found, 37 with truncated result bodies, and every referenced temp output path had expired. The design therefore treats attempt, run, phase progress, runtime configuration, journal, child transcript and durable result as separate evidence.</p>
+</section>
+<div class="tablebox"><table class="cmp">
+  <thead><tr><th>Native evidence</th><th>Meaning</th><th>Projection</th></tr></thead>
+  <tbody>
+    <tr><td><code>Agent</code> request + result; optional sidecar <code>toolUseId</code> / <code>parentAgentId</code></td><td>Launch or resume of one invocation-rooted worker.</td><td class="take">One <em>Delegated</em> disclosure rooted at launch; exact resumes append to it.</td></tr>
+    <tr><td>User <code>origin.kind: peer | coordinator</code></td><td>Worker-to-worker/main delivery or coordinator follow-up.</td><td class="take">A machine-authored event inside the worker thread, never a human prompt.</td></tr>
+    <tr><td><code>taskKind: in_process_teammate</code> + <code>teamName</code> + member config</td><td>Persistent team member with stable address and optional colour/configured model.</td><td class="take">Roster membership and shared boundary chronology; neutral mark when colour is absent.</td></tr>
+    <tr><td>Assistant <code>message.model</code> + response <code>effort</code></td><td>Concrete runtime evidence for that response.</td><td class="take">Exact pair on its head; only derived summaries elsewhere.</td></tr>
+    <tr><td>Agent request operation + <code>teammate_spawned</code>; SendMessage <code>resumedAgentId</code></td><td>Transport acceptance whose lifecycle meaning depends on the initiating operation.</td><td class="take"><em>Added</em> or <em>Resumed</em>, never completion.</td></tr>
+    <tr><td>SendMessage request/routing + inbox + recipient envelope</td><td>Up to four observations of one communication; <code>content</code> may only be a preview.</td><td class="take">Correlate, prefer full <code>message</code>, render once at delivery.</td></tr>
+    <tr><td><code>task_assignment</code>, <code>idle_notification</code>, shutdown request/approval, <code>teammate_terminated</code></td><td>Native assignment and lifecycle controls, not one conversational message class.</td><td class="take">Label assignment in the member thread; update idle quietly; render shutdown/termination once as muted or failed lifecycle evidence.</td></tr>
+    <tr><td>Top-level <code>&lt;teammate-message&gt;</code></td><td>Native team speech. Identical-looking tags nested inside another result are copies.</td><td class="take">Correlate delivery observations and render the full addressed message once; nested tags stay provenance.</td></tr>
+    <tr><td>Top-level <code>&lt;task-notification&gt;</code> + task-queue terminal record</td><td>Generic machine callback plus a queue fallback, neither authored human speech. Bodies and usage may be truncated.</td><td class="take">Correlate by tool/task ids. A Workflow callback patches its exact attempt/run; another known task patches its own act/report; use the queue record only when delivery is absent. An unmatched callback is one system async event.</td></tr>
+    <tr><td>Task status <code>completed | failed | killed | stopped | missing</code></td><td>Asynchronous outcome evidence, sometimes with result/usage/diagnostics.</td><td class="take">Resolve the correlated act or report; otherwise show one async ledger event. Preserve the exact terminal word and unknown absence; cancelled/killed/stopped are muted, not failed red.</td></tr>
+    <tr><td>Inbox <code>read: false</code> without delivery envelope</td><td>Pending mailbox state.</td><td class="take">No transcript position until a delivered observation exists.</td></tr>
+    <tr><td>Workflow request → immediate tool result</td><td>One attempt: <code>async_launched</code> carries task/run identity; a validation string may fail before either exists.</td><td class="take">Anchor a Ran/Resumed line at invocation time. Async launch is running, never succeeded; immediate failure has no run disclosure.</td></tr>
+    <tr><td>WorkflowRun snapshot: phases, <code>workflowProgress</code>, status, metrics, logs, result/error</td><td>The mutable current view of one run. A resume may replace its current roster and metrics. Progress currently records every worker model but no worker effort.</td><td class="take">Authoritative run head, phase tree, denominator and terminal payload. Join configured and observed runtime evidence per worker; keep attempts separately so a newer snapshot cannot erase earlier work.</td></tr>
+    <tr><td>Workflow journal <code>started</code> / optional <code>result</code></td><td>Coordinator lifecycle evidence, with no native timestamps and potentially unmatched/accumulated records.</td><td class="take">Resolve known workers and retain unmatched evidence, but do not use the journal alone as the current roster, denominator or clock.</td></tr>
+    <tr><td>Workflow child transcript + callback <code>output-file</code></td><td>The child is durable worker chronology; the temp result file is an optional live cache and may disappear.</td><td class="take">Worker row opens the child document. Full result comes from the run/raw ledger; never make an expiring temp path its only route.</td></tr>
+    <tr><td><code>pendingWorkflowCount</code></td><td>A live aggregate hint, not a timestamped event and not enough to reconstruct any run.</td><td class="take">Activity/session chrome only. It produces no transcript row.</td></tr>
+  </tbody>
+</table></div>
+
+<section class="rec">
+  <h3>The minimum durable model</h3>
+  <p>The renderer should not recover these semantics from prose. It needs a three-way relation discriminant; exact parent/call/child ids for Agent workers; team/member/session ids, display name and optional native colour for teammates; and an explicit <code>WorkflowRun → WorkflowAttempt[] → WorkflowPhase[] → WorkflowWorker[]</code> graph. An attempt keeps invocation time, operation, request/tool/task ids, launch and terminal outcome, duration/usage metrics and run id, so a resumed snapshot cannot erase the costly first attempt. The run keeps label evidence, declared phases, current progress snapshot, exact terminal word, aggregate metrics, logs, error, structured result/resources and raw/source cursors. Every Workflow worker keeps configured model/effort separately from its observed response profiles, with provenance for both; normalization must preserve the agent request’s effort instead of asking the renderer to parse Workflow JavaScript. Journal observations and child transcript ids attach as provenance instead of masquerading as the current snapshot.</p>
+  <p><em>Reported</em> is a projection, not a Claude message type. It additionally requires the exact task/tool/result relation and source response; an optional work disclosure requires exact start/end cursors in that member transcript. Without both boundaries, the report body can still fold but the work control is absent. Agent workers always reopen their one canonical child document; workflow worker rows reopen beneath their run, grouped by phase. Search indexes folded bodies, durable workflow results and loaded subthreads. At narrow widths objectives and runtime summaries wrap, low-priority phase descriptions disappear, and colour is never the only identity cue.</p>
+</section>
+
 <section class="rec">
   <span class="eyebrow">§05</span>
   <h2>The room</h2>
@@ -837,6 +1360,92 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   </div></div>
 </div>
 <section class="rec"><p class="cap">The <em>activity</em> act stands on the fill at rest and inverts when pressed, like the meta block's tree and figures toggles. Folded is the default; the reader who wants the build log gets it in one press, and the preference is per room, not per run.</p></section>
+
+<section class="rec">
+  <span class="eyebrow">§05A · timeline_meta</span>
+  <h2>The work index floats inside the transcript</h2>
+  <p>Tasks, plans and artifacts are three small indexes into the session, not a fourth room column and not a replacement for their messages. The buttons sit at the upper-left of the message-view wrapper, above the document. On a wide column that is empty margin; on a narrow column it is the same 60px gutter already reserved for time anchors. Nothing moves when the index appears.</p>
+  <blockquote class="claim"><p>The timeline remains the record. <code>timeline_meta</code> is the map back into it.</p></blockquote>
+  <p>Press a button to open the shared island on that tab; press it again, press Escape, or press outside to close. Try the task rows below: they land on the retained task message. Plan and artifact rows hand their exact resource to the file viewer the room already owns.</p>
+</section>
+
+<div class="spec spec--wide" id="timeline-meta-spec"><div class="spec__bar">Session work · floating inside the message wrapper<span class="note">tasks open · no transcript reflow</span></div>
+  <div class="colhead"><i></i><strong>Refine the session message view</strong><span class="bubble">94</span><span class="range">09:36 → now</span><button class="act" type="button" aria-pressed="true" title="Activity: folded"><svg><use href="#g-activity"/></svg></button></div>
+  <div class="spec__body tr-col tr-meta-stage">
+    <div class="tr-meta-launchers" role="group" aria-label="Session work">
+      <button class="tr-meta-launch" type="button" data-meta-kind="tasks" aria-label="Tasks, 6" aria-expanded="true" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-task"/></svg><span class="tr-meta-launch__count">6</span></button>
+      <button class="tr-meta-launch" type="button" data-meta-kind="plans" aria-label="Plans, 2" aria-expanded="false" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-doc"/></svg><span class="tr-meta-launch__count">2</span></button>
+      <button class="tr-meta-launch" type="button" data-meta-kind="artifacts" aria-label="Artifacts, 3" aria-expanded="false" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-box"/></svg><span class="tr-meta-launch__count">3</span></button>
+    </div>
+
+    <div class="tr-meta-popover" id="timeline-meta-popover" role="dialog" aria-modal="false" aria-label="Session work index">
+      <div class="tr-meta-top">
+        <div class="tr-meta-tabs" role="tablist" aria-label="Session work type">
+          <button class="tr-meta-tab" id="timeline-meta-tab-tasks" type="button" role="tab" data-meta-kind="tasks" aria-selected="true" aria-controls="timeline-meta-panel-tasks">Tasks</button>
+          <button class="tr-meta-tab" id="timeline-meta-tab-plans" type="button" role="tab" data-meta-kind="plans" aria-selected="false" aria-controls="timeline-meta-panel-plans">Plans</button>
+          <button class="tr-meta-tab" id="timeline-meta-tab-artifacts" type="button" role="tab" data-meta-kind="artifacts" aria-selected="false" aria-controls="timeline-meta-panel-artifacts">Artifacts</button>
+        </div>
+        <button class="tr-meta-close" type="button" aria-label="Close session work"><svg aria-hidden="true"><use href="#g-close"/></svg></button>
+      </div>
+
+      <div class="tr-meta-panel" id="timeline-meta-panel-tasks" role="tabpanel" aria-labelledby="timeline-meta-tab-tasks">
+        <div class="tr-meta-listhead"><span>Task · state · started</span><span>Duration</span></div>
+        <ol class="tr-meta-list" aria-label="Full task list">
+          <li><button class="tr-meta-row" type="button" data-state="completed" data-meta-task="Define the timeline_meta contract" aria-label="Define the timeline_meta contract, completed, started 9:41 AM, duration 3 minutes 14 seconds; jump to task message"><span class="tr-meta-status" aria-hidden="true">✓</span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Define the timeline_meta contract</span><span class="tr-meta-row__meta">Completed · started 09:41</span></span><span class="tr-meta-row__value">3m 14s</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-state="completed" data-meta-task="Keep the existing task messages" aria-label="Keep the existing task messages, completed, started 9:45 AM, duration 1 minute 08 seconds; jump to task message"><span class="tr-meta-status" aria-hidden="true">✓</span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Keep the existing task messages</span><span class="tr-meta-row__meta">Completed · started 09:45</span></span><span class="tr-meta-row__value">1m 08s</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-state="running" data-meta-task="Add the fast Rust query" aria-label="Add the fast Rust query, in progress, started 9:47 AM, running for 8 minutes; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Add the fast Rust query</span><span class="tr-meta-row__meta">In progress · started 09:47</span></span><span class="tr-meta-row__value">8m now</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-state="pending" data-meta-task="Wire the session snapshot" aria-label="Wire the session snapshot, pending, not started; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Wire the session snapshot</span><span class="tr-meta-row__meta">Pending · not started</span></span><span class="tr-meta-row__value">—</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-state="pending" data-meta-task="Build the floating menu" aria-label="Build the floating menu, pending, not started; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Build the floating menu</span><span class="tr-meta-row__meta">Pending · not started</span></span><span class="tr-meta-row__value">—</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-state="pending" data-meta-task="Verify file opening and anchors" aria-label="Verify file opening and anchors, pending, not started; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Verify file opening and anchors</span><span class="tr-meta-row__meta">Pending · not started</span></span><span class="tr-meta-row__value">—</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+        </ol>
+      </div>
+
+      <div class="tr-meta-panel" id="timeline-meta-panel-plans" role="tabpanel" aria-labelledby="timeline-meta-tab-plans" hidden>
+        <div class="tr-meta-listhead"><span>Plan file · latest revision</span><span>Size</span></div>
+        <ul class="tr-meta-list" aria-label="Plan files">
+          <li><button class="tr-meta-row" type="button" data-meta-file="timeline-meta.md" aria-label="Open timeline-meta.md in file viewer"><span class="tr-meta-file"><svg aria-hidden="true"><use href="#g-doc"/></svg></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">timeline-meta.md</span><span class="tr-meta-row__meta">Updated 10:01 · revision 3</span></span><span class="tr-meta-row__value">4.8 KB</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-meta-file="message-view-refinement.md" aria-label="Open message-view-refinement.md in file viewer"><span class="tr-meta-file"><svg aria-hidden="true"><use href="#g-doc"/></svg></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">message-view-refinement.md</span><span class="tr-meta-row__meta">Updated 09:43 · revision 1</span></span><span class="tr-meta-row__value">2.1 KB</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+        </ul>
+      </div>
+
+      <div class="tr-meta-panel" id="timeline-meta-panel-artifacts" role="tabpanel" aria-labelledby="timeline-meta-tab-artifacts" hidden>
+        <div class="tr-meta-listhead"><span>Artifact file · created</span><span>Size</span></div>
+        <ul class="tr-meta-list" aria-label="Artifact files">
+          <li><button class="tr-meta-row" type="button" data-meta-file="timeline-meta-wire.json" aria-label="Open timeline-meta-wire.json in file viewer"><span class="tr-meta-file"><svg aria-hidden="true"><use href="#g-doc"/></svg></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">timeline-meta-wire.json</span><span class="tr-meta-row__meta">JSON · created 10:09</span></span><span class="tr-meta-row__value">1.7 KB</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-meta-file="task-timing-query.sql" aria-label="Open task-timing-query.sql in file viewer"><span class="tr-meta-file"><svg aria-hidden="true"><use href="#g-doc"/></svg></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">task-timing-query.sql</span><span class="tr-meta-row__meta">SQL · created 10:04</span></span><span class="tr-meta-row__value">936 B</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-meta-file="popover-states.png" aria-label="Open popover-states.png in file viewer"><span class="tr-meta-file"><svg aria-hidden="true"><use href="#g-box"/></svg></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">popover-states.png</span><span class="tr-meta-row__meta">PNG · created 09:58</span></span><span class="tr-meta-row__value">184 KB</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tr">
+      <div class="tr-turn">
+        <div class="tr-seg"><span class="tr-anchor" style="top:12px">09:36:11</span><div class="tr-prompt"><p>Keep the task messages as they are. Add quick access to every task, plan and artifact without turning the transcript into another dashboard.</p></div></div>
+        <div class="tr-resp">
+          <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">19m 02s · <b>28.4K</b></span></div>
+          <div class="tr-seg tr-prose"><span class="tr-anchor">09:36:24</span><p>The message remains the point-in-time record. I’ll add a session index that points back to it and opens its files through the existing viewer.</p></div>
+          <div class="tr-ledger">
+            <div class="tr-line tr-meta-source" id="timeline-meta-task-message" tabindex="0"><span class="tr-line__g"><svg><use href="#g-task"/></svg></span><span class="tr-line__v">Started</span><span class="tr-line__o">Add the fast Rust query</span><span class="tr-line__r"><span>2 of 6 done</span><span class="t">09:47:03</span></span></div>
+            <div class="tr-line" tabindex="0"><span class="tr-line__g"><svg><use href="#g-doc"/></svg></span><span class="tr-line__v">Updated plan</span><span class="tr-line__o">timeline_meta <span class="in">· query, protocol, client, view</span></span><span class="tr-line__r"><span>4 steps</span><span class="t">10:01:12</span></span></div>
+            <div class="tr-line" tabindex="0"><span class="tr-line__g"><svg><use href="#g-box"/></svg></span><span class="tr-line__v">Created</span><span class="tr-line__o">timeline-meta-wire.json</span><span class="tr-line__r"><span>artifact</span><span class="t">10:09:44</span></span></div>
+          </div>
+          <div class="tr-seg tr-prose"><span class="tr-anchor">10:10:03</span><p>The index arrived quietly. It did not replace, move or summarize away any of those messages.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section class="rec"><p class="cap"><b>The three controls are overlay chrome.</b> They are siblings of the scrolling document inside the message-view wrapper, not a grid track and not children of the 68ch transcript. The one open island overlays the record without a scrim, so the reader keeps their place.</p></section>
+
+<table class="laws">
+  <tr><td>M-1</td><td>No new column.</td><td>The vertical stack is absolutely positioned 14px from the message wrapper’s upper-left corner. It consumes no layout width. Under 760px it occupies the time-anchor gutter the transcript already reserves; it never covers prose.</td></tr>
+  <tr><td>M-2</td><td>Three buttons, one island.</td><td>Each 42×30 button carries one monochrome 14px glyph and its exact count. A press opens the one island directly beside the stack on that tab; pressing the active button, Escape, or outside closes it. New data updates a count quietly and never opens or moves the island.</td></tr>
+  <tr><td>M-3</td><td>The count equals the list.</td><td>Tasks count the full canonical task board, plans count unique openable plan documents at their latest revision, and artifacts count individual openable resources—not tool calls. Every button shows the exact length of the list its tab opens.</td></tr>
+  <tr><td>M-4</td><td>Task time is evidence.</td><td><em>Started</em> is the first source-stamped explicit transition to in-progress. A terminal task’s duration is terminal time minus that start; a running task advances from that start; pending or missing timestamps show an em dash. The UI never substitutes local ingest time or guesses from order.</td></tr>
+  <tr><td>M-5</td><td>The index points; the record remains.</td><td>A task row lands on its exact task-message anchor, fetching that exact session-scoped row when it is older than the loaded tail. Plan and artifact rows open the room’s existing file viewer through a canonical resource reference. The rich task messages stay in chronology unchanged.</td></tr>
+  <tr><td>M-6</td><td>Metadata is light; bytes are lazy.</td><td>The initial session subscription receives one Rust-built <code>timeline_meta</code> snapshot: ids, names, states, times, counts, sizes and safe open references. Plan and artifact bodies are not in that frame; the file viewer reads them only when pressed.</td></tr>
+</table>
 
 <section class="rec">
   <span class="eyebrow">§06</span>
@@ -1202,7 +1811,7 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     <tr><td>Status</td><td>a shimmer while running, red text on failure</td><td>a spinner while running</td><td>spinner · check · × at the row's edge</td><td class="take">A breathing green dot for running (§2.5 <em>working</em>), red for did-not-complete, nothing for success. No spinner theater and no green check: a passing call is not news.</td></tr>
     <tr><td>Code</td><td>a block with a language bar and copy</td><td>the same</td><td>the same</td><td class="take">Taken as drawn.</td></tr>
     <tr><td>Images</td><td>inline thumbnails</td><td>inline thumbnails</td><td>inline</td><td class="take">Taken: a tile inside the prompt, opening the viewer; a dashed tile with its facts when the bytes were not kept.</td></tr>
-    <tr><td>Avatars, names, brand colour</td><td>a small avatar on the assistant side</td><td>a logo avatar</td><td>none</td><td class="take">Refused: no avatars, no photos. The agent's monochrome mark in the eyebrow, once per reply, and no hue for identity (record §4).</td></tr>
+    <tr><td>Avatars, names, brand colour</td><td>a small avatar on the assistant side</td><td>a logo avatar</td><td>none</td><td class="take">Provider branding stays refused: no avatars, photos or brand-coloured prose. The agent's mark remains monochrome. A native Agent Team colour is the narrow §04A exception: an organizational key for a persistent <code>@address</code>, not provider decoration.</td></tr>
     <tr><td>Timestamps</td><td>hidden</td><td>hidden</td><td>hidden</td><td class="take">Refused: History is retrieval, so every segment stays pointable-at — in the margin, or on hover (T-4).</td></tr>
   </tbody>
 </table></div>
@@ -1212,7 +1821,7 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
   <h2>Deltas this would make to the standing docs</h2>
   <p>Governance says the doc moves first. <strong>No new colour tokens.</strong> One new geometry constant (the prompt radius) and one reused one (the ledger pitch is the tree row).</p>
   <ol>
-    <li><strong>DESIGN.md §8 — the transcript (amend the record's delta 3).</strong> The document has one container, the prompt (<code>--vf-fill</code>, radius 10, primary ink, content-hugging on a 68ch measure, no eyebrow). One head per response: mark · agent name · model caption · span and tokens. Reply prose in primary ink. Hairlines between messages are gone; the turn's spacing (30px) is the separator.</li>
+    <li><strong>DESIGN.md §8 — the transcript (amend the record's delta 3).</strong> The document has one container, the prompt (<code>--vf-fill</code>, radius 10, primary ink, content-hugging on a 68ch measure, no eyebrow). One head per response: mark · agent name · observed model and effort caption · span and tokens. Model and effort belong to that response, never the worker's permanent identity. Reply prose in primary ink. Hairlines between messages are gone; the turn's spacing (30px) is the separator.</li>
     <li><strong>DESIGN.md §8 — the work block becomes the activity ledger.</strong> Material dropped: no fill, no border; a 1px <code>--vf-hairline-strong</code> rail, lines at <code>--vf-tree-row-height</code>, glyph 14 in 16, verb column 72, object mono 11.5 with the directory on the tertiary ramp, result and time-of-day at the right in tabular figures. The sentence grammar and fold rule of §04, with shell in the looking class: consecutive commands fold, a failure breaks the fold. The failure rule kept. Reasoning is muted, clamped prose in the measure — never a box, never a rail line.</li>
     <li><strong>DESIGN.md §8 — system markers.</strong> The two drawn markers become a family: every <code>Notice</code> is a hairline line with its words, runtime errors in red text, the gap still pressable.</li>
     <li><strong>DESIGN.md §8 — attachment tile, code bar, command pill.</strong> As drawn in §03 A, E, H.</li>
@@ -1222,6 +1831,7 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     <li><strong>DESIGN.md §8 — the head of the document (§08).</strong> A counting marker at the top of the loaded document; the next page fetched within one viewport of the top and held, the bar standing full when it is (Q7 B, 2026-09-02); the pull (120px of upward travel at scroll position zero) as the reveal, spending the bar; landing above a held viewport with the receipt pill; the session-start line; the two failure sentences. The rule it instances, the foot's rule mirrored: <strong>arrival is a notice, never a jump — in either direction.</strong></li>
     <li><strong>DESIGN.md §5 Elevation &amp; materials — the top fade.</strong> One new row for readers that pin chrome: a 64px fade at the scroller's top edge — the paper's surface as a gradient, 100% → 88% at a third → 0 — present only while scrolled, absent at rest. No blur (drawn, declined 2026-09-02). It is the pinned pill's ground, not a header: it draws no line and holds no controls.</li>
     <li><strong>DESIGN.md §9 Voice — the verbs.</strong> Read · Listed · Searched · Looked up · Edited / Created / Deleted / Moved / Changed · Ran · Waited for / Sent input to / Stopped / Inspected · Fetched / Opened · Searched the web · Delegated · Sent to · Asked · Used skill · Ran workflow · Scheduled a wake-up · Made / Edited / Sent an artifact · Notified · Entered / Left · Reported · Produced · the native name for unknown. And the two sentences: <em>no detail recorded</em>, <em>found nothing</em>.</li>
+    <li><strong>DESIGN.md §2.6 / §8 — delegated work (§04A, revised from ground truth 2026-09-03).</strong> Three native ownership relations produce three disclosures. An Agent worker is rooted once beneath its earliest proven invocation; later coordinator/peer messages and exact resumes extend that same child thread. An Agent Team teammate is addressable: a roster carries stable <code>@name</code>, optional native colour, objective and known-response runtime summary while delivered boundary messages interleave in shared chronology. Claude has no report message type, so only an exact task/tool/result relation projects a folded <em>Reported</em> line; prose alone remains a message. A Workflow run is one durable document with one chronological line per launch/resume attempt; it opens to purpose, attempt history, declared phases, the current progress roster, worker subthreads and the structured result. Every workflow worker reserves a visible model/effort line; observed values win, configuration is labelled, mixed values say <em>varies</em>, and missing fields say <em>unknown</em> rather than inheriting from the lead. Async launch is running, an immediate error has no run, callbacks patch by exact id, and killed/cancelled/stopped stay muted. Run snapshots outrank truncated callbacks and expiring temp files for terminal content. Native team colour is confined to a small Claude Code mark and missing colour stays neutral. Sender, routing, inbox and recipient observations correlate to one rendering; only top-level delivery envelopes speak.</li>
     <li><strong>design-agent-history.md §5 — the work block.</strong> Retitled and revised per the above; the “one object that opens” unit survives, its closed state does not. §11's Q3 (where the run's boundary sits) gets its first data: the fold threshold, not the boundary, is what a forty-call turn needed.</li>
   </ol>
 </section>
@@ -1232,7 +1842,7 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
   <h3>Build order</h3>
   <ol>
     <li><strong><code>lib/model.ts</code> — the turn and the ledger.</strong> <code>documentBlocks</code> grows into turns (fold rows by <code>group.kind === "human_turn"</code>, then response cycles) and <code>toWorkCall</code> becomes the §04 projection: class, glyph, verb, object parts, result, state, and the detail kind. Class folding and the eight-line rule are pure functions of the run. All of it is testable against fixtures today.</li>
-    <li><strong><code>Transcript.tsx</code> — the components.</strong> <code>Prompt</code>, <code>ResponseHead</code>, <code>Prose</code> (the markdown renderer as is, plus the code bar), <code>Ledger</code> / <code>Line</code> / <code>Fold</code>, the details (<code>DiffBody</code> already exists; a diagnostic block; a path list; the existing <code>Subthread</code> under its delegate line), <code>Marker</code>, <code>CommandPill</code>, <code>Anchor</code>. The live-tail, watermark, focus-landing and paging logic is untouched.</li>
+    <li><strong><code>Transcript.tsx</code> — the components.</strong> <code>Prompt</code>, <code>ResponseHead</code>, <code>Prose</code> (the markdown renderer as is, plus the code bar), <code>Ledger</code> / <code>Line</code> / <code>Fold</code>, the details (<code>DiffBody</code> already exists; a diagnostic block; a path list; one canonical <code>AgentThread</code> per worker), <code>TeamRoster</code> / <code>TeamMessage</code> / task-linked <code>TeamReport</code> / <code>TeamWorkThread</code>, and <code>WorkflowRun</code> / <code>WorkflowAttempt</code> / <code>WorkflowPhase</code> / <code>WorkflowWorker</code> per §04A, reusing the structured-output and file-viewer disclosures for results and scripts, plus <code>Marker</code>, <code>CommandPill</code>, <code>Anchor</code>. The live-tail, watermark, focus-landing and paging logic is untouched.</li>
     <li><strong><code>room.css</code> — replace <code>.ah-work</code> / <code>.ah-rung</code> with the <code>tr-</code> rules in this page</strong> (they are written against the app's tokens), and drop the per-message hairline.</li>
     <li><strong>The column head</strong> gains the <em>activity</em> act beside the git act; the preference is room state, not per run.</li>
     <li><strong>Days and sittings</strong> — a pure function in <code>lib/model.ts</code> over the ordered entries' <code>at</code>: emit a pill before any entry whose calendar day differs from the previous, or whose gap exceeds fifteen minutes; carry the day label, the resumption time and the pause. The pill is CSS <code>position: sticky</code> inside the existing scroller, and every sitting renders as its own section — a sticky element's containing block is its parent, so sections are what make the next pill push the previous one out instead of stacking on it; the day list reads the same array. The session row's <code>N sittings</code> is the same count.</li>
@@ -1240,11 +1850,12 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     <li><strong>The top fade</strong> — one sticky, zero-height element at the head of <code>.ah-scroll</code> whose pseudo-element paints the gradient; <code>--frost</code> follows the first 24px of scroll from the existing scroll handler. Eight lines of CSS, no new tokens.</li>
     <li><strong>Site icons</strong> — a small per-host cache in the renderer (<code>https://&lt;host&gt;/favicon.ico</code>, a globe on refusal or 404), the <em>fetch site icons</em> setting, and the <code>&lt;Favicon&gt;</code> used by the source list and the line's stack. The Electron main process is the right place for the fetch, so the renderer never talks to the web itself.</li>
   </ol>
-  <h3>Three things the daemon showed that this view cannot fix</h3>
+  <h3>Four things the daemon showed that this view cannot fix</h3>
   <ol>
     <li><strong>Claude Code and Codex tool calls arrive as <code>unknown</code>.</strong> On the running daemon (built 15:30 today, after HEAD), every <code>tool_use</code> in the sampled Claude Code and Codex sessions has <code>action.type = "unknown"</code>, <code>status.basis = "native_terminal_record"</code> and no <code>started_at</code> — the terminal record landed, the opener with the input never joined it. Grok's rows are typed (<code>shell</code>, <code>file_change</code>, <code>file_search</code>). The projectors for Claude exist in <code>crates/adapters/claude-code/src/tool.rs</code>. Until this is found, the ledger's Claude lines will all read <em>no detail recorded</em>, which is honest and useless.</li>
     <li><strong>Pasted images arrive as prose.</strong> A Claude Code turn that pasted a screenshot carries the text <code>[Image: original 3000x1816, displayed at 2000x1211. Multiply coordinates by 1.50 …]</code> as a <code>user</code> body with an empty <code>attachments</code> array. That sentence is injected context, not something the human typed; the recent “clean injected context” pass has one more shape to catch, and the attachment should come through as an <code>AttachmentRef</code>.</li>
     <li><strong>Timing is one-sided.</strong> With <code>started_at</code> absent, a line's duration is unknowable and only the span between a run's first and last <code>completed_at</code> can be shown. The design shows time-of-day per line for that reason; per-line durations return when openers are correlated.</li>
+    <li><strong>Agent workers, Agent Team members and Workflow workers are flattened.</strong> The Claude rails prove all three relationships, but the current projection ignores exact <code>parentAgentId</code>, <code>toolUseId</code>, <code>taskKind</code>, <code>teamName</code>, member colour, workflow attempt/run/journal identity, progress phases and structured origin. Resumes can look like new members or overwrite an earlier Workflow attempt, nested envelope copies can speak twice, unmatched workflow starts can disappear, callbacks can become human prompts, and incoming peer transport can become a <code>human_turn</code>. §04A needs those relations and Workflow sidecars normalized before the renderer can draw them honestly.</li>
   </ol>
 </section>
 
@@ -1331,6 +1942,14 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     receipt.textContent = text; receipt.hidden = false;
     clearTimeout(receiptTimer); receiptTimer = setTimeout(function () { receipt.hidden = true; }, 1800);
   }
+  function toggleWorkThread(trigger) {
+    var detail = document.getElementById(trigger.getAttribute('data-workthread'));
+    if (!detail) return;
+    var isOpen = trigger.getAttribute('aria-expanded') === 'true';
+    trigger.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+    detail.hidden = isOpen;
+    say(isOpen ? 'Collapsed the proven work subthread' : 'Opened the proven work behind this result');
+  }
   document.getElementById('theme').addEventListener('click', function () {
     var dark = root.getAttribute('data-theme') === 'dark' ||
       (!root.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -1339,9 +1958,11 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     paintFakes();
   });
   document.addEventListener('click', function (e) {
+    var workThread = e.target.closest('[data-workthread]');
+    if (workThread) { toggleWorkThread(workThread); return; }
     var anchor = e.target.closest('.tr-anchor');
     if (anchor) { say('Anchor copied · ' + anchor.textContent.trim()); return; }
-    var act = e.target.closest('.tr-acts button, .tr-code__bar button, .tr-detail__bar .open');
+    var act = e.target.closest('.tr-acts button, .tr-code__bar button, .tr-detail__bar .open, .tm-work, .wf-action, .wf-resource');
     if (act) { say(act.textContent.trim() === 'copy' ? 'Copied' : act.textContent.trim() + ' — not wired in this page'); return; }
     var line = e.target.closest('.tr-line');
     if (!line) return;
@@ -1367,6 +1988,76 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     foldact.setAttribute('aria-pressed', folded ? 'false' : 'true');
     foldact.title = folded ? 'Activity: open — press to fold every run' : 'Activity: folded — press to open every run';
   });
+
+  /* §05A — three floating launchers, one timeline_meta island. */
+  var metaSpec = document.getElementById('timeline-meta-spec');
+  if (metaSpec) {
+    var metaPopover = document.getElementById('timeline-meta-popover');
+    var metaLaunchers = Array.prototype.slice.call(metaSpec.querySelectorAll('.tr-meta-launch'));
+    var metaTabs = Array.prototype.slice.call(metaSpec.querySelectorAll('.tr-meta-tab'));
+    var metaPanels = Array.prototype.slice.call(metaSpec.querySelectorAll('.tr-meta-panel'));
+    var metaKind = 'tasks';
+    function setMetaKind(kind, open) {
+      metaKind = kind;
+      metaPopover.hidden = !open;
+      metaLaunchers.forEach(function (button) {
+        button.setAttribute('aria-expanded', open && button.getAttribute('data-meta-kind') === kind ? 'true' : 'false');
+      });
+      metaTabs.forEach(function (tab) {
+        tab.setAttribute('aria-selected', tab.getAttribute('data-meta-kind') === kind ? 'true' : 'false');
+      });
+      metaPanels.forEach(function (panel) { panel.hidden = panel.id !== 'timeline-meta-panel-' + kind; });
+    }
+    function closeMeta(restoreFocus) {
+      setMetaKind(metaKind, false);
+      if (restoreFocus) {
+        var launcher = metaLaunchers.find(function (button) { return button.getAttribute('data-meta-kind') === metaKind; });
+        if (launcher) launcher.focus();
+      }
+    }
+    metaSpec.addEventListener('click', function (e) {
+      var launcher = e.target.closest('.tr-meta-launch');
+      if (launcher) {
+        var kind = launcher.getAttribute('data-meta-kind');
+        var sameOpen = !metaPopover.hidden && kind === metaKind;
+        setMetaKind(kind, !sameOpen);
+        return;
+      }
+      var tab = e.target.closest('.tr-meta-tab');
+      if (tab) { setMetaKind(tab.getAttribute('data-meta-kind'), true); return; }
+      if (e.target.closest('.tr-meta-close')) { closeMeta(true); return; }
+      var task = e.target.closest('[data-meta-task]');
+      if (task) {
+        var source = document.getElementById('timeline-meta-task-message');
+        closeMeta(false);
+        if (source) {
+          source.scrollIntoView({ block: 'center', behavior: 'smooth' }); source.focus(); source.classList.add('is-landed');
+          setTimeout(function () { source.classList.remove('is-landed'); }, 1400);
+        }
+        say('Landed on the task message · ' + task.getAttribute('data-meta-task'));
+        return;
+      }
+      var file = e.target.closest('[data-meta-file]');
+      if (file) {
+        closeMeta(false);
+        say('Opening ' + file.getAttribute('data-meta-file') + ' in the shared file viewer');
+        return;
+      }
+      if (!metaPopover.hidden && !e.target.closest('.tr-meta-popover')) closeMeta(false);
+    });
+    metaTabs.forEach(function (tab, index) {
+      tab.addEventListener('keydown', function (e) {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        var move = e.key === 'ArrowRight' ? 1 : -1;
+        var next = metaTabs[(index + move + metaTabs.length) % metaTabs.length];
+        next.focus(); setMetaKind(next.getAttribute('data-meta-kind'), true);
+      });
+    });
+    metaSpec.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !metaPopover.hidden) { e.preventDefault(); closeMeta(true); }
+    });
+  }
 
   /* §12 — the record: rings show the decisions; the cards no longer take a press */
   var DEFAULTS = { Q1: 'A', Q2: 'B', Q3: 'A', Q4: 'C', Q5: 'A', Q6: 'A', Q7: 'B' };

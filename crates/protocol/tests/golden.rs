@@ -5,10 +5,12 @@
 //! accidental break, or bump `PROTOCOL_VERSION` deliberately and refresh
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
+use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
-    CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind, NativeToolRef, Notice,
-    Provenance, ResponseGroup, ShellOutcome, StatusBasis, TimelineBody, TimelineEntry,
-    TimelineGroup, ToolAction, ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
+    ArtifactKind, AssetRef, CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind,
+    NativeToolRef, Notice, Provenance, ResponseGroup, ShellOutcome, StatusBasis, TaskOp,
+    TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
+    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, CommandResponse, ContributionResponse,
@@ -18,7 +20,8 @@ use rosetta_protocol::{
     ProjectsResponse, RuntimeBackfill, RuntimeIngestStatus, RuntimeRow, RuntimesResponse,
     SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState, ServerFrame,
     SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState,
-    TimelinePage, TokenSnapshot, UsageResponse,
+    TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
+    TimelineMetaPlanSource, TimelineMetaTask, TimelinePage, TokenSnapshot, UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -94,6 +97,28 @@ fn tool_interaction() -> ToolInteraction {
         },
         failure: None,
         timing: None,
+    }
+}
+
+fn task_action() -> ToolAction {
+    ToolAction::Task {
+        operation: TaskOp::Update,
+        task_id: Some("T-1".into()),
+        subject: Some("Ship the task board".into()),
+        description: None,
+        status: Some(TaskStatus::Completed),
+        owner: Some("architect".into()),
+        blocker_ids: vec![],
+        snapshot: Some(TaskSnapshot {
+            tasks: vec![TaskSnapshotItem {
+                task_id: "T-1".into(),
+                subject: Some("Ship the task board".into()),
+                status: Some(TaskStatus::Completed),
+                owner: Some("architect".into()),
+                blocker_ids: vec![],
+            }],
+            total_count: 1,
+        }),
     }
 }
 
@@ -180,10 +205,72 @@ fn stamp() -> Stamp {
     Stamp { epoch: 9, seq: 3 }
 }
 
+fn timeline_meta() -> TimelineMeta {
+    TimelineMeta {
+        tasks: vec![TimelineMetaTask {
+            id: "task-1".into(),
+            subject: "Ship the work index".into(),
+            status: Some(TaskStatus::Completed),
+            started_at: Some(3_600_000),
+            terminal_at: Some(3_610_000),
+            timeline_id: Some("task-message-1".into()),
+        }],
+        plans: vec![
+            TimelineMetaPlan {
+                id: "revision:2".into(),
+                name: "plan-r2.json".into(),
+                updated_at: Some(3_605_000),
+                byte_len: 128,
+                source: TimelineMetaPlanSource::Revision { revision: 2 },
+            },
+            TimelineMetaPlan {
+                id: "timeline:primary".into(),
+                name: "Implementation plan.md".into(),
+                updated_at: Some(3_606_000),
+                byte_len: 96,
+                source: TimelineMetaPlanSource::Timeline {
+                    timeline_id: "plan-message-1".into(),
+                },
+            },
+        ],
+        artifacts: vec![
+            TimelineMetaArtifact {
+                id: "file:/w/rosetta/report.md".into(),
+                name: "report.md".into(),
+                artifact_kind: ArtifactKind::Document,
+                created_at: Some(3_608_000),
+                byte_len: None,
+                media_type: Some("text/markdown".into()),
+                source: TimelineMetaArtifactSource::TimelineFile {
+                    timeline_id: "artifact-message-1".into(),
+                    target_index: 0,
+                    path: "/w/rosetta/report.md".into(),
+                },
+            },
+            TimelineMetaArtifact {
+                id: "asset:digest".into(),
+                name: "preview.png".into(),
+                artifact_kind: ArtifactKind::Image,
+                created_at: Some(3_609_000),
+                byte_len: Some(42),
+                media_type: Some("image/png".into()),
+                source: TimelineMetaArtifactSource::Asset {
+                    asset: AssetRef {
+                        url: "/api/assets/digest.png".into(),
+                        digest: "digest".into(),
+                        media_type: "image/png".into(),
+                        byte_len: 42,
+                    },
+                },
+            },
+        ],
+    }
+}
+
 fn exemplars() -> serde_json::Value {
     let status = StatusResponse {
         protocol_version: PROTOCOL_VERSION,
-        schema_version: 9,
+        schema_version: 14,
         canonical_ready: true,
         search: search_state(),
         daemon: Some(DaemonStatus {
@@ -264,6 +351,9 @@ fn exemplars() -> serde_json::Value {
         Mutation::SessionSwept {
             session_id: "s1".into(),
         },
+        Mutation::TimelineMetaChanged {
+            session_id: "s1".into(),
+        },
         Mutation::Session(Box::new(session_row())),
         Mutation::Project(Box::new(project_row())),
         Mutation::Runtime(Box::new(runtime_row())),
@@ -276,6 +366,11 @@ fn exemplars() -> serde_json::Value {
         ServerFrame::TimelineSnapshot {
             stamp: stamp(),
             entries: vec![timeline_entry()],
+            timeline_meta: timeline_meta(),
+        },
+        ServerFrame::TimelineMetaSnapshot {
+            stamp: Some(stamp()),
+            timeline_meta: timeline_meta(),
         },
         ServerFrame::MetaSnapshot {
             runtimes: vec![runtime_row()],
@@ -307,6 +402,7 @@ fn exemplars() -> serde_json::Value {
             entries: vec![timeline_entry()],
             cursor: Some("{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}".into()),
         },
+        "task_action": task_action(),
         "command": CommandResponse { command: "printf 'full source'".into() },
         "search_request": SearchRequest {
             q: "needle".into(),

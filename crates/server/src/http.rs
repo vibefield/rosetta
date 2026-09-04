@@ -31,7 +31,7 @@ use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
 };
 use rosetta_store::{StoreError, schema};
-use rosetta_store::{assets, queries};
+use rosetta_store::{assets, queries, timeline_meta};
 
 use crate::hub::Hub;
 
@@ -242,6 +242,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/timeline", get(timeline))
         .route(
+            "/api/sessions/{id}/timeline/{timeline_id}",
+            get(timeline_entry),
+        )
+        .route(
             "/api/sessions/{id}/timeline/{timeline_id}/command",
             get(command),
         )
@@ -249,6 +253,14 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}",
             get(read_file_target)
                 .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
+        .route(
+            "/api/sessions/{id}/plans/revisions/{revision}",
+            get(read_plan_revision),
+        )
+        .route(
+            "/api/sessions/{id}/timeline/{timeline_id}/plan",
+            get(read_timeline_plan),
         )
         .route("/api/assets/{name}", get(asset))
         .route("/api/search", get(search))
@@ -457,17 +469,64 @@ async fn asset(
 /// direct request from turning one historical path into an unbounded read.
 const FILE_VIEW_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+fn plan_response(document: timeline_meta::PlanDocument) -> Response {
+    let content_type = if document.name.ends_with(".json") {
+        "application/json; charset=utf-8"
+    } else {
+        "text/markdown; charset=utf-8"
+    };
+    let mut response = Response::new(Body::from(document.content));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+async fn read_plan_revision(
+    State(state): State<AppState>,
+    UrlPath((session_id, revision)): UrlPath<(String, i64)>,
+) -> Result<Response, Failure> {
+    let document = with_read(state.projection.clone(), move |conn| {
+        timeline_meta::revision_plan_document(conn, &session_id, revision)
+            .map_err(store_err)?
+            .ok_or_else(|| Failure::not_found("that plan revision is not available"))
+    })
+    .await?;
+    Ok(plan_response(document))
+}
+
+async fn read_timeline_plan(
+    State(state): State<AppState>,
+    UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
+) -> Result<Response, Failure> {
+    let document = with_read(state.projection.clone(), move |conn| {
+        timeline_meta::timeline_plan_document(conn, &session_id, &timeline_id)
+            .map_err(store_err)?
+            .ok_or_else(|| Failure::not_found("that recorded plan is not available"))
+    })
+    .await?;
+    Ok(plan_response(document))
+}
+
 async fn read_file_target(
     State(state): State<AppState>,
     UrlPath((session_id, timeline_id, target_index)): UrlPath<(String, String, usize)>,
 ) -> Result<Response, Failure> {
     // The path is looked up from the canonical row. There is intentionally no
     // path query parameter: the browser can ask for target 0, but it cannot
-    // substitute a different file for the one the transcript proved was read.
+    // substitute a different file for the one the transcript recorded.
     let target = with_read(state.projection.clone(), move |conn| {
         queries::file_read_target(conn, &session_id, &timeline_id, target_index)
             .map_err(store_err)?
-            .ok_or_else(|| Failure::not_found("no file at that recorded read target"))
+            .ok_or_else(|| Failure::not_found("no file at that recorded target"))
     })
     .await?;
 
@@ -775,6 +834,26 @@ async fn timeline(
     })
     .await?;
     Ok(Json(page))
+}
+
+async fn timeline_entry(
+    State(state): State<AppState>,
+    UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
+) -> Result<Json<rosetta_core::TimelineEntry>, Failure> {
+    let hide_pending = !state.projection.is_published();
+    with_read(state.projection.clone(), move |conn| {
+        let Some(session) = queries::session(conn, &session_id).map_err(store_err)? else {
+            return Err(Failure::not_found(format!("no session {session_id}")));
+        };
+        if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+            return Err(Failure::not_found("that timeline row is not available"));
+        }
+        queries::timeline_entry(conn, &session_id, &timeline_id)
+            .map_err(store_err)?
+            .map(Json)
+            .ok_or_else(|| Failure::not_found("that timeline row is not available"))
+    })
+    .await
 }
 
 async fn command(

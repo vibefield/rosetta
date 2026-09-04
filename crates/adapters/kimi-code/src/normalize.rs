@@ -324,6 +324,12 @@ fn tools_update_store(
             content: title.to_owned(),
             created_at: None,
             updated_at: Some(at),
+            started_at: (task_status == TaskStatus::InProgress).then_some(at),
+            terminal_at: matches!(
+                task_status,
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            )
+            .then_some(at),
         }));
     }
     status

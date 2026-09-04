@@ -28,6 +28,10 @@ pub const WEB_SOURCE_LIMIT: usize = 10;
 pub const CITATION_RANGE_LIMIT: usize = 40;
 pub const EXTERNAL_FIELD_LIMIT: usize = 24;
 pub const CANONICAL_LIST_LIMIT: usize = 20;
+/// Task boards are durable user-visible state rather than a result preview.
+/// Keep enough of the board for the UI's explicit "show full tasks" action,
+/// while retaining a hard admission ceiling for hostile/native payloads.
+pub const TASK_SNAPSHOT_LIMIT: usize = 128;
 pub const EXTERNAL_LABEL_MAX_BYTES: usize = 128;
 pub const EXTERNAL_VALUE_MAX_BYTES: usize = 1024;
 pub const DOCUMENT_MAX_DEPTH: usize = 4;
@@ -167,6 +171,7 @@ wire_enum!(PlanOp {
 });
 wire_enum!(CollaborationOp {
     Send,
+    RequestStop,
     Create,
     Delete,
     List
@@ -868,6 +873,29 @@ pub struct UserAnswer {
     pub values: Vec<CanonicalText>,
 }
 
+/// One task in the bounded, point-in-time board attached to a task action.
+/// The raw ledger remains authoritative; this user-facing state makes both a
+/// compact preview and an explicit full-board disclosure possible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TaskSnapshotItem {
+    pub task_id: String,
+    pub subject: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub owner: Option<String>,
+    pub blocker_ids: Vec<String>,
+}
+
+/// A bounded task board immediately after the action completed. `total_count`
+/// stays honest if a native board exceeds the task-specific safety ceiling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TaskSnapshot {
+    pub tasks: Vec<TaskSnapshotItem>,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub total_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct MediaMetadata {
@@ -1057,6 +1085,7 @@ pub enum ToolAction {
         status: Option<TaskStatus>,
         owner: Option<String>,
         blocker_ids: Vec<String>,
+        snapshot: Option<TaskSnapshot>,
     },
     Plan {
         operation: PlanOp,
@@ -1595,6 +1624,7 @@ impl ToolAction {
                 description,
                 owner,
                 blocker_ids,
+                snapshot,
                 ..
             } => {
                 bounded_option("task id", task_id.as_deref(), ID_MAX_BYTES)?;
@@ -1602,6 +1632,32 @@ impl ToolAction {
                 validate_optional_text(description.as_ref())?;
                 bounded_option("task owner", owner.as_deref(), ID_MAX_BYTES)?;
                 validate_id_list("task blocker ids", blocker_ids, CANONICAL_LIST_LIMIT)?;
+                if let Some(snapshot) = snapshot {
+                    bounded_collection(
+                        "task snapshot items",
+                        snapshot.tasks.len(),
+                        TASK_SNAPSHOT_LIMIT,
+                    )?;
+                    reduced_count(
+                        "task snapshot items",
+                        snapshot.tasks.len(),
+                        snapshot.total_count,
+                    )?;
+                    for task in &snapshot.tasks {
+                        required_bounded("task snapshot id", &task.task_id, ID_MAX_BYTES)?;
+                        bounded_option(
+                            "task snapshot subject",
+                            task.subject.as_deref(),
+                            CORE_SCALAR_MAX_BYTES,
+                        )?;
+                        bounded_option("task snapshot owner", task.owner.as_deref(), ID_MAX_BYTES)?;
+                        validate_id_list(
+                            "task snapshot blocker ids",
+                            &task.blocker_ids,
+                            CANONICAL_LIST_LIMIT,
+                        )?;
+                    }
+                }
             }
             Self::Plan {
                 plan_id,
@@ -2465,6 +2521,7 @@ enum ToolField {
     TaskStatus,
     Owner,
     BlockerIds,
+    TaskSnapshot,
     PlanId,
     Title,
     Summary,
@@ -2899,6 +2956,7 @@ fn merge_action_fields(
                 status: current_status,
                 owner: current_owner,
                 blocker_ids: current_blockers,
+                snapshot: current_snapshot,
             },
             ToolAction::Task {
                 operation: incoming_operation,
@@ -2908,6 +2966,7 @@ fn merge_action_fields(
                 status: incoming_status,
                 owner: incoming_owner,
                 blocker_ids: incoming_blockers,
+                snapshot: incoming_snapshot,
             },
         ) => match phase {
             ToolPatchPhase::Request => {
@@ -2917,6 +2976,7 @@ fn merge_action_fields(
                 optional!(Description, current_description, incoming_description);
                 optional!(Owner, current_owner, incoming_owner);
                 required!(BlockerIds, current_blockers, incoming_blockers);
+                optional!(TaskSnapshot, current_snapshot, incoming_snapshot);
             }
             ToolPatchPhase::Outcome => optional!(TaskStatus, current_status, incoming_status),
         },

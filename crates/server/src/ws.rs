@@ -19,8 +19,8 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream::{SplitSink, SplitStream, StreamExt};
 
 use rosetta_protocol::{PROTOCOL_VERSION, ServerFrame, Stamp};
-use rosetta_store::hot::Replay;
-use rosetta_store::queries;
+use rosetta_store::hot::{Mutation, Replay};
+use rosetta_store::{queries, timeline_meta};
 
 use crate::http::{AppState, Failure, ProjectionReader, origin_allowed, with_read};
 use crate::hub::{Hub, HubItem, Subscription};
@@ -177,16 +177,50 @@ async fn timeline_snapshot(
     with_read(projection, move |conn| {
         let session = queries::session(conn, &session_id)
             .map_err(|error| Failure::internal(format!("{error}")))?;
-        let entries = if hide_pending
+        let hidden = hide_pending
             && session
-                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending)
-        {
-            Vec::new()
+                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
+        let (entries, timeline_meta) = if hidden {
+            (Vec::new(), timeline_meta::TimelineMeta::default())
         } else {
-            queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
+            (
+                queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
+                    .map_err(|error| Failure::internal(format!("{error}")))?,
+                timeline_meta::read(conn, &session_id)
+                    .map_err(|error| Failure::internal(format!("{error}")))?,
+            )
+        };
+        Ok(ServerFrame::TimelineSnapshot {
+            stamp,
+            entries,
+            timeline_meta,
+        })
+    })
+    .await
+}
+
+async fn timeline_meta_snapshot(
+    projection: Arc<ProjectionReader>,
+    session_id: String,
+    stamp: Option<Stamp>,
+) -> Result<ServerFrame, Failure> {
+    let hide_pending = !projection.is_published();
+    with_read(projection, move |conn| {
+        let session = queries::session(conn, &session_id)
+            .map_err(|error| Failure::internal(format!("{error}")))?;
+        let hidden = hide_pending
+            && session
+                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
+        let timeline_meta = if hidden {
+            timeline_meta::TimelineMeta::default()
+        } else {
+            timeline_meta::read(conn, &session_id)
                 .map_err(|error| Failure::internal(format!("{error}")))?
         };
-        Ok(ServerFrame::TimelineSnapshot { stamp, entries })
+        Ok(ServerFrame::TimelineMetaSnapshot {
+            stamp,
+            timeline_meta,
+        })
     })
     .await
 }
@@ -219,13 +253,28 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
     if let Some(resume) = resume
         && let Replay::Mutations(items) = state.hub.replay_session(&session_id, resume, now_ms())
     {
+        let mut refresh_timeline_meta = false;
         for mutation in items {
+            if matches!(&*mutation, Mutation::TimelineMetaChanged { .. }) {
+                refresh_timeline_meta = true;
+                continue;
+            }
             let frame = ServerFrame::Mutation {
                 stamp: None,
                 mutation: (*mutation).clone(),
             };
             if sink.send(frame).await.is_err() {
                 return;
+            }
+        }
+        if refresh_timeline_meta {
+            match timeline_meta_snapshot(state.projection.clone(), session_id.clone(), None).await {
+                Ok(frame) => {
+                    if sink.send(frame).await.is_err() {
+                        return;
+                    }
+                }
+                Err(_) => return,
             }
         }
         replayed = true;
@@ -259,6 +308,23 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
         };
         match item {
             HubItem::Mutation { stamp, mutation } => {
+                if matches!(&*mutation, Mutation::TimelineMetaChanged { .. }) {
+                    match timeline_meta_snapshot(
+                        state.projection.clone(),
+                        session_id.clone(),
+                        stamp,
+                    )
+                    .await
+                    {
+                        Ok(frame) => {
+                            if sink.send(frame).await.is_err() {
+                                return;
+                            }
+                        }
+                        Err(_) => return,
+                    }
+                    continue;
+                }
                 let frame = ServerFrame::Mutation {
                     stamp,
                     mutation: (*mutation).clone(),
@@ -383,7 +449,8 @@ mod tests {
 
     use rosetta_core::IngestOp;
     use rosetta_core::rows::{
-        MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
+        MessageKind, MessageRow, PlanRow, ProjectRow, RuntimeRow, SessionRole, SessionRow,
+        StreamState,
     };
     use rosetta_store::hot::Mutation;
     use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
@@ -568,8 +635,13 @@ mod tests {
             let seen = frames.lock().unwrap();
             assert!(matches!(seen[0], ServerFrame::Hello { stamp: Some(_), .. }));
             match &seen[1] {
-                ServerFrame::TimelineSnapshot { entries, .. } => {
+                ServerFrame::TimelineSnapshot {
+                    entries,
+                    timeline_meta,
+                    ..
+                } => {
                     assert_eq!(entries.len(), 1, "snapshot covers the pre-subscribe row");
+                    assert_eq!(timeline_meta, &timeline_meta::TimelineMeta::default());
                 }
                 other => panic!("expected snapshot, got {other:?}"),
             }
@@ -620,6 +692,122 @@ mod tests {
             }
         }
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn relevant_commit_streams_one_replacement_timeline_meta_snapshot() {
+        let mut h = harness();
+        let sink = RecordingSink::default();
+        let frames = sink.frames.clone();
+        let state = h.state.clone();
+        let task = tokio::spawn(async move {
+            let mut sink = sink;
+            run_session_stream(state, "s1".into(), None, &mut sink).await;
+        });
+        wait_for_frames(&frames, 2).await;
+
+        h.store
+            .apply(&Batch {
+                ops: vec![IngestOp::Plan(PlanRow {
+                    session_id: "s1".into(),
+                    revision: 1,
+                    content: "# Plan".into(),
+                    updated_at: 20_000,
+                })],
+                ..Batch::default()
+            })
+            .unwrap();
+        h.absorb();
+        wait_for_frames(&frames, 3).await;
+
+        let seen = frames.lock().unwrap();
+        match &seen[2] {
+            ServerFrame::TimelineMetaSnapshot {
+                stamp: Some(_),
+                timeline_meta,
+            } => {
+                assert_eq!(timeline_meta.plans.len(), 1);
+                assert_eq!(timeline_meta.plans[0].name, "plan-r1.md");
+            }
+            other => panic!("expected timeline meta snapshot, got {other:?}"),
+        }
+        drop(seen);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn replacement_timeline_meta_hides_progressive_pending_payload() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("projection.sqlite");
+        let uri = format!(
+            "file:rosetta-ws-pending-{}?mode=memory&cache=shared",
+            std::process::id()
+        );
+        let mut store = Store::open_shared_in_memory_for_rebuild_with_assets(&uri, &db).unwrap();
+        store
+            .apply(&Batch {
+                ops: vec![
+                    IngestOp::Runtime(RuntimeRow {
+                        id: "rt1".into(),
+                        kind: "claude-code".into(),
+                        data_root: "~/.claude".into(),
+                        enabled: true,
+                        account: None,
+                        config: None,
+                        skills: None,
+                        versions_seen: None,
+                        discovered_at: 1_000,
+                    }),
+                    IngestOp::Project(ProjectRow {
+                        id: "p1".into(),
+                        name: "rosetta".into(),
+                        root_paths: vec!["/w/rosetta".into()],
+                        git_repo: None,
+                    }),
+                    IngestOp::SessionMeta(SessionRow {
+                        id: "s1".into(),
+                        native_session_id: "native-s1".into(),
+                        runtime_id: "rt1".into(),
+                        project_id: Some("p1".into()),
+                        cwd: Some("/w/rosetta".into()),
+                        parent_session_id: None,
+                        root_session_id: "s1".into(),
+                        role: SessionRole::Main,
+                        title: None,
+                        summary: None,
+                        started_at: 10_000,
+                        updated_at: 10_000,
+                        stream_state: StreamState::Pending,
+                    }),
+                    IngestOp::Plan(PlanRow {
+                        session_id: "s1".into(),
+                        revision: 1,
+                        content: "# Not public yet".into(),
+                        updated_at: 20_000,
+                    }),
+                ],
+                ..Batch::default()
+            })
+            .unwrap();
+        let projection = Arc::new(ProjectionReader::shared_memory(&uri).unwrap());
+
+        let frame =
+            timeline_meta_snapshot(projection, "s1".into(), Some(Stamp { epoch: 1, seq: 2 })).await;
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(_) => panic!("timeline meta snapshot should be readable"),
+        };
+
+        match frame {
+            ServerFrame::TimelineMetaSnapshot {
+                stamp,
+                timeline_meta,
+            } => {
+                assert_eq!(stamp, Some(Stamp { epoch: 1, seq: 2 }));
+                assert_eq!(timeline_meta, timeline_meta::TimelineMeta::default());
+            }
+            other => panic!("expected timeline meta snapshot, got {other:?}"),
+        }
     }
 
     #[tokio::test]

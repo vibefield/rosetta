@@ -20,7 +20,8 @@ pub use rows::{
 pub use timeline::{
     CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, FailureKind,
     GroupDerivation, GroupKind, MessageDetail, NativeToolRef, Provenance, ResponseGroup,
-    SearchLanes, SourceIdentity, StatusBasis, TimelineBody, TimelineEntry, TimelineGroup,
-    ToolAction, ToolActionKind, ToolCorrelation, ToolFailure, ToolFoldState, ToolInteraction,
-    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
+    SearchLanes, SourceIdentity, StatusBasis, TaskSnapshot, TaskSnapshotItem, TimelineBody,
+    TimelineEntry, TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure,
+    ToolFoldState, ToolInteraction, ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact,
+    ToolTiming, ToolUpdatePatch,
 };

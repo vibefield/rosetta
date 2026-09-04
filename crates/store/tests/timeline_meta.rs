@@ -1,0 +1,437 @@
+use rosetta_core::rows::{
+    PlanRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, TaskRow, TaskStatus,
+    TokenSnapshot,
+};
+use rosetta_core::timeline::{
+    ArtifactKind, ArtifactOp, CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind,
+    NativeToolRef, PlanOp, Provenance, ResourceRef, StatusBasis, TaskOp, TaskSnapshot,
+    TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolCorrelation,
+    ToolInteraction, ToolStatus, ToolStatusFact,
+};
+use rosetta_core::{IngestOp, ids};
+use rosetta_store::timeline_meta::{
+    TimelineMetaArtifactSource, TimelineMetaPlanSource, read, revision_plan_document,
+    timeline_plan_document,
+};
+use rosetta_store::{Batch, Store};
+
+fn base_batch() -> Batch {
+    Batch {
+        ops: vec![
+            IngestOp::Runtime(RuntimeRow {
+                id: "rt1".into(),
+                kind: "test".into(),
+                data_root: "/tmp/test".into(),
+                enabled: true,
+                account: None,
+                config: None,
+                skills: None,
+                versions_seen: None,
+                discovered_at: 1,
+            }),
+            IngestOp::Project(ProjectRow {
+                id: "p1".into(),
+                name: "project".into(),
+                root_paths: vec!["/w/project".into()],
+                git_repo: None,
+            }),
+            IngestOp::SessionMeta(SessionRow {
+                id: "s1".into(),
+                native_session_id: "native-s1".into(),
+                runtime_id: "rt1".into(),
+                project_id: Some("p1".into()),
+                cwd: Some("/w/project".into()),
+                parent_session_id: None,
+                root_session_id: "s1".into(),
+                role: SessionRole::Main,
+                title: None,
+                summary: None,
+                started_at: 1,
+                updated_at: 1,
+                stream_state: StreamState::Streaming,
+            }),
+        ],
+        ..Batch::default()
+    }
+}
+
+fn task_row(status: TaskStatus, at: i64) -> TaskRow {
+    TaskRow {
+        id: ids::task_id("s1", "native-task"),
+        session_id: "s1".into(),
+        status,
+        content: "Stored task".into(),
+        created_at: (status == TaskStatus::Pending).then_some(100),
+        updated_at: Some(at),
+        started_at: None,
+        terminal_at: None,
+    }
+}
+
+fn tool_entry(id: &str, ordinal: i64, at: i64, action: ToolAction) -> TimelineEntry {
+    TimelineEntry {
+        timeline_id: id.into(),
+        session_id: "s1".into(),
+        ordinal,
+        group: TimelineGroup {
+            id: format!("group-{id}"),
+            kind: GroupKind::SystemCycle,
+            derivation: GroupDerivation::Native,
+        },
+        response: None,
+        block_index: None,
+        native_id: Some(id.into()),
+        parent_native_id: None,
+        at: Some(at),
+        model: None,
+        effort: None,
+        body: TimelineBody::ToolUse {
+            tool: Box::new(ToolInteraction {
+                correlation: ToolCorrelation {
+                    key: format!("call-{id}"),
+                    derivation: CorrelationDerivation::NativeId,
+                },
+                native: NativeToolRef {
+                    id: Some(format!("call-{id}")),
+                    namespace: None,
+                    name: "test".into(),
+                    provider: None,
+                },
+                status: ToolStatusFact {
+                    value: ToolStatus::Succeeded,
+                    basis: StatusBasis::NativeTerminalRecord,
+                },
+                action,
+                failure: None,
+                timing: None,
+            }),
+        },
+        parent_tool_native_id: None,
+        usage: TokenSnapshot::default(),
+        provenance: Provenance {
+            agent_version: None,
+            src_cursor: None,
+            src_offset: None,
+        },
+    }
+}
+
+fn plan_action(title: &str) -> ToolAction {
+    ToolAction::Plan {
+        operation: PlanOp::Update,
+        plan_id: Some("primary".into()),
+        title: Some(title.into()),
+        summary: Some(CanonicalText::inline("Query, protocol, client, view.").unwrap()),
+        step_count: Some(4),
+    }
+}
+
+fn artifact_action(name: &str) -> ToolAction {
+    ToolAction::Artifact {
+        operation: ArtifactOp::Create,
+        artifact_kind: ArtifactKind::Document,
+        name: Some(name.into()),
+        description: None,
+        resources: vec![ResourceRef::File {
+            path: "/w/project/report.md".into(),
+            resolved: true,
+        }],
+        media: None,
+    }
+}
+
+#[test]
+fn one_read_builds_complete_deduplicated_work_indexes_without_bodies() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    for (status, at) in [
+        (TaskStatus::Pending, 100),
+        (TaskStatus::InProgress, 200),
+        (TaskStatus::Completed, 500),
+    ] {
+        store
+            .apply(&Batch {
+                ops: vec![IngestOp::Task(task_row(status, at))],
+                ..Batch::default()
+            })
+            .unwrap();
+    }
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Plan(PlanRow {
+                    session_id: "s1".into(),
+                    revision: 1,
+                    content: "old".into(),
+                    updated_at: 300,
+                }),
+                IngestOp::Plan(PlanRow {
+                    session_id: "s1".into(),
+                    revision: 2,
+                    content: "[{\"step\":\"ship\"}]".into(),
+                    updated_at: 600,
+                }),
+                IngestOp::Message(Box::new(tool_entry(
+                    "task-message",
+                    0,
+                    700,
+                    ToolAction::Task {
+                        operation: TaskOp::Update,
+                        task_id: Some("claude-task".into()),
+                        subject: Some("Snapshot task".into()),
+                        description: None,
+                        status: Some(TaskStatus::InProgress),
+                        owner: None,
+                        blocker_ids: vec![],
+                        snapshot: Some(TaskSnapshot {
+                            tasks: vec![TaskSnapshotItem {
+                                task_id: "claude-task".into(),
+                                subject: Some("Snapshot task".into()),
+                                status: Some(TaskStatus::InProgress),
+                                owner: None,
+                                blocker_ids: vec![],
+                            }],
+                            total_count: 1,
+                        }),
+                    },
+                ))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "plan-old",
+                    1,
+                    800,
+                    plan_action("Old plan"),
+                ))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "plan-new",
+                    2,
+                    900,
+                    plan_action("Current plan"),
+                ))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "artifact-old",
+                    3,
+                    1_000,
+                    artifact_action("old-report.md"),
+                ))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "artifact-new",
+                    4,
+                    1_100,
+                    artifact_action("report.md"),
+                ))),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let meta = read(store.conn(), "s1").unwrap();
+    assert_eq!(meta.tasks.len(), 2);
+    let stored = meta
+        .tasks
+        .iter()
+        .find(|task| task.subject == "Stored task")
+        .unwrap();
+    assert_eq!(stored.started_at, Some(200));
+    assert_eq!(stored.terminal_at, Some(500));
+    assert_eq!(stored.timeline_id, None);
+    let snapshot = meta
+        .tasks
+        .iter()
+        .find(|task| task.subject == "Snapshot task")
+        .unwrap();
+    assert_eq!(snapshot.started_at, Some(700));
+    assert_eq!(snapshot.timeline_id.as_deref(), Some("task-message"));
+
+    assert_eq!(meta.plans.len(), 2, "latest stored and latest named plan");
+    assert!(meta.plans.iter().any(|plan| {
+        plan.name == "plan-r2.json"
+            && matches!(
+                plan.source,
+                TimelineMetaPlanSource::Revision { revision: 2 }
+            )
+    }));
+    assert!(meta.plans.iter().any(|plan| {
+        plan.name == "Current plan.md"
+            && matches!(
+                &plan.source,
+                TimelineMetaPlanSource::Timeline { timeline_id } if timeline_id == "plan-new"
+            )
+    }));
+
+    assert_eq!(meta.artifacts.len(), 1, "a repeated resource is one file");
+    assert_eq!(meta.artifacts[0].name, "report.md");
+    assert_eq!(
+        meta.artifacts[0].created_at,
+        Some(1_000),
+        "later artifact activity must not rewrite its creation time"
+    );
+    assert!(matches!(
+        &meta.artifacts[0].source,
+        TimelineMetaArtifactSource::TimelineFile { timeline_id, target_index: 0, .. }
+            if timeline_id == "artifact-new"
+    ));
+
+    let stored_plan = revision_plan_document(store.conn(), "s1", 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_plan.content, "[{\"step\":\"ship\"}]");
+    let timeline_plan = timeline_plan_document(store.conn(), "s1", "plan-new")
+        .unwrap()
+        .unwrap();
+    assert!(timeline_plan.content.contains("# Current plan"));
+    assert!(timeline_plan.content.contains("Steps recorded: 4"));
+}
+
+#[test]
+fn task_rename_preserves_the_source_observed_run_timing() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(tool_entry(
+                    "task-started",
+                    0,
+                    200,
+                    ToolAction::Task {
+                        operation: TaskOp::Update,
+                        task_id: Some("rename-me".into()),
+                        subject: Some("First name".into()),
+                        description: None,
+                        status: Some(TaskStatus::InProgress),
+                        owner: None,
+                        blocker_ids: vec![],
+                        snapshot: None,
+                    },
+                ))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "task-completed",
+                    1,
+                    500,
+                    ToolAction::Task {
+                        operation: TaskOp::Update,
+                        task_id: Some("rename-me".into()),
+                        subject: Some("Clearer final name".into()),
+                        description: None,
+                        status: Some(TaskStatus::Completed),
+                        owner: None,
+                        blocker_ids: vec![],
+                        snapshot: None,
+                    },
+                ))),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let meta = read(store.conn(), "s1").unwrap();
+    assert_eq!(meta.tasks.len(), 1);
+    assert_eq!(meta.tasks[0].subject, "Clearer final name");
+    assert_eq!(meta.tasks[0].started_at, Some(200));
+    assert_eq!(meta.tasks[0].terminal_at, Some(500));
+    assert_eq!(meta.tasks[0].timeline_id.as_deref(), Some("task-completed"));
+}
+
+#[test]
+fn task_snapshots_contribute_timing_and_do_not_hide_explicit_tasks() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let snapshot = |id: &str, ordinal: i64, at: i64, status: TaskStatus| {
+        IngestOp::Message(Box::new(tool_entry(
+            id,
+            ordinal,
+            at,
+            ToolAction::Task {
+                operation: TaskOp::List,
+                task_id: None,
+                subject: None,
+                description: None,
+                status: None,
+                owner: None,
+                blocker_ids: vec![],
+                snapshot: Some(TaskSnapshot {
+                    tasks: vec![TaskSnapshotItem {
+                        task_id: "board-task".into(),
+                        subject: Some("Board task".into()),
+                        status: Some(status),
+                        owner: None,
+                        blocker_ids: vec![],
+                    }],
+                    total_count: 1,
+                }),
+            },
+        )))
+    };
+
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(tool_entry(
+                    "explicit-task",
+                    0,
+                    100,
+                    ToolAction::Task {
+                        operation: TaskOp::Create,
+                        task_id: Some("outside-board".into()),
+                        subject: Some("Explicit task".into()),
+                        description: None,
+                        status: Some(TaskStatus::Pending),
+                        owner: None,
+                        blocker_ids: vec![],
+                        snapshot: None,
+                    },
+                ))),
+                snapshot("board-start", 1, 200, TaskStatus::InProgress),
+                snapshot("board-finish", 2, 500, TaskStatus::Completed),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let meta = read(store.conn(), "s1").unwrap();
+    assert_eq!(meta.tasks.len(), 2);
+    let board = meta
+        .tasks
+        .iter()
+        .find(|task| task.subject == "Board task")
+        .unwrap();
+    assert_eq!(board.started_at, Some(200));
+    assert_eq!(board.terminal_at, Some(500));
+    assert_eq!(board.timeline_id.as_deref(), Some("board-finish"));
+    assert!(
+        meta.tasks
+            .iter()
+            .any(|task| task.subject == "Explicit task")
+    );
+}
+
+#[test]
+fn relevant_batch_coalesces_to_one_timeline_meta_session_touch() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store.observe_effects();
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(tool_entry("plan", 0, 100, plan_action("Plan")))),
+                IngestOp::Message(Box::new(tool_entry(
+                    "artifact",
+                    1,
+                    200,
+                    artifact_action("report.md"),
+                ))),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+    let effects = store.drain_effects();
+    assert_eq!(
+        effects
+            .timeline_meta_sessions
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec!["s1"]
+    );
+}

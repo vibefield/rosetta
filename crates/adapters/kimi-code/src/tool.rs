@@ -144,6 +144,7 @@ pub fn project_request(
             status: first_string(input, &["status"]).and_then(task_status),
             owner: None,
             blocker_ids: vec![],
+            snapshot: None,
         },
         _ => unreachable!("Kimi registry and projector are closed together"),
     };

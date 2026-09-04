@@ -15,6 +15,7 @@ use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, SessionUsageRow, TaskRow,
 };
+use rosetta_core::{TimelineBody, ToolAction};
 
 use crate::StoreError;
 use crate::hot::{Effects, MetaEffects, MetaTouch, Mutation, meta_touch};
@@ -344,12 +345,42 @@ fn apply_plan(tx: &Transaction, row: &PlanRow, src_cursor: Option<i64>) -> Resul
 }
 
 fn apply_task(tx: &Transaction, row: &TaskRow, src_cursor: Option<i64>) -> Result<(), StoreError> {
+    let event_at = row.updated_at.or(row.created_at);
+    let started_at = match row.status {
+        rosetta_core::TaskStatus::Pending => None,
+        rosetta_core::TaskStatus::InProgress => row.started_at.or(event_at),
+        rosetta_core::TaskStatus::Completed
+        | rosetta_core::TaskStatus::Failed
+        | rosetta_core::TaskStatus::Cancelled => row.started_at,
+    };
+    let terminal_at = match row.status {
+        rosetta_core::TaskStatus::Completed
+        | rosetta_core::TaskStatus::Failed
+        | rosetta_core::TaskStatus::Cancelled => row.terminal_at.or(event_at),
+        rosetta_core::TaskStatus::Pending | rosetta_core::TaskStatus::InProgress => None,
+    };
     tx.prepare_cached(
-        "INSERT INTO task (id, session_id, status, content, created_at, updated_at, src_cursor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO task
+           (id, session_id, status, content, created_at, updated_at,
+            started_at, terminal_at, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
            status = excluded.status, content = excluded.content,
            updated_at = COALESCE(excluded.updated_at, task.updated_at),
+           started_at = CASE
+             WHEN excluded.status = 'pending' THEN NULL
+             WHEN excluded.status = 'in_progress' AND task.status != 'in_progress'
+               THEN COALESCE(excluded.started_at, excluded.updated_at, excluded.created_at)
+             ELSE COALESCE(task.started_at, excluded.started_at)
+           END,
+           terminal_at = CASE
+             WHEN excluded.status IN ('completed', 'failed', 'cancelled')
+                  AND task.status IN ('completed', 'failed', 'cancelled')
+               THEN COALESCE(task.terminal_at, excluded.terminal_at, excluded.updated_at)
+             WHEN excluded.status IN ('completed', 'failed', 'cancelled')
+               THEN COALESCE(excluded.terminal_at, excluded.updated_at)
+             ELSE NULL
+           END,
            src_cursor = excluded.src_cursor",
     )?
     .execute(params![
@@ -359,6 +390,8 @@ fn apply_task(tx: &Transaction, row: &TaskRow, src_cursor: Option<i64>) -> Resul
         row.content,
         row.created_at,
         row.updated_at,
+        started_at,
+        terminal_at,
         src_cursor,
     ])?;
     Ok(())
@@ -1083,6 +1116,44 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
         }
         MetaTouch::Session(id) => fx.touch_session(id),
         MetaTouch::None => {}
+    }
+    if let Some(session_id) = timeline_meta_session(op) {
+        fx.touch_timeline_meta(session_id);
+    }
+}
+
+fn action_affects_timeline_meta(action: &ToolAction) -> bool {
+    matches!(
+        action,
+        ToolAction::Task { .. } | ToolAction::Plan { .. } | ToolAction::Artifact { .. }
+    )
+}
+
+fn timeline_meta_session(op: &IngestOp) -> Option<&str> {
+    match op {
+        IngestOp::Task(row) => Some(&row.session_id),
+        IngestOp::Plan(row) => Some(&row.session_id),
+        IngestOp::Message(row)
+            if matches!(
+                &row.body,
+                TimelineBody::ToolUse { tool } if action_affects_timeline_meta(&tool.action)
+            ) =>
+        {
+            Some(&row.session_id)
+        }
+        IngestOp::ToolUpdate {
+            session_id, patch, ..
+        } if [
+            patch.request.as_ref().map(|request| &request.action),
+            patch.outcome.as_ref().map(|outcome| &outcome.action),
+        ]
+        .into_iter()
+        .flatten()
+        .any(action_affects_timeline_meta) =>
+        {
+            Some(session_id)
+        }
+        _ => None,
     }
 }
 

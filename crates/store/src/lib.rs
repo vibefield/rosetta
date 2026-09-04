@@ -11,6 +11,7 @@ mod message_codec;
 pub mod queries;
 pub mod schema;
 mod search_sync;
+pub mod timeline_meta;
 mod tool_codec;
 
 use std::collections::BTreeSet;

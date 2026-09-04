@@ -21,10 +21,11 @@ use rosetta_adapter_support::tool::{
 };
 use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
-    ArtifactKind, ArtifactOp, CodeLookupOp, CollaborationOp, CorrelationDerivation, ExecutionMode,
-    FileChangeOp, FileDelta, FileSearchMode, ModeOp, ProcessOp, QuestionOption, RangeUnit,
-    ReadTarget, ScheduleOp, SearchFilter, SearchFilterKind, SourceRange, TaskOp, ToolAction,
-    ToolActionKind, ToolInteraction, UserQuestion,
+    ArtifactKind, ArtifactOp, CANONICAL_LIST_LIMIT, CodeLookupOp, CollaborationOp,
+    CorrelationDerivation, ExecutionMode, FileChangeOp, FileDelta, FileSearchMode, ModeOp,
+    ProcessOp, QuestionOption, RangeUnit, ReadTarget, ScheduleOp, SearchFilter, SearchFilterKind,
+    SourceRange, TaskOp, TaskSnapshotItem, ToolAction, ToolActionKind, ToolInteraction,
+    UserQuestion,
 };
 use serde_json::Value;
 
@@ -519,18 +520,29 @@ fn project_task(name: &str, input: &Value) -> Result<ToolAction, ProjectionError
     };
     Ok(ToolAction::Task {
         operation,
-        task_id: first_string(input, &["task_id", "id"]).map(str::to_owned),
+        task_id: first_string(input, &["taskId", "task_id", "id"]).map(str::to_owned),
         subject: first_string(input, &["subject", "title"]).map(str::to_owned),
         description: first_string(input, &["description", "content"])
             .map(canonical_text)
             .transpose()?,
-        status: first_string(input, &["status"]).and_then(task_status),
+        status: if operation == TaskOp::Create {
+            first_string(input, &["status"])
+                .and_then(task_status)
+                .or(Some(TaskStatus::Pending))
+        } else {
+            first_string(input, &["status"]).and_then(task_status)
+        },
         owner: first_string(input, &["owner"]).map(str::to_owned),
-        blocker_ids: string_values(input, &["addBlocks", "blocker_ids"], 20),
+        blocker_ids: string_values(
+            input,
+            &["addBlockedBy", "blockedBy", "addBlocks", "blocker_ids"],
+            20,
+        ),
+        snapshot: None,
     })
 }
 
-fn task_status(value: &str) -> Option<TaskStatus> {
+pub(crate) fn task_status(value: &str) -> Option<TaskStatus> {
     match value.to_ascii_lowercase().replace(' ', "_").as_str() {
         "pending" => Some(TaskStatus::Pending),
         "in_progress" => Some(TaskStatus::InProgress),
@@ -539,6 +551,30 @@ fn task_status(value: &str) -> Option<TaskStatus> {
         "cancelled" | "canceled" => Some(TaskStatus::Cancelled),
         _ => None,
     }
+}
+
+/// Task result structures are captured in the Claude ground-truth document:
+/// TaskCreate returns `task`, while TaskList returns `tasks`. Keep this parser
+/// beside the request projector so native field knowledge does not leak into
+/// the client.
+pub(crate) fn project_task_item(value: &Value) -> Option<TaskSnapshotItem> {
+    let task_id = first_string(value, &["id", "taskId", "task_id"])?;
+    Some(TaskSnapshotItem {
+        task_id: task_id.to_owned(),
+        subject: first_string(value, &["subject", "title"]).map(str::to_owned),
+        status: first_string(value, &["status"]).and_then(task_status),
+        owner: first_string(value, &["owner"]).map(str::to_owned),
+        blocker_ids: string_values(value, &["blockedBy", "blocker_ids"], 20),
+    })
+}
+
+pub(crate) fn project_task_list_result(value: &Value) -> Option<(Vec<TaskSnapshotItem>, u64)> {
+    let values = value.get("tasks")?.as_array()?;
+    let total_count = u64::try_from(values.len()).unwrap_or(u64::MAX);
+    Some((
+        values.iter().filter_map(project_task_item).collect(),
+        total_count,
+    ))
 }
 
 fn project_questions(input: &Value) -> Result<Vec<UserQuestion>, ProjectionError> {
@@ -607,11 +643,19 @@ fn project_artifact(
     input: &Value,
     cwd: Option<&str>,
 ) -> Result<ToolAction, ProjectionError> {
-    let resources = first_string(input, &["path", "file_path"])
-        .map(|path| lexical_resource(path, cwd, false))
-        .transpose()?
+    // `SendUserFile` is plural in the native record even when it sends one
+    // file. Preserve every entry; falling back to the singular fields keeps
+    // the separate `Artifact` tool's observed shape intact.
+    let mut paths = string_values(input, &["files"], CANONICAL_LIST_LIMIT);
+    if paths.is_empty()
+        && let Some(path) = first_string(input, &["path", "file_path"])
+    {
+        paths.push(path.to_owned());
+    }
+    let resources = paths
         .into_iter()
-        .collect();
+        .map(|path| lexical_resource(path, cwd, false))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ToolAction::Artifact {
         operation: if name == "SendUserFile" {
             ArtifactOp::Send
@@ -619,8 +663,8 @@ fn project_artifact(
             ArtifactOp::Create
         },
         artifact_kind: ArtifactKind::File,
-        name: first_string(input, &["name"]).map(str::to_owned),
-        description: first_string(input, &["description", "prompt"])
+        name: first_string(input, &["name", "title"]).map(str::to_owned),
+        description: first_string(input, &["description", "prompt", "caption"])
             .map(canonical_text)
             .transpose()?,
         resources,
@@ -654,6 +698,11 @@ fn project_mode(
 
 fn project_collaboration(name: &str, input: &Value) -> Result<ToolAction, ProjectionError> {
     let operation = match name {
+        "SendMessage"
+            if first_string(input, &["type"]).is_some_and(|kind| kind == "shutdown_request") =>
+        {
+            CollaborationOp::RequestStop
+        }
         "TeamCreate" => CollaborationOp::Create,
         "TeamDelete" => CollaborationOp::Delete,
         "ListAgents" => CollaborationOp::List,
@@ -664,7 +713,7 @@ fn project_collaboration(name: &str, input: &Value) -> Result<ToolAction, Projec
         recipient: first_string(input, &["recipient"]).map(str::to_owned),
         team: first_string(input, &["team_name", "team"]).map(str::to_owned),
         summary: first_string(input, &["summary"]).map(str::to_owned),
-        body: first_string(input, &["message", "body"])
+        body: first_string(input, &["content", "message", "body"])
             .map(canonical_text)
             .transpose()?,
         linked_session_id: None,
@@ -693,6 +742,64 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool.action, ToolAction::Shell { .. }));
+    }
+
+    #[test]
+    fn send_message_keeps_content_and_distinguishes_shutdown_requests() {
+        let message = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "SendMessage",
+            &json!({
+                "type":"message",
+                "recipient":"researcher",
+                "summary":"found the implementation",
+                "content":"The implementation is in src/message.rs."
+            }),
+            None,
+            "send-1",
+            Some("send-1"),
+            None,
+        )
+        .unwrap();
+        let ToolAction::Collaborate {
+            operation,
+            recipient,
+            summary,
+            body,
+            ..
+        } = message.action
+        else {
+            panic!("expected collaboration")
+        };
+        assert_eq!(operation, CollaborationOp::Send);
+        assert_eq!(recipient.as_deref(), Some("researcher"));
+        assert_eq!(summary.as_deref(), Some("found the implementation"));
+        assert_eq!(
+            body.as_ref().map(|text| text.as_preview()),
+            Some("The implementation is in src/message.rs.")
+        );
+
+        let shutdown = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "SendMessage",
+            &json!({
+                "type":"shutdown_request",
+                "recipient":"researcher",
+                "content":"The assigned work is complete."
+            }),
+            None,
+            "send-2",
+            Some("send-2"),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            shutdown.action,
+            ToolAction::Collaborate {
+                operation: CollaborationOp::RequestStop,
+                ..
+            }
+        ));
     }
 
     /// Replaces `newer_writer_does_not_silently_inherit_the_mapping`, which
@@ -870,5 +977,40 @@ mod tests {
             changes[0].diff.as_ref().map(|diff| diff.as_preview()),
             Some("--- /dev/null\n+++ /repo/new.txt\n@@ -1,0 +1,2 @@\n+one\n+two")
         );
+    }
+
+    #[test]
+    fn send_user_file_preserves_every_file_and_its_caption() {
+        let tool = project_request(
+            Some(PINNED_WRITER_VERSION),
+            "SendUserFile",
+            &json!({
+                "files": ["shots/first.png", "/tmp/second.png"],
+                "caption": "Two views of the finished work"
+            }),
+            Some("/repo"),
+            "send-1",
+            Some("send-1"),
+            None,
+        )
+        .unwrap();
+
+        let ToolAction::Artifact {
+            operation,
+            description,
+            resources,
+            ..
+        } = tool.action
+        else {
+            panic!("expected artifact")
+        };
+        assert_eq!(operation, ArtifactOp::Send);
+        assert_eq!(
+            description.as_ref().map(|text| text.as_preview()),
+            Some("Two views of the finished work")
+        );
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].display_value(), "/repo/shots/first.png");
+        assert_eq!(resources[1].display_value(), "/tmp/second.png");
     }
 }

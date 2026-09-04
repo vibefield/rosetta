@@ -6,6 +6,7 @@ import type { RuntimeRow } from "./RuntimeRow";
 import type { SessionRow } from "./SessionRow";
 import type { Stamp } from "./Stamp";
 import type { TimelineEntry } from "./TimelineEntry";
+import type { TimelineMeta } from "./TimelineMeta";
 
 /**
  * Server→client WebSocket frames. The subscribe protocol is the hub's:
@@ -14,4 +15,4 @@ import type { TimelineEntry } from "./TimelineEntry";
  * `timeline_id`), and `Resync` announces a barrier — the server re-stamps
  * and sends a fresh snapshot immediately after.
  */
-export type ServerFrame = { "frame": "hello", protocol_version: number, stamp: Stamp | null, } | { "frame": "timeline_snapshot", stamp: Stamp, entries: Array<TimelineEntry>, } | { "frame": "meta_snapshot", runtimes: Array<RuntimeRow>, projects: Array<ProjectRow>, sessions: Array<SessionRow>, } | { "frame": "mutation", stamp: Stamp | null, mutation: Mutation, } | { "frame": "resync" } | { "frame": "error", error: ApiError, };
+export type ServerFrame = { "frame": "hello", protocol_version: number, stamp: Stamp | null, } | { "frame": "timeline_snapshot", stamp: Stamp, entries: Array<TimelineEntry>, timeline_meta: TimelineMeta, } | { "frame": "timeline_meta_snapshot", stamp: Stamp | null, timeline_meta: TimelineMeta, } | { "frame": "meta_snapshot", runtimes: Array<RuntimeRow>, projects: Array<ProjectRow>, sessions: Array<SessionRow>, } | { "frame": "mutation", stamp: Stamp | null, mutation: Mutation, } | { "frame": "resync" } | { "frame": "error", error: ApiError, };

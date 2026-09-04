@@ -1,4 +1,4 @@
-// Canonical file-read targets through the shared file-viewer seam.
+// Canonical transcript file targets through the shared file-viewer seam.
 //
 // A transcript path is evidence, not authority. The renderer therefore sends
 // only the session id, timeline id and target index back to rosettad. The

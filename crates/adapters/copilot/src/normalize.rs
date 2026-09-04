@@ -550,6 +550,16 @@ fn task_row(ctx: &NormalizeCtx, state: &mut CopilotState, task: TaskFact, ops: &
     state
         .task_content
         .insert(task.native_id.clone(), task.content.clone());
+    let event_at = task.updated_at.or(task.created_at);
+    let started_at = (task.status == TaskStatus::InProgress)
+        .then_some(event_at)
+        .flatten();
+    let terminal_at = matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+    )
+    .then_some(task.updated_at)
+    .flatten();
     ops.push(IngestOp::Task(TaskRow {
         id: ids::task_id(&ctx.session_id, &task.native_id),
         session_id: ctx.session_id.clone(),
@@ -557,6 +567,8 @@ fn task_row(ctx: &NormalizeCtx, state: &mut CopilotState, task: TaskFact, ops: &
         content: task.content,
         created_at: task.created_at,
         updated_at: task.updated_at,
+        started_at,
+        terminal_at,
     }));
 }
 

@@ -764,6 +764,13 @@ fn goal(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -> Resul
         content,
         created_at: None,
         updated_at: at,
+        started_at: (status == TaskStatus::InProgress).then_some(at).flatten(),
+        terminal_at: matches!(
+            status,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        )
+        .then_some(at)
+        .flatten(),
     }));
     Ok(())
 }
@@ -784,6 +791,8 @@ fn task_backgrounded(
         content,
         created_at: at,
         updated_at: at,
+        started_at: at,
+        terminal_at: None,
     }));
     Ok(())
 }
@@ -810,6 +819,11 @@ fn task_completed(
         .get("completed")
         .and_then(Value::as_bool)
         .ok_or(())?;
+    let started_at = snapshot.get("start_time").and_then(system_time_ms);
+    let terminal_at = snapshot
+        .get("end_time")
+        .and_then(system_time_ms)
+        .or_else(|| stamp(line));
     ops.push(IngestOp::Task(TaskRow {
         id: ids::task_id(&ctx.session_id, native_id),
         session_id: ctx.session_id.clone(),
@@ -819,11 +833,10 @@ fn task_completed(
             TaskStatus::InProgress
         },
         content,
-        created_at: snapshot.get("start_time").and_then(system_time_ms),
-        updated_at: snapshot
-            .get("end_time")
-            .and_then(system_time_ms)
-            .or_else(|| stamp(line)),
+        created_at: started_at,
+        updated_at: terminal_at,
+        started_at,
+        terminal_at: completed.then_some(terminal_at).flatten(),
     }));
     Ok(())
 }

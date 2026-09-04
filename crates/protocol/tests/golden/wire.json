@@ -54,7 +54,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 8,
+      "protocol_version": 10,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -137,6 +137,147 @@
       "stamp": {
         "epoch": 9,
         "seq": 3
+      },
+      "timeline_meta": {
+        "artifacts": [
+          {
+            "artifact_kind": "document",
+            "byte_len": null,
+            "created_at": 3608000,
+            "id": "file:/w/rosetta/report.md",
+            "media_type": "text/markdown",
+            "name": "report.md",
+            "source": {
+              "path": "/w/rosetta/report.md",
+              "target_index": 0,
+              "timeline_id": "artifact-message-1",
+              "type": "timeline_file"
+            }
+          },
+          {
+            "artifact_kind": "image",
+            "byte_len": 42,
+            "created_at": 3609000,
+            "id": "asset:digest",
+            "media_type": "image/png",
+            "name": "preview.png",
+            "source": {
+              "asset": {
+                "byte_len": 42,
+                "digest": "digest",
+                "media_type": "image/png",
+                "url": "/api/assets/digest.png"
+              },
+              "type": "asset"
+            }
+          }
+        ],
+        "plans": [
+          {
+            "byte_len": 128,
+            "id": "revision:2",
+            "name": "plan-r2.json",
+            "source": {
+              "revision": 2,
+              "type": "revision"
+            },
+            "updated_at": 3605000
+          },
+          {
+            "byte_len": 96,
+            "id": "timeline:primary",
+            "name": "Implementation plan.md",
+            "source": {
+              "timeline_id": "plan-message-1",
+              "type": "timeline"
+            },
+            "updated_at": 3606000
+          }
+        ],
+        "tasks": [
+          {
+            "id": "task-1",
+            "started_at": 3600000,
+            "status": "completed",
+            "subject": "Ship the work index",
+            "terminal_at": 3610000,
+            "timeline_id": "task-message-1"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "timeline_meta_snapshot",
+      "stamp": {
+        "epoch": 9,
+        "seq": 3
+      },
+      "timeline_meta": {
+        "artifacts": [
+          {
+            "artifact_kind": "document",
+            "byte_len": null,
+            "created_at": 3608000,
+            "id": "file:/w/rosetta/report.md",
+            "media_type": "text/markdown",
+            "name": "report.md",
+            "source": {
+              "path": "/w/rosetta/report.md",
+              "target_index": 0,
+              "timeline_id": "artifact-message-1",
+              "type": "timeline_file"
+            }
+          },
+          {
+            "artifact_kind": "image",
+            "byte_len": 42,
+            "created_at": 3609000,
+            "id": "asset:digest",
+            "media_type": "image/png",
+            "name": "preview.png",
+            "source": {
+              "asset": {
+                "byte_len": 42,
+                "digest": "digest",
+                "media_type": "image/png",
+                "url": "/api/assets/digest.png"
+              },
+              "type": "asset"
+            }
+          }
+        ],
+        "plans": [
+          {
+            "byte_len": 128,
+            "id": "revision:2",
+            "name": "plan-r2.json",
+            "source": {
+              "revision": 2,
+              "type": "revision"
+            },
+            "updated_at": 3605000
+          },
+          {
+            "byte_len": 96,
+            "id": "timeline:primary",
+            "name": "Implementation plan.md",
+            "source": {
+              "timeline_id": "plan-message-1",
+              "type": "timeline"
+            },
+            "updated_at": 3606000
+          }
+        ],
+        "tasks": [
+          {
+            "id": "task-1",
+            "started_at": 3600000,
+            "status": "completed",
+            "subject": "Ship the work index",
+            "terminal_at": 3610000,
+            "timeline_id": "task-message-1"
+          }
+        ]
       }
     },
     {
@@ -399,6 +540,10 @@
       "type": "session_swept"
     },
     {
+      "session_id": "s1",
+      "type": "timeline_meta_changed"
+    },
+    {
       "cwd": "/w/rosetta",
       "id": "s1",
       "native_session_id": "native-s1",
@@ -456,7 +601,7 @@
       }
     ]
   },
-  "protocol_version": 8,
+  "protocol_version": 10,
   "runtimes": {
     "runtimes": [
       {
@@ -608,13 +753,35 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 8,
-    "schema_version": 9,
+    "protocol_version": 10,
+    "schema_version": 14,
     "search": {
       "projection_epoch": "epoch-1",
       "readiness": "catching-up",
       "revision": 42
     }
+  },
+  "task_action": {
+    "blocker_ids": [],
+    "description": null,
+    "operation": "update",
+    "owner": "architect",
+    "snapshot": {
+      "tasks": [
+        {
+          "blocker_ids": [],
+          "owner": "architect",
+          "status": "completed",
+          "subject": "Ship the task board",
+          "task_id": "T-1"
+        }
+      ],
+      "total_count": 1
+    },
+    "status": "completed",
+    "subject": "Ship the task board",
+    "task_id": "T-1",
+    "type": "task"
   },
   "timeline_page": {
     "cursor": "{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}",

@@ -477,7 +477,7 @@
     <div class="card">
       <div class="kicker">representation 2</div>
       <h3>Canonical projection</h3>
-      <p>SQLite schema 13 plus content-addressed <code>&lt;db&gt;.assets/</code> members. Disposable.
+      <p>SQLite schema 14 plus content-addressed <code>&lt;db&gt;.assets/</code> members. Disposable.
       <code>Store::apply</code> is the only row writer. On schema/normalizer bump, rebuild from the
       ledger—never migrate.</p>
     </div>
@@ -1407,7 +1407,7 @@
       <div>bulk::{prepare, prepare_progressive, finalize, validate, validate_complete, restore_live_pragmas, checkpoint_progressive}</div>
       <div>search_sync::{before_batch, record_batch, mark_canonical_ready, acknowledge}</div>
       <div>queries::{cursor_state, audit_path, session, session_list, projection_state, search_repairs, visit_search_documents, …}</div>
-      <div>schema::{init, init_deferred} SCHEMA_VERSION=13</div>
+      <div>schema::{init, init_deferred} SCHEMA_VERSION=14 · timeline_meta::{read, revision_plan_document, timeline_plan_document}</div>
     </div>
   </details>
 

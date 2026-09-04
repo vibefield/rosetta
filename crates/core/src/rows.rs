@@ -293,6 +293,13 @@ pub struct TaskRow {
     pub content: String,
     pub created_at: Option<Ms>,
     pub updated_at: Option<Ms>,
+    /// First source-observed transition into `in_progress`, when the native
+    /// format makes it explicit. Older ledger records deserialize without it.
+    #[serde(default)]
+    pub started_at: Option<Ms>,
+    /// First source-observed terminal transition for the current run.
+    #[serde(default)]
+    pub terminal_at: Option<Ms>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

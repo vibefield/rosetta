@@ -6,7 +6,7 @@
 // ACTION and only the action; `ledger.ts` wraps it in the evidence (T-5's hue,
 // the stamps, the fold). Splitting them is what keeps the failure rules in one
 // place instead of twenty-eight.
-import type { ResourceRef, ToolAction } from "@rosetta/protocol";
+import type { ResourceRef, TaskSnapshotItem, ToolAction } from "@rosetta/protocol";
 import type {
   CanonicalDocument,
   CollaboratorRef,
@@ -44,10 +44,12 @@ export interface PathFact {
   readonly dir: string;
   readonly name: string;
   readonly resource: ResourceRef;
-  /** Present only when this path is an exact target of a canonical file-read
-   * row. It is an address into that row, not a renderer-supplied filesystem
-   * path, so the daemon can reopen the recorded file without widening its
-   * read authority. */
+  /** A read target's own source range, drawn beside that file in its detail. */
+  readonly range?: string;
+  /** Present only when this path is an exact file target of a canonical row.
+   * It is an address into that row, not a renderer-supplied filesystem path,
+   * so the daemon can reopen the recorded file without widening its read
+   * authority. */
   readonly read?: {
     readonly sessionId: string;
     readonly timelineId: string;
@@ -158,6 +160,44 @@ export interface DelegateFact {
   readonly orphanSummary: string | null;
 }
 
+/** The one task mutation this historical board is explaining. */
+export type TaskChange =
+  | "added"
+  | "started"
+  | "done"
+  | "reopened"
+  | "failed"
+  | "cancelled"
+  | "updated";
+
+/** The open task row is a status glimpse first; the reader can disclose the
+ * complete recorded board without turning every task event into a wall. */
+export const TASK_PREVIEW_LIMIT = 3;
+
+/** Pin the task this event changed to the bottom, where the eye lands after
+ * reading the board. The compact form keeps its two nearest preceding peers
+ * above it (filling from following peers only at the start of a board); the
+ * full form retains every other recorded task in its original relative order. */
+export function taskDisplayRows(
+  tasks: readonly TaskSnapshotItem[],
+  changedTaskId: string | null,
+  full: boolean,
+): TaskSnapshotItem[] {
+  const currentAt =
+    changedTaskId === null ? -1 : tasks.findIndex((task) => task.task_id === changedTaskId);
+  const ordered =
+    currentAt < 0
+      ? [...tasks]
+      : [...tasks.slice(0, currentAt), ...tasks.slice(currentAt + 1), tasks[currentAt]];
+  if (full || ordered.length <= TASK_PREVIEW_LIMIT) return ordered;
+  if (currentAt < 0) return ordered.slice(-TASK_PREVIEW_LIMIT);
+
+  const peerLimit = TASK_PREVIEW_LIMIT - 1;
+  const before = tasks.slice(Math.max(0, currentAt - peerLimit), currentAt);
+  const after = tasks.slice(currentAt + 1, currentAt + 1 + (peerLimit - before.length));
+  return [...before, ...after, tasks[currentAt]];
+}
+
 /**
  * What a ledger line opens into (§04's last column). `none` means the line has
  * nothing honest to show. A read keeps no content in SQLite but does retain
@@ -165,7 +205,12 @@ export interface DelegateFact {
  */
 export type LedgerDetail =
   | { readonly kind: "none" }
-  | { readonly kind: "paths"; readonly paths: readonly PathFact[]; readonly total: number }
+  | {
+      readonly kind: "paths";
+      readonly paths: readonly PathFact[];
+      readonly total: number;
+      readonly description?: string;
+    }
   | {
       readonly kind: "locations";
       readonly locations: readonly SourceLocation[];
@@ -177,6 +222,13 @@ export type LedgerDetail =
   | { readonly kind: "command"; readonly commands: readonly CommandFact[] }
   | { readonly kind: "code"; readonly commands: readonly CommandFact[] }
   | { readonly kind: "names"; readonly names: readonly string[]; readonly total: number }
+  | {
+      readonly kind: "tasks";
+      readonly tasks: readonly TaskSnapshotItem[];
+      readonly total: number;
+      readonly changedTaskId: string | null;
+      readonly change: TaskChange | null;
+    }
   | { readonly kind: "text"; readonly text: string }
   | {
       readonly kind: "questions";
@@ -231,17 +283,35 @@ function pathFact(
   resource: ResourceRef,
   context: LedgerContext,
   read?: PathFact["read"],
+  range?: string,
 ): PathFact {
   const label = resourceDisplay(resource, context);
   const { dir, name } = splitPath(label);
-  return { label, dir, name, resource, ...(read === undefined ? {} : { read }) };
+  return {
+    label,
+    dir,
+    name,
+    resource,
+    ...(range === undefined ? {} : { range }),
+    ...(read === undefined ? {} : { read }),
+  };
 }
 
-function pathFacts(resources: readonly ResourceRef[], context: LedgerContext): PathFact[] {
-  return resources.map((resource) => pathFact(resource, context));
+function pathFacts(
+  resources: readonly ResourceRef[],
+  context: LedgerContext,
+  source: Omit<NonNullable<PathFact["read"]>, "targetIndex"> | null = null,
+): PathFact[] {
+  return resources.map((resource, targetIndex) =>
+    pathFact(
+      resource,
+      context,
+      source !== null && resource.type === "file" ? { ...source, targetIndex } : undefined,
+    ),
+  );
 }
 
-/** `L1–180` · `p3–4`. The record puts a read's range in the RESULT slot. */
+/** `L1–180` · `p3–4`, carried by the exact file target it describes. */
 function rangeText(range: SourceRange): string {
   const mark = range.unit === "line" ? "L" : "p";
   const end = range.count === null ? null : range.start + range.count - 1;
@@ -253,13 +323,6 @@ function rangeText(range: SourceRange): string {
 function joined(pieces: readonly (string | null)[]): string | null {
   const kept = pieces.filter((piece): piece is string => piece !== null && piece !== "");
   return kept.length === 0 ? null : kept.join(" · ");
-}
-
-/** Object parts for `N things · a, b, c` — a count, then the names as an aside. */
-function countAndNames(count: number, noun: string, names: readonly string[]): ObjectPart[] {
-  const parts: ObjectPart[] = [part(plural(count, noun))];
-  if (names.length > 0) parts.push(part(` · ${names.join(", ")}`, "aside"));
-  return parts;
 }
 
 function displayScalarText(value: DisplayScalar): string {
@@ -336,12 +399,53 @@ const ARTIFACT_VERB: Readonly<Record<string, string>> = {
 
 const COLLABORATE_VERB: Readonly<Record<string, string>> = {
   send: "Sent to",
+  request_stop: "Asked to stop",
   create: "Created",
   delete: "Deleted",
   list: "Listed",
 };
 
 const SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"] as const;
+
+function taskChange(operation: string, status: string | null): TaskChange | null {
+  if (operation === "create") return "added";
+  if (operation !== "update") return null;
+  switch (status) {
+    case "in_progress":
+      return "started";
+    case "completed":
+      return "done";
+    case "pending":
+      return "reopened";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "updated";
+  }
+}
+
+function taskVerb(operation: string, status: string | null): string {
+  if (operation === "create") return "Added";
+  if (operation === "list") return "Checked";
+  if (operation === "get" || operation === "output") return "Checked";
+  if (operation === "stop") return "Stopped";
+  switch (status) {
+    case "in_progress":
+      return "Started";
+    case "completed":
+      return "Completed";
+    case "pending":
+      return "Reopened";
+    case "failed":
+      return "Marked failed";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Updated";
+  }
+}
 
 /**
  * The §04 table as one function. `native` is only read by the `unknown` family,
@@ -371,22 +475,19 @@ export function projectAction(
           source !== null && target.resource.type === "file"
             ? { ...source, targetIndex }
             : undefined,
+          target.range === null ? undefined : rangeText(target.range),
         ),
       );
-      const range = action.targets.find((target) => target.range !== null)?.range ?? null;
       const media = action.targets.find((target) => target.media_kind !== null)?.media_kind ?? null;
       const object =
-        facts.length > 1
-          ? countAndNames(facts.length, "file", facts.map((fact) => fact.name))
-          : facts.length === 1
-            ? pathParts(facts[0].label)
-            : [part("no target recorded", "aside")];
+        facts.length > 0
+          ? [part(facts.map((fact) => fact.name || fact.label).join(", "))]
+          : [part("no target recorded", "aside")];
       return {
         ...base,
         verb: "Read",
         object,
         result: joined([
-          range === null ? null : rangeText(range),
           action.outcome?.truncated ? "truncated" : null,
           media,
         ]),
@@ -830,6 +931,7 @@ export function projectAction(
 
     case "artifact": {
       const media = action.media;
+      const resources = pathFacts(action.resources, context, source);
       return {
         ...base,
         verb: ARTIFACT_VERB[action.operation],
@@ -844,15 +946,18 @@ export function projectAction(
               ? plural(action.resources.length, "file")
               : null,
         detail:
-          action.description === null
-            ? action.resources.length === 0
+          resources.length > 0
+            ? {
+                kind: "paths",
+                paths: resources,
+                total: resources.length,
+                ...(action.description === null
+                  ? {}
+                  : { description: canonicalText(action.description) }),
+              }
+            : action.description === null
               ? NO_DETAIL
-              : {
-                  kind: "paths",
-                  paths: pathFacts(action.resources, context),
-                  total: action.resources.length,
-                }
-            : { kind: "text", text: canonicalText(action.description) },
+              : { kind: "text", text: canonicalText(action.description) },
       };
     }
 
@@ -887,21 +992,51 @@ export function projectAction(
     /* ── Structure ───────────────────────────────────────────────────────── */
 
     case "task": {
+      const snapshot = action.snapshot;
+      const changed =
+        snapshot === null || action.task_id === null
+          ? null
+          : (snapshot.tasks.find((task) => task.task_id === action.task_id) ?? null);
       const subject =
         action.subject ??
+        changed?.subject ??
         (action.description === null ? null : firstLine(canonicalText(action.description)));
+      const isList = action.operation === "list";
+      const completed = snapshot?.tasks.filter((task) => task.status === "completed").length ?? 0;
       return {
         ...base,
-        verb: "Task",
-        object: [
-          part(`${action.operation} `, "dir"),
-          part(subject ?? action.task_id ?? "", subject === null ? "aside" : "plain"),
-        ],
-        result: action.status === null ? null : action.status.replaceAll("_", " "),
+        verb: taskVerb(action.operation, action.status),
+        object: isList
+          ? [part("task list", "aside")]
+          : [
+              part(
+                subject ?? (action.task_id === null ? "task" : `task #${action.task_id}`),
+                subject === null ? "aside" : "plain",
+              ),
+            ],
+        result:
+          snapshot === null
+            ? action.status === null
+              ? null
+              : action.status.replaceAll("_", " ")
+            : snapshot.total_count === 0
+              ? "no tasks"
+              : snapshot.total_count === snapshot.tasks.length
+                ? `${completed} of ${snapshot.total_count} done`
+                : plural(snapshot.total_count, "task"),
+        openByDefault: true,
         detail:
-          action.description === null
-            ? NO_DETAIL
-            : { kind: "text", text: canonicalText(action.description) },
+          snapshot !== null
+            ? {
+                kind: "tasks",
+                tasks: snapshot.tasks,
+                total: snapshot.total_count,
+                changedTaskId: action.task_id,
+                change: taskChange(action.operation, action.status),
+              }
+            : action.description === null
+              ? NO_DETAIL
+              : { kind: "text", text: canonicalText(action.description) },
       };
     }
 

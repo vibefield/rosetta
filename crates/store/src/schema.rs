@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS task (
   content    TEXT NOT NULL,
   created_at INTEGER,
   updated_at INTEGER,
+  started_at INTEGER,
+  terminal_at INTEGER,
   src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX IF NOT EXISTS task_src ON task(src_cursor);
@@ -340,6 +342,7 @@ DROP INDEX IF EXISTS session_runtime;
 DROP INDEX IF EXISTS session_parent;
 DROP INDEX IF EXISTS task_session;
 DROP INDEX IF EXISTS message_bucket_key;
+DROP INDEX IF EXISTS timeline_meta_message;
 DROP INDEX IF EXISTS session_usage_bucket_key;
 DROP INDEX IF EXISTS file_edit_session;
 DROP INDEX IF EXISTS file_edit_path;
@@ -359,6 +362,8 @@ CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
 );
+CREATE INDEX IF NOT EXISTS timeline_meta_message ON message(session_id, ordinal)
+  WHERE tool_kind IN ('task', 'plan', 'artifact');
 CREATE INDEX IF NOT EXISTS session_usage_bucket_key ON session_usage(
   session_id, COALESCE(model, 'unknown'), ts
 );
