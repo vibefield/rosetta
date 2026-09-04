@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod document;
 pub mod ledger;
 pub mod segment;
+pub mod segment_index;
 pub mod sqlite;
 pub mod tailer;
 pub mod watch;
@@ -22,6 +23,9 @@ pub use ledger::{
     visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
 pub use segment::{RecompressOutcome, SegmentCodec, recompress_segment, sniff_segment};
+pub use segment_index::{
+    IndexedSource, SegmentIndexLine, candidate_segments, rebuild_segment_index,
+};
 pub use sqlite::{
     DbSnapshot, DbStamp, SnapshotOutcome, SqliteFileStatus, db_stamp, is_db_sidecar,
     snapshot as snapshot_db, sqlite_file_status,

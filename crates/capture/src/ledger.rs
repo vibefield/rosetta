@@ -28,6 +28,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::segment::{MAGIC_LEN, SegmentCodec, SegmentReader, SegmentWriter};
+use crate::segment_index::{self, IndexedSource, SegmentIndexLine};
 use crate::{CaptureError, io_error};
 
 const CHECKSUM_BYTES: usize = 8;
@@ -127,6 +128,9 @@ pub struct Ledger {
     written: u64,
     /// Sources already defined in the CURRENT segment → their local id.
     defined: HashMap<SourceDef, u32>,
+    /// Generation range seen per local source id in the CURRENT segment,
+    /// for the segment index line written when it closes.
+    segment_generations: HashMap<u32, (u64, u64)>,
     /// Private cold builds may flush each projection batch to the kernel and
     /// defer physical sync until their pre-publication barrier. Live writers
     /// leave this false and retain the per-batch durability contract.
@@ -186,6 +190,7 @@ impl Ledger {
             disk_sampled: 0,
             written: 0,
             defined: HashMap::new(),
+            segment_generations: HashMap::new(),
             defer_checkpoint_sync: false,
             unsynced_segments: Vec::new(),
             unsynced_directories,
@@ -249,6 +254,7 @@ impl Ledger {
             disk_sampled: 0,
             written: 0,
             defined: HashMap::new(),
+            segment_generations: HashMap::new(),
             defer_checkpoint_sync,
             unsynced_segments: Vec::new(),
             unsynced_directories: Vec::new(),
@@ -355,6 +361,7 @@ impl Ledger {
             });
         }
         let file_id = self.define(source)?;
+        self.note_generation(file_id, generation);
         let started = Instant::now();
         let mut body = Vec::with_capacity(17);
         body.extend_from_slice(&file_id.to_be_bytes());
@@ -535,6 +542,7 @@ impl Ledger {
         self.codec = finished.codec;
         self.disk_sampled = finished.disk_sampled;
         self.defined = std::mem::take(&mut finished.defined);
+        self.segment_generations = std::mem::take(&mut finished.segment_generations);
         self.defer_checkpoint_sync = finished.defer_checkpoint_sync;
         self.unsynced_segments = std::mem::take(&mut finished.unsynced_segments);
         self.unsynced_directories = std::mem::take(&mut finished.unsynced_directories);
@@ -590,7 +598,51 @@ impl Ledger {
             .disk_bytes
             .saturating_add(total.saturating_sub(self.disk_sampled));
         self.disk_sampled = 0;
+        self.index_closed_segment();
         Ok(())
+    }
+
+    fn note_generation(&mut self, file_id: u32, generation: u64) {
+        let range = self
+            .segment_generations
+            .entry(file_id)
+            .or_insert((generation, generation));
+        range.0 = range.0.min(generation);
+        range.1 = range.1.max(generation);
+    }
+
+    /// Record which sources and generations the just-closed segment holds so
+    /// scoped reads can skip it. Best effort by design: the index is a
+    /// derived cache, and a missing line only widens a read to this segment.
+    fn index_closed_segment(&mut self) {
+        let mut sources: Vec<IndexedSource> = self
+            .defined
+            .iter()
+            .map(|(source, id)| {
+                let (lo, hi) = self
+                    .segment_generations
+                    .get(id)
+                    .copied()
+                    .unwrap_or((0, u64::MAX));
+                IndexedSource {
+                    session_id: source.session_id.clone(),
+                    relative_path: source.relative_path.clone(),
+                    generations: [lo, hi],
+                }
+            })
+            .collect();
+        sources.sort_by(|a, b| {
+            (&a.session_id, &a.relative_path, a.generations).cmp(&(
+                &b.session_id,
+                &b.relative_path,
+                b.generations,
+            ))
+        });
+        let line = SegmentIndexLine {
+            segment: self.segment_seq,
+            sources,
+        };
+        let _ = segment_index::append_line(&self.dir, &line);
     }
 
     fn rotate_if_needed(&mut self, current_is_synced: bool) -> Result<(), CaptureError> {
@@ -603,6 +655,7 @@ impl Ledger {
             self.unsynced_segments.push(path);
         }
         self.defined.clear();
+        self.segment_generations.clear();
         self.segment_seq += 1;
         self.written = 0;
         Ok(())
@@ -699,6 +752,7 @@ impl Ledger {
                 MAX_FRAME_BYTES - FIXED_BYTES
             )));
         }
+        self.note_generation(file_id, generation);
         self.ensure_writer()?;
         let path = self.dir.join(segment_name(self.segment_seq));
         let started = Instant::now();
@@ -781,8 +835,8 @@ impl Drop for Ledger {
         }
         // A synchronous ledger dropped mid-segment drains as a buffered file
         // always did; a compressed container additionally needs its epilogue.
-        if let Some(writer) = self.writer.take() {
-            let _ = writer.finish();
+        if self.writer.is_some() {
+            let _ = self.close_segment();
         }
     }
 }
@@ -895,7 +949,7 @@ where
 }
 
 /// Returns false if the segment ended in a torn/corrupt frame.
-fn scan_segment<E, F>(path: &Path, visitor: &mut F) -> Result<bool, E>
+pub(crate) fn scan_segment<E, F>(path: &Path, visitor: &mut F) -> Result<bool, E>
 where
     E: From<CaptureError>,
     F: FnMut(LedgerEntry) -> Result<(), E>,
@@ -1156,7 +1210,7 @@ fn segment_name(seq: u64) -> String {
     format!("{seq:08}.rledger")
 }
 
-fn segment_files(dir: &Path) -> Result<Vec<(u64, PathBuf)>, CaptureError> {
+pub(crate) fn segment_files(dir: &Path) -> Result<Vec<(u64, PathBuf)>, CaptureError> {
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
