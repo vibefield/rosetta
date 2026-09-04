@@ -423,7 +423,23 @@ capture contract explicit.
   to size-rotated segment files, checksummed with blake3, and durably flushed before the
   corresponding projection transaction. By default `rosettad` stores one runtime
   ledger at `<projection>.ledger/<agent>/`; `--ledger` overrides that root. Segments are
-  self-describing and scanned incrementally during rebuild. Two reasons this exists:
+  self-describing and scanned incrementally during rebuild. Since 2026-09-04 a new segment
+  lands inside one zstd stream (magic `RLZ1`); the frame stream inside is byte-for-byte the
+  plain `RLG1` one, per-frame blake3 integrity is unchanged, and readers keep both containers
+  forever, so nothing is rebuilt for the format's sake. The stream flushes at every checkpoint
+  — a zstd block ends, the frame does not — so the durable prefix stays decodable while the
+  match window survives; rotation and close write the epilogue, and a torn or corrupt tail
+  reports exactly as a plain one would. Level 3 measured on a real 9.65 GB archive: 5.56×
+  overall (claude-code 5.0×, codex 5.6×, grok 8.6×) at 1.0–1.6 GB/s compress and 1.9–3.1 GB/s
+  decompress on one core, all on the ledger worker thread that already owns segment IO;
+  compressing frames individually would halve the ratio, and lz4 lost on both axes.
+  `rosettad ledger compact` rewrites older plain segments in place under the projection lock
+  (temp file, sync, decode-and-digest verification, rename; torn segments are left alone).
+  Each closed segment also appends one line to `<agent>/.segments` naming the sources and
+  generation ranges it holds, so a read scoped to one source generation (the transcript's
+  exact-command fetch) opens the owning segments instead of walking the ledger; the index is
+  derived and rebuildable, and it only ever narrows a read — an unlisted segment is always a
+  candidate. Two reasons this exists:
   1. **Agents garbage-collect their own data** (Claude Code's `cleanupPeriodDays`
      deletes old transcripts). Without a ledger, history — and your FTS index over it —
      silently rots.
@@ -696,7 +712,8 @@ ingestion.
   search commit. Search loss or corruption never blocks canonical reads and triggers a
   rebuild. The disposable Tantivy prototype clears latency/build/filter/determinism gates
   but not relevance, product-mix, or storage acceptance, so it is not production.
-- **On-disk layout:** `<projection>.ledger/<agent>/` (segments) + the configured SQLite file +
+- **On-disk layout:** `<projection>.ledger/<agent>/` (`RLZ1`/`RLG1` segments plus the derived
+  `.segments` index) + the configured SQLite file +
   optional canonical `<projection>.assets/` members; `--ledger` can relocate the segment root.
   An adopted search backend owns a disposable `<projection>.search/`. Ledger is precious; the
   canonical projection and search index are rebuildable.
@@ -1010,7 +1027,7 @@ layer's design is frozen.
 |---|---|---|
 | FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
-| Ledger retention | keep forever (no segment GC yet) | ledger > tens of GB |
+| Ledger retention | keep forever; segments zstd-compressed since 2026-09-04 (`ledger compact` for older ones); no segment GC yet | compressed ledger > tens of GB |
 | Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |

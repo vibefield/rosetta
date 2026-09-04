@@ -71,7 +71,10 @@ surveyed per-agent sourcing plan (11 agents, tiered, with citations).
 runtime adapters are registered in `rosettad`. The generic pipeline handles the
 JSONL and SQLite snapshot drivers those adapters select, generation-safe rewrites,
 deterministic adapter checkpoints, watch-before-scan live ingestion, polling/audit
-recovery, and an append-only checksummed raw ledger. A normal fresh `serve` binds HTTP/WS
+recovery, and an append-only checksummed raw ledger whose segments are zstd streams
+(`RLZ1`, since 2026-09-04; plain `RLG1` is read forever and `rosettad ledger compact`
+rewrites it in place) with a derived per-runtime `.segments` index for scoped reads.
+A normal fresh `serve` binds HTTP/WS
 before discovery, then constructs the canonical schema in a named shared-memory SQLite
 database. Each enrolled adapter's bounded, source-free metadata batches commit there first
 and drain through `Hub::absorb_meta`, so projects and top-level sessions are immediately
@@ -225,3 +228,5 @@ clients/                   TypeScript consumers                       [Phase 4]
 - Python tool tests: `python3 -m unittest discover -s tools/groundtruth/tests`.
 - Frozen FTS campaigns: `cargo run -p rosetta-search-bench -- help` (protocol and
   privacy rules in `crates/search-bench/README.md`).
+- Ledger compaction (stop the daemon/app that owns the projection first):
+  `rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]`.

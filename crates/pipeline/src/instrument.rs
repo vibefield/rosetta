@@ -43,6 +43,9 @@ pub enum Metric {
     LedgerWriteNanos,
     LedgerFrames,
     LedgerFrameBytes,
+    /// Bytes that reached ledger segment files (container included) — below
+    /// frame bytes by the segment codec's ratio.
+    LedgerDiskBytes,
     LedgerFlushes,
     LedgerSyncs,
     LedgerDirectorySyncs,
@@ -92,7 +95,7 @@ pub enum Metric {
     SearchSyncNanos,
 }
 
-const METRIC_COUNT: usize = 76;
+const METRIC_COUNT: usize = 77;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -124,6 +127,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::LedgerWriteNanos, "ledger write time"),
     (Metric::LedgerFrames, "ledger frames"),
     (Metric::LedgerFrameBytes, "ledger frame bytes"),
+    (Metric::LedgerDiskBytes, "ledger disk bytes"),
     (Metric::LedgerFlushes, "ledger flushes"),
     (Metric::LedgerSyncs, "ledger syncs"),
     (Metric::LedgerDirectorySyncs, "ledger directory syncs"),
@@ -383,6 +387,7 @@ impl Instrument {
     fn record_ledger_write(&self, stats: LedgerWriteStats) {
         self.add(Metric::LedgerFrames, stats.frames);
         self.add(Metric::LedgerFrameBytes, stats.frame_bytes);
+        self.add(Metric::LedgerDiskBytes, stats.disk_bytes);
         self.add(Metric::LedgerFlushes, stats.flushes);
         self.add(Metric::LedgerSyncs, stats.syncs);
         self.add(Metric::LedgerDirectorySyncs, stats.directory_syncs);

@@ -7,6 +7,7 @@
 //!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--audit-boundaries]
 //!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N]
 //!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...]
+//!   rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long]
 //!
 //! `ingest` implies consent for the selected agents (the CLI user asked);
 //! the app flow instead runs `discover`, asks, and flips `enabled` itself.
@@ -42,6 +43,7 @@ mod bench;
 mod brutal;
 mod cold_stage;
 mod engine;
+mod ledger_cmd;
 mod recovery;
 mod serve;
 
@@ -71,9 +73,10 @@ fn main() -> ExitCode {
         Some("watch") => cmd_watch(&args[1..]),
         Some("serve") => serve::cmd_serve(&args[1..]),
         Some("rebuild") => cmd_rebuild(&args[1..]),
+        Some("ledger") => ledger_cmd::cmd_ledger(&args[1..]),
         _ => {
             eprintln!(
-                "usage: rosettad <discover|sources|streams|meta|brutal-ingest|ingest|watch|serve|rebuild> [options]"
+                "usage: rosettad <discover|sources|streams|meta|brutal-ingest|ingest|watch|serve|rebuild|ledger> [options]"
             );
             eprintln!("  discover [--home DIR] [--agent KIND ...] [--json]");
             eprintln!("  sources [--home DIR] [--agent KIND ...] [--json]");
@@ -90,6 +93,9 @@ fn main() -> ExitCode {
                 "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0]"
             );
             eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
+            eprintln!(
+                "  ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]"
+            );
             eprintln!(
                 "  (ingest and watch keep a raw ledger at <db>.ledger/ unless --ledger overrides)"
             );
@@ -131,6 +137,17 @@ struct Flags {
     /// serve only: starter-slice byte budget for the cold scheduler.
     /// `None` = the blessed default; `Some(0)` disables slicing.
     slice_budget: Option<u64>,
+    /// `ledger compact` only: the zstd level for rewritten segments.
+    /// `None` = the write path's blessed default.
+    level: Option<i32>,
+    /// `ledger compact` only: rewrite with zstd's widest stock window
+    /// (`MAX_WINDOW_LOG`). Offline only — the write path never pays for it.
+    long_window: bool,
+    /// `ledger compact` only: rewrite segments that are already compressed,
+    /// for instance to a higher level or a wider window.
+    force: bool,
+    /// `ledger compact` only: report what a pass would do and write nothing.
+    dry_run: bool,
     /// Rebuild experiments only: trust the ordinary election/replay scans to
     /// detect corrupt tails instead of first reading the whole ledger once.
     experiment_skip_ledger_preflight: bool,
@@ -201,6 +218,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         stop_after_meta: false,
         restart_incomplete: false,
         slice_budget: None,
+        level: None,
+        long_window: false,
+        force: false,
+        dry_run: false,
         experiment_skip_ledger_preflight: false,
         experiment_stop_after_replay: false,
         experiment_skip_search: false,
@@ -253,6 +274,26 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--slice-budget" => {
                 let value = take_value(args, &mut at)?;
                 flags.slice_budget = Some(parse_byte_size(&value)?);
+            }
+            "--level" => {
+                let value = take_value(args, &mut at)?;
+                flags.level = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--level needs a number, got {value}"))?,
+                );
+            }
+            "--long" => {
+                flags.long_window = true;
+                at += 1;
+            }
+            "--force" => {
+                flags.force = true;
+                at += 1;
+            }
+            "--dry-run" => {
+                flags.dry_run = true;
+                at += 1;
             }
             "--experiment-skip-ledger-preflight" => {
                 flags.experiment_skip_ledger_preflight = true;
