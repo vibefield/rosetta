@@ -1,5 +1,5 @@
 // §05A — timeline_meta is the map back into the transcript, never a second
-// rendering of it. Three floating launchers share one non-modal island;
+// rendering of it. Up to three non-empty launchers share one non-modal island;
 // tasks land on their retained message and file rows hand off to the room's
 // existing viewer.
 
@@ -12,13 +12,15 @@ import type {
 } from "@rosetta/protocol";
 import { clockShort, fmtBytes } from "../../lib/format";
 import { FamilyGlyph, LineChevron } from "./glyphs";
+import {
+  availableTimelineMetaKinds,
+  resolveTimelineMetaKind,
+  type TimelineMetaKind,
+} from "./timeline-meta-state";
 
-type MetaKind = "tasks" | "plans" | "artifacts";
-
-const KINDS: readonly MetaKind[] = ["tasks", "plans", "artifacts"];
 const GLYPH = { tasks: "task", plans: "doc", artifacts: "box" } as const;
 
-function exactCount(meta: TimelineMetaValue, kind: MetaKind): number {
+function exactCount(meta: TimelineMetaValue, kind: TimelineMetaKind): number {
   return meta[kind].length;
 }
 
@@ -61,7 +63,7 @@ function fileType(name: string): string {
   return extension === undefined || extension === name ? "File" : extension.toUpperCase();
 }
 
-function EmptyPanel({ kind }: { readonly kind: MetaKind }) {
+function EmptyPanel({ kind }: { readonly kind: TimelineMetaKind }) {
   return <p className="tr-meta-empty">No {kind} recorded in this session.</p>;
 }
 
@@ -205,28 +207,34 @@ export interface TimelineMetaProps {
 }
 
 export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: TimelineMetaProps) {
-  const [active, setActive] = useState<MetaKind | null>(null);
+  const [active, setActive] = useState<TimelineMetaKind | null>(null);
   const [now, setNow] = useState(Date.now());
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const launcherRefs = useRef<Partial<Record<MetaKind, HTMLButtonElement | null>>>({});
+  const launcherRefs = useRef<Partial<Record<TimelineMetaKind, HTMLButtonElement | null>>>({});
   const id = useId().replaceAll(":", "");
+  const availableKinds = availableTimelineMetaKinds(meta);
+  const visibleActive = resolveTimelineMetaKind(active, availableKinds);
 
   useEffect(() => {
-    if (active !== "tasks" || !meta.tasks.some((task) => task.status === "in_progress")) return;
+    if (active !== visibleActive) setActive(visibleActive);
+  }, [active, visibleActive]);
+
+  useEffect(() => {
+    if (visibleActive !== "tasks" || !meta.tasks.some((task) => task.status === "in_progress")) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [active, meta.tasks]);
+  }, [visibleActive, meta.tasks]);
 
   useEffect(() => {
-    if (active === null) return;
+    if (visibleActive === null) return;
     const pointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setActive(null);
     };
     const keyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      const selected = active;
+      const selected = visibleActive;
       setActive(null);
       launcherRefs.current[selected]?.focus();
     };
@@ -236,20 +244,23 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
       document.removeEventListener("pointerdown", pointerDown);
       document.removeEventListener("keydown", keyDown);
     };
-  }, [active]);
+  }, [visibleActive]);
 
-  const selectTab = (kind: MetaKind) => setActive(kind);
-  const moveTab = (kind: MetaKind, direction: -1 | 1) => {
-    const index = KINDS.indexOf(kind);
-    const next = KINDS[(index + direction + KINDS.length) % KINDS.length];
+  const selectTab = (kind: TimelineMetaKind) => setActive(kind);
+  const moveTab = (kind: TimelineMetaKind, direction: -1 | 1) => {
+    const index = availableKinds.indexOf(kind);
+    const next = availableKinds[(index + direction + availableKinds.length) % availableKinds.length];
+    if (next === undefined) return;
     setActive(next);
     document.getElementById(`${id}-tab-${next}`)?.focus();
   };
 
+  if (availableKinds.length === 0) return null;
+
   return (
     <div className="tr-meta" ref={rootRef}>
       <div className="tr-meta-launchers" role="group" aria-label="Session work">
-        {KINDS.map((kind) => {
+        {availableKinds.map((kind) => {
           const count = exactCount(meta, kind);
           return (
             <button
@@ -258,7 +269,7 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
               className="tr-meta-launch"
               type="button"
               aria-label={`${titleCase(kind)}, ${count}`}
-              aria-expanded={active === kind}
+              aria-expanded={visibleActive === kind}
               aria-controls={`${id}-popover`}
               onClick={() => setActive((current) => current === kind ? null : kind)}
             >
@@ -269,7 +280,7 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
         })}
       </div>
 
-      {active !== null && (
+      {visibleActive !== null && (
         <div
           className="tr-meta-popover"
           id={`${id}-popover`}
@@ -279,16 +290,16 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
         >
           <div className="tr-meta-top">
             <div className="tr-meta-tabs" role="tablist" aria-label="Session work type">
-              {KINDS.map((kind) => (
+              {availableKinds.map((kind) => (
                 <button
                   className="tr-meta-tab"
                   id={`${id}-tab-${kind}`}
                   key={kind}
                   type="button"
                   role="tab"
-                  aria-selected={active === kind}
+                  aria-selected={visibleActive === kind}
                   aria-controls={`${id}-panel`}
-                  tabIndex={active === kind ? 0 : -1}
+                  tabIndex={visibleActive === kind ? 0 : -1}
                   onClick={() => selectTab(kind)}
                   onKeyDown={(event) => {
                     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -305,7 +316,7 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
               type="button"
               aria-label="Close session work"
               onClick={() => {
-                const selected = active;
+                const selected = visibleActive;
                 setActive(null);
                 launcherRefs.current[selected]?.focus();
               }}
@@ -320,9 +331,9 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
             className="tr-meta-panel"
             id={`${id}-panel`}
             role="tabpanel"
-            aria-labelledby={`${id}-tab-${active}`}
+            aria-labelledby={`${id}-tab-${visibleActive}`}
           >
-            {active === "tasks" && (
+            {visibleActive === "tasks" && (
               <TaskPanel
                 tasks={meta.tasks}
                 now={now}
@@ -332,7 +343,7 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
                 }}
               />
             )}
-            {active === "plans" && (
+            {visibleActive === "plans" && (
               <PlanPanel
                 plans={meta.plans}
                 onOpen={(plan) => {
@@ -341,7 +352,7 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
                 }}
               />
             )}
-            {active === "artifacts" && (
+            {visibleActive === "artifacts" && (
               <ArtifactPanel
                 artifacts={meta.artifacts}
                 onOpen={(artifact) => {
