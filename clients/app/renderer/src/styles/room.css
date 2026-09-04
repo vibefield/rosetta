@@ -636,6 +636,11 @@ code, .mono { font-family: var(--vf-font-mono); }
 .ah-searchbar .ah-search,
 .ah-searchbar button,
 .ah-searchbar input { -webkit-app-region: no-drag; }
+/* A modal occupies the native title-bar strip when it goes edge-to-edge.
+   Remove the room's drag region for the whole modal lifetime: Electron drops
+   every pointer event over a drag region before the restore button can see
+   it, even though the modal paints above the room. */
+body:has([data-ah-fileview]) .ah-searchbar { -webkit-app-region: no-drag; }
 
 /* a receipt, so a copy or an act is never silent */
 .ah-receipt {
@@ -786,6 +791,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   position: fixed; inset: 0; z-index: 60;
   background: var(--vf-backdrop-dim);
   backdrop-filter: blur(2px);
+  -webkit-app-region: no-drag;
   animation: ah-fade-in 200ms ease;
 }
 .ah-fileview__backdrop[data-state="closed"] { animation: ah-fade-out 160ms ease forwards; }
@@ -803,6 +809,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   background: var(--vf-chrome-solid);
   box-shadow: var(--vf-shadow-dialog);
   overflow: hidden;
+  -webkit-app-region: no-drag;
   animation: ah-fileview-in 240ms var(--vf-ease-island);
 }
 .ah-fileview[data-state="closed"] { animation: ah-fileview-out 160ms ease forwards; }
