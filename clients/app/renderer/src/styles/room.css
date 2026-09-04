@@ -887,6 +887,38 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 
 /* ── the code view ─────────────────────────────────────────────────────── */
 
+.ah-code-shell {
+  flex: 1; min-width: 0; min-height: 0; display: flex;
+}
+.ah-code-shell > .ah-code { min-width: 0; }
+
+.ah-code-minimap {
+  position: relative; flex: none; align-self: stretch; width: 72px; overflow: hidden;
+  border-left: 1px solid var(--vf-hairline);
+  background: var(--vf-chrome-solid); user-select: none; touch-action: none;
+  contain: paint;
+}
+.ah-code-minimap__stage {
+  position: relative; width: 100%; overflow: hidden; cursor: pointer;
+}
+.ah-code-minimap__text {
+  position: absolute; inset: 0; display: block; width: 100%; height: 100%;
+  pointer-events: none; image-rendering: pixelated;
+}
+.ah-code-minimap__slider {
+  position: absolute; z-index: 1; top: 0; left: 0; right: 0;
+  border: 1px solid color-mix(in srgb, var(--vf-text-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--vf-text-primary) 12%, transparent);
+  opacity: 0.4; cursor: ns-resize; will-change: transform;
+  transition: opacity 90ms linear;
+}
+.ah-code-minimap:hover .ah-code-minimap__slider,
+.ah-code-minimap__slider.is-dragging { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ah-code-minimap__slider { transition: none; }
+}
+
 .ah-code {
   padding: 8px 0 16px;
   font-family: var(--vf-font-mono); font-size: 12.5px;

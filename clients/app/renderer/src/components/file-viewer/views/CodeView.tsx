@@ -10,6 +10,7 @@
 import { useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { CodeMinimap } from "../minimap/CodeMinimap";
 import { highlight, PLAIN_TEXT } from "../syntax";
 import type { TokenLine } from "../syntax";
 import type { ViewBodyProps } from "../types";
@@ -29,7 +30,9 @@ function widestLine(lines: readonly TokenLine[]): number {
   for (const line of lines) {
     let columns = 0;
     for (const token of line) {
-      for (const char of token.text) columns += char === "\t" ? TAB_COLUMNS : 1;
+      for (const char of token.text) {
+        columns += char === "\t" ? TAB_COLUMNS - (columns % TAB_COLUMNS) : 1;
+      }
     }
     if (columns > widest) widest = columns;
   }
@@ -64,41 +67,49 @@ export function CodeView({ file }: ViewBodyProps) {
   });
 
   return (
-    <div
-      className="ah-fileview__scroll ah-code"
-      ref={scrollerRef}
-      style={{ "--ah-code-digits": digits } as CSSProperties}
-    >
+    <div className="ah-code-shell">
       <div
-        className="ah-code__sizer"
-        style={{
-          height: virtualizer.getTotalSize(),
-          minWidth: `calc(${columns}ch + var(--ah-code-gutter) + var(--ah-code-trail))`,
-        }}
+        className="ah-fileview__scroll ah-code"
+        ref={scrollerRef}
+        style={{ "--ah-code-digits": digits } as CSSProperties}
       >
-        {virtualizer.getVirtualItems().map((row) => (
-          <div
-            className="ah-code__line"
-            key={row.key}
-            style={{ height: LINE_HEIGHT, transform: `translateY(${row.start}px)` }}
-          >
-            <span className="ah-code__num">{row.index + 1}</span>
-            <code>
-              {lines[row.index].map((token, at) =>
-                token.kind === "plain" ? (
-                  token.text
-                ) : (
-                  // eslint-disable-next-line react/no-array-index-key -- the
-                  // token list is derived from immutable text; index IS its id.
-                  <span data-t={token.kind} key={at}>
-                    {token.text}
-                  </span>
-                ),
-              )}
-            </code>
-          </div>
-        ))}
+        <div
+          className="ah-code__sizer"
+          style={{
+            height: virtualizer.getTotalSize(),
+            minWidth: `calc(${columns}ch + var(--ah-code-gutter) + var(--ah-code-trail))`,
+          }}
+        >
+          {virtualizer.getVirtualItems().map((row) => (
+            <div
+              className="ah-code__line"
+              key={row.key}
+              style={{ height: LINE_HEIGHT, transform: `translateY(${row.start}px)` }}
+            >
+              <span className="ah-code__num">{row.index + 1}</span>
+              <code>
+                {lines[row.index].map((token, at) =>
+                  token.kind === "plain" ? (
+                    token.text
+                  ) : (
+                    // eslint-disable-next-line react/no-array-index-key -- the
+                    // token list is derived from immutable text; index IS its id.
+                    <span data-t={token.kind} key={at}>
+                      {token.text}
+                    </span>
+                  ),
+                )}
+              </code>
+            </div>
+          ))}
+        </div>
       </div>
+      <CodeMinimap
+        lines={lines}
+        lineHeight={LINE_HEIGHT}
+        tabColumns={TAB_COLUMNS}
+        scrollerRef={scrollerRef}
+      />
     </div>
   );
 }
