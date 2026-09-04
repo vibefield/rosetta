@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
+  computeScrollbarInsets,
   computeThumbGeometry,
   createRasterLayout,
   needsMinimap,
@@ -63,6 +64,27 @@ describe("file viewer minimap layout", () => {
     assert.equal(needsMinimap(701, 700), false);
     assert.equal(needsMinimap(724, 700), true);
     assert.equal(needsMinimap(724, 0), false);
+  });
+
+  it("places the map inside classic scrollbar gutters", () => {
+    assert.deepEqual(
+      computeScrollbarInsets({
+        offsetWidth: 1_000,
+        clientWidth: 991,
+        offsetHeight: 700,
+        clientHeight: 691,
+      }),
+      { right: 9, bottom: 9 },
+    );
+    assert.deepEqual(
+      computeScrollbarInsets({
+        offsetWidth: 1_000,
+        clientWidth: 1_000,
+        offsetHeight: 700,
+        clientHeight: 700,
+      }),
+      { right: 0, bottom: 0 },
+    );
   });
 
   it("uses only the painted rows as an unsampled track", () => {

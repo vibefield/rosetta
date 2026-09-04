@@ -873,6 +873,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   border: 3px solid transparent; border-radius: 999px;
   background: var(--vf-hairline-strong); background-clip: content-box;
 }
+.ah-fileview__scroll::-webkit-scrollbar-corner { background: var(--vf-chrome-solid); }
 
 .ah-fileview__state {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -888,13 +889,17 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 /* ── the code view ─────────────────────────────────────────────────────── */
 
 .ah-code-shell {
-  flex: 1; min-width: 0; min-height: 0; display: flex;
+  --ah-code-minimap-width: 72px;
+  position: relative; flex: 1; min-width: 0; min-height: 0; display: flex;
 }
 .ah-code-shell > .ah-code { min-width: 0; }
+.ah-code-shell:has(> .ah-code-minimap) .ah-code__sizer {
+  margin-right: var(--ah-code-minimap-width);
+}
 
 .ah-code-minimap {
-  position: relative; flex: none; align-self: stretch; width: 72px; overflow: hidden;
-  border-left: 1px solid var(--vf-hairline);
+  position: absolute; z-index: 2; top: 0; right: 0; bottom: 0;
+  width: var(--ah-code-minimap-width); overflow: hidden;
   background: var(--vf-chrome-solid); user-select: none; touch-action: none;
   contain: paint;
 }

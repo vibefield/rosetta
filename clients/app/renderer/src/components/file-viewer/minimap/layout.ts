@@ -25,6 +25,13 @@ export interface MinimapThumbGeometry {
   readonly scrollPerTrackPixel: number;
 }
 
+export interface MinimapScrollbarInsets {
+  /** Width occupied by the native vertical scrollbar. */
+  readonly right: number;
+  /** Height occupied by the native horizontal scrollbar. */
+  readonly bottom: number;
+}
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -38,6 +45,22 @@ function positive(value: number): number {
 export function needsMinimap(scrollHeight: number, clientHeight: number): boolean {
   const viewport = positive(clientHeight);
   return viewport > 0 && positive(scrollHeight) - viewport > OVERFLOW_EPSILON;
+}
+
+/** Position an overlay inside the scrollport, leaving the browser-owned
+ * scrollbar gutters untouched. The code scroller has no borders, so its
+ * offset/client delta is exactly the classic scrollbar footprint; overlay
+ * scrollbars naturally report zero. */
+export function computeScrollbarInsets(args: {
+  readonly offsetWidth: number;
+  readonly clientWidth: number;
+  readonly offsetHeight: number;
+  readonly clientHeight: number;
+}): MinimapScrollbarInsets {
+  return {
+    right: Math.max(0, positive(args.offsetWidth) - positive(args.clientWidth)),
+    bottom: Math.max(0, positive(args.offsetHeight) - positive(args.clientHeight)),
+  };
 }
 
 /** One representative source line per equal source interval. Endpoints are

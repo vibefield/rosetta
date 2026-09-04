@@ -1,4 +1,4 @@
-// A read-only source map beside CodeView.
+// A read-only source map inside CodeView's native scrollbar gutters.
 //
 // Text is painted only on file/theme/size changes. Scroll moves one DOM
 // thumb, derived from the native scroller's real geometry. Sampling changes
@@ -8,6 +8,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { TokenLine } from "../syntax";
 import {
+  computeScrollbarInsets,
   computeThumbGeometry,
   createRasterLayout,
   needsMinimap,
@@ -123,6 +124,17 @@ export function CodeMinimap({
     let paintPending = false;
     let palettePending = false;
 
+    const alignToScrollport = (): void => {
+      const insets = computeScrollbarInsets({
+        offsetWidth: scroller.offsetWidth,
+        clientWidth: scroller.clientWidth,
+        offsetHeight: scroller.offsetHeight,
+        clientHeight: scroller.clientHeight,
+      });
+      host.style.right = `${insets.right}px`;
+      host.style.bottom = `${insets.bottom}px`;
+    };
+
     const syncThumb = (): void => {
       geometry = computeThumbGeometry({
         scrollTop: scroller.scrollTop,
@@ -135,6 +147,7 @@ export function CodeMinimap({
     };
 
     const paint = (): void => {
+      alignToScrollport();
       const scale = renderScale();
       const cssWidth = host.clientWidth;
       const availableHeight = host.clientHeight;

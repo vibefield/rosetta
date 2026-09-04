@@ -105,13 +105,24 @@ Unicode-width package, WebGL, or a canvas test shim.
       div.ah-code-minimap__slider
 ```
 
-The host stretches to the scroller height and reserves 72 px of width. The
-stage is only as tall as the painted map. This distinction matters for an
+The scroller spans the full shell, so its native vertical scrollbar remains at
+the file viewer's outer edge. The 72 px host is absolutely overlaid immediately
+inside the browser-owned scrollbar gutters. On each layout paint, its right and
+bottom insets come from `offsetWidth - clientWidth` and
+`offsetHeight - clientHeight`; platforms with overlay scrollbars naturally
+report zero. The scroller is borderless, so no border correction is needed.
+
+When the map is present, the code sizer gains a 72 px trailing margin. Long
+lines can therefore scroll completely to the left of the opaque map instead of
+ending underneath it. The map does not own, replace, or cover either native
+scrollbar. The scrollbar corner is explicitly painted with
+`--vf-chrome-solid`, avoiding Chromium's light default where both axes meet.
+
+The stage is only as tall as the painted map. This distinction matters for an
 unsampled medium file: at 2× density, 100 source lines occupy 100 CSS px, not
 the entire 700 px host. The thumb must never travel through the blank ground
-below those pixels.
-
-The host is absent when hidden, so the source listing recovers all 72 px.
+below those pixels. The host is absent when hidden, so the source listing has
+no 72 px overlay or trailing clearance.
 
 ### Visibility
 
@@ -350,6 +361,7 @@ does not make that trade.
 Pure node tests cover:
 
 - fit versus sampled raster height;
+- classic and overlay-scrollbar inset geometry;
 - the short identity-map track, not the full host height;
 - 60,000-line bounded sampling and monotonic representatives;
 - continuous sampled thumb geometry where no sample intersects the viewport;
@@ -367,6 +379,8 @@ Browser acceptance covers:
   states do not show it;
 - light and dark use the live syntax palette;
 - click, drag, wheel, native scroll, and window resize stay aligned;
+- the native scrollbar stays on the outer edge and its corner matches the
+  viewer ground;
 - scrolling does not call `putImageData`.
 
 At the default pane and the 2× render cap, one 72×700 CSS px ImageData is about
@@ -383,7 +397,7 @@ separately: tokenization and `widestLine` are existing costs, not minimap work.
 
 The first shippable unit includes all correctness paths:
 
-1. flex shell and hide-when-fits behavior;
+1. full-width scroll shell, inset overlay, and hide-when-fits behavior;
 2. identity and sampled raster;
 3. continuous thumb, click, drag, and wheel geometry;
 4. live light/dark palette and density invalidation;
