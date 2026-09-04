@@ -39,7 +39,8 @@ pub const DEFAULT_ZSTD_LEVEL: i32 = 3;
 /// The widest window a stock zstd decoder accepts without configuration
 /// (`ZSTD_WINDOWLOG_LIMIT_DEFAULT`). Offline recompression may use it; the
 /// write path never does — it costs 128 MiB per open stream and half the speed
-/// for about 7% of ratio.
+/// for about 7% of ratio. The window is paid on the read side too: every
+/// decoder of such a segment allocates it, where a level-3 segment needs 2 MiB.
 pub const MAX_WINDOW_LOG: u32 = 27;
 
 const READ_BUFFER_BYTES: usize = 256 * 1024;
@@ -590,10 +591,17 @@ mod tests {
         assert_eq!(torn, 0);
         assert_eq!(all.len(), 400);
 
+        // A crash right after the segment was created leaves the magic and
+        // nothing else: an empty stream, clean, holding no records.
+        std::fs::write(&segment, &whole[..MAGIC_LEN]).unwrap();
+        let (raw, segments, torn) = payloads(dir.path());
+        assert_eq!((raw.len(), segments, torn), (0, 1, 0));
+
         // Cut the container at several points: the visible records are always
         // a prefix, in order, and never fabricated.
         for cut in [
             MAGIC_LEN + 1,
+            MAGIC_LEN + 4,
             whole.len() / 3,
             whole.len() / 2,
             whole.len() - 3,

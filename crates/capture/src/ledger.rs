@@ -272,7 +272,9 @@ impl Ledger {
     }
 
     /// Choose the container for segments this ledger creates from now on.
-    /// Existing segments keep theirs; readers accept every container.
+    /// Existing segments keep theirs; readers accept every container. Like
+    /// the other builders, this must precede [`Ledger::into_async`], which
+    /// hands the worker its settings once.
     pub fn with_codec(mut self, codec: SegmentCodec) -> Self {
         self.codec = codec;
         self

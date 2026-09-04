@@ -31,10 +31,15 @@ use serde_json::{Value, json};
 use crate::bench::emit;
 use crate::{Flags, ledger_root, parse_flags, projection_lock};
 
-/// zstd's documented compression range (`ZSTD_maxCLevel()`). The negative
-/// "fast" levels below 1 trade ratio for speed an offline pass never needs.
+/// zstd's compression range short of its `--ultra` tier. Levels 20–22 widen
+/// the match window to 32–128 MiB, and a window is not a write-side cost
+/// only: every later decoder of such a segment — a rebuild replay per runtime,
+/// the transcript's exact-command fetch — allocates it for as long as the
+/// segment is open. Levels 1–19 keep the window at or below 8 MiB. `--long`
+/// is the explicit way to choose the 128 MiB window. The negative "fast"
+/// levels below 1 trade ratio for speed an offline pass never needs.
 const MIN_LEVEL: i32 = 1;
-const MAX_LEVEL: i32 = 22;
+const MAX_LEVEL: i32 = 19;
 
 const SEGMENT_SUFFIX: &str = ".rledger";
 /// Segments are `NNNNNNNN.rledger`. Anything else in a runtime directory —
@@ -644,7 +649,7 @@ mod tests {
         assert!(
             cmd_ledger(&compact_args(&db, &["--level", "99"]))
                 .unwrap_err()
-                .contains("--level wants 1..=22")
+                .contains("--level wants 1..=19")
         );
         assert!(
             cmd_ledger(&compact_args(&temp.path().join("absent.sqlite"), &[]))

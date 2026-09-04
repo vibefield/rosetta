@@ -435,6 +435,10 @@ capture contract explicit.
   compressing frames individually would halve the ratio, and lz4 lost on both axes.
   `rosettad ledger compact` rewrites older plain segments in place under the projection lock
   (temp file, sync, decode-and-digest verification, rename; torn segments are left alone).
+  Its `--level` stops at 19 and `--long` is explicit because a zstd window is a read-side
+  cost as much as a write-side one: every later decoder of a segment allocates its window
+  (2 MiB at level 3, 8 MiB at 19, 128 MiB for `--long` or levels 20–22) for as long as the
+  segment is open, and a replay opens one per runtime.
   Each closed segment also appends one line to `<agent>/.segments` naming the sources and
   generation ranges it holds, so a read scoped to one source generation (the transcript's
   exact-command fetch) opens the owning segments instead of walking the ledger; the index is

@@ -90,9 +90,11 @@ pub fn read_raw_command(
     let mut seen = BTreeSet::new();
     let mut found = None;
     // The segment index narrows the walk to the segments holding this source
-    // generation; unindexed segments (the open one, or all of them for a
-    // ledger without an index) are always included.
-    let candidates = rosetta_capture::candidate_segments(
+    // generation; a segment the index does not list — the open one, one the
+    // writer rotates in while this request runs, or all of them for a ledger
+    // without an index — is always walked. The filter is applied to the
+    // walk's own directory listing so nothing can appear in between.
+    let filter = rosetta_capture::segment_filter(
         ledger_dir,
         &locator.session_id,
         &locator.relative_path,
@@ -101,7 +103,7 @@ pub fn read_raw_command(
     .map_err(PipelineError::Capture)?;
     let visited = rosetta_capture::visit_ledger_segments::<VisitError, _>(
         ledger_dir,
-        |seq| candidates.contains(&seq),
+        |seq| filter.admits(seq),
         |entry| {
             let LedgerEntry::Raw {
                 source,

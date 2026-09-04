@@ -69,18 +69,36 @@ fn read_lines(dir: &Path) -> Result<Vec<SegmentIndexLine>, CaptureError> {
     Ok(lines)
 }
 
-/// The segments a read scoped to one source generation must visit: those
-/// the index lists for it, plus every segment the index does not know.
-pub fn candidate_segments(
+/// What the index says about one source generation: the segments it lists
+/// as holding it, and the segments it knows at all. A walk applies this to
+/// its own directory listing, so a segment that appears between reading the
+/// index and listing the directory — the writer rotating meanwhile — is
+/// unknown to the filter and therefore visited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SegmentFilter {
+    matched: BTreeSet<u64>,
+    indexed: BTreeSet<u64>,
+}
+
+impl SegmentFilter {
+    /// True when the read must visit `segment`: the index lists it for the
+    /// source generation, or does not know it.
+    pub fn admits(&self, segment: u64) -> bool {
+        self.matched.contains(&segment) || !self.indexed.contains(&segment)
+    }
+}
+
+/// Read the index for one source generation. Cheap: one small file, no
+/// segment is opened.
+pub fn segment_filter(
     dir: &Path,
     session_id: &str,
     relative_path: &str,
     generation: u64,
-) -> Result<BTreeSet<u64>, CaptureError> {
-    let mut indexed = BTreeSet::new();
-    let mut matched = BTreeSet::new();
+) -> Result<SegmentFilter, CaptureError> {
+    let mut filter = SegmentFilter::default();
     for line in read_lines(dir)? {
-        indexed.insert(line.segment);
+        filter.indexed.insert(line.segment);
         let holds = line.sources.iter().any(|source| {
             source.session_id == session_id
                 && source.relative_path == relative_path
@@ -88,13 +106,26 @@ pub fn candidate_segments(
                 && generation <= source.generations[1]
         });
         if holds {
-            matched.insert(line.segment);
+            filter.matched.insert(line.segment);
         }
     }
+    Ok(filter)
+}
+
+/// The segments on disk right now that a read scoped to one source
+/// generation must visit. A walk should prefer [`segment_filter`] against its
+/// own listing; this is the same answer for a directory nobody is writing.
+pub fn candidate_segments(
+    dir: &Path,
+    session_id: &str,
+    relative_path: &str,
+    generation: u64,
+) -> Result<BTreeSet<u64>, CaptureError> {
+    let filter = segment_filter(dir, session_id, relative_path, generation)?;
     Ok(ledger::segment_files(dir)?
         .into_iter()
         .map(|(seq, _)| seq)
-        .filter(|seq| matched.contains(seq) || !indexed.contains(seq))
+        .filter(|seq| filter.admits(*seq))
         .collect())
 }
 
@@ -273,6 +304,18 @@ mod tests {
         assert_eq!(
             seqs(candidate_segments(dir.path(), "A", "a.jsonl", 1).unwrap()),
             [0, 3]
+        );
+
+        // The filter itself never consults the directory: a segment it has
+        // not heard of — including one rotated in after it was read — is
+        // admitted, and only a listed segment for another generation is not.
+        let filter = segment_filter(dir.path(), "A", "a.jsonl", 1).unwrap();
+        assert!(filter.admits(0));
+        assert!(!filter.admits(1));
+        assert!(filter.admits(3));
+        assert!(
+            filter.admits(99),
+            "a segment the index never saw is a candidate"
         );
     }
 

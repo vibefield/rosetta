@@ -24,7 +24,8 @@ pub use ledger::{
 };
 pub use segment::{RecompressOutcome, SegmentCodec, recompress_segment, sniff_segment};
 pub use segment_index::{
-    IndexedSource, SegmentIndexLine, candidate_segments, rebuild_segment_index,
+    IndexedSource, SegmentFilter, SegmentIndexLine, candidate_segments, rebuild_segment_index,
+    segment_filter,
 };
 pub use sqlite::{
     DbSnapshot, DbStamp, SnapshotOutcome, SqliteFileStatus, db_stamp, is_db_sidecar,

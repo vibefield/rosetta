@@ -141,7 +141,10 @@ struct Flags {
     /// `None` = the write path's blessed default.
     level: Option<i32>,
     /// `ledger compact` only: rewrite with zstd's widest stock window
-    /// (`MAX_WINDOW_LOG`). Offline only — the write path never pays for it.
+    /// (`MAX_WINDOW_LOG`, 128 MiB) for about 7% more ratio. The write path
+    /// never pays for it, but every later decoder of those segments allocates
+    /// that window while the segment is open — a replay across nine runtimes
+    /// or the exact-command fetch included.
     long_window: bool,
     /// `ledger compact` only: rewrite segments that are already compressed,
     /// for instance to a higher level or a wider window.
