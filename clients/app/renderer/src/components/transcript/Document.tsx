@@ -9,15 +9,35 @@
 // the focus landing from a search hit, subthreads interleaved by timestamp for
 // a parent-only link and anchored under their own delegate line when the link
 // is proven, and the honest states for a session the daemon has not reached.
-import { Fragment } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { SessionRow } from "@rosetta/protocol";
-import type { AttachmentFact, LedgerLine, PathFact, Segment } from "../../lib/transcript";
-import { linkedChildSessionIds } from "../../lib/transcript";
+import type { ParticipantColor, SessionRow, TimelineEntry } from "@rosetta/protocol";
+import type {
+  AttachmentFact,
+  LedgerLine,
+  PathFact,
+  RuntimeProfile,
+  Segment,
+} from "../../lib/transcript";
+import {
+  interleaveTeamCollaboration,
+  linkedChildSessionIds,
+  participantPresentation,
+  runtimeProfile,
+  taskBoundedReportWork,
+  teamMemberPresentations,
+  teamParticipants,
+  teamSessionIds,
+  workerThreadLinks,
+  workflowAttemptIndex,
+  workflowAttemptsFor,
+} from "../../lib/transcript";
 import type { TimelineFeed } from "../../lib/hooks";
+import { useTeamTimelines } from "../../lib/hooks";
 import { EmptyState } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
+import { transcriptModel } from "./document-model";
 import type { TranscriptModel } from "./document-model";
 import type { TurnPart } from "./document-plan";
 import { Ledger } from "./Ledger";
@@ -30,6 +50,8 @@ import type { ThreadFocus, ThreadIndex } from "./thread-index";
 import { messageDomId, sessionContains } from "./thread-index";
 import { Thinking } from "./Thinking";
 import { canOpenAttachment } from "./attachment-file-source";
+import type { TeamReportWorkPresentation } from "./Team";
+import { KnownTeamRoster, TeamEvent, TeamWorkthread } from "./Team";
 
 export interface TranscriptDocumentProps {
   readonly session: SessionRow;
@@ -54,14 +76,113 @@ export interface TranscriptDocumentProps {
   readonly nested?: boolean;
 }
 
+function staticTimelineFeed(rows: readonly TimelineEntry[]): TimelineFeed {
+  const nothing = () => undefined;
+  return {
+    rows: [...rows],
+    snapshotReady: true,
+    timelineMeta: null,
+    status: "live",
+    watermark: null,
+    earlier: { kind: "none" },
+    earlierNotice: null,
+    earlierAbove: 0,
+    landed: null,
+    holdEarlier: nothing,
+    revealEarlier: nothing,
+    retryEarlier: nothing,
+    dismissEarlierNotice: nothing,
+    canLoadEarlier: false,
+    loadEarlier: nothing,
+    loadAnchor: async () => false,
+  };
+}
+
+function ReportWorkDocument({
+  session,
+  rows,
+  name,
+  color,
+  runtime,
+  startedAt,
+  endedAt,
+  index,
+  onReceipt,
+  onOpenAttachment,
+  onOpenPath,
+  getRuntimeKind,
+  homeDirectory,
+}: {
+  readonly session: SessionRow;
+  readonly rows: readonly TimelineEntry[];
+  readonly name: string | null;
+  readonly color: ParticipantColor | null;
+  readonly runtime: RuntimeProfile;
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
+  readonly index: ThreadIndex;
+  readonly onReceipt: (text: string) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenPath: (path: PathFact) => void;
+  readonly getRuntimeKind: (runtimeId: string) => string;
+  readonly homeDirectory: string | null;
+}) {
+  const boundedSession = useMemo(
+    () => ({ ...session, stream_state: "indexed" as const }),
+    [session],
+  );
+  const feed = useMemo(() => staticTimelineFeed(rows), [rows]);
+  const model = useMemo(
+    () => transcriptModel(rows, boundedSession, homeDirectory, Date.now()),
+    [rows, boundedSession, homeDirectory],
+  );
+  const scopedIndex = useMemo<ThreadIndex>(() => {
+    const linked = new Set(rows.flatMap((row) => linkedChildSessionIds(row)));
+    const childrenByParent = new Map(index.childrenByParent);
+    childrenByParent.set(
+      session.id,
+      (index.childrenByParent.get(session.id) ?? []).filter((child) => linked.has(child.id)),
+    );
+    return { byId: index.byId, childrenByParent };
+  }, [rows, session.id, index]);
+
+  return (
+    <TeamWorkthread
+      name={name}
+      color={color}
+      runtime={runtime}
+      startedAt={startedAt}
+      endedAt={endedAt}
+    >
+      <TranscriptDocument
+        session={boundedSession}
+        model={model}
+        feed={feed}
+        duringBackfill={false}
+        index={scopedIndex}
+        focus={null}
+        highlightedTimelineId={null}
+        onFocusConsumed={() => undefined}
+        onReceipt={onReceipt}
+        onOpenAttachment={onOpenAttachment}
+        onOpenPath={onOpenPath}
+        getRuntimeKind={getRuntimeKind}
+        homeDirectory={homeDirectory}
+        onPillPress={null}
+        nested
+      />
+    </TeamWorkthread>
+  );
+}
+
 export function TranscriptDocument({
   session,
-  model,
+  model: baseModel,
   feed,
   duringBackfill,
   index,
   focus,
-  highlightedTimelineId,
+  highlightedTimelineId: parentHighlightedTimelineId,
   onFocusConsumed,
   onReceipt,
   onOpenAttachment,
@@ -74,34 +195,144 @@ export function TranscriptDocument({
 }: TranscriptDocumentProps) {
   const runtimeKind = getRuntimeKind(session.runtime_id);
   const live = session.stream_state === "streaming" && !duringBackfill;
-  const focusTimelineId = focus?.sessionId === session.id ? focus.timelineId : null;
-  const domIdOf = (timelineId: string) => messageDomId(session.id, timelineId);
-
-  // Children this document owns. A proven `child_session_id` anchors the run
-  // under its own line; everything else is interleaved by start time.
   const directChildren = index.childrenByParent.get(session.id) ?? [];
-  const claimed = new Set<string>();
-  const childrenByRow = new Map<string, SessionRow[]>();
-  for (const turn of model.turns) {
-    for (const segment of turn.segments) {
-      if (segment.kind !== "ledger") continue;
-      for (const line of segment.lines) {
-        for (const row of line.rows) {
-          for (const childId of linkedChildSessionIds(row)) {
-            const child = index.byId.get(childId);
-            if (child === undefined || claimed.has(child.id)) continue;
-            if (child.parent_session_id !== session.id) continue;
-            claimed.add(child.id);
-            const key = line.rows[0].timeline_id;
-            const existing = childrenByRow.get(key);
-            if (existing) existing.push(child);
-            else childrenByRow.set(key, [child]);
-          }
-        }
-      }
+  const teamIds = useMemo(
+    () => teamSessionIds(session.id, directChildren, feed.rows),
+    [session.id, directChildren, feed.rows],
+  );
+  const teamIdSet = useMemo(() => new Set(teamIds), [teamIds]);
+  const teamFeed = useTeamTimelines(teamIds);
+  const displayedRows = useMemo(
+    () => interleaveTeamCollaboration(feed.rows, teamFeed.rowsBySession),
+    [feed.rows, teamFeed.rowsBySession],
+  );
+  const model = useMemo(
+    () =>
+      displayedRows === feed.rows
+        ? baseModel
+        : transcriptModel(displayedRows, session, homeDirectory, Date.now(), {
+            sharedCollaborationSessionIds: teamIdSet,
+          }),
+    [displayedRows, feed.rows, baseModel, session, homeDirectory, teamIdSet],
+  );
+  const workflowAttempts = useMemo(() => workflowAttemptIndex(displayedRows), [displayedRows]);
+  const teamMembers = useMemo(
+    () => teamMemberPresentations(feed.rows, index.byId, teamFeed.rowsBySession),
+    [feed.rows, index.byId, teamFeed.rowsBySession],
+  );
+  const participants = useMemo(() => teamParticipants(teamMembers), [teamMembers]);
+  const sessionByTimelineId = useMemo(
+    () => new Map(displayedRows.map((row) => [row.timeline_id, row.session_id])),
+    [displayedRows],
+  );
+  const focusTimelineId =
+    focus !== null && (focus.sessionId === session.id || teamIdSet.has(focus.sessionId))
+      ? focus.timelineId
+      : null;
+  const domIdOf = (timelineId: string) =>
+    messageDomId(sessionByTimelineId.get(timelineId) ?? session.id, timelineId);
+  const teamFocus = focus !== null && teamIdSet.has(focus.sessionId) ? focus : null;
+  const [teamHighlight, setTeamHighlight] = useState<string | null>(null);
+  const teamFocusRequest = useRef<string | null>(null);
+  const highlightedTimelineId = teamHighlight ?? parentHighlightedTimelineId;
+
+  useEffect(() => {
+    if (teamFocus === null) {
+      teamFocusRequest.current = null;
+      return;
     }
-  }
-  const floating = directChildren.filter((child) => !claimed.has(child.id));
+    const drawnBy = model.representatives.get(teamFocus.timelineId) ?? null;
+    if (drawnBy !== null) {
+      const element = document.getElementById(
+        messageDomId(sessionByTimelineId.get(drawnBy) ?? session.id, drawnBy),
+      );
+      if (element !== null) {
+        element.scrollIntoView({ block: "center" });
+        setTeamHighlight(drawnBy);
+        onFocusConsumed();
+        window.setTimeout(() => setTeamHighlight(null), 1500);
+      }
+      return;
+    }
+
+    const source = teamFeed.rowsBySession
+      .get(teamFocus.sessionId)
+      ?.find((row) => row.timeline_id === teamFocus.timelineId);
+    if (source !== undefined) {
+      onFocusConsumed();
+      onReceipt(
+        source.body.type === "collaboration" && source.body.event.channel === "coordinator"
+          ? "That message is private team context, not shared team chronology"
+          : "That team-member row is private work, not a delivered boundary message",
+      );
+      return;
+    }
+
+    const requestKey = `${teamFocus.sessionId}\u0000${teamFocus.timelineId}`;
+    if (teamFocusRequest.current === requestKey) return;
+    teamFocusRequest.current = requestKey;
+    void teamFeed
+      .loadAnchor(teamFocus.sessionId, teamFocus.timelineId)
+      .then((loaded) => {
+        if (loaded) return;
+        onFocusConsumed();
+        onReceipt("That team message is no longer available");
+      })
+      .catch((error: unknown) => {
+        onFocusConsumed();
+        onReceipt(error instanceof Error ? error.message : "Could not load that team message");
+      });
+  }, [
+    teamFocus,
+    teamFeed.loadAnchor,
+    teamFeed.rowsBySession,
+    model,
+    onFocusConsumed,
+    onReceipt,
+    session.id,
+    sessionByTimelineId,
+  ]);
+
+  // Children this document owns. A proven `child_session_id` anchors an
+  // ordinary Agent worker under its earliest line. Team members are consumed
+  // above as roster + shared chronology and must never open duplicate threads.
+  const workerChildren = directChildren.filter((child) => !teamIdSet.has(child.id));
+  const ledgerLines = useMemo(
+    () =>
+      model.turns.flatMap((turn) =>
+        turn.segments.flatMap((segment) => (segment.kind === "ledger" ? segment.lines : [])),
+      ),
+    [model],
+  );
+  const workerLinks = useMemo(
+    () => workerThreadLinks(ledgerLines, session.id, index.byId, teamIdSet),
+    [ledgerLines, session.id, index.byId, teamIdSet],
+  );
+  const floating = workerChildren.filter(
+    (child) => !workerLinks.anchorRowByChild.has(child.id),
+  );
+  const [revealedWorker, setRevealedWorker] = useState<{
+    readonly childId: string;
+    readonly anchorTimelineId: string;
+    readonly request: number;
+  } | null>(null);
+  const revealRequest = useRef(0);
+  const revealLinkedWorker = (childId: string) => {
+    const anchorTimelineId = workerLinks.anchorRowByChild.get(childId);
+    if (anchorTimelineId === undefined) return;
+    revealRequest.current += 1;
+    setRevealedWorker({ childId, anchorTimelineId, request: revealRequest.current });
+  };
+
+  useEffect(() => {
+    if (revealedWorker === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .getElementById(messageDomId(session.id, revealedWorker.anchorTimelineId))
+        ?.scrollIntoView({ block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealedWorker, session.id]);
 
   const renderChild = (child: SessionRow, anchored: boolean) => (
     <Subthread
@@ -120,6 +351,52 @@ export function TranscriptDocument({
     />
   );
 
+  const reportWorkFor = (row: TimelineEntry): TeamReportWorkPresentation | null => {
+    if (row.body.type !== "collaboration") return null;
+    const participant = participantPresentation(
+      participants,
+      row.body.event.sender,
+      row.body.event.team,
+    );
+    const memberSessionId = teamIdSet.has(row.session_id)
+      ? row.session_id
+      : participant?.sessionId;
+    if (memberSessionId === null || memberSessionId === undefined) return null;
+    const sourceRows = teamFeed.rowsBySession.get(memberSessionId);
+    const memberSession = index.byId.get(memberSessionId);
+    if (
+      sourceRows === undefined ||
+      memberSession === undefined ||
+      !teamIdSet.has(memberSession.id)
+    ) {
+      return null;
+    }
+    const work = taskBoundedReportWork(row, sourceRows);
+    if (work === null) return null;
+    return {
+      actionCount: work.actionCount,
+      startedAt: work.startedAt,
+      endedAt: work.endedAt,
+      content: (
+        <ReportWorkDocument
+          session={memberSession}
+          rows={work.rows}
+          name={row.body.event.sender}
+          color={row.body.event.color ?? participant?.color ?? null}
+          runtime={participant?.runtime ?? runtimeProfile(work.rows, null)}
+          startedAt={work.startedAt}
+          endedAt={work.endedAt}
+          index={index}
+          onReceipt={onReceipt}
+          onOpenAttachment={onOpenAttachment}
+          onOpenPath={onOpenPath}
+          getRuntimeKind={getRuntimeKind}
+          homeDirectory={homeDirectory}
+        />
+      ),
+    };
+  };
+
   const renderSegment = (segment: Segment): ReactNode => {
     const rowId = segment.kind === "ledger" ? segment.rows[0].timeline_id : segment.row.timeline_id;
     const hit = highlightedTimelineId === rowId;
@@ -134,19 +411,37 @@ export function TranscriptDocument({
             highlightedTimelineId={highlightedTimelineId}
             focusTimelineId={focusTimelineId}
             alive={(line) =>
-              live && (feed.watermark === null || line.rows[0].ordinal > feed.watermark)
+              live &&
+              line.rows[0].session_id === session.id &&
+              (feed.watermark === null || line.rows[0].ordinal > feed.watermark)
             }
-            hasChildren={(line) => (childrenByRow.get(line.rows[0].timeline_id) ?? []).length > 0}
+            hasChildren={(line) =>
+              (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).length > 0
+            }
             childFocused={(line) =>
-              focus !== null &&
-              (childrenByRow.get(line.rows[0].timeline_id) ?? []).some((child) =>
-                sessionContains(child.id, focus.sessionId, index.byId),
-              )
+              (focus !== null &&
+                (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).some((child) =>
+                  sessionContains(child.id, focus.sessionId, index.byId),
+                )) ||
+              (revealedWorker !== null &&
+                (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).some(
+                  (child) => child.id === revealedWorker.childId,
+                ))
             }
             subthreadsFor={(line: LedgerLine) =>
-              (childrenByRow.get(line.rows[0].timeline_id) ?? []).map((child) =>
-                renderChild(child, true),
+              (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).map((child) =>
+                ({ childSessionId: child.id, node: renderChild(child, true) }),
               )
+            }
+            workflowAttemptsFor={(line) => workflowAttemptsFor(workflowAttempts, line.rows[0])}
+            linkedChildId={(line) =>
+              workerLinks.referencedChildIdsByRow.get(line.rows[0].timeline_id)?.[0] ?? null
+            }
+            onOpenLinkedChild={revealLinkedWorker}
+            teamMemberFor={(line) =>
+              line.rows
+                .map((row) => teamMembers.get(row.timeline_id) ?? null)
+                .find((member) => member !== null) ?? null
             }
             onOpenPath={onOpenPath}
           />
@@ -163,7 +458,7 @@ export function TranscriptDocument({
             anchor={
               <Anchor
                 at={segment.at}
-                sessionId={session.id}
+                sessionId={segment.row.session_id}
                 timelineId={rowId}
                 onReceipt={onReceipt}
               />
@@ -205,7 +500,7 @@ export function TranscriptDocument({
           >
             <Anchor
               at={segment.at}
-              sessionId={session.id}
+              sessionId={segment.row.session_id}
               timelineId={rowId}
               onReceipt={onReceipt}
             />
@@ -231,6 +526,44 @@ export function TranscriptDocument({
             <SegmentActs text={segment.text ?? ""} onReceipt={onReceipt} />
           </div>
         );
+      case "collaboration": {
+        const sourceMember = teamIdSet.has(segment.row.session_id)
+          ? index.byId.get(segment.row.session_id)
+          : undefined;
+        const inferredRecipient =
+          segment.event.channel === "coordinator" && segment.event.recipient === null
+            ? (sourceMember?.title ?? sourceMember?.native_session_id ?? null)
+            : segment.event.recipient;
+        const event =
+          inferredRecipient === segment.event.recipient
+            ? segment.event
+            : { ...segment.event, recipient: inferredRecipient };
+        const participant = participantPresentation(
+          participants,
+          event.sender,
+          event.team,
+        );
+        const recipientParticipant = participantPresentation(
+          participants,
+          event.recipient,
+          event.team,
+        );
+        return (
+          <TeamEvent
+            key={segment.key}
+            event={event}
+            at={segment.at}
+            domId={domIdOf(rowId)}
+            timelineId={rowId}
+            participant={participant}
+            recipientParticipant={recipientParticipant}
+            hit={hit}
+            forceOpen={focusTimelineId === rowId}
+            reportWork={reportWorkFor(segment.row)}
+            onReceipt={onReceipt}
+          />
+        );
+      }
     }
   };
 
@@ -281,7 +614,6 @@ export function TranscriptDocument({
           {part.prompts.length > 0 && (
             <Prompt
               prompts={part.prompts}
-              sessionId={session.id}
               domIdOf={domIdOf}
               landedTimelineId={highlightedTimelineId}
               onReceipt={onReceipt}
@@ -306,10 +638,18 @@ export function TranscriptDocument({
     );
   };
 
-  const empty = model.plan.length === 0 && directChildren.length === 0;
+  const knownTeamSessions = directChildren.filter((child) => teamIdSet.has(child.id));
+  const showKnownTeam = knownTeamSessions.length > 0 && teamMembers.size === 0;
+  const empty = model.plan.length === 0 && workerChildren.length === 0 && !showKnownTeam;
   return (
     <>
       {head}
+      {showKnownTeam && (
+        <KnownTeamRoster
+          sessions={knownTeamSessions}
+          rowsBySession={teamFeed.rowsBySession}
+        />
+      )}
       {model.plan.map(({ sitting, parts }) => (
         <Sitting key={sitting.key} sitting={sitting}>
           {showPills && (
@@ -323,7 +663,7 @@ export function TranscriptDocument({
       ))}
       {drainFloating(null)}
       {empty &&
-        feed.status !== "connecting" &&
+        feed.snapshotReady &&
         (nested ? (
           <p className="tr-quiet">
             {session.stream_state === "indexed"

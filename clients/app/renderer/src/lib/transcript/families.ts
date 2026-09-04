@@ -6,7 +6,12 @@
 // ACTION and only the action; `ledger.ts` wraps it in the evidence (T-5's hue,
 // the stamps, the fold). Splitting them is what keeps the failure rules in one
 // place instead of twenty-eight.
-import type { ResourceRef, TaskSnapshotItem, ToolAction } from "@rosetta/protocol";
+import type {
+  ParticipantColor,
+  ResourceRef,
+  TaskSnapshotItem,
+  ToolAction,
+} from "@rosetta/protocol";
 import type {
   CanonicalDocument,
   CollaboratorRef,
@@ -154,10 +159,26 @@ export interface DelegateFact {
   readonly agentKind: string | null;
   readonly name: string | null;
   readonly model: string | null;
+  /** Named only when native evidence proves persistent team membership. */
+  readonly team: string | null;
+  readonly color: ParticipantColor | null;
+  readonly resumeId: string | null;
   readonly objective: string;
   readonly background: boolean;
   /** The child was never indexed; the record says draw its summary as prose. */
   readonly orphanSummary: string | null;
+}
+
+export type WorkflowAction = Extract<ToolAction, { readonly type: "workflow" }>;
+
+/** The durable Workflow document plus the exact file addresses exposed by
+ * the row. The first path, when present, is the workflow script; remaining
+ * paths are result resources discovered in the sidecar/callback. */
+export interface WorkflowFact {
+  readonly action: WorkflowAction;
+  readonly objective: string | null;
+  readonly script: PathFact | null;
+  readonly resources: readonly PathFact[];
 }
 
 /** The one task mutation this historical board is explaining. */
@@ -243,6 +264,7 @@ export type LedgerDetail =
       readonly resources: readonly PathFact[];
     }
   | { readonly kind: "delegate"; readonly delegate: DelegateFact }
+  | { readonly kind: "workflow"; readonly workflow: WorkflowFact }
   | {
       readonly kind: "participants";
       readonly participants: readonly CollaboratorRef[];
@@ -309,6 +331,63 @@ function pathFacts(
       source !== null && resource.type === "file" ? { ...source, targetIndex } : undefined,
     ),
   );
+}
+
+function sameResource(left: ResourceRef, right: ResourceRef): boolean {
+  return left.type === right.type && resourceLabel(left) === resourceLabel(right);
+}
+
+/** Keep the renderer and `/file` target indices deterministic: workflow
+ * script first, then each distinct result resource in native order. */
+function workflowPathFacts(
+  action: WorkflowAction,
+  context: LedgerContext,
+  source: { readonly sessionId: string; readonly timelineId: string } | null,
+): { readonly script: PathFact | null; readonly resources: readonly PathFact[] } {
+  const scriptResource = action.run?.script_path ?? action.path;
+  const resources: ResourceRef[] = [];
+  if (scriptResource !== null) resources.push(scriptResource);
+  for (const resource of action.run?.resources ?? []) {
+    if (!resources.some((existing) => sameResource(existing, resource))) resources.push(resource);
+  }
+  const facts = pathFacts(resources, context, source);
+  return {
+    script: scriptResource === null ? null : (facts[0] ?? null),
+    resources: scriptResource === null ? facts : facts.slice(1),
+  };
+}
+
+function workflowPhaseAside(action: WorkflowAction): string | null {
+  if ((action.attempt ?? 1) > 1 || action.resume_id !== null) {
+    return `attempt ${action.attempt ?? 2}, same run`;
+  }
+  const run = action.run ?? null;
+  if (run === null || run.phases.length === 0) {
+    return action.objective === null || action.objective === undefined
+      ? null
+      : firstLine(canonicalText(action.objective), 68);
+  }
+  const active = run.workers.find((worker) => worker.state === "progress");
+  const observed = active?.phase_index ?? Math.max(
+    0,
+    ...run.workers
+      .filter((worker) => worker.state !== "start" && worker.phase_index !== null)
+      .map((worker) => worker.phase_index ?? 0),
+  );
+  if (observed > 0 && run.status !== "completed") {
+    return `phase ${observed} of ${run.phases.length}`;
+  }
+  const objective = action.objective ?? run.summary;
+  return objective === null ? null : firstLine(canonicalText(objective), 68);
+}
+
+function workflowResult(action: WorkflowAction): string | null {
+  const run = action.run ?? null;
+  if (run === null) return action.background ? "in background" : null;
+  const total = run.workers.length;
+  const done = run.workers.filter((worker) => worker.state === "done").length;
+  const status = run.status === "unknown" ? "status unknown" : run.status;
+  return total === 0 ? status : `${status} · ${done}/${total}`;
 }
 
 /** `L1–180` · `p3–4`, carried by the exact file target it describes. */
@@ -819,7 +898,7 @@ export function projectAction(
       const label = action.name ?? action.agent_kind;
       return {
         ...base,
-        verb: "Delegated",
+        verb: action.resume_id === null ? "Delegated" : "Resumed",
         object: [
           ...(label === null ? [] : [part(label)]),
           part(label === null ? objective : ` · ${objective}`, "aside"),
@@ -834,6 +913,9 @@ export function projectAction(
             agentKind: action.agent_kind,
             name: action.name,
             model: action.model,
+            team: action.team,
+            color: action.color,
+            resumeId: action.resume_id,
             objective: canonicalText(action.objective),
             background: action.background,
             orphanSummary:
@@ -901,14 +983,33 @@ export function projectAction(
     case "workflow": {
       const label =
         action.name ?? (action.path === null ? null : resourceDisplay(action.path, context));
-      const text =
-        action.objective ?? action.arguments ?? null;
+      const run = action.run ?? null;
+      const objective = action.objective ?? run?.summary ?? null;
+      const paths = workflowPathFacts(action, context, source);
+      const aside = workflowPhaseAside(action);
       return {
         ...base,
-        verb: "Ran workflow",
-        object: label === null ? [part("unnamed", "aside")] : pathParts(label),
-        result: action.background ? "in background" : null,
-        detail: text === null ? NO_DETAIL : { kind: "text", text: canonicalText(text) },
+        glyph:
+          run !== null && ["killed", "cancelled", "stopped"].includes(run.status)
+            ? "clock"
+            : base.glyph,
+        verb: (action.attempt ?? 1) > 1 || action.resume_id !== null
+          ? "Resumed workflow"
+          : "Ran workflow",
+        object: [
+          ...(label === null ? [part("dynamic workflow", "aside")] : pathParts(label)),
+          ...(aside === null ? [] : [part(` · ${aside}`, "aside")]),
+        ],
+        result: workflowResult(action),
+        detail: {
+          kind: "workflow",
+          workflow: {
+            action,
+            objective: objective === null ? null : canonicalText(objective),
+            script: paths.script,
+            resources: paths.resources,
+          },
+        },
       };
     }
 

@@ -15,7 +15,7 @@
 //     silently closed over.
 import { useMemo } from "react";
 import type { SessionRow, TimelineEntry } from "@rosetta/protocol";
-import type { DayEntry, Sitting, Turn } from "../../lib/transcript";
+import type { DayEntry, DocumentOptions, Sitting, Turn } from "../../lib/transcript";
 import { dayList, documentTurns, sittings } from "../../lib/transcript";
 import type { PlannedSitting } from "./document-plan";
 import { documentPlan } from "./document-plan";
@@ -54,11 +54,36 @@ function buildRepresentatives(turns: readonly Turn[]): Map<string, string> {
 
 function buildGaps(rows: readonly TimelineEntry[]): Map<string, number> {
   const gaps = new Map<string, number>();
-  for (let at = 1; at < rows.length; at += 1) {
-    const missing = rows[at].ordinal - rows[at - 1].ordinal - 1;
-    if (missing > 0) gaps.set(rows[at].timeline_id, missing);
+  const previousBySession = new Map<string, number>();
+  for (const row of rows) {
+    const previous = previousBySession.get(row.session_id);
+    const missing = previous === undefined ? 0 : row.ordinal - previous - 1;
+    if (missing > 0) gaps.set(row.timeline_id, missing);
+    previousBySession.set(row.session_id, row.ordinal);
   }
   return gaps;
+}
+
+export function transcriptModel(
+  rows: readonly TimelineEntry[],
+  session: SessionRow | null,
+  homeDirectory: string | null,
+  now: number,
+  options: DocumentOptions = {},
+): TranscriptModel {
+  const turns = documentTurns(rows, {
+    ...options,
+    context: { cwd: session?.cwd ?? null, home: homeDirectory },
+  });
+  const list = sittings(rows, now);
+  return {
+    turns,
+    sittings: list,
+    days: dayList(list),
+    plan: documentPlan(turns, list),
+    representatives: buildRepresentatives(turns),
+    gaps: buildGaps(rows),
+  };
 }
 
 export function useTranscriptModel(
@@ -66,21 +91,20 @@ export function useTranscriptModel(
   session: SessionRow | null,
   homeDirectory: string | null,
   now: number,
+  options: DocumentOptions = {},
 ): TranscriptModel {
   const cwd = session?.cwd ?? null;
+  const sharedKey = [...(options.sharedCollaborationSessionIds ?? [])].sort().join("\u0000");
   return useMemo(() => {
-    const turns = documentTurns(rows, { context: { cwd, home: homeDirectory } });
-    const list = sittings(rows, now);
-    return {
-      turns,
-      sittings: list,
-      days: dayList(list),
-      plan: documentPlan(turns, list),
-      representatives: buildRepresentatives(turns),
-      gaps: buildGaps(rows),
-    };
+    const sharedCollaborationSessionIds = new Set(
+      sharedKey === "" ? [] : sharedKey.split("\u0000"),
+    );
+    return transcriptModel(rows, session, homeDirectory, now, {
+      ...options,
+      sharedCollaborationSessionIds,
+    });
     // `now` only names the day a stamp falls in; re-deriving the whole
     // document on every clock tick would be a memo that never hits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, cwd, homeDirectory]);
+  }, [rows, cwd, homeDirectory, sharedKey]);
 }

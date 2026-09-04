@@ -15,7 +15,7 @@
 //     that object: label + normalized value, with the CLI's prose discarded.
 import type { AttachmentFact, Prompt as PromptModel } from "../../lib/transcript";
 import { firstLine } from "../../lib/transcript";
-import { fmtBytes } from "../../lib/format";
+import { clock, fmtBytes } from "../../lib/format";
 import { Anchor } from "./Anchor";
 import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
 import { Prose, SegmentActs } from "./Prose";
@@ -118,11 +118,47 @@ export function PromptPanel({
 export interface PromptProps {
   /** One conversational prompt, or adjacent successful setting commands. */
   readonly prompts: readonly PromptModel[];
-  readonly sessionId: string;
   readonly domIdOf: (timelineId: string) => string;
   readonly landedTimelineId: string | null;
   readonly onReceipt: (message: string) => void;
   readonly onOpenAttachment: (fact: AttachmentFact) => void;
+}
+
+function senderLabel(sender: string): string {
+  if (sender === "coordinator") return "Claude Code";
+  return sender.startsWith("@") ? sender : `@${sender}`;
+}
+
+function MachinePrompt({
+  prompt,
+  domId,
+  onReceipt,
+}: {
+  readonly prompt: PromptModel;
+  readonly domId: string;
+  readonly onReceipt: (message: string) => void;
+}) {
+  const machine = prompt.machine;
+  if (machine === null) return null;
+  const facts = [
+    machine.label,
+    machine.sender === null ? null : `from ${senderLabel(machine.sender)}`,
+    prompt.at === null ? null : clock(prompt.at),
+  ].filter((fact): fact is string => fact !== null);
+  return (
+    <div
+      className="tr-assignment"
+      id={domId}
+      data-timeline-id={prompt.row.timeline_id}
+    >
+      <span className="tr-assignment__head">{facts.join(" · ")}</span>
+      {prompt.text === null ? (
+        <span className="tr-quiet">no message body recorded</span>
+      ) : (
+        <Prose text={prompt.text} onReceipt={onReceipt} />
+      )}
+    </div>
+  );
 }
 
 function CommandPrompt({ prompt, domId }: { readonly prompt: PromptModel; readonly domId: string }) {
@@ -150,7 +186,6 @@ function CommandPrompt({ prompt, domId }: { readonly prompt: PromptModel; readon
 
 export function Prompt({
   prompts,
-  sessionId,
   domIdOf,
   landedTimelineId,
   onReceipt,
@@ -163,6 +198,7 @@ export function Prompt({
   // The anchor sits against the first thing in the segment, and a pill is
   // half a panel's height — so the offset follows what actually opens it.
   const allCommands = prompts.every((prompt) => prompt.isCommand && prompt.command !== null);
+  const allMachine = prompts.every((prompt) => prompt.machine !== null);
   const text = prompts
     .map((prompt) => prompt.text)
     .filter((value): value is string => value !== null)
@@ -170,20 +206,28 @@ export function Prompt({
   return (
     <div
       className={clustered ? "tr-seg tr-cluster" : "tr-seg"}
-      data-prompt={allCommands ? undefined : ""}
+      data-prompt={allCommands || allMachine ? undefined : ""}
       data-command={allCommands ? "" : undefined}
+      data-machine={allMachine ? "" : undefined}
       data-timeline-id={first.row.timeline_id}
     >
       <Anchor
         at={first.at}
-        sessionId={sessionId}
+        sessionId={first.row.session_id}
         timelineId={first.row.timeline_id}
         onReceipt={onReceipt}
       />
       {prompts.map((prompt) =>
         // §03 H — a prompt that is a local command wears a pill instead of a
         // panel, and its `command_output` rides beside it. One object.
-        prompt.isCommand && prompt.command !== null ? (
+        prompt.machine !== null ? (
+          <MachinePrompt
+            key={prompt.key}
+            prompt={prompt}
+            domId={domIdOf(prompt.row.timeline_id)}
+            onReceipt={onReceipt}
+          />
+        ) : prompt.isCommand && prompt.command !== null ? (
           <CommandPrompt
             key={prompt.key}
             prompt={prompt}
@@ -200,7 +244,7 @@ export function Prompt({
           />
         ),
       )}
-      {!allCommands && <SegmentActs text={text} onReceipt={onReceipt} />}
+      {!allCommands && !allMachine && <SegmentActs text={text} onReceipt={onReceipt} />}
     </div>
   );
 }

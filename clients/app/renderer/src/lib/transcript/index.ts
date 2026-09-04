@@ -52,6 +52,8 @@ export type {
   PathFact,
   SourceFact,
   TaskChange,
+  WorkflowAction,
+  WorkflowFact,
 } from "./families.ts";
 export {
   COMMAND_PREVIEW_CHARACTER_LIMIT,
@@ -96,3 +98,35 @@ export {
   sittings,
   withinPromptCluster,
 } from "./sittings.ts";
+
+export type {
+  RuntimeProfile,
+  RuntimeProfileBasis,
+  TeamMemberOperation,
+  TeamMemberPresentation,
+  TeamParticipantPresentation,
+  TeamReportWork,
+  WorkerThreadLinks,
+} from "./collaboration.ts";
+
+export type {
+  WorkflowAttemptFact,
+  WorkflowAttemptIndex,
+  WorkflowRuntimeFact,
+} from "./workflow.ts";
+export {
+  workflowAttemptIndex,
+  workflowAttemptsFor,
+  workflowRuntime,
+  workflowWorkerState,
+} from "./workflow.ts";
+export {
+  interleaveTeamCollaboration,
+  participantPresentation,
+  runtimeProfile,
+  teamMemberPresentations,
+  teamParticipants,
+  taskBoundedReportWork,
+  teamSessionIds,
+  workerThreadLinks,
+} from "./collaboration.ts";

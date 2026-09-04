@@ -22,11 +22,20 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { clock } from "../../lib/format";
-import type { LedgerLine, ObjectPart, PathFact, RunSummary } from "../../lib/transcript";
+import type {
+  LedgerLine,
+  ObjectPart,
+  PathFact,
+  RunSummary,
+  TeamMemberPresentation,
+  WorkflowAttemptFact,
+} from "../../lib/transcript";
 import { objectText, spanText } from "../../lib/transcript";
 import { FaviconStack, Favicon } from "./Favicon";
 import { FailGlyph, FamilyGlyph, LineChevron } from "./glyphs";
 import { hasDetail, LineDetail } from "./LineDetail";
+import { TeamInvocation } from "./Team";
+import type { WorkflowChildThread } from "./Workflow";
 
 const TONE_CLASS: Readonly<Record<ObjectPart["tone"], string | undefined>> = {
   plain: undefined,
@@ -62,8 +71,12 @@ export interface LineProps {
   /** Force the line open — a search hit landed inside it. */
   readonly forceOpen: boolean;
   /** The child runs this line owns, already built (§03 F). */
-  readonly subthreads: ReactNode;
+  readonly subthreads: readonly WorkflowChildThread[];
+  readonly workflowAttempts: readonly WorkflowAttemptFact[];
   readonly hasChildren: boolean;
+  /** A later contact with an already-mounted worker navigates to the original
+   * disclosure instead of opening an empty duplicate. */
+  readonly onOpenLinkedChild: (() => void) | null;
   readonly onOpenPath: (path: PathFact) => void;
 }
 
@@ -74,7 +87,9 @@ export function Line({
   alive,
   forceOpen,
   subthreads,
+  workflowAttempts,
   hasChildren,
+  onOpenLinkedChild,
   onOpenPath,
 }: LineProps) {
   const [open, setOpen] = useState(line.openByDefault);
@@ -82,8 +97,9 @@ export function Line({
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
 
-  const pressable = hasChildren || hasDetail(line.detail, line.diagnostic);
-  const isOpen = pressable && (open || forceOpen);
+  const navigatesToChild = onOpenLinkedChild !== null;
+  const pressable = navigatesToChild || hasChildren || hasDetail(line.detail, line.diagnostic);
+  const isOpen = !navigatesToChild && pressable && (open || forceOpen);
   const running = line.state === "running" && alive;
   const state =
     line.state === "failed"
@@ -101,6 +117,10 @@ export function Line({
   const stamp = line.at === null ? null : clock(line.at);
 
   const toggle = () => {
+    if (navigatesToChild) {
+      onOpenLinkedChild();
+      return;
+    }
     if (pressable) setOpen((value) => !value);
   };
 
@@ -114,7 +134,8 @@ export function Line({
         data-hit={hit || undefined}
         role={pressable ? "button" : undefined}
         tabIndex={pressable ? 0 : undefined}
-        aria-expanded={pressable ? isOpen : undefined}
+        aria-expanded={!navigatesToChild && pressable ? isOpen : undefined}
+        aria-label={navigatesToChild ? `${line.verb}: open original worker subthread` : undefined}
         onClick={toggle}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
@@ -169,6 +190,8 @@ export function Line({
               <LineDetail
                 detail={line.detail}
                 diagnostic={line.diagnostic}
+                workflowChildren={line.detail.kind === "workflow" ? subthreads : []}
+                workflowAttempts={workflowAttempts}
                 onOpenPath={onOpenPath}
               />
             );
@@ -178,7 +201,7 @@ export function Line({
               <div className="tr-detail">{body}</div>
             ) : null;
           })()}
-          {subthreads}
+          {line.detail.kind === "workflow" ? null : subthreads.map((thread) => thread.node)}
         </>
       )}
     </>
@@ -193,13 +216,31 @@ export interface LedgerProps {
   /** The reader is being sent to a row inside this run. */
   readonly focusTimelineId: string | null;
   readonly alive: (line: LedgerLine) => boolean;
-  readonly subthreadsFor: (line: LedgerLine) => ReactNode;
+  readonly subthreadsFor: (line: LedgerLine) => readonly WorkflowChildThread[];
+  readonly workflowAttemptsFor: (line: LedgerLine) => readonly WorkflowAttemptFact[];
   readonly hasChildren: (line: LedgerLine) => boolean;
   /** A search hit landed inside a CHILD run this line owns: the line has to
    * open for the subthread to mount at all, so the reader is not sent to an
    * element that does not exist yet. */
   readonly childFocused: (line: LedgerLine) => boolean;
+  /** The already-anchored worker named by a later delegate/resume line. */
+  readonly linkedChildId: (line: LedgerLine) => string | null;
+  readonly onOpenLinkedChild: (childId: string) => void;
+  /** A proven team delegate replaces the generic delegate sentence with its
+   * roster operation. Ordinary Agent workers return null and keep Line. */
+  readonly teamMemberFor: (line: LedgerLine) => TeamMemberPresentation | null;
   readonly onOpenPath: (path: PathFact) => void;
+}
+
+const TEAM_START_BURST_MS = 5 * 60_000;
+
+function sameStartBurst(
+  first: TeamMemberPresentation,
+  candidate: TeamMemberPresentation,
+): boolean {
+  if (candidate.operation !== "add" || candidate.team !== first.team) return false;
+  if (first.row.at === null || candidate.row.at === null) return true;
+  return candidate.row.at >= first.row.at && candidate.row.at - first.row.at <= TEAM_START_BURST_MS;
 }
 
 export function Ledger({
@@ -210,8 +251,12 @@ export function Ledger({
   focusTimelineId,
   alive,
   subthreadsFor,
+  workflowAttemptsFor,
   hasChildren,
   childFocused,
+  linkedChildId,
+  onOpenLinkedChild,
+  teamMemberFor,
   onOpenPath,
 }: LedgerProps) {
   const focusInside = lines.some(
@@ -225,13 +270,38 @@ export function Ledger({
     if (focusInside) setOpen(true);
   }, [focusInside]);
 
-  const drawn = lines.map((line) => {
+  const drawn: ReactNode[] = [];
+  for (let at = 0; at < lines.length; at += 1) {
+    const line = lines[at];
+    const teamMember = teamMemberFor(line);
+    if (teamMember !== null) {
+      const members = [teamMember];
+      if (teamMember.operation === "start") {
+        while (at + 1 < lines.length) {
+          const candidate = teamMemberFor(lines[at + 1]);
+          if (candidate === null || !sameStartBurst(teamMember, candidate)) break;
+          members.push(candidate);
+          at += 1;
+        }
+      }
+      drawn.push(
+        <TeamInvocation
+          key={teamMember.row.timeline_id}
+          members={members}
+          domIdOf={domIdOf}
+          highlightedTimelineId={highlightedTimelineId}
+          focusTimelineId={focusTimelineId}
+        />,
+      );
+      continue;
+    }
     const key = line.rows[0]?.timeline_id ?? line.key;
     const inside =
       childFocused(line) ||
       (focusTimelineId !== null &&
         line.rows.some((row) => row.timeline_id === focusTimelineId));
-    return (
+    const linkedChild = linkedChildId(line);
+    drawn.push(
       <Line
         key={line.key}
         line={line}
@@ -243,11 +313,13 @@ export function Ledger({
         alive={alive(line)}
         forceOpen={inside}
         subthreads={subthreadsFor(line)}
+        workflowAttempts={workflowAttemptsFor(line)}
         hasChildren={hasChildren(line)}
+        onOpenLinkedChild={linkedChild === null ? null : () => onOpenLinkedChild(linkedChild)}
         onOpenPath={onOpenPath}
       />
     );
-  });
+  }
 
   if (!summary.closedByDefault) return <div className="tr-ledger">{drawn}</div>;
 

@@ -644,8 +644,9 @@ describe("§04 — the twenty-eight families", () => {
       resume_id: null,
       background: true,
     });
-    assert.equal(sentence(workflow), "Ran workflow release");
+    assert.equal(sentence(workflow), "Ran workflow release · cut a tag");
     assert.equal(workflow.result, "in background");
+    assert.equal(workflow.detail.kind, "workflow");
 
     const schedule = line({
       type: "schedule",

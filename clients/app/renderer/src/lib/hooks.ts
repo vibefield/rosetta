@@ -209,6 +209,10 @@ export function useProjectUsage(
 export interface TimelineFeed {
   /** Ordinal-ordered rows: paged history + the live tail, deduplicated. */
   rows: TimelineEntry[];
+  /** The subscription has delivered its first authoritative snapshot. A live
+   * status can arrive one frame earlier, so consumers must not infer an empty
+   * transcript until this is true. */
+  snapshotReady: boolean;
   /** Complete task/plan/artifact index delivered beside the tail snapshot. */
   timelineMeta: TimelineMeta | null;
   status: SubscriptionStatus;
@@ -246,6 +250,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
   const [anchors, setAnchors] = useState<TimelineEntry[]>([]);
   const [timelineMeta, setTimelineMeta] = useState<TimelineMeta | null>(null);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
+  const [snapshotReady, setSnapshotReady] = useState(false);
   const [watermark, setWatermark] = useState<number | null>(null);
   const sawSnapshot = useRef(false);
   const activeSession = useRef(sessionId);
@@ -283,6 +288,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     setTimelineMeta(null);
     setWatermark(null);
     setStatus("connecting");
+    setSnapshotReady(false);
     sawSnapshot.current = false;
     // A held page belongs to the session it was fetched for.
     apply({ type: "reset" });
@@ -290,6 +296,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     const sub = client.subscribeSession(sessionId, {
       onChange: (entries) => {
         setTail(entries);
+        setSnapshotReady(true);
         if (!sawSnapshot.current) {
           sawSnapshot.current = true;
           // Everything in the snapshot is the past; the line goes after it.
@@ -382,6 +389,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
 
   return {
     rows,
+    snapshotReady,
     timelineMeta,
     status,
     watermark,
@@ -397,6 +405,85 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     loadEarlier,
     loadAnchor,
   };
+}
+
+export interface TeamTimelineFeed {
+  /** Tail snapshots for the known team members. Only boundary rows are merged
+   * by the transcript model; private work remains in these source sessions. */
+  readonly rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>;
+  /** Pull one exact older boundary row for a search landing. */
+  readonly loadAnchor: (sessionId: string, timelineId: string) => Promise<boolean>;
+}
+
+/** Team conversation is distributed across member transcripts, so one parent
+ * document owns a small subscription set. Unlike ordinary Agent subthreads it
+ * is eager: delivered boundary messages belong in shared chronology even when
+ * no disclosure is open. */
+export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFeed {
+  const key = [...new Set(sessionIds)].sort().join("\n");
+  const ids = useMemo(() => (key === "" ? [] : key.split("\n")), [key]);
+  const [rowsBySession, setRowsBySession] = useState<
+    ReadonlyMap<string, readonly TimelineEntry[]>
+  >(new Map());
+  const activeIds = useRef(new Set(ids));
+  activeIds.current = new Set(ids);
+
+  useEffect(() => {
+    let active = true;
+    setRowsBySession(new Map());
+    const subscriptions = ids.map((sessionId) =>
+      client.subscribeSession(sessionId, {
+        onChange: (entries) => {
+          if (!active) return;
+          setRowsBySession((current) => {
+            const next = new Map(current);
+            next.set(sessionId, entries);
+            return next;
+          });
+        },
+      }),
+    );
+    return () => {
+      active = false;
+      subscriptions.forEach((subscription) => subscription.close());
+    };
+  }, [ids]);
+
+  const loadAnchor = useCallback(async (sessionId: string, timelineId: string) => {
+    if (!activeIds.current.has(sessionId)) return false;
+    const entry = await client.timelineEntry(sessionId, timelineId);
+    if (!activeIds.current.has(sessionId) || entry.session_id !== sessionId) return false;
+    setRowsBySession((current) => {
+      const next = new Map(current);
+      const rows = current.get(sessionId) ?? [];
+      next.set(
+        sessionId,
+        [...rows.filter((row) => row.timeline_id !== entry.timeline_id), entry].sort(
+          (left, right) => left.ordinal - right.ordinal,
+        ),
+      );
+      return next;
+    });
+    return true;
+  }, []);
+
+  // A changed roster must not briefly replay a removed member while the
+  // subscription effect is cleaning up. Keeping the returned object stable
+  // also prevents focus effects from rerunning on unrelated parent renders.
+  const activeRows = useMemo(
+    () =>
+      new Map(
+        ids.flatMap((sessionId) => {
+          const rows = rowsBySession.get(sessionId);
+          return rows === undefined ? [] : [[sessionId, rows] as const];
+        }),
+      ),
+    [ids, rowsBySession],
+  );
+  return useMemo(
+    () => ({ rowsBySession: activeRows, loadAnchor }),
+    [activeRows, loadAnchor],
+  );
 }
 
 export interface SearchFeed {

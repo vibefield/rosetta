@@ -195,8 +195,31 @@ function childSessionIdsOf(action: ToolAction): string[] {
       return action.child_session_id === null ? [] : [action.child_session_id];
     case "collaborate":
       return action.linked_session_id === null ? [] : [action.linked_session_id];
+    case "workflow":
+      return action.run == null
+        ? []
+        : [...new Set(action.run.workers.flatMap((worker) =>
+            worker.child_session_id === null ? [] : [worker.child_session_id],
+          ))];
     default:
       return [];
+  }
+}
+
+function workflowState(action: ToolAction, fallback: LedgerState): LedgerState {
+  if (action.type !== "workflow" || action.run == null) return fallback;
+  switch (action.run.status) {
+    case "completed":
+      return "done";
+    case "running":
+      return "running";
+    case "failed":
+      return "failed";
+    case "killed":
+    case "cancelled":
+    case "stopped":
+    case "unknown":
+      return "muted";
   }
 }
 
@@ -223,7 +246,7 @@ export function ledgerLine(row: TimelineEntry, context: LedgerContext = {}): Led
 
   // The unknown family is never plain: the row is honest about knowing nothing,
   // and the muted state is what italicises `no detail recorded`.
-  const rawState = stateOf(status, statusBasis);
+  const rawState = workflowState(action, stateOf(status, statusBasis));
   const state: LedgerState =
     action.type === "unknown" && rawState === "done" ? "muted" : rawState;
 
@@ -234,7 +257,13 @@ export function ledgerLine(row: TimelineEntry, context: LedgerContext = {}): Led
   }
 
   const diagnostic = tool.failure?.diagnostic ?? tool.failure?.summary ?? null;
-  const failure = failureResult(tool, action);
+  const rawFailure = failureResult(tool, action);
+  const failure =
+    action.type === "workflow" && action.run_id == null && rawState === "failed"
+      ? rawFailure === null
+        ? "did not start"
+        : `did not start · ${rawFailure}`
+      : rawFailure;
   const timing = tool.timing;
   const startedAt = timing?.started_at ?? null;
   const endedAt = timing?.completed_at ?? null;

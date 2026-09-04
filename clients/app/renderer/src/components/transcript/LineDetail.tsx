@@ -29,6 +29,8 @@ import {
   LIST_CAP,
 } from "./detail-parts";
 import { Favicon } from "./Favicon";
+import { WorkflowDetail } from "./Workflow";
+import type { WorkflowChildThread } from "./Workflow";
 
 function LocationList({
   locations,
@@ -111,6 +113,10 @@ export interface LineDetailProps {
   /** The delegate's child run, resolved by the document and passed in — this
    * module knows the shape of a detail, not the shape of a session tree. */
   readonly subthread?: ReactNode;
+  /** Workflow children stay attached to their own worker row instead of
+   * becoming an undifferentiated stack below the run document. */
+  readonly workflowChildren?: readonly WorkflowChildThread[];
+  readonly workflowAttempts?: readonly import("../../lib/transcript").WorkflowAttemptFact[];
   /** The document owns the viewer; detail rows only report which exact path
    * the reader pressed. */
   readonly onOpenPath?: (path: PathFact) => void;
@@ -118,7 +124,14 @@ export interface LineDetailProps {
 
 /** The body of one open line. Returns null when the family has nothing honest
  * to show, which is what makes the line unpressable in `Ledger`. */
-export function LineDetail({ detail, diagnostic, subthread, onOpenPath }: LineDetailProps) {
+export function LineDetail({
+  detail,
+  diagnostic,
+  subthread,
+  workflowChildren = [],
+  workflowAttempts = [],
+  onOpenPath,
+}: LineDetailProps) {
   const body = ((): ReactNode => {
     switch (detail.kind) {
       case "none":
@@ -186,6 +199,15 @@ export function LineDetail({ detail, diagnostic, subthread, onOpenPath }: LineDe
           // The child was never indexed, so the record draws its result
           // summary as prose rather than an empty subthread.
           <p className="tr-text">{detail.delegate.orphanSummary}</p>
+        );
+      case "workflow":
+        return (
+          <WorkflowDetail
+            fact={detail.workflow}
+            attempts={workflowAttempts}
+            children={workflowChildren}
+            onOpenPath={onOpenPath}
+          />
         );
       case "participants":
         return (

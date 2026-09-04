@@ -30,6 +30,7 @@ import type {
   AttachmentKind,
   AttachmentRef,
   CitationRef,
+  CollaborationEvent,
   Notice,
   SummaryPurpose,
   TimelineEntry,
@@ -229,6 +230,13 @@ export interface Prompt {
   readonly setting: LocalSetting | null;
   /** The parent session sent this, not a person (`parent_invocation`). */
   readonly fromParent: boolean;
+  /** Machine-delivered context has prompt semantics but never human styling. */
+  readonly machine: MachinePrompt | null;
+}
+
+export interface MachinePrompt {
+  readonly label: string;
+  readonly sender: string | null;
 }
 
 function looksLocalCommand(text: string | null): boolean {
@@ -309,6 +317,13 @@ export type Segment =
       readonly at: number | null;
       readonly purpose: SummaryPurpose;
       readonly text: string;
+    }
+  | {
+      readonly kind: "collaboration";
+      readonly key: string;
+      readonly row: TimelineEntry;
+      readonly at: number | null;
+      readonly event: CollaborationEvent;
     };
 
 /* ── the head ────────────────────────────────────────────────────────────── */
@@ -348,10 +363,19 @@ export interface Turn {
 export interface DocumentOptions {
   /** Paths draw relative to the session's own cwd, then home-relative. */
   readonly context?: LedgerContext;
+  /** Team child rows interleaved into their parent's shared chronology. Their
+   * native parent-invocation group must not masquerade as a human turn here. */
+  readonly sharedCollaborationSessionIds?: ReadonlySet<string>;
 }
 
-function opensTurn(row: TimelineEntry): boolean {
+function opensTurn(row: TimelineEntry, options: DocumentOptions): boolean {
   if (row.body.type === "user") return true;
+  if (
+    row.body.type === "collaboration" &&
+    options.sharedCollaborationSessionIds?.has(row.session_id) === true
+  ) {
+    return false;
+  }
   return row.group.kind === "human_turn" || row.group.kind === "parent_invocation";
 }
 
@@ -362,6 +386,7 @@ function isAgentAuthored(row: TimelineEntry): boolean {
     case "tool_use":
     case "summary":
       return true;
+    case "collaboration":
     case "user":
     case "notice":
       return false;
@@ -390,10 +415,16 @@ function buildPrompt(
   outputRow: TimelineEntry | null,
 ): Prompt {
   const body = row.body;
-  const rawText = body.type === "user" && body.text !== null ? canonicalText(body.text) : null;
+  const collaboration = body.type === "collaboration" ? body.event : null;
+  const rawText =
+    body.type === "user" && body.text !== null
+      ? canonicalText(body.text)
+      : collaboration?.body !== null && collaboration?.body !== undefined
+        ? canonicalText(collaboration.body)
+        : (collaboration?.summary ?? null);
   const refs = body.type === "user" ? body.attachments : [];
   const { text, attachments } = readAttachments(rawText, refs);
-  const isCommand = looksLocalCommand(text);
+  const isCommand = body.type === "user" && looksLocalCommand(text);
   const output =
     outputRow !== null && outputRow.body.type === "notice"
       ? canonicalText(
@@ -417,6 +448,20 @@ function buildPrompt(
     commandOutputRow: outputRow,
     setting: localSetting(command, commandOutput),
     fromParent: row.group.kind === "parent_invocation",
+    machine:
+      collaboration === null
+        ? null
+        : {
+            label:
+              collaboration.kind === "assignment"
+                ? "Assignment"
+                : collaboration.channel === "coordinator"
+                  ? "Coordinator follow-up"
+                  : collaboration.channel === "peer"
+                    ? "Peer message"
+                    : "Team message",
+            sender: collaboration.sender,
+          },
   };
 }
 
@@ -505,6 +550,15 @@ function buildSegments(
         });
         break;
       }
+      case "collaboration":
+        segments.push({
+          kind: "collaboration",
+          key: row.timeline_id,
+          row,
+          at: row.at,
+          event: row.body.event,
+        });
+        break;
       case "user":
         // Unreachable: a user row always opens its own turn.
         break;
@@ -549,7 +603,7 @@ export function documentTurns(
     body: TimelineEntry[];
   }[] = [];
   for (const row of rows) {
-    if (opensTurn(row)) {
+    if (opensTurn(row, options)) {
       groups.push({ prompt: row, output: null, body: [] });
       continue;
     }
