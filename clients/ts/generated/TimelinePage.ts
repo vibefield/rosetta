@@ -4,7 +4,7 @@ import type { TimelineEntry } from "./TimelineEntry";
 /**
  * One backward page of a session timeline, oldest-first within the page.
  */
-export type TimelinePage = { entries: Array<TimelineEntry>,
+export type TimelinePage = { entries: Array<TimelineEntry>, 
 /**
  * Opaque continuation for the next older page; `None` at the top of
  * the timeline. Expires (HTTP 410, [`ErrorCode::CursorExpired`]) when

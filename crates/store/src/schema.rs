@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -111,6 +111,34 @@ CREATE TABLE IF NOT EXISTS task (
 );
 CREATE INDEX IF NOT EXISTS task_src ON task(src_cursor);
 
+-- Workflow attempts remain ordinary timeline tool rows. The mutable native
+-- sidecar is one generation-owned run document joined to those attempts by
+-- run_id at read time, so a resume does not duplicate the worker roster and
+-- structured result into every invocation.
+CREATE TABLE IF NOT EXISTS workflow_run (
+  run_id      TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES session(id),
+  detail      TEXT NOT NULL CHECK (json_valid(detail)),
+  updated_at  INTEGER,
+  src_cursor  INTEGER REFERENCES ingest_cursor(id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS workflow_run_session ON workflow_run(session_id);
+CREATE INDEX IF NOT EXISTS workflow_run_src ON workflow_run(src_cursor);
+
+-- The coordinator journal is append-only evidence and may arrive before its
+-- run snapshot. Avoid a run foreign key for that valid ordering; hydration
+-- attaches matching observations once the run exists.
+CREATE TABLE IF NOT EXISTS workflow_journal (
+  observation_id TEXT PRIMARY KEY,
+  run_id          TEXT NOT NULL,
+  session_id      TEXT NOT NULL REFERENCES session(id),
+  detail          TEXT NOT NULL CHECK (json_valid(detail)),
+  src_cursor      INTEGER REFERENCES ingest_cursor(id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS workflow_journal_run ON workflow_journal(run_id);
+CREATE INDEX IF NOT EXISTS workflow_journal_session ON workflow_journal(session_id);
+CREATE INDEX IF NOT EXISTS workflow_journal_src ON workflow_journal(src_cursor);
+
 -- ————— phase 3 · stream —————————————————————————————————————————
 CREATE TABLE IF NOT EXISTS ingest_cursor (
   id          INTEGER PRIMARY KEY,
@@ -142,7 +170,7 @@ CREATE TABLE IF NOT EXISTS message (
                     ('native','parent_linked','ordered','synthetic')),
   block_index    INTEGER CHECK (block_index IS NULL OR block_index >= 0),
   type           TEXT NOT NULL CHECK (type IN
-                    ('user','agent','thinking','tool_use','notice','summary')),
+                    ('user','agent','thinking','collaboration','tool_use','notice','summary')),
   uuid           TEXT,
   parent_uuid    TEXT,
   ts             INTEGER,
@@ -200,12 +228,14 @@ CREATE TABLE IF NOT EXISTS message (
           AND tool_completed_at IS NULL AND tool_duration_ms IS NULL)),
   CHECK ((type IN ('user','agent') AND (content IS NOT NULL OR detail IS NOT NULL))
       OR (type = 'thinking' AND content IS NOT NULL)
+      OR (type = 'collaboration' AND detail IS NOT NULL)
       OR (type = 'summary' AND content IS NOT NULL AND detail IS NOT NULL)
       OR (type = 'notice' AND content IS NULL AND detail IS NOT NULL)
       OR (type = 'tool_use' AND content IS NULL)),
   CHECK (detail IS NULL OR
       (type IN ('user','agent') AND json_extract(detail, '$.type') = 'prose') OR
       (type = 'thinking' AND json_extract(detail, '$.type') = 'thinking') OR
+      (type = 'collaboration' AND json_extract(detail, '$.type') = 'collaboration') OR
       (type = 'notice' AND json_extract(detail, '$.type') = 'notice') OR
       (type = 'summary' AND json_extract(detail, '$.type') = 'summary')),
   CHECK ((response_id IS NULL AND response_derivation IS NULL AND block_index IS NULL)

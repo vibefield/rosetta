@@ -10,7 +10,8 @@ use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, TitleKind};
 use rosetta_core::timeline::{
-    AttachmentKind, Notice, TimelineBody, TimelineEntry, ToolAction, ToolStatus,
+    AttachmentKind, CollaborationChannel, CollaborationEventKind, CollaborationStatus, Notice,
+    ParticipantColor, TimelineBody, TimelineEntry, ToolAction, ToolStatus,
 };
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
@@ -19,6 +20,10 @@ const CWD: &str = "/tmp/project";
 const UUID: &str = "11111111-1111-1111-1111-111111111111";
 
 fn run(lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
+    run_stream("transcript", lines)
+}
+
+fn run_stream(stream_id: &str, lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
     let adapter = ClaudeCodeAdapter;
     let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
     let mut ctx = NormalizeCtx::new(
@@ -30,7 +35,7 @@ fn run(lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
     let mut ops = Vec::new();
     let mut statuses = Vec::new();
     for line in lines {
-        let outcome = adapter.ingest_line(&mut ctx, "transcript", line.to_string().as_bytes());
+        let outcome = adapter.ingest_line(&mut ctx, stream_id, line.to_string().as_bytes());
         ops.extend(outcome.ops);
         statuses.push(outcome.status);
     }
@@ -151,6 +156,7 @@ fn body_kind(row: &TimelineEntry) -> &'static str {
         TimelineBody::User { .. } => "user",
         TimelineBody::Agent { .. } => "agent",
         TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::Collaboration { .. } => "collaboration",
         TimelineBody::ToolUse { .. } => "tool_use",
         TimelineBody::Notice { .. } => "notice",
         TimelineBody::Summary { .. } => "summary",
@@ -165,6 +171,7 @@ fn text(row: &TimelineEntry) -> Option<&str> {
         TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
             Some(text.as_preview())
         }
+        TimelineBody::Collaboration { event } => event.body.as_ref().map(|text| text.as_preview()),
         TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
     }
 }
@@ -632,6 +639,121 @@ fn spawn_tools_anchor_the_subagent_thread() {
 }
 
 #[test]
+fn child_assignments_and_peer_deliveries_are_not_human_prompts() {
+    let assignment = user(
+        json!("Inspect the grouping rules and report back."),
+        json!({}),
+    );
+    let peer = user(
+        json!("short preview"),
+        json!({"origin": {
+            "kind": "peer",
+            "from": "agent-a",
+            "name": "schema-audit",
+            "body": "The wrapperless delivery is the full message.",
+            "senderTaskId": "task-9"
+        }}),
+    );
+    let (ops, _) = run_stream("subagent-transcript", &[assignment, peer]);
+    let rows = messages(&ops);
+    assert_eq!(
+        rows.iter().map(|row| body_kind(row)).collect::<Vec<_>>(),
+        ["collaboration", "collaboration"]
+    );
+
+    let TimelineBody::Collaboration { event } = &rows[0].body else {
+        unreachable!()
+    };
+    assert_eq!(event.kind, CollaborationEventKind::Assignment);
+    assert_eq!(event.channel, CollaborationChannel::Coordinator);
+    assert_eq!(
+        text(rows[0]),
+        Some("Inspect the grouping rules and report back.")
+    );
+    assert_eq!(
+        rows[0].group.kind,
+        rosetta_core::GroupKind::ParentInvocation
+    );
+
+    let TimelineBody::Collaboration { event } = &rows[1].body else {
+        unreachable!()
+    };
+    assert_eq!(event.kind, CollaborationEventKind::Message);
+    assert_eq!(event.channel, CollaborationChannel::Peer);
+    assert_eq!(event.sender.as_deref(), Some("schema-audit"));
+    assert_eq!(event.task_id.as_deref(), Some("task-9"));
+    assert_eq!(
+        text(rows[1]),
+        Some("The wrapperless delivery is the full message.")
+    );
+}
+
+#[test]
+fn top_level_team_envelopes_split_and_nested_copies_do_not_replay() {
+    let delivered = user(
+        json!(concat!(
+            "<teammate-message teammate_id=\"w1\" color=\"blue\" summary=\"root cause\">",
+            "Typed actions now survive reconciliation.",
+            "</teammate-message>",
+            "\n<teammate-message teammate_id=\"w2\" color=\"green\">",
+            "{\"type\":\"idle_notification\",\"from\":\"w2\",\"idleReason\":\"failed\",",
+            "\"summary\":\"tests failed\",\"timestamp\":\"2026-09-03T00:00:00Z\"}",
+            "</teammate-message>"
+        )),
+        json!({"teamName": "refinement"}),
+    );
+    let nested = user(
+        json!(
+            "<task-notification><teammate-message teammate_id=\"w1\">duplicate</teammate-message></task-notification>"
+        ),
+        json!({"origin": {"kind": "task-notification"}}),
+    );
+    let (ops, _) = run(&[delivered, nested]);
+    let rows = messages(&ops);
+    assert_eq!(
+        rows.len(),
+        2,
+        "the nested teammate copy stays provenance only"
+    );
+
+    let TimelineBody::Collaboration { event } = &rows[0].body else {
+        unreachable!()
+    };
+    assert_eq!(event.kind, CollaborationEventKind::Message);
+    assert_eq!(event.channel, CollaborationChannel::Team);
+    assert_eq!(event.sender.as_deref(), Some("w1"));
+    assert_eq!(event.team.as_deref(), Some("refinement"));
+    assert_eq!(event.color, Some(ParticipantColor::Blue));
+    assert_eq!(event.summary.as_deref(), Some("root cause"));
+
+    let TimelineBody::Collaboration { event } = &rows[1].body else {
+        unreachable!()
+    };
+    assert_eq!(event.kind, CollaborationEventKind::Idle);
+    assert_eq!(event.status, Some(CollaborationStatus::Failed));
+}
+
+#[test]
+fn prose_less_team_lifecycle_envelopes_remain_timeline_facts() {
+    let approved = user(
+        json!(
+            "<teammate-message teammate_id=\"w2\" color=\"green\">{\"type\":\"shutdown_approved\",\"from\":\"w2\",\"requestId\":\"stop-7\"}</teammate-message>"
+        ),
+        json!({"teamName": "refinement"}),
+    );
+    let (ops, _) = run(&[approved]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    let TimelineBody::Collaboration { event } = &rows[0].body else {
+        unreachable!()
+    };
+    assert_eq!(event.kind, CollaborationEventKind::StopApproved);
+    assert_eq!(event.sender.as_deref(), Some("w2"));
+    assert_eq!(event.delivery_id.as_deref(), Some("stop-7"));
+    assert_eq!(event.body, None);
+}
+
+#[test]
 fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     let (ops, _) = run(&[user(
         json!([{"type": "tool_result", "tool_use_id": "toolu_1",
@@ -658,6 +780,158 @@ fn tool_results_fold_onto_their_call_instead_of_becoming_rows() {
     );
     assert!(patch.failure.is_none(), "successful output is noise");
     assert_eq!(*at, Some(1787625320000));
+}
+
+#[test]
+fn workflow_launch_stays_running_until_its_exact_machine_callback() {
+    let lines = vec![
+        assistant(
+            json!([{"type": "tool_use", "id": "toolu_workflow", "name": "Workflow",
+                    "input": {"script": "export const meta = { name: 'api-design' }"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_workflow",
+                    "content": "Workflow launched in background.", "is_error": false}]),
+            json!({"toolUseResult": {
+                "status": "async_launched", "taskId": "w1", "taskType": "local_workflow",
+                "workflowName": "api-design", "runId": "wf_one",
+                "summary": "Design the API", "scriptPath": "/tmp/project/api.js"
+            }}),
+        ),
+        user(
+            json!(concat!(
+                "<task-notification><task-id>w1</task-id>",
+                "<tool-use-id>toolu_workflow</tool-use-id><status>completed</status>",
+                "<summary>API workflow completed</summary>",
+                "<result>{\"finalDoc\":\"/tmp/project/api.md\"}</result>",
+                "<usage><agent_count>12</agent_count><subagent_tokens>1123053</subagent_tokens>",
+                "<tool_uses>73</tool_uses><duration_ms>1890268</duration_ms></usage>",
+                "</task-notification>"
+            )),
+            json!({"origin": {"kind": "task-notification"}}),
+        ),
+    ];
+    let (ops, statuses) = run(&lines);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    assert_eq!(messages(&ops).len(), 1, "the callback is not a user prompt");
+    let updates = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(&**patch),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(
+        updates[0].status.as_ref().map(|fact| fact.value),
+        Some(ToolStatus::Running)
+    );
+    let ToolAction::Workflow {
+        name,
+        run_id,
+        task_id,
+        attempt,
+        objective,
+        background,
+        ..
+    } = &updates[0].request.as_ref().unwrap().action
+    else {
+        unreachable!()
+    };
+    assert_eq!(name.as_deref(), Some("api-design"));
+    assert_eq!(run_id.as_deref(), Some("wf_one"));
+    assert_eq!(task_id.as_deref(), Some("w1"));
+    assert_eq!(*attempt, Some(1));
+    assert_eq!(
+        objective.as_ref().map(|text| text.as_preview()),
+        Some("Design the API")
+    );
+    assert!(*background);
+
+    assert_eq!(
+        updates[1].status.as_ref().map(|fact| fact.value),
+        Some(ToolStatus::Succeeded)
+    );
+    let ToolAction::Workflow {
+        callback_summary,
+        callback_result,
+        usage,
+        ..
+    } = &updates[1].request.as_ref().unwrap().action
+    else {
+        unreachable!()
+    };
+    assert_eq!(callback_summary.as_deref(), Some("API workflow completed"));
+    assert_eq!(
+        callback_result.as_ref().map(|text| text.as_preview()),
+        Some("{\"finalDoc\":\"/tmp/project/api.md\"}")
+    );
+    assert_eq!(usage.as_ref().and_then(|usage| usage.agent_count), Some(12));
+    assert_eq!(
+        usage.as_ref().and_then(|usage| usage.tokens),
+        Some(1_123_053)
+    );
+    assert_eq!(run_with_checkpoint(&lines, 2), ops);
+}
+
+#[test]
+fn repeated_accepted_invocation_is_a_new_attempt_on_the_same_run() {
+    let launch = |id: &str, uuid: &str| {
+        assistant_record(
+            &format!("msg_{id}"),
+            uuid,
+            json!([{"type": "tool_use", "id": id, "name": "Workflow",
+                    "input": {"scriptPath": "/tmp/project/api-wf_same.js"}}]),
+            None,
+        )
+    };
+    let accepted = |id: &str, task: &str| {
+        user(
+            json!([{"type": "tool_result", "tool_use_id": id,
+                    "content": "Workflow launched in background.", "is_error": false}]),
+            json!({"toolUseResult": {
+                "status": "async_launched", "taskId": task,
+                "taskType": "local_workflow", "workflowName": "api-design",
+                "runId": "wf_same", "scriptPath": "/tmp/project/api-wf_same.js"
+            }}),
+        )
+    };
+    let lines = vec![
+        launch("toolu_first", "11111111-1111-1111-1111-111111111501"),
+        accepted("toolu_first", "w1"),
+        launch("toolu_second", "11111111-1111-1111-1111-111111111502"),
+        accepted("toolu_second", "w2"),
+    ];
+    let (ops, _) = run(&lines);
+    let actions = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => patch.request.as_ref(),
+            _ => None,
+        })
+        .map(|request| &request.action)
+        .collect::<Vec<_>>();
+    let ToolAction::Workflow {
+        attempt: first,
+        resume_id: first_resume,
+        ..
+    } = actions[0]
+    else {
+        unreachable!()
+    };
+    let ToolAction::Workflow {
+        attempt: second,
+        resume_id: second_resume,
+        ..
+    } = actions[1]
+    else {
+        unreachable!()
+    };
+    assert_eq!(*first, Some(1));
+    assert_eq!(*first_resume, None);
+    assert_eq!(*second, Some(2));
+    assert_eq!(second_resume.as_deref(), Some("wf_same"));
 }
 
 #[test]
@@ -941,6 +1215,68 @@ fn delegate_result_links_the_canonical_child_session() {
         patch.delegate_child_session_id.as_deref(),
         Some(child_id.as_str())
     );
+}
+
+#[test]
+fn teammate_spawn_result_enriches_the_delegate_without_deciding_launch_or_resume() {
+    let adapter = ClaudeCodeAdapter;
+    let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
+    let child_id = ids::session_id(&runtime_id, "member-7");
+    let (ops, _) = run(&[
+        assistant(
+            json!([{"type": "tool_use", "id": "toolu_team", "name": "Agent",
+                    "input": {"prompt": "Land the docs", "description": "docs", "name": "w2"}}]),
+            None,
+        ),
+        user(
+            json!([{"type": "tool_result", "tool_use_id": "toolu_team"}]),
+            json!({"toolUseResult": {
+                "status": "teammate_spawned",
+                "agent_id": "member-7",
+                "teammate_id": "w2@refinement",
+                "name": "w2",
+                "team_name": "refinement",
+                "color": "green",
+                "model": "opus",
+                "prompt": "Land the docs",
+                "is_splitpane": false,
+                "plan_mode_required": false,
+                "tmux_pane_id": "in-process",
+                "tmux_session_name": "",
+                "tmux_window_name": ""
+            }}),
+        ),
+    ]);
+    let patch = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("team delegate result patch");
+    assert_eq!(
+        patch.delegate_child_session_id.as_deref(),
+        Some(child_id.as_str())
+    );
+    let Some(outcome) = &patch.outcome else {
+        panic!("team identity must enrich the delegate")
+    };
+    let ToolAction::Delegate {
+        name,
+        model,
+        team,
+        color,
+        resume_id,
+        ..
+    } = &outcome.action
+    else {
+        unreachable!()
+    };
+    assert_eq!(name.as_deref(), Some("w2"));
+    assert_eq!(model.as_deref(), Some("opus"));
+    assert_eq!(team.as_deref(), Some("refinement"));
+    assert_eq!(*color, Some(ParticipantColor::Green));
+    assert_eq!(*resume_id, None, "resume remains request-side evidence");
 }
 
 #[test]

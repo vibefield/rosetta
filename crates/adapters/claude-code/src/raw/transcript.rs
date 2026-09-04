@@ -160,7 +160,7 @@ pub struct UserLine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_visible_in_transcript_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<Value>,
+    pub origin: Option<UserOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_origin: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -197,6 +197,40 @@ impl Drift for UserLine {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
         self.message.drift(&format!("{prefix}.message"), out);
+        if let Some(origin) = &self.origin {
+            origin.drift(&format!("{prefix}.origin"), out);
+        }
+    }
+}
+
+/// Structured provenance for machine-delivered `user` records.  Claude uses
+/// the API role as a transport direction; `kind` is what tells the canonical
+/// projection whether a person, coordinator, or peer actually spoke.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserOrigin {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_task_id: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for UserOrigin {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        if !matches!(
+            self.kind.as_str(),
+            "human" | "peer" | "coordinator" | "task-notification"
+        ) {
+            out.push(format!("{prefix}.kind=<{}>", self.kind));
+        }
     }
 }
 

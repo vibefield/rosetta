@@ -18,10 +18,13 @@ pub use rows::{
     TaskRow, TaskStatus, TitleKind, TokenSnapshot, ToolCall,
 };
 pub use timeline::{
-    CanonicalError, CanonicalText, CorrelationDerivation, EvidenceOrder, FailureKind,
-    GroupDerivation, GroupKind, MessageDetail, NativeToolRef, Provenance, ResponseGroup,
-    SearchLanes, SourceIdentity, StatusBasis, TaskSnapshot, TaskSnapshotItem, TimelineBody,
-    TimelineEntry, TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation, ToolFailure,
-    ToolFoldState, ToolInteraction, ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact,
-    ToolTiming, ToolUpdatePatch,
+    CanonicalError, CanonicalText, CollaborationChannel, CollaborationEvent,
+    CollaborationEventKind, CollaborationStatus, CorrelationDerivation, EvidenceOrder, FailureKind,
+    GroupDerivation, GroupKind, MessageDetail, NativeToolRef, ParticipantColor, Provenance,
+    ResponseGroup, SearchLanes, SourceIdentity, StatusBasis, TaskSnapshot, TaskSnapshotItem,
+    TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation,
+    ToolFailure, ToolFoldState, ToolInteraction, ToolOutcomePatch, ToolRequestPatch, ToolStatus,
+    ToolStatusFact, ToolTiming, ToolUpdatePatch, WorkflowJournalKind, WorkflowJournalObservation,
+    WorkflowPhase, WorkflowResultKind, WorkflowRun, WorkflowRunStatus, WorkflowUsage,
+    WorkflowWorker, WorkflowWorkerState,
 };

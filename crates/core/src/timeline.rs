@@ -32,6 +32,15 @@ pub const CANONICAL_LIST_LIMIT: usize = 20;
 /// Keep enough of the board for the UI's explicit "show full tasks" action,
 /// while retaining a hard admission ceiling for hostile/native payloads.
 pub const TASK_SNAPSHOT_LIMIT: usize = 128;
+/// Workflow fan-out is a first-class document rather than an ordinary tool
+/// result. Real runs currently top out well below these bounds, but the limits
+/// keep a hostile rewrite-in-place sidecar from becoming an unbounded wire
+/// payload while still preserving the complete observed roster.
+pub const WORKFLOW_PHASE_LIMIT: usize = 64;
+pub const WORKFLOW_WORKER_LIMIT: usize = 256;
+pub const WORKFLOW_JOURNAL_LIMIT: usize = 2_048;
+pub const WORKFLOW_LOG_LIMIT: usize = 128;
+pub const WORKFLOW_RUNTIME_PROFILE_LIMIT: usize = 16;
 pub const EXTERNAL_LABEL_MAX_BYTES: usize = 128;
 pub const EXTERNAL_VALUE_MAX_BYTES: usize = 1024;
 pub const DOCUMENT_MAX_DEPTH: usize = 4;
@@ -163,6 +172,31 @@ wire_enum!(TaskOp {
     Stop,
     Output
 });
+wire_enum!(WorkflowRunStatus {
+    Running,
+    Completed,
+    Failed,
+    Killed,
+    Cancelled,
+    Stopped,
+    Unknown,
+});
+wire_enum!(WorkflowWorkerState {
+    Done,
+    Error,
+    Progress,
+    Start,
+    Unknown,
+});
+wire_enum!(WorkflowJournalKind { Started, Result });
+wire_enum!(WorkflowResultKind {
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Null,
+});
 wire_enum!(PlanOp {
     Create,
     Update,
@@ -182,6 +216,40 @@ wire_enum!(ParticipantState {
     Completed,
     Failed,
     Unknown
+});
+// Native teammate colours are stable participant addresses, not inferred
+// state. The closed set is backed by the Claude Code team-config census;
+// adapters for runtimes without a native colour simply leave it absent.
+wire_enum!(ParticipantColor {
+    Blue,
+    Green,
+    Yellow,
+    Purple,
+    Orange,
+    Pink,
+    Cyan,
+    Red
+});
+wire_enum!(CollaborationChannel {
+    Coordinator,
+    Peer,
+    Team
+});
+wire_enum!(CollaborationEventKind {
+    Message,
+    Assignment,
+    Idle,
+    StopRequested,
+    StopApproved,
+    Terminated,
+    Report
+});
+wire_enum!(CollaborationStatus {
+    Available,
+    Completed,
+    Failed,
+    Killed,
+    Stopped
 });
 wire_enum!(ScheduleOp {
     Create,
@@ -848,6 +916,67 @@ pub struct CollaborationOutcome {
     pub total_count: u64,
 }
 
+/// One delivered collaboration boundary event.  This is deliberately not a
+/// native transport envelope: sender-side requests, routing acknowledgements,
+/// inbox copies, and recipient envelopes can all describe the same speech.
+/// Adapters emit only the user-facing observation they can place in time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CollaborationEvent {
+    pub kind: CollaborationEventKind,
+    pub channel: CollaborationChannel,
+    pub sender: Option<String>,
+    pub recipient: Option<String>,
+    pub team: Option<String>,
+    pub color: Option<ParticipantColor>,
+    pub summary: Option<String>,
+    pub body: Option<CanonicalText>,
+    pub task_id: Option<String>,
+    pub delivery_id: Option<String>,
+    pub status: Option<CollaborationStatus>,
+}
+
+impl CollaborationEvent {
+    fn validate(&self) -> Result<(), CanonicalError> {
+        bounded_option("collaboration sender", self.sender.as_deref(), ID_MAX_BYTES)?;
+        bounded_option(
+            "collaboration recipient",
+            self.recipient.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option("collaboration team", self.team.as_deref(), ID_MAX_BYTES)?;
+        bounded_option(
+            "collaboration summary",
+            self.summary.as_deref(),
+            FAILURE_SUMMARY_MAX_BYTES,
+        )?;
+        bounded_option(
+            "collaboration task id",
+            self.task_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        bounded_option(
+            "collaboration delivery id",
+            self.delivery_id.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        validate_optional_text(self.body.as_ref())?;
+        if matches!(
+            self.kind,
+            CollaborationEventKind::Message
+                | CollaborationEventKind::Assignment
+                | CollaborationEventKind::Report
+        ) && self.body.is_none()
+            && self.summary.is_none()
+        {
+            return Err(CanonicalError::Invalid(
+                "collaboration event has no visible fact".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct QuestionOption {
@@ -894,6 +1023,265 @@ pub struct TaskSnapshot {
     pub tasks: Vec<TaskSnapshotItem>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub total_count: u64,
+}
+
+/// Aggregate accounting emitted by one Workflow attempt or its durable run.
+/// Missing values stay missing: a cached worker must never claim fresh work.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkflowUsage {
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub duration_ms: Option<u64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub tokens: Option<u64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub tool_calls: Option<u64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub agent_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkflowPhase {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub index: u64,
+    pub title: String,
+    pub detail: Option<String>,
+}
+
+/// One row in the mutable `workflowProgress` roster. Configured runtime facts
+/// come from the run snapshot; observed profiles are joined from the durable
+/// child transcript at read time and therefore remain separate evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkflowWorker {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub index: u64,
+    pub key: Option<String>,
+    pub label: String,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub phase_index: Option<u64>,
+    pub phase_title: Option<String>,
+    pub state: WorkflowWorkerState,
+    pub cached: bool,
+    pub configured_model: Option<String>,
+    pub configured_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_efforts: Vec<String>,
+    pub child_session_id: Option<String>,
+    pub prompt_preview: Option<String>,
+    pub result_preview: Option<String>,
+    pub last_tool_name: Option<String>,
+    pub last_tool_summary: Option<String>,
+    pub queued_at: Option<Ms>,
+    pub started_at: Option<Ms>,
+    pub last_progress_at: Option<Ms>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub duration_ms: Option<u64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub tokens: Option<u64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub tool_calls: Option<u64>,
+    pub error: Option<String>,
+}
+
+/// Untimestamped coordinator evidence. `observation_id` is derived from the
+/// journal source position, so append replay and generation replacement remain
+/// deterministic without pretending the journal supplies a clock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkflowJournalObservation {
+    pub observation_id: String,
+    pub run_id: String,
+    /// Byte position in the append-only journal. It orders observations
+    /// without inventing a timestamp the native record does not contain.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub source_offset: Option<u64>,
+    pub kind: WorkflowJournalKind,
+    pub worker_key: String,
+    pub agent_id: Option<String>,
+    pub result_kind: Option<WorkflowResultKind>,
+    pub result_preview: Option<String>,
+}
+
+/// The durable current view of one Workflow run. Attempts deliberately do not
+/// live here: each invocation remains a chronological tool row, and all rows
+/// carrying this `run_id` hydrate the same current document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkflowRun {
+    pub run_id: String,
+    pub task_id: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<CanonicalText>,
+    pub status: WorkflowRunStatus,
+    pub started_at: Option<Ms>,
+    pub updated_at: Option<Ms>,
+    pub usage: WorkflowUsage,
+    pub default_model: Option<String>,
+    pub arguments: Option<CanonicalText>,
+    pub script_path: Option<ResourceRef>,
+    pub script: Option<CanonicalText>,
+    pub phases: Vec<WorkflowPhase>,
+    pub workers: Vec<WorkflowWorker>,
+    pub logs: Vec<String>,
+    pub result_kind: Option<WorkflowResultKind>,
+    pub result: Option<CanonicalText>,
+    pub error: Option<CanonicalText>,
+    pub resources: Vec<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub journal: Vec<WorkflowJournalObservation>,
+}
+
+impl WorkflowRun {
+    pub(crate) fn externalize_text_members(&mut self) -> Vec<ProjectionAsset> {
+        let mut assets = Vec::new();
+        externalize_optional_text(&mut self.summary, &mut assets);
+        externalize_optional_text(&mut self.arguments, &mut assets);
+        externalize_optional_text(&mut self.script, &mut assets);
+        externalize_optional_text(&mut self.result, &mut assets);
+        externalize_optional_text(&mut self.error, &mut assets);
+        assets
+    }
+
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        required_bounded("workflow run id", &self.run_id, ID_MAX_BYTES)?;
+        bounded_option("workflow task id", self.task_id.as_deref(), ID_MAX_BYTES)?;
+        bounded_option("workflow name", self.name.as_deref(), ID_MAX_BYTES)?;
+        validate_optional_text(self.summary.as_ref())?;
+        bounded_option(
+            "workflow default model",
+            self.default_model.as_deref(),
+            ID_MAX_BYTES,
+        )?;
+        validate_optional_text(self.arguments.as_ref())?;
+        validate_optional_resource(self.script_path.as_ref())?;
+        validate_optional_text(self.script.as_ref())?;
+        bounded_collection("workflow phases", self.phases.len(), WORKFLOW_PHASE_LIMIT)?;
+        for phase in &self.phases {
+            required_bounded(
+                "workflow phase title",
+                &phase.title,
+                EXTERNAL_LABEL_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow phase detail",
+                phase.detail.as_deref(),
+                CORE_SCALAR_MAX_BYTES,
+            )?;
+        }
+        bounded_collection(
+            "workflow workers",
+            self.workers.len(),
+            WORKFLOW_WORKER_LIMIT,
+        )?;
+        for worker in &self.workers {
+            bounded_option("workflow worker key", worker.key.as_deref(), ID_MAX_BYTES)?;
+            required_bounded(
+                "workflow worker label",
+                &worker.label,
+                EXTERNAL_LABEL_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow worker phase",
+                worker.phase_title.as_deref(),
+                EXTERNAL_LABEL_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow configured model",
+                worker.configured_model.as_deref(),
+                ID_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow configured effort",
+                worker.configured_effort.as_deref(),
+                ID_MAX_BYTES,
+            )?;
+            bounded_collection(
+                "workflow observed models",
+                worker.observed_models.len(),
+                WORKFLOW_RUNTIME_PROFILE_LIMIT,
+            )?;
+            bounded_collection(
+                "workflow observed efforts",
+                worker.observed_efforts.len(),
+                WORKFLOW_RUNTIME_PROFILE_LIMIT,
+            )?;
+            for value in worker
+                .observed_models
+                .iter()
+                .chain(worker.observed_efforts.iter())
+            {
+                required_bounded("workflow observed runtime", value, ID_MAX_BYTES)?;
+            }
+            bounded_option(
+                "workflow worker session",
+                worker.child_session_id.as_deref(),
+                ID_MAX_BYTES,
+            )?;
+            for (field, value) in [
+                ("workflow prompt preview", worker.prompt_preview.as_deref()),
+                ("workflow result preview", worker.result_preview.as_deref()),
+                ("workflow last tool", worker.last_tool_name.as_deref()),
+                ("workflow tool summary", worker.last_tool_summary.as_deref()),
+                ("workflow worker error", worker.error.as_deref()),
+            ] {
+                bounded_option(field, value, EXTERNAL_VALUE_MAX_BYTES)?;
+            }
+        }
+        bounded_collection("workflow logs", self.logs.len(), WORKFLOW_LOG_LIMIT)?;
+        for log in &self.logs {
+            required_bounded("workflow log", log, EXTERNAL_VALUE_MAX_BYTES)?;
+        }
+        validate_optional_text(self.result.as_ref())?;
+        validate_optional_text(self.error.as_ref())?;
+        bounded_collection(
+            "workflow resources",
+            self.resources.len(),
+            CANONICAL_LIST_LIMIT,
+        )?;
+        validate_resources(&self.resources)?;
+        bounded_collection(
+            "workflow journal",
+            self.journal.len(),
+            WORKFLOW_JOURNAL_LIMIT,
+        )?;
+        for observation in &self.journal {
+            required_bounded(
+                "workflow observation id",
+                &observation.observation_id,
+                ID_MAX_BYTES,
+            )?;
+            required_bounded(
+                "workflow observation run",
+                &observation.run_id,
+                ID_MAX_BYTES,
+            )?;
+            if observation.run_id != self.run_id {
+                return Err(CanonicalError::Invalid(
+                    "workflow journal observation belongs to another run".into(),
+                ));
+            }
+            required_bounded(
+                "workflow observation worker",
+                &observation.worker_key,
+                ID_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow observation agent",
+                observation.agent_id.as_deref(),
+                ID_MAX_BYTES,
+            )?;
+            bounded_option(
+                "workflow observation result",
+                observation.result_preview.as_deref(),
+                EXTERNAL_VALUE_MAX_BYTES,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1071,6 +1459,11 @@ pub enum ToolAction {
         name: Option<String>,
         model: Option<String>,
         mode: Option<String>,
+        /// Present only when native evidence proves this invocation addresses
+        /// a persistent team rather than an invocation-owned worker.
+        team: Option<String>,
+        /// Native participant address colour.  Absence stays absence.
+        color: Option<ParticipantColor>,
         objective: CanonicalText,
         child_session_id: Option<String>,
         resume_id: Option<String>,
@@ -1120,6 +1513,20 @@ pub enum ToolAction {
         objective: Option<CanonicalText>,
         resume_id: Option<String>,
         background: bool,
+        task_id: Option<String>,
+        run_id: Option<String>,
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+        attempt: Option<u64>,
+        callback_summary: Option<String>,
+        /// Structured callback result retained as canonical JSON/text when a
+        /// run sidecar is delayed or absent. The hydrated run remains the
+        /// authoritative current snapshot when both exist.
+        callback_result: Option<CanonicalText>,
+        usage: Option<WorkflowUsage>,
+        /// Hydrated from the generation-owned workflow sidecar at read time;
+        /// the stored tool row keeps this `None`, so every attempt points to
+        /// one run document instead of copying it.
+        run: Option<WorkflowRun>,
     },
     Schedule {
         operation: ScheduleOp,
@@ -1353,10 +1760,16 @@ impl ToolAction {
             Self::Workflow {
                 arguments,
                 objective,
+                callback_result,
+                run,
                 ..
             } => {
                 externalize_optional_text(arguments, &mut assets);
                 externalize_optional_text(objective, &mut assets);
+                externalize_optional_text(callback_result, &mut assets);
+                if let Some(run) = run {
+                    assets.extend(run.externalize_text_members());
+                }
             }
             Self::Schedule { objective, .. } => externalize_optional_text(objective, &mut assets),
             Self::Artifact { description, .. } => {
@@ -1594,6 +2007,7 @@ impl ToolAction {
                 name,
                 model,
                 mode,
+                team,
                 objective,
                 child_session_id,
                 resume_id,
@@ -1604,6 +2018,7 @@ impl ToolAction {
                 bounded_option("delegate name", name.as_deref(), ID_MAX_BYTES)?;
                 bounded_option("delegate model", model.as_deref(), ID_MAX_BYTES)?;
                 bounded_option("delegate mode", mode.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("delegate team", team.as_deref(), ID_MAX_BYTES)?;
                 validate_required_text("delegate objective", objective)?;
                 bounded_option(
                     "delegate child session",
@@ -1773,6 +2188,11 @@ impl ToolAction {
                 arguments,
                 objective,
                 resume_id,
+                task_id,
+                run_id,
+                callback_summary,
+                callback_result,
+                run,
                 ..
             } => {
                 bounded_option("workflow name", name.as_deref(), ID_MAX_BYTES)?;
@@ -1780,6 +2200,22 @@ impl ToolAction {
                 validate_optional_text(arguments.as_ref())?;
                 validate_optional_text(objective.as_ref())?;
                 bounded_option("workflow resume id", resume_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("workflow task id", task_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option("workflow run id", run_id.as_deref(), ID_MAX_BYTES)?;
+                bounded_option(
+                    "workflow callback summary",
+                    callback_summary.as_deref(),
+                    FAILURE_SUMMARY_MAX_BYTES,
+                )?;
+                validate_optional_text(callback_result.as_ref())?;
+                if let Some(run) = run {
+                    if run_id.as_deref() != Some(&run.run_id) {
+                        return Err(CanonicalError::Invalid(
+                            "workflow action and hydrated run ids disagree".into(),
+                        ));
+                    }
+                    run.validate()?;
+                }
             }
             Self::Schedule {
                 schedule_id,
@@ -2511,6 +2947,7 @@ enum ToolField {
     AgentKind,
     Name,
     Model,
+    ParticipantColor,
     Objective,
     ChildSessionId,
     ResumeId,
@@ -2534,6 +2971,12 @@ enum ToolField {
     Questions,
     Answers,
     Arguments,
+    RunId,
+    Attempt,
+    CallbackSummary,
+    CallbackResult,
+    WorkflowUsage,
+    WorkflowRun,
     ScheduleId,
     DueAt,
     DelayMs,
@@ -2907,6 +3350,8 @@ fn merge_action_fields(
                 name: current_name,
                 model: current_model,
                 mode: current_mode,
+                team: current_team,
+                color: current_color,
                 objective: current_objective,
                 child_session_id: current_child_session,
                 resume_id: current_resume_id,
@@ -2918,6 +3363,8 @@ fn merge_action_fields(
                 name: incoming_name,
                 model: incoming_model,
                 mode: incoming_mode,
+                team: incoming_team,
+                color: incoming_color,
                 objective: incoming_objective,
                 child_session_id: incoming_child_session,
                 resume_id: incoming_resume_id,
@@ -2935,6 +3382,11 @@ fn merge_action_fields(
                 required!(Background, current_background, incoming_background);
             }
             ToolPatchPhase::Outcome => {
+                optional!(AgentKind, current_agent_kind, incoming_agent_kind);
+                optional!(Name, current_name, incoming_name);
+                optional!(Model, current_model, incoming_model);
+                optional!(Team, current_team, incoming_team);
+                optional!(ParticipantColor, current_color, incoming_color);
                 optional!(
                     ChildSessionId,
                     current_child_session,
@@ -3081,6 +3533,13 @@ fn merge_action_fields(
                 objective: current_objective,
                 resume_id: current_resume_id,
                 background: current_background,
+                task_id: current_task_id,
+                run_id: current_run_id,
+                attempt: current_attempt,
+                callback_summary: current_callback_summary,
+                callback_result: current_callback_result,
+                usage: current_usage,
+                run: current_run,
             },
             ToolAction::Workflow {
                 name: incoming_name,
@@ -3089,6 +3548,13 @@ fn merge_action_fields(
                 objective: incoming_objective,
                 resume_id: incoming_resume_id,
                 background: incoming_background,
+                task_id: incoming_task_id,
+                run_id: incoming_run_id,
+                attempt: incoming_attempt,
+                callback_summary: incoming_callback_summary,
+                callback_result: incoming_callback_result,
+                usage: incoming_usage,
+                run: incoming_run,
             },
         ) => {
             if phase == ToolPatchPhase::Request {
@@ -3098,6 +3564,21 @@ fn merge_action_fields(
                 optional!(Objective, current_objective, incoming_objective);
                 optional!(ResumeId, current_resume_id, incoming_resume_id);
                 required!(Background, current_background, incoming_background);
+                optional!(TaskId, current_task_id, incoming_task_id);
+                optional!(RunId, current_run_id, incoming_run_id);
+                optional!(Attempt, current_attempt, incoming_attempt);
+                optional!(
+                    CallbackSummary,
+                    current_callback_summary,
+                    incoming_callback_summary
+                );
+                optional!(
+                    CallbackResult,
+                    current_callback_result,
+                    incoming_callback_result
+                );
+                optional!(WorkflowUsage, current_usage, incoming_usage);
+                optional!(WorkflowRun, current_run, incoming_run);
             }
         }
         (
@@ -3300,6 +3781,9 @@ pub enum TimelineBody {
     Thinking {
         text: CanonicalText,
     },
+    Collaboration {
+        event: CollaborationEvent,
+    },
     ToolUse {
         tool: Box<ToolInteraction>,
     },
@@ -3325,6 +3809,12 @@ pub enum MessageDetail {
     },
     Thinking {
         text_member: Option<AssetRef>,
+    },
+    Collaboration {
+        /// `body` is cleared while encoded because its searchable preview is
+        /// stored in `message.content`; `body_member` restores a large body.
+        event: CollaborationEvent,
+        body_member: Option<AssetRef>,
     },
     Notice {
         notice: Notice,
@@ -3440,6 +3930,7 @@ impl TimelineEntry {
             }
             | TimelineBody::Thinking { text }
             | TimelineBody::Summary { text, .. } => text.validate()?,
+            TimelineBody::Collaboration { event } => event.validate()?,
             TimelineBody::ToolUse { tool } => tool.validate()?,
             TimelineBody::Notice { notice } => notice.validate()?,
             _ => {}
@@ -3467,6 +3958,7 @@ impl TimelineEntry {
             }
             TimelineBody::ToolUse { .. } => {}
             TimelineBody::Thinking { .. }
+            | TimelineBody::Collaboration { .. }
             | TimelineBody::Notice { .. }
             | TimelineBody::Summary { .. } => {}
         }
@@ -3695,6 +4187,24 @@ impl TimelineEntry {
             }
             TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
                 lanes.push_text(SearchLane::Prose, text);
+            }
+            TimelineBody::Collaboration { event } => {
+                if let Some(body) = &event.body {
+                    lanes.push_text(SearchLane::Prose, body);
+                }
+                for value in [
+                    event.sender.as_deref(),
+                    event.recipient.as_deref(),
+                    event.team.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    SearchLanes::push(&mut lanes.target, value);
+                }
+                if let Some(summary) = &event.summary {
+                    SearchLanes::push(&mut lanes.intent, summary);
+                }
             }
             TimelineBody::Notice {
                 notice: Notice::CommandOutput { output },
@@ -3928,6 +4438,9 @@ impl ToolAction {
                 path,
                 arguments,
                 objective,
+                callback_summary,
+                callback_result,
+                run,
                 ..
             } => {
                 if let Some(v) = name {
@@ -3941,6 +4454,29 @@ impl ToolAction {
                 }
                 if let Some(v) = objective {
                     lanes.push_text(SearchLane::Intent, v);
+                }
+                if let Some(v) = callback_summary {
+                    SearchLanes::push(&mut lanes.prose, v);
+                }
+                if let Some(v) = callback_result {
+                    lanes.push_text(SearchLane::Prose, v);
+                }
+                if let Some(run) = run {
+                    if let Some(v) = &run.name {
+                        SearchLanes::push(&mut lanes.tool, v);
+                    }
+                    if let Some(v) = &run.summary {
+                        lanes.push_text(SearchLane::Intent, v);
+                    }
+                    if let Some(v) = &run.result {
+                        lanes.push_text(SearchLane::Prose, v);
+                    }
+                    if let Some(v) = &run.error {
+                        lanes.push_text(SearchLane::Prose, v);
+                    }
+                    for resource_ref in &run.resources {
+                        resource(lanes, resource_ref);
+                    }
                 }
             }
             Self::Schedule {
@@ -4359,6 +4895,26 @@ mod tests {
     }
 
     #[test]
+    fn collaboration_lifecycle_kind_is_itself_a_visible_fact() {
+        let row = base(TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::StopApproved,
+                channel: CollaborationChannel::Team,
+                sender: Some("w1".into()),
+                recipient: None,
+                team: Some("review".into()),
+                color: None,
+                summary: None,
+                body: None,
+                task_id: None,
+                delivery_id: Some("shutdown-1".into()),
+                status: None,
+            },
+        });
+        assert!(row.validate().is_ok());
+    }
+
+    #[test]
     fn lifecycle_merge_is_order_independent_and_replay_idempotent() {
         let opener = ToolInteraction::unknown("t1", CorrelationDerivation::NativeId, "future_tool");
         let weak = ToolUpdatePatch {
@@ -4446,6 +5002,8 @@ mod tests {
                 name: None,
                 model: None,
                 mode: None,
+                team: None,
+                color: None,
                 objective: CanonicalText::inline("inspect the store").unwrap(),
                 child_session_id: None,
                 resume_id: None,

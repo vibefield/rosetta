@@ -23,9 +23,9 @@ use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
     ArtifactKind, ArtifactOp, CANONICAL_LIST_LIMIT, CodeLookupOp, CollaborationOp,
     CorrelationDerivation, ExecutionMode, FileChangeOp, FileDelta, FileSearchMode, ModeOp,
-    ProcessOp, QuestionOption, RangeUnit, ReadTarget, ScheduleOp, SearchFilter, SearchFilterKind,
-    SourceRange, TaskOp, TaskSnapshotItem, ToolAction, ToolActionKind, ToolInteraction,
-    UserQuestion,
+    ParticipantColor, ProcessOp, QuestionOption, RangeUnit, ReadTarget, ScheduleOp, SearchFilter,
+    SearchFilterKind, SourceRange, TaskOp, TaskSnapshotItem, ToolAction, ToolActionKind,
+    ToolInteraction, UserQuestion,
 };
 use serde_json::Value;
 
@@ -161,7 +161,7 @@ pub fn project_request(
         }
         ToolActionKind::Workflow => ToolAction::Workflow {
             name: first_string(input, &["name", "workflow"]).map(str::to_owned),
-            path: first_string(input, &["path"])
+            path: first_string(input, &["path", "scriptPath", "script_path"])
                 .map(|path| lexical_resource(path, cwd, false))
                 .transpose()?,
             arguments: first_string(input, &["args", "arguments"])
@@ -172,6 +172,13 @@ pub fn project_request(
                 .transpose()?,
             resume_id: first_string(input, &["resume", "resume_id"]).map(str::to_owned),
             background: first_bool(input, &["background", "run_in_background"]).unwrap_or(false),
+            task_id: None,
+            run_id: None,
+            attempt: None,
+            callback_summary: None,
+            callback_result: None,
+            usage: None,
+            run: None,
         },
         ToolActionKind::Schedule => project_schedule(name, input)?,
         ToolActionKind::Artifact => project_artifact(name, input, cwd)?,
@@ -501,12 +508,42 @@ fn project_delegate(input: &Value) -> Result<ToolAction, ProjectionError> {
         name: first_string(input, &["name"]).map(str::to_owned),
         model: first_string(input, &["model"]).map(str::to_owned),
         mode: first_string(input, &["mode"]).map(str::to_owned),
+        team: None,
+        color: None,
         objective: canonical_text(objective)?,
         child_session_id: None,
         resume_id: first_string(input, &["resume", "resume_id"]).map(str::to_owned),
         background: first_bool(input, &["run_in_background", "background"]).unwrap_or(false),
         orphan_result_summary: None,
     })
+}
+
+/// Outcome-only identity for an Agent invocation.  `teammate_spawned` is not
+/// itself the relation proof; the request's launch/resume intent remains on
+/// the opener, while a team name on this structured result proves membership.
+pub fn project_delegate_result(
+    result: &Value,
+    child_session_id: Option<String>,
+) -> Result<ToolAction, ProjectionError> {
+    let objective = first_string(result, &["prompt", "description"])
+        .ok_or(ProjectionError::MissingField("delegate result objective"))?;
+    Ok(ToolAction::Delegate {
+        agent_kind: first_string(result, &["agentType", "agent_type"]).map(str::to_owned),
+        name: first_string(result, &["name"]).map(str::to_owned),
+        model: first_string(result, &["model"]).map(str::to_owned),
+        mode: None,
+        team: first_string(result, &["team_name", "teamName"]).map(str::to_owned),
+        color: first_string(result, &["color"]).and_then(participant_color),
+        objective: canonical_text(objective)?,
+        child_session_id,
+        resume_id: None,
+        background: first_bool(result, &["isAsync", "is_async"]).unwrap_or(false),
+        orphan_result_summary: None,
+    })
+}
+
+fn participant_color(value: &str) -> Option<ParticipantColor> {
+    crate::envelope::participant_color(value)
 }
 
 fn project_task(name: &str, input: &Value) -> Result<ToolAction, ProjectionError> {

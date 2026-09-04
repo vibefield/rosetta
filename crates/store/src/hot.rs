@@ -114,6 +114,10 @@ impl Mutation {
                     TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
                         text.as_preview().len()
                     }
+                    TimelineBody::Collaboration { event } => event
+                        .body
+                        .as_ref()
+                        .map_or(0, |text| text.as_preview().len()),
                     TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => 0,
                 };
                 prose
@@ -285,9 +289,10 @@ pub(crate) fn meta_touch(op: &IngestOp) -> MetaTouch<'_> {
         IngestOp::SessionTitle(row) => MetaTouch::Session(&row.session_id),
         // Messages and late merge facts touch the session's activity time.
         IngestOp::Message(row) => MetaTouch::Session(&row.session_id),
-        IngestOp::ToolUpdate { session_id, .. } | IngestOp::Usage { session_id, .. } => {
-            MetaTouch::Session(session_id)
-        }
+        IngestOp::ToolUpdate { session_id, .. }
+        | IngestOp::Usage { session_id, .. }
+        | IngestOp::WorkflowRun { session_id, .. }
+        | IngestOp::WorkflowJournal { session_id, .. } => MetaTouch::Session(session_id),
         IngestOp::SessionUsage(row) => MetaTouch::Session(&row.session_id),
         IngestOp::ProjectionAsset { .. }
         | IngestOp::FileEdit(_)

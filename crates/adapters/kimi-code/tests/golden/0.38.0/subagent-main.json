@@ -117,6 +117,8 @@
           "name": null,
           "model": null,
           "mode": null,
+          "team": null,
+          "color": null,
           "objective": {
             "type": "inline",
             "text": "greet briefly"

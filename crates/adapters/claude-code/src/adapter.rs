@@ -27,14 +27,16 @@ impl AgentAdapter for ClaudeCodeAdapter {
 
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
         match stream_id {
-            spec::TRANSCRIPT | spec::SUBAGENT_TRANSCRIPT => Some(StreamDriver::JsonLines),
-            spec::SUBAGENT_METADATA => Some(StreamDriver::DocumentSnapshot),
+            spec::TRANSCRIPT | spec::SUBAGENT_TRANSCRIPT | spec::WORKFLOW_JOURNAL => {
+                Some(StreamDriver::JsonLines)
+            }
+            spec::SUBAGENT_METADATA | spec::WORKFLOW_RUN => Some(StreamDriver::DocumentSnapshot),
             _ => None,
         }
     }
 
     fn normalizer_version(&self) -> u32 {
-        19
+        20
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -78,6 +80,12 @@ impl AgentAdapter for ClaudeCodeAdapter {
         }
         if stream_id == spec::SUBAGENT_METADATA {
             return skim_subagent_metadata(stat, head);
+        }
+        if stream_id == spec::WORKFLOW_RUN {
+            return crate::workflow::skim_run(stat, head);
+        }
+        if stream_id == spec::WORKFLOW_JOURNAL {
+            return crate::workflow::skim_journal(stat);
         }
         let mut skim = Skim::default();
         // The head begins at byte 0, so its first stamped record is the one
@@ -189,7 +197,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
         if stream_id == spec::SUBAGENT_METADATA {
             return LineOutcome::parsed(Vec::new());
         }
-        normalize::ingest(ctx, stream_id, line)
+        match stream_id {
+            spec::WORKFLOW_RUN => crate::workflow::ingest_run(ctx, line),
+            spec::WORKFLOW_JOURNAL => crate::workflow::ingest_journal(ctx, line),
+            _ => normalize::ingest(ctx, stream_id, line),
+        }
     }
 
     fn document_size_limit(&self, stream_id: &str, pipeline_limit: usize) -> usize {
@@ -204,10 +216,13 @@ impl AgentAdapter for ClaudeCodeAdapter {
         &self,
         stream_id: &str,
         _native_session_id: &str,
-        _document: &[u8],
+        document: &[u8],
     ) -> Vec<Vec<u8>> {
-        debug_assert_eq!(stream_id, spec::SUBAGENT_METADATA);
-        Vec::new()
+        match stream_id {
+            spec::SUBAGENT_METADATA => Vec::new(),
+            spec::WORKFLOW_RUN => vec![document.to_vec()],
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -341,18 +356,28 @@ fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
         .map(|_| ProjectHint::SameAsSession {
             native_session_id: parent.clone(),
         });
+    let role = if meta.task_kind.as_deref() == Some("in_process_teammate") {
+        SessionRole::Team
+    } else {
+        SessionRole::Subagent
+    };
+    let title = meta
+        .name
+        .clone()
+        .or_else(|| Some(meta.agent_type.clone()))
+        .filter(|title| !title.trim().is_empty());
     SkimResult {
         ops: Vec::new(),
         session_id: Some(child),
         parent_session_id: Some(parent.clone()),
         root_session_id: Some(parent),
-        role: Some(SessionRole::Subagent),
+        role: Some(role),
         cwd: None,
         project,
         agent_version: None,
-        title: None,
-        title_kind: None,
-        summary: None,
+        title,
+        title_kind: Some(TitleKind::Generated),
+        summary: meta.description,
         started_at: None,
         updated_at: None,
     }
@@ -538,6 +563,23 @@ mod tests {
             assert_eq!(result.session_id.as_deref(), Some("child-7"));
             assert_eq!(result.project, None);
         }
+    }
+
+    #[test]
+    fn teammate_sidecar_promotes_the_child_and_keeps_its_native_identity() {
+        let result = ClaudeCodeAdapter.skim(
+            spec::SUBAGENT_METADATA,
+            &stat("projects/p/parent-1/subagents/agent-member-7.meta.json"),
+            br#"{"agentType":"general-purpose","taskKind":"in_process_teammate","teamName":"refinement","name":"w2-docs","description":"Land the docs","model":"opus","color":"green"}"#,
+            b"",
+        );
+        assert_eq!(result.role, Some(SessionRole::Team));
+        assert_eq!(result.title.as_deref(), Some("w2-docs"));
+        assert_eq!(
+            result.title_kind,
+            Some(rosetta_core::rows::TitleKind::Generated)
+        );
+        assert_eq!(result.summary.as_deref(), Some("Land the docs"));
     }
 
     #[test]

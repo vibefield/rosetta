@@ -29,7 +29,7 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

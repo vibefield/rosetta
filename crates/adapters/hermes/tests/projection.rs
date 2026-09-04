@@ -83,6 +83,7 @@ fn body_kind(row: &TimelineEntry) -> &'static str {
         TimelineBody::User { .. } => "user",
         TimelineBody::Agent { .. } => "agent",
         TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::Collaboration { .. } => "collaboration",
         TimelineBody::ToolUse { .. } => "tool_use",
         TimelineBody::Notice { .. } => "notice",
         TimelineBody::Summary { .. } => "summary",
@@ -97,6 +98,7 @@ fn text(row: &TimelineEntry) -> Option<&str> {
         TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
             Some(text.as_preview())
         }
+        TimelineBody::Collaboration { event } => event.body.as_ref().map(|text| text.as_preview()),
         TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
     }
 }

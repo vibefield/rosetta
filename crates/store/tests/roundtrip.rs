@@ -6,8 +6,11 @@ use rosetta_core::rows::{
     SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TitleKind, TokenSnapshot,
 };
 use rosetta_core::timeline::{
-    AttachmentKind, AttachmentRef, CitationRef, INLINE_TEXT_MAX_BYTES, ReadTarget, ResourceRef,
-    TextRange, TimelineBody, TimelineEntry,
+    AttachmentKind, AttachmentRef, CitationRef, CollaborationChannel, CollaborationEvent,
+    CollaborationEventKind, CollaborationStatus, INLINE_TEXT_MAX_BYTES, ParticipantColor,
+    ReadTarget, ResourceRef, TextRange, TimelineBody, TimelineEntry, WorkflowJournalKind,
+    WorkflowJournalObservation, WorkflowPhase, WorkflowResultKind, WorkflowRun, WorkflowRunStatus,
+    WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
 };
 use rosetta_core::{
     CanonicalText, CorrelationDerivation, EvidenceOrder, IngestOp, NativeToolRef, ProjectionAsset,
@@ -118,6 +121,70 @@ fn pending_tool(key: &str, name: &str, action: ToolAction) -> ToolInteraction {
         action,
         failure: None,
         timing: None,
+    }
+}
+
+fn workflow_run() -> WorkflowRun {
+    WorkflowRun {
+        run_id: "wf_test".into(),
+        task_id: Some("task-test".into()),
+        name: Some("api-design".into()),
+        summary: Some(CanonicalText::inline("Design the API").unwrap()),
+        status: WorkflowRunStatus::Completed,
+        started_at: Some(20_000),
+        updated_at: Some(25_000),
+        usage: WorkflowUsage {
+            duration_ms: Some(5_000),
+            tokens: Some(42_000),
+            tool_calls: Some(7),
+            agent_count: Some(1),
+        },
+        default_model: Some("claude-opus-5".into()),
+        arguments: None,
+        script_path: Some(ResourceRef::File {
+            path: "/w/rosetta/workflow.js".into(),
+            resolved: true,
+        }),
+        script: None,
+        phases: vec![WorkflowPhase {
+            index: 1,
+            title: "Draft".into(),
+            detail: Some("write the first draft".into()),
+        }],
+        workers: vec![WorkflowWorker {
+            index: 1,
+            key: Some("worker-key".into()),
+            label: "draft".into(),
+            phase_index: Some(1),
+            phase_title: Some("Draft".into()),
+            state: WorkflowWorkerState::Done,
+            cached: false,
+            configured_model: Some("claude-opus-5".into()),
+            configured_effort: None,
+            observed_models: vec![],
+            observed_efforts: vec![],
+            child_session_id: Some("child-workflow".into()),
+            prompt_preview: Some("Draft it".into()),
+            result_preview: Some("Drafted the API".into()),
+            last_tool_name: Some("Read".into()),
+            last_tool_summary: Some("architecture.md".into()),
+            queued_at: Some(20_000),
+            started_at: Some(20_100),
+            last_progress_at: Some(24_900),
+            duration_ms: Some(4_800),
+            tokens: Some(42_000),
+            tool_calls: Some(7),
+            error: None,
+        }],
+        logs: vec!["drafted 1/1".into()],
+        result_kind: Some(WorkflowResultKind::Object),
+        result: Some(CanonicalText::inline("{\"finalDoc\":\"/w/rosetta/api.md\"}").unwrap()),
+        error: None,
+        resources: vec![ResourceRef::File {
+            path: "/w/rosetta/api.md".into(),
+            resolved: true,
+        }],
+        journal: vec![],
     }
 }
 
@@ -1036,6 +1103,84 @@ fn closed_message_codec_round_trips_members_attachments_and_citations() {
     let detail = detail.expect("closed message detail");
     assert!(!detail.contains(&prose));
     assert!(!detail.contains("payload"));
+}
+
+#[test]
+fn collaboration_message_codec_round_trips_address_and_member_body() {
+    let directory = tempfile::tempdir().unwrap();
+    let projection = directory.path().join("rosetta.sqlite");
+    let mut store = Store::open(&projection).unwrap();
+    store.apply(&base_batch()).unwrap();
+
+    let prose = "team result ".repeat(INLINE_TEXT_MAX_BYTES / 4);
+    let (body, asset) = CanonicalText::externalize(prose.clone());
+    let event = CollaborationEvent {
+        kind: CollaborationEventKind::Report,
+        channel: CollaborationChannel::Team,
+        sender: Some("w2-docs-deltas".into()),
+        recipient: Some("team-lead".into()),
+        team: Some("session-ce09d936".into()),
+        color: Some(ParticipantColor::Green),
+        summary: Some("standing docs updated".into()),
+        body: Some(body),
+        task_id: Some("task-2".into()),
+        delivery_id: Some("delivery-2".into()),
+        status: Some(CollaborationStatus::Completed),
+    };
+    let entry = TimelineEntry {
+        timeline_id: "team-report".into(),
+        session_id: "s1".into(),
+        ordinal: 1,
+        group: rosetta_core::TimelineGroup {
+            id: "team-cycle".into(),
+            kind: rosetta_core::GroupKind::SystemCycle,
+            derivation: rosetta_core::GroupDerivation::Native,
+        },
+        response: None,
+        block_index: None,
+        native_id: Some("native-team-report".into()),
+        parent_native_id: None,
+        at: Some(3_600_000),
+        model: None,
+        effort: None,
+        body: TimelineBody::Collaboration {
+            event: event.clone(),
+        },
+        parent_tool_native_id: None,
+        usage: TokenSnapshot::default(),
+        provenance: rosetta_core::Provenance {
+            agent_version: None,
+            src_cursor: None,
+            src_offset: None,
+        },
+    };
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::ProjectionAsset {
+                    asset: asset.expect("large collaboration body is externalized"),
+                },
+                IngestOp::Message(Box::new(entry)),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let [stored] = page.as_slice() else {
+        panic!("expected one collaboration row");
+    };
+    let TimelineBody::Collaboration { event: stored } = &stored.body else {
+        panic!("expected collaboration body, got {:?}", stored.body);
+    };
+    assert_eq!(stored.sender.as_deref(), Some("w2-docs-deltas"));
+    assert_eq!(stored.color, Some(ParticipantColor::Green));
+    assert_eq!(stored.task_id.as_deref(), Some("task-2"));
+    assert!(matches!(stored.body, Some(CanonicalText::Member { .. })));
+    assert_eq!(
+        stored.body.as_ref().unwrap().as_preview().len() <= 2 * 1024,
+        true
+    );
 }
 
 #[test]
@@ -2926,4 +3071,144 @@ fn message_timestamps_only_write_when_the_session_clock_advances() {
     let newer_changes = store.conn().total_changes() - before;
     assert_eq!(newer_changes, 2, "the message and session rows both change");
     assert_eq!(updated_at(&store), 20_000);
+}
+
+#[test]
+fn workflow_attempt_hydrates_one_run_journal_and_observed_worker_runtime() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut child = session("child-workflow");
+    child.parent_session_id = Some("s1".into());
+    child.root_session_id = "s1".into();
+    child.role = SessionRole::Subagent;
+    let mut opener = message("workflow-attempt", 0, MessageKind::ToolUse);
+    opener.content = None;
+    opener.tool = Some(pending_tool(
+        "toolu-workflow",
+        "Workflow",
+        ToolAction::Workflow {
+            name: Some("api-design".into()),
+            path: None,
+            arguments: None,
+            objective: Some(CanonicalText::inline("Design the API").unwrap()),
+            resume_id: None,
+            background: true,
+            task_id: Some("task-test".into()),
+            run_id: Some("wf_test".into()),
+            attempt: Some(1),
+            callback_summary: Some("completed".into()),
+            callback_result: None,
+            usage: None,
+            run: None,
+        },
+    ));
+    let mut child_message = message("child-response", 0, MessageKind::Agent);
+    child_message.session_id = "child-workflow".into();
+    child_message.model = Some("claude-opus-5".into());
+    child_message.effort = Some("max".into());
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Runtime(runtime()),
+                IngestOp::Project(project()),
+                IngestOp::SessionMeta(session("s1")),
+                IngestOp::SessionMeta(child),
+                message_op(opener),
+                message_op(child_message),
+                IngestOp::WorkflowRun {
+                    session_id: "s1".into(),
+                    run: workflow_run(),
+                },
+                IngestOp::WorkflowJournal {
+                    session_id: "s1".into(),
+                    observation: WorkflowJournalObservation {
+                        observation_id: "journal-1".into(),
+                        run_id: "wf_test".into(),
+                        source_offset: Some(7),
+                        kind: WorkflowJournalKind::Result,
+                        worker_key: "worker-key".into(),
+                        agent_id: Some("native-child".into()),
+                        result_kind: Some(WorkflowResultKind::String),
+                        result_preview: Some("Drafted the API".into()),
+                    },
+                },
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let tool = entry_tool(&page[0]).unwrap();
+    let ToolAction::Workflow { run: Some(run), .. } = &tool.action else {
+        panic!("workflow run must hydrate onto its attempt")
+    };
+    assert_eq!(run.run_id, "wf_test");
+    assert_eq!(run.journal.len(), 1);
+    assert_eq!(run.workers[0].observed_models, ["claude-opus-5"]);
+    assert_eq!(run.workers[0].observed_efforts, ["max"]);
+    assert_eq!(
+        queries::file_read_target(store.conn(), "s1", "workflow-attempt", 0)
+            .unwrap()
+            .unwrap()
+            .path,
+        "/w/rosetta/workflow.js"
+    );
+    assert_eq!(
+        queries::file_read_target(store.conn(), "s1", "workflow-attempt", 1)
+            .unwrap()
+            .unwrap()
+            .path,
+        "/w/rosetta/api.md"
+    );
+}
+
+#[test]
+fn workflow_sidecar_generation_replacement_sweeps_the_old_snapshot() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "project/session/workflows/wf_test.json");
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::WorkflowRun {
+                session_id: "s1".into(),
+                run: workflow_run(),
+            }],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM workflow_run", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+
+    store
+        .apply(&Batch {
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 2,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM workflow_run", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }

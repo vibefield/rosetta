@@ -73,6 +73,7 @@ fn body_kind(row: &TimelineEntry) -> &'static str {
         TimelineBody::User { .. } => "user",
         TimelineBody::Agent { .. } => "agent",
         TimelineBody::Thinking { .. } => "thinking",
+        TimelineBody::Collaboration { .. } => "collaboration",
         TimelineBody::ToolUse { .. } => "tool_use",
         TimelineBody::Notice { .. } => "notice",
         TimelineBody::Summary { .. } => "summary",

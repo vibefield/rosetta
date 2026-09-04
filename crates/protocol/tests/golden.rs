@@ -7,9 +7,10 @@
 
 use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
-    ArtifactKind, AssetRef, CanonicalText, CorrelationDerivation, GroupDerivation, GroupKind,
-    NativeToolRef, Notice, Provenance, ResponseGroup, ShellOutcome, StatusBasis, TaskOp,
-    TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
+    ArtifactKind, AssetRef, CanonicalText, CollaborationChannel, CollaborationEvent,
+    CollaborationEventKind, CollaborationStatus, CorrelationDerivation, GroupDerivation, GroupKind,
+    NativeToolRef, Notice, ParticipantColor, Provenance, ResponseGroup, ShellOutcome, StatusBasis,
+    TaskOp, TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
     ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_protocol::{
@@ -193,6 +194,48 @@ fn command_output_entry() -> TimelineEntry {
     }
 }
 
+fn collaboration_entry() -> TimelineEntry {
+    TimelineEntry {
+        timeline_id: "team-report-1".into(),
+        session_id: "s1".into(),
+        ordinal: 9,
+        group: TimelineGroup {
+            id: "team-delivery-1".into(),
+            kind: GroupKind::SystemCycle,
+            derivation: GroupDerivation::Native,
+        },
+        response: None,
+        block_index: None,
+        native_id: Some("team-native-1".into()),
+        parent_native_id: Some("team-parent-1".into()),
+        at: Some(3_800_000),
+        model: None,
+        effort: None,
+        body: TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::Report,
+                channel: CollaborationChannel::Team,
+                sender: Some("w2-docs".into()),
+                recipient: Some("coordinator".into()),
+                team: Some("refinement".into()),
+                color: Some(ParticipantColor::Green),
+                summary: Some("design docs updated".into()),
+                body: Some(CanonicalText::inline("All design deltas landed.").unwrap()),
+                task_id: Some("task-2".into()),
+                delivery_id: Some("delivery-2".into()),
+                status: Some(CollaborationStatus::Completed),
+            },
+        },
+        parent_tool_native_id: None,
+        usage: TokenSnapshot::default(),
+        provenance: Provenance {
+            agent_version: Some("2.1.240".into()),
+            src_cursor: Some(4),
+            src_offset: Some(3072),
+        },
+    }
+}
+
 fn search_state() -> SearchState {
     SearchState {
         readiness: SearchReadiness::CatchingUp,
@@ -270,7 +313,7 @@ fn timeline_meta() -> TimelineMeta {
 fn exemplars() -> serde_json::Value {
     let status = StatusResponse {
         protocol_version: PROTOCOL_VERSION,
-        schema_version: 14,
+        schema_version: 15,
         canonical_ready: true,
         search: search_state(),
         daemon: Some(DaemonStatus {
@@ -329,6 +372,7 @@ fn exemplars() -> serde_json::Value {
     let mutations = vec![
         Mutation::Message(Box::new(timeline_entry())),
         Mutation::Message(Box::new(command_output_entry())),
+        Mutation::Message(Box::new(collaboration_entry())),
         Mutation::ToolUpdated {
             session_id: "s1".into(),
             timeline_id: "t1".into(),
@@ -365,7 +409,7 @@ fn exemplars() -> serde_json::Value {
         },
         ServerFrame::TimelineSnapshot {
             stamp: stamp(),
-            entries: vec![timeline_entry()],
+            entries: vec![timeline_entry(), collaboration_entry()],
             timeline_meta: timeline_meta(),
         },
         ServerFrame::TimelineMetaSnapshot {
@@ -399,7 +443,7 @@ fn exemplars() -> serde_json::Value {
         "sessions": SessionsResponse { sessions: vec![session_row()] },
         "session": SessionResponse { session: session_row() },
         "timeline_page": TimelinePage {
-            entries: vec![timeline_entry()],
+            entries: vec![timeline_entry(), collaboration_entry()],
             cursor: Some("{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}".into()),
         },
         "task_action": task_action(),

@@ -14,10 +14,12 @@
 //!   need it; it belongs in `core`.
 
 pub mod adapter;
+mod envelope;
 pub mod normalize;
 pub mod raw;
 pub mod spec;
 pub mod time;
 pub mod tool;
+mod workflow;
 
 pub use adapter::ClaudeCodeAdapter;

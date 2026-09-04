@@ -16,6 +16,8 @@ const CANONICAL: &str = include_str!("../../../../groundtruth/claude-code/ground
 pub const TRANSCRIPT: &str = "transcript";
 pub const SUBAGENT_TRANSCRIPT: &str = "subagent-transcript";
 pub const SUBAGENT_METADATA: &str = "subagent-metadata";
+pub const WORKFLOW_JOURNAL: &str = "workflow-journal";
+pub const WORKFLOW_RUN: &str = "workflow-run";
 
 /// The two streams that carry timeline records in the same JSONL dialect. Their
 /// censuses are independent samples of one writer, so the adapter unions their

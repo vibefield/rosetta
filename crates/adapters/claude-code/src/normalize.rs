@@ -15,16 +15,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rosetta_adapter_support::tool::{
-    projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
+    canonical_text, lexical_resource, projection_record_kind, projection_shape_paths,
+    terminal_update, unknown_interaction,
 };
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot,
 };
 use rosetta_core::timeline::{
-    AssetRef, AttachmentKind, AttachmentRef, CorrelationDerivation, GroupDerivation, GroupKind,
-    ResourceRef, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT, TaskOp, TaskSnapshot,
-    TaskSnapshotItem, TimelineGroup, ToolAction, ToolRequestPatch,
+    AssetRef, AttachmentKind, AttachmentRef, CollaborationChannel, CollaborationEvent,
+    CorrelationDerivation, FAILURE_SUMMARY_MAX_BYTES, FailureKind, GroupDerivation, GroupKind,
+    Provenance, ResourceRef, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT, TaskOp, TaskSnapshot,
+    TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolFailure,
+    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
+    WorkflowUsage,
 };
 use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
 use serde::{Deserialize, Serialize};
@@ -81,6 +85,19 @@ pub struct ClaudeCodeState {
     tasks: Vec<TaskSnapshotItem>,
     #[serde(default, skip_serializing_if = "is_zero")]
     task_total_count: u64,
+    /// Accepted Workflow calls remain addressable until their later
+    /// task-notification terminalizes the exact attempt.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    workflow_calls: BTreeMap<String, WorkflowCallState>,
+    /// Number of distinct accepted invocations observed for each durable run.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    workflow_attempts: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkflowCallState {
+    action: ToolAction,
+    started_at: Option<Ms>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -139,6 +156,53 @@ impl ClaudeCodeState {
     fn remember_task_call(&mut self, tool_use_id: &str, action: &ToolAction) {
         self.task_calls
             .insert(tool_use_id.to_owned(), action.clone());
+    }
+
+    fn remember_workflow_call(
+        &mut self,
+        tool_use_id: &str,
+        action: &ToolAction,
+        started_at: Option<Ms>,
+    ) {
+        self.workflow_calls
+            .entry(tool_use_id.to_owned())
+            .or_insert_with(|| WorkflowCallState {
+                action: action.clone(),
+                started_at,
+            });
+    }
+
+    fn workflow_call(&self, tool_use_id: &str) -> Option<WorkflowCallState> {
+        self.workflow_calls.get(tool_use_id).cloned()
+    }
+
+    fn update_workflow_call(&mut self, tool_use_id: &str, action: ToolAction) {
+        if let Some(call) = self.workflow_calls.get_mut(tool_use_id) {
+            call.action = action;
+        }
+    }
+
+    fn forget_workflow_call(&mut self, tool_use_id: &str) {
+        self.workflow_calls.remove(tool_use_id);
+    }
+
+    fn workflow_attempt(&mut self, tool_use_id: &str, run_id: &str) -> u64 {
+        if let Some(WorkflowCallState {
+            action:
+                ToolAction::Workflow {
+                    attempt: Some(attempt),
+                    run_id: Some(known_run),
+                    ..
+                },
+            ..
+        }) = self.workflow_calls.get(tool_use_id)
+            && known_run == run_id
+        {
+            return *attempt;
+        }
+        let attempt = self.workflow_attempts.entry(run_id.to_owned()).or_default();
+        *attempt = attempt.saturating_add(1);
+        *attempt
     }
 
     fn resolve_task_call(
@@ -534,8 +598,11 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
                         delegate_child_native_id: line
                             .tool_use_result
                             .as_ref()
-                            .and_then(|result| result.get("agentId"))
-                            .and_then(Value::as_str)
+                            .and_then(|result| {
+                                ["agentId", "agent_id", "teammate_id"]
+                                    .into_iter()
+                                    .find_map(|key| result.get(key).and_then(Value::as_str))
+                            })
                             .filter(|id| !id.is_empty())
                             .map(str::to_owned),
                     }),
@@ -563,9 +630,39 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
         }
     }
 
+    // The API-shaped `user` role also carries coordinator assignments, peer
+    // deliveries, and top-level Agent Team envelopes. Classify those before
+    // the human-message boundary; nested envelopes stay inside their owning
+    // notification body and are never replayed as separate speech.
+    let collaboration = if attachments.is_empty() && !has_other_block && !text.is_empty() {
+        if let Some(notification) = crate::envelope::task_notification(&text) {
+            emit.workflow_notification(notification, ts);
+            // A recognized callback is transport, even when its opener is
+            // outside the available branch and cannot be correlated here.
+            Some(Vec::new())
+        } else {
+            crate::envelope::classify(
+                &text,
+                line.origin.as_ref(),
+                line.team_name.as_deref(),
+                emit.stream_id == spec::SUBAGENT_TRANSCRIPT,
+            )
+        }
+    } else {
+        None
+    };
+
+    if let Some(drafts) = collaboration {
+        for (index, draft) in drafts.into_iter().enumerate() {
+            emit.push_collaboration(
+                &seed,
+                &format!("{}#collaboration-{index}", line.uuid),
+                draft,
+            );
+        }
     // A turn made only of tool_results is the report-back for a tool call — it
     // folds into that call's row instead of becoming a row of its own.
-    if !text.is_empty() || !attachments.is_empty() || has_other_block || results.is_empty() {
+    } else if !text.is_empty() || !attachments.is_empty() || has_other_block || results.is_empty() {
         let mut row = emit.row(&seed, MessageKind::User, &line.uuid);
         row.content = (!text.is_empty()).then_some(text);
         row.attachments = attachments;
@@ -634,12 +731,13 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     Some(id),
                     None,
                 );
-                let (tool, is_delegate, is_file_change, is_task) = match projected {
+                let (tool, is_delegate, is_file_change, is_task, is_workflow) = match projected {
                     Ok(tool) => {
                         let is_delegate = matches!(&tool.action, ToolAction::Delegate { .. });
                         let is_file_change = matches!(&tool.action, ToolAction::FileChange { .. });
                         let is_task = matches!(&tool.action, ToolAction::Task { .. });
-                        (tool, is_delegate, is_file_change, is_task)
+                        let is_workflow = matches!(&tool.action, ToolAction::Workflow { .. });
+                        (tool, is_delegate, is_file_change, is_task, is_workflow)
                     }
                     Err(error) => {
                         emit.drift(
@@ -661,11 +759,15 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                             false,
                             false,
                             false,
+                            false,
                         )
                     }
                 };
                 if is_task {
                     emit.remember_task_call(id, &tool.action);
+                }
+                if is_workflow {
+                    emit.remember_workflow_call(id, &tool.action, ts);
                 }
                 row.tool = Some(tool);
                 // A native name is not enough to establish canonical
@@ -952,6 +1054,80 @@ fn result_text(content: Option<&Value>) -> Option<String> {
     }
 }
 
+#[derive(Debug)]
+struct WorkflowLaunchDraft {
+    task_id: Option<String>,
+    run_id: String,
+    name: Option<String>,
+    summary: Option<String>,
+    script_path: Option<String>,
+}
+
+fn workflow_launch_draft(
+    native: Option<&Value>,
+    display_text: Option<&str>,
+) -> Option<WorkflowLaunchDraft> {
+    let native_launch = native.filter(|value| {
+        value.get("status").and_then(Value::as_str) == Some("async_launched")
+            && value
+                .get("taskType")
+                .or_else(|| value.get("task_type"))
+                .and_then(Value::as_str)
+                .is_none_or(|kind| kind == "local_workflow")
+    });
+    let value = |keys: &[&str]| {
+        native_launch.and_then(|native| {
+            keys.iter().find_map(|key| {
+                native
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+            })
+        })
+    };
+    let line = |prefix: &str| {
+        display_text.and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix(prefix).map(str::trim))
+                .filter(|text| !text.is_empty())
+        })
+    };
+    let run_id = value(&["runId", "run_id"])
+        .or_else(|| line("Run ID:"))?
+        .to_owned();
+    if native_launch.is_none()
+        && !display_text.is_some_and(|text| text.contains("Workflow launched in background"))
+    {
+        return None;
+    }
+    Some(WorkflowLaunchDraft {
+        task_id: value(&["taskId", "task_id"])
+            .or_else(|| line("Task ID:"))
+            .map(str::to_owned),
+        run_id,
+        name: value(&["workflowName", "workflow_name"]).map(str::to_owned),
+        summary: value(&["summary"])
+            .or_else(|| line("Summary:"))
+            .map(str::to_owned),
+        script_path: value(&["scriptPath", "script_path"])
+            .or_else(|| line("Script file:"))
+            .map(str::to_owned),
+    })
+}
+
+fn bounded_utf8(mut value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes.saturating_sub(3).min(value.len());
+    while !value.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    value.truncate(boundary);
+    value.push_str("...");
+    value
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AuthoredSource {
@@ -1137,6 +1313,73 @@ impl<'a> Emit<'a> {
         IngestOp::push_message(&mut self.ops, row);
     }
 
+    fn push_collaboration(
+        &mut self,
+        seed: &Seed,
+        discriminator: &str,
+        draft: crate::envelope::CollaborationDraft,
+    ) {
+        let row = self.row(seed, MessageKind::System, discriminator);
+        let (body, asset) = match draft.body {
+            Some(body) => {
+                let (body, asset) = rosetta_core::CanonicalText::externalize(body);
+                (Some(body), asset)
+            }
+            None => (None, None),
+        };
+        let group_kind = if draft.channel == CollaborationChannel::Team {
+            GroupKind::SystemCycle
+        } else {
+            GroupKind::ParentInvocation
+        };
+        let entry = TimelineEntry {
+            timeline_id: row.timeline_id.clone(),
+            session_id: row.session_id,
+            ordinal: row.ordinal,
+            group: TimelineGroup {
+                id: discriminator.to_owned(),
+                kind: group_kind,
+                derivation: GroupDerivation::Native,
+            },
+            response: None,
+            block_index: None,
+            native_id: row.uuid,
+            parent_native_id: row.parent_uuid,
+            at: row.ts,
+            model: None,
+            effort: None,
+            body: TimelineBody::Collaboration {
+                event: CollaborationEvent {
+                    kind: draft.kind,
+                    channel: draft.channel,
+                    sender: draft.sender,
+                    recipient: draft.recipient,
+                    team: draft.team,
+                    color: draft.color,
+                    summary: draft.summary,
+                    body,
+                    task_id: draft.task_id,
+                    delivery_id: draft.delivery_id,
+                    status: draft.status,
+                },
+            },
+            parent_tool_native_id: None,
+            usage: TokenSnapshot::default(),
+            provenance: Provenance {
+                agent_version: row.agent_version,
+                src_cursor: row.src_cursor,
+                src_offset: row.src_offset,
+            },
+        };
+        if entry.validate().is_err() {
+            return;
+        }
+        if let Some(asset) = asset {
+            self.ops.push(IngestOp::ProjectionAsset { asset });
+        }
+        self.ops.push(IngestOp::Message(Box::new(entry)));
+    }
+
     fn response_projection(
         &mut self,
         response_id: &str,
@@ -1222,6 +1465,184 @@ impl<'a> Emit<'a> {
         }
     }
 
+    fn remember_workflow_call(
+        &mut self,
+        tool_use_id: &str,
+        action: &ToolAction,
+        started_at: Option<Ms>,
+    ) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_workflow_call(tool_use_id, action, started_at);
+        }
+    }
+
+    fn workflow_call(&mut self, tool_use_id: &str) -> Option<WorkflowCallState> {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.workflow_call(tool_use_id))
+    }
+
+    fn update_workflow_call(&mut self, tool_use_id: &str, action: ToolAction) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.update_workflow_call(tool_use_id, action);
+        }
+    }
+
+    fn forget_workflow_call(&mut self, tool_use_id: &str) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.forget_workflow_call(tool_use_id);
+        }
+    }
+
+    fn resolve_workflow_launch(
+        &mut self,
+        result: &ToolResultBlock<'_>,
+    ) -> Option<(ToolAction, Option<Ms>)> {
+        let display = result_text(result.content);
+        let draft = workflow_launch_draft(result.tool_use_result, display.as_deref())?;
+        let call = self.workflow_call(result.tool_use_id)?;
+        let attempt = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .map(|state| state.workflow_attempt(result.tool_use_id, &draft.run_id))?;
+        let mut action = call.action;
+        let ToolAction::Workflow {
+            name,
+            path,
+            objective,
+            resume_id,
+            background,
+            task_id,
+            run_id,
+            attempt: action_attempt,
+            ..
+        } = &mut action
+        else {
+            return None;
+        };
+        if let Some(value) = draft.name {
+            *name = Some(bounded_utf8(value, rosetta_core::timeline::ID_MAX_BYTES));
+        }
+        if let Some(value) = draft.script_path {
+            *path = lexical_resource(&value, result.cwd, false).ok();
+        }
+        if objective.is_none()
+            && let Some(value) = draft.summary
+            && let Ok(value) = canonical_text(value)
+        {
+            *objective = Some(value);
+        }
+        *background = true;
+        *task_id = draft.task_id;
+        *run_id = Some(draft.run_id.clone());
+        *action_attempt = Some(attempt);
+        if attempt > 1 && resume_id.is_none() {
+            *resume_id = Some(draft.run_id);
+        }
+        self.update_workflow_call(result.tool_use_id, action.clone());
+        Some((action, call.started_at))
+    }
+
+    fn workflow_notification(
+        &mut self,
+        notification: crate::envelope::TaskNotificationDraft,
+        at: Option<Ms>,
+    ) {
+        let Some(tool_use_id) = notification.tool_use_id.as_deref() else {
+            return;
+        };
+        let Some(call) = self.workflow_call(tool_use_id) else {
+            return;
+        };
+        let mut action = call.action;
+        let ToolAction::Workflow {
+            task_id,
+            callback_summary,
+            callback_result,
+            usage,
+            ..
+        } = &mut action
+        else {
+            return;
+        };
+        if notification.task_id.is_some() {
+            *task_id = notification.task_id;
+        }
+        *callback_summary = notification
+            .summary
+            .map(|summary| bounded_utf8(summary, FAILURE_SUMMARY_MAX_BYTES));
+        *callback_result = notification
+            .result
+            .and_then(|result| canonical_text(result).ok());
+        let callback_usage = WorkflowUsage {
+            duration_ms: notification.duration_ms,
+            tokens: notification.tokens,
+            tool_calls: notification.tool_uses,
+            agent_count: notification.agent_count,
+        };
+        if callback_usage != WorkflowUsage::default() {
+            *usage = Some(callback_usage.clone());
+        }
+
+        let status = match notification.status.as_deref() {
+            Some("completed") => ToolStatus::Succeeded,
+            Some("failed") => ToolStatus::Failed,
+            Some("killed" | "stopped") => ToolStatus::Interrupted,
+            Some("cancelled" | "canceled") => ToolStatus::Cancelled,
+            Some("running" | "pending") => ToolStatus::Running,
+            _ => ToolStatus::Unknown,
+        };
+        let failure = (status == ToolStatus::Failed).then(|| ToolFailure {
+            kind: FailureKind::Provider,
+            summary: callback_summary.clone(),
+            diagnostic: None,
+        });
+        let patch = ToolUpdatePatch {
+            request: Some(ToolRequestPatch {
+                action: action.clone(),
+            }),
+            status: Some(ToolStatusFact {
+                value: status,
+                basis: StatusBasis::GroundTruthProtocol,
+            }),
+            failure,
+            timing: Some(ToolTiming {
+                started_at: call.started_at,
+                completed_at: at,
+                duration_ms: callback_usage.duration_ms,
+            }),
+            ..ToolUpdatePatch::default()
+        };
+        self.update_workflow_call(tool_use_id, action);
+        IngestOp::push_tool_update(
+            &mut self.ops,
+            self.session_id.clone(),
+            tool_use_id.to_owned(),
+            self.ctx.evidence(0),
+            patch,
+            at,
+        );
+    }
+
     fn resolve_task_call(
         &mut self,
         tool_use_id: &str,
@@ -1248,6 +1669,35 @@ impl<'a> Emit<'a> {
         };
         let failed = effective_error == Some(true);
         let diagnostic = failed.then(|| result_text(result.content)).flatten();
+        if self.workflow_call(result.tool_use_id).is_some() {
+            if !failed && let Some((action, started_at)) = self.resolve_workflow_launch(result) {
+                let patch = ToolUpdatePatch {
+                    request: Some(ToolRequestPatch { action }),
+                    status: Some(ToolStatusFact {
+                        value: ToolStatus::Running,
+                        basis: StatusBasis::GroundTruthProtocol,
+                    }),
+                    timing: Some(ToolTiming {
+                        started_at,
+                        completed_at: None,
+                        duration_ms: None,
+                    }),
+                    ..ToolUpdatePatch::default()
+                };
+                IngestOp::push_tool_update(
+                    &mut self.ops,
+                    self.session_id.clone(),
+                    result.tool_use_id.to_owned(),
+                    self.ctx.evidence(mutation_index),
+                    patch,
+                    at,
+                );
+                return;
+            }
+            if failed {
+                self.forget_workflow_call(result.tool_use_id);
+            }
+        }
         let mut patch = terminal_update(
             effective_error,
             true,
@@ -1256,10 +1706,17 @@ impl<'a> Emit<'a> {
             diagnostic.as_deref(),
         );
         if self.take_delegate_call(result.tool_use_id) {
-            patch.delegate_child_session_id = result
+            let child_session_id = result
                 .delegate_child_native_id
                 .as_deref()
                 .map(|native| ids::session_id(&self.ctx.runtime_id, native));
+            patch.delegate_child_session_id = child_session_id.clone();
+            if !failed
+                && let Some(native) = result.tool_use_result
+                && let Ok(action) = crate::tool::project_delegate_result(native, child_session_id)
+            {
+                patch.outcome = Some(ToolOutcomePatch { action });
+            }
         }
         if self.take_file_change_call(result.tool_use_id)
             && !failed

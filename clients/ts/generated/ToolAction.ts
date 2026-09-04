@@ -17,6 +17,7 @@ import type { ListOutcome } from "./ListOutcome";
 import type { LocationOutcome } from "./LocationOutcome";
 import type { MediaMetadata } from "./MediaMetadata";
 import type { ModeOp } from "./ModeOp";
+import type { ParticipantColor } from "./ParticipantColor";
 import type { PlanOp } from "./PlanOp";
 import type { ProcessOp } from "./ProcessOp";
 import type { ProcessOutcome } from "./ProcessOutcome";
@@ -34,15 +35,38 @@ import type { UserAnswer } from "./UserAnswer";
 import type { UserQuestion } from "./UserQuestion";
 import type { WebNavigationOp } from "./WebNavigationOp";
 import type { WebSearchOutcome } from "./WebSearchOutcome";
+import type { WorkflowRun } from "./WorkflowRun";
+import type { WorkflowUsage } from "./WorkflowUsage";
 
-export type ToolAction = { "type": "file_read", targets: Array<ReadTarget>, outcome: ReadOutcome | null, } | { "type": "file_list", directory: ResourceRef, depth: number | null, filter: string | null, outcome: ListOutcome | null, } | { "type": "file_search", query: string, mode: FileSearchMode, roots: Array<ResourceRef>, filters: Array<SearchFilter>, outcome: SearchOutcome | null, } | { "type": "code_lookup", operation: CodeLookupOp, query: string, path: ResourceRef | null, outcome: LocationOutcome | null, } | { "type": "file_change", changes: Array<FileDelta>, } | { "type": "shell", command: CanonicalText,
+export type ToolAction = { "type": "file_read", targets: Array<ReadTarget>, outcome: ReadOutcome | null, } | { "type": "file_list", directory: ResourceRef, depth: number | null, filter: string | null, outcome: ListOutcome | null, } | { "type": "file_search", query: string, mode: FileSearchMode, roots: Array<ResourceRef>, filters: Array<SearchFilter>, outcome: SearchOutcome | null, } | { "type": "code_lookup", operation: CodeLookupOp, query: string, path: ResourceRef | null, outcome: LocationOutcome | null, } | { "type": "file_change", changes: Array<FileDelta>, } | { "type": "shell", command: CanonicalText, 
 /**
  * The command is a bounded projection preview. Its exact source text
  * remains addressable through the row's raw-ledger provenance.
  */
-source_truncated?: boolean, cwd: ResourceRef | null, timeout_ms: number | null, background: boolean, outcome: ShellOutcome | null, } | { "type": "code_execute", language: string | null, code: CanonicalText,
+source_truncated?: boolean, cwd: ResourceRef | null, timeout_ms: number | null, background: boolean, outcome: ShellOutcome | null, } | { "type": "code_execute", language: string | null, code: CanonicalText, 
 /**
  * The code is a bounded projection preview. Its exact source text
  * remains addressable through the row's raw-ledger provenance.
  */
-source_truncated?: boolean, cwd: ResourceRef | null, outcome: ShellOutcome | null, } | { "type": "process", operation: ProcessOp, process_id: string, input: CanonicalText | null, outcome: ProcessOutcome | null, } | { "type": "orchestration", runtime: string | null, trace: ChildTrace, executed_children: Array<string>, executed_child_count: number | null, } | { "type": "web_search", query: string | null, allowed_domains: Array<string>, blocked_domains: Array<string>, outcome: WebSearchOutcome | null, } | { "type": "web_navigate", operation: WebNavigationOp, url: ResourceRef | null, pattern: string | null, outcome: FetchOutcome | null, } | { "type": "web_fetch", url: ResourceRef, purpose: string | null, outcome: FetchOutcome | null, } | { "type": "delegate", agent_kind: string | null, name: string | null, model: string | null, mode: string | null, objective: CanonicalText, child_session_id: string | null, resume_id: string | null, background: boolean, orphan_result_summary: CanonicalText | null, } | { "type": "task", operation: TaskOp, task_id: string | null, subject: string | null, description: CanonicalText | null, status: TaskStatus | null, owner: string | null, blocker_ids: Array<string>, snapshot: TaskSnapshot | null, } | { "type": "plan", operation: PlanOp, plan_id: string | null, title: string | null, summary: CanonicalText | null, step_count: number | null, } | { "type": "collaborate", operation: CollaborationOp, recipient: string | null, team: string | null, summary: string | null, body: CanonicalText | null, linked_session_id: string | null, delivery_id: string | null, outcome: CollaborationOutcome | null, } | { "type": "question", questions: Array<UserQuestion>, answers: Array<UserAnswer>, } | { "type": "skill", name: string, arguments: CanonicalText | null, } | { "type": "workflow", name: string | null, path: ResourceRef | null, arguments: CanonicalText | null, objective: CanonicalText | null, resume_id: string | null, background: boolean, } | { "type": "schedule", operation: ScheduleOp, schedule_id: string | null, due_at: number | null, delay_ms: number | null, reason: string | null, objective: CanonicalText | null, } | { "type": "artifact", operation: ArtifactOp, artifact_kind: ArtifactKind, name: string | null, description: CanonicalText | null, resources: Array<ResourceRef>, media: MediaMetadata | null, } | { "type": "tool_discovery", query: string, matches: Array<string>, total_count: number, } | { "type": "mode", operation: ModeOp, mode: ExecutionMode, workspace: ResourceRef | null, } | { "type": "finding", findings: Array<FindingItem>, total_count: number, } | { "type": "notification", channel: string | null, destination: string | null, summary: CanonicalText, delivery_id: string | null, } | { "type": "structured_output", document: CanonicalDocument, } | { "type": "external", provider: string | null, operation: string, subject: string | null, fields: Array<DisplayField>, resources: Array<ResourceRef>, } | { "type": "unknown", };
+source_truncated?: boolean, cwd: ResourceRef | null, outcome: ShellOutcome | null, } | { "type": "process", operation: ProcessOp, process_id: string, input: CanonicalText | null, outcome: ProcessOutcome | null, } | { "type": "orchestration", runtime: string | null, trace: ChildTrace, executed_children: Array<string>, executed_child_count: number | null, } | { "type": "web_search", query: string | null, allowed_domains: Array<string>, blocked_domains: Array<string>, outcome: WebSearchOutcome | null, } | { "type": "web_navigate", operation: WebNavigationOp, url: ResourceRef | null, pattern: string | null, outcome: FetchOutcome | null, } | { "type": "web_fetch", url: ResourceRef, purpose: string | null, outcome: FetchOutcome | null, } | { "type": "delegate", agent_kind: string | null, name: string | null, model: string | null, mode: string | null, 
+/**
+ * Present only when native evidence proves this invocation addresses
+ * a persistent team rather than an invocation-owned worker.
+ */
+team: string | null, 
+/**
+ * Native participant address colour.  Absence stays absence.
+ */
+color: ParticipantColor | null, objective: CanonicalText, child_session_id: string | null, resume_id: string | null, background: boolean, orphan_result_summary: CanonicalText | null, } | { "type": "task", operation: TaskOp, task_id: string | null, subject: string | null, description: CanonicalText | null, status: TaskStatus | null, owner: string | null, blocker_ids: Array<string>, snapshot: TaskSnapshot | null, } | { "type": "plan", operation: PlanOp, plan_id: string | null, title: string | null, summary: CanonicalText | null, step_count: number | null, } | { "type": "collaborate", operation: CollaborationOp, recipient: string | null, team: string | null, summary: string | null, body: CanonicalText | null, linked_session_id: string | null, delivery_id: string | null, outcome: CollaborationOutcome | null, } | { "type": "question", questions: Array<UserQuestion>, answers: Array<UserAnswer>, } | { "type": "skill", name: string, arguments: CanonicalText | null, } | { "type": "workflow", name: string | null, path: ResourceRef | null, arguments: CanonicalText | null, objective: CanonicalText | null, resume_id: string | null, background: boolean, task_id: string | null, run_id: string | null, attempt: number | null, callback_summary: string | null, 
+/**
+ * Structured callback result retained as canonical JSON/text when a
+ * run sidecar is delayed or absent. The hydrated run remains the
+ * authoritative current snapshot when both exist.
+ */
+callback_result: CanonicalText | null, usage: WorkflowUsage | null, 
+/**
+ * Hydrated from the generation-owned workflow sidecar at read time;
+ * the stored tool row keeps this `None`, so every attempt points to
+ * one run document instead of copying it.
+ */
+run: WorkflowRun | null, } | { "type": "schedule", operation: ScheduleOp, schedule_id: string | null, due_at: number | null, delay_ms: number | null, reason: string | null, objective: CanonicalText | null, } | { "type": "artifact", operation: ArtifactOp, artifact_kind: ArtifactKind, name: string | null, description: CanonicalText | null, resources: Array<ResourceRef>, media: MediaMetadata | null, } | { "type": "tool_discovery", query: string, matches: Array<string>, total_count: number, } | { "type": "mode", operation: ModeOp, mode: ExecutionMode, workspace: ResourceRef | null, } | { "type": "finding", findings: Array<FindingItem>, total_count: number, } | { "type": "notification", channel: string | null, destination: string | null, summary: CanonicalText, delivery_id: string | null, } | { "type": "structured_output", document: CanonicalDocument, } | { "type": "external", provider: string | null, operation: string, subject: string | null, fields: Array<DisplayField>, resources: Array<ResourceRef>, } | { "type": "unknown", };

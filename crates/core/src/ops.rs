@@ -12,7 +12,7 @@ use crate::rows::{
 use crate::timeline::{
     EvidenceOrder, ExecutionMode, GroupDerivation, GroupKind, Notice, PermissionOutcome,
     Provenance, RuntimeErrorKind, SummaryPurpose, TimelineBody, TimelineEntry, TimelineGroup,
-    ToolUpdatePatch, TruncationScope,
+    ToolUpdatePatch, TruncationScope, WorkflowJournalObservation, WorkflowRun,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,6 +62,17 @@ pub enum IngestOp {
     FileEdit(FileEditRow),
     Plan(PlanRow),
     Task(TaskRow),
+    /// Current durable snapshot for one Workflow run. Attempts remain tool
+    /// timeline rows and join this document by `run_id` at read time.
+    WorkflowRun {
+        session_id: String,
+        run: WorkflowRun,
+    },
+    /// One append-only coordinator observation for a Workflow worker.
+    WorkflowJournal {
+        session_id: String,
+        observation: WorkflowJournalObservation,
+    },
     GitCommit(GitCommitRow),
     /// Lands aggregated in drift_agg — never one row per bad record.
     Drift(DriftFact),
@@ -107,6 +118,18 @@ impl IngestOp {
             patch: Box::new(patch),
             at,
         });
+    }
+
+    /// Close a Workflow sidecar into the same bounded member store as message
+    /// text. The run remains one row even when its script or result needs a
+    /// content-addressed overflow member.
+    pub fn push_workflow_run(ops: &mut Vec<Self>, session_id: String, mut run: WorkflowRun) {
+        ops.extend(
+            run.externalize_text_members()
+                .into_iter()
+                .map(|asset| Self::ProjectionAsset { asset }),
+        );
+        ops.push(Self::WorkflowRun { session_id, run });
     }
 
     /// Close command/code payloads into their bounded SQLite projection.

@@ -66,6 +66,7 @@ fn text(row: &TimelineEntry) -> Option<&str> {
         TimelineBody::Thinking { text } | TimelineBody::Summary { text, .. } => {
             Some(text.as_preview())
         }
+        TimelineBody::Collaboration { event } => event.body.as_ref().map(|text| text.as_preview()),
         TimelineBody::ToolUse { .. } | TimelineBody::Notice { .. } => None,
     }
 }

@@ -2,12 +2,12 @@
 import type { SessionRole } from "./SessionRole";
 import type { StreamState } from "./StreamState";
 
-export type SessionRow = { id: string, native_session_id: string, runtime_id: string, project_id: string | null,
+export type SessionRow = { id: string, native_session_id: string, runtime_id: string, project_id: string | null, 
 /**
  * One normalized primary working directory, selected by the adapter's
  * bounded metadata admission. Timeline records never mutate it.
  */
-cwd: string | null, parent_session_id: string | null,
+cwd: string | null, parent_session_id: string | null, 
 /**
  * `== id` for top-level sessions; subagent trees roll up here.
  */

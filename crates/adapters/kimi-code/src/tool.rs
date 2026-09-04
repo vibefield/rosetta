@@ -127,6 +127,8 @@ pub fn project_request(
                 name: None,
                 model: first_string(input, &["model"]).map(str::to_owned),
                 mode: first_string(input, &["mode"]).map(str::to_owned),
+                team: None,
+                color: None,
                 objective: canonical_text(objective)?,
                 child_session_id: None,
                 resume_id: first_string(input, &["resume_id"]).map(str::to_owned),

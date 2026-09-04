@@ -3,11 +3,15 @@
 //! docs/canonical-model.html; higher scopes are query-time sums through
 //! `session` (session-grain-only cache).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
-use rosetta_core::timeline::{ResourceRef, SearchMember};
-use rosetta_core::{TimelineBody, TimelineEntry};
+use rosetta_core::timeline::{ResourceRef, SearchMember, WORKFLOW_RUNTIME_PROFILE_LIMIT};
+use rosetta_core::{
+    TimelineBody, TimelineEntry, ToolAction, WorkflowJournalObservation, WorkflowRun,
+};
 
 use crate::{StoreError, message_codec};
 
@@ -175,6 +179,11 @@ pub fn file_read_target(
     let Some((entry, cwd)) = raw else {
         return Ok(None);
     };
+    let mut entries = vec![entry];
+    hydrate_workflows(conn, session_id, &mut entries)?;
+    let Some(entry) = entries.pop() else {
+        return Ok(None);
+    };
     let TimelineBody::ToolUse { tool } = entry.body else {
         return Ok(None);
     };
@@ -192,6 +201,29 @@ pub fn file_read_target(
                     ResourceRef::File { path, .. } => Some(path.clone()),
                     _ => None,
                 }),
+            rosetta_core::ToolAction::Workflow { path, run, .. } => {
+                let mut resources = Vec::new();
+                if let Some(script) = run
+                    .as_ref()
+                    .and_then(|run| run.script_path.as_ref())
+                    .or(path.as_ref())
+                {
+                    resources.push(script.clone());
+                }
+                if let Some(run) = run {
+                    for resource in run.resources {
+                        if !resources.contains(&resource) {
+                            resources.push(resource);
+                        }
+                    }
+                }
+                resources
+                    .get(target_index)
+                    .and_then(|resource| match resource {
+                        ResourceRef::File { path, .. } => Some(path.clone()),
+                        _ => None,
+                    })
+            }
             _ => None,
         };
     let Some(path) = path else {
@@ -642,6 +674,7 @@ pub fn timeline_page(
     for row in rows {
         out.push(row?);
     }
+    hydrate_workflows(conn, session_id, &mut out)?;
     Ok(out)
 }
 
@@ -653,10 +686,140 @@ pub fn timeline_entry(
     session_id: &str,
     timeline_id: &str,
 ) -> Result<Option<TimelineEntry>, StoreError> {
-    conn.prepare_cached("SELECT * FROM message WHERE session_id = ?1 AND timeline_id = ?2")?
+    let entry = conn
+        .prepare_cached("SELECT * FROM message WHERE session_id = ?1 AND timeline_id = ?2")?
         .query_row(params![session_id, timeline_id], message_codec::decode)
         .optional()
-        .map_err(StoreError::from)
+        .map_err(StoreError::from)?;
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    let mut entries = vec![entry];
+    hydrate_workflows(conn, session_id, &mut entries)?;
+    Ok(entries.pop())
+}
+
+/// Join the generation-owned Workflow document onto each chronological
+/// invocation that proved the same native run id. Runtime profiles come from
+/// child transcripts and therefore override neither configured values nor one
+/// another; the UI can honestly say "varies" when multiple were observed.
+fn hydrate_workflows(
+    conn: &Connection,
+    session_id: &str,
+    entries: &mut [TimelineEntry],
+) -> Result<(), StoreError> {
+    let wanted = entries
+        .iter()
+        .filter_map(|entry| match &entry.body {
+            TimelineBody::ToolUse { tool } => match &tool.action {
+                ToolAction::Workflow {
+                    run_id: Some(run_id),
+                    ..
+                } => Some(run_id.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+
+    let mut runs = BTreeMap::<String, WorkflowRun>::new();
+    let mut statement = conn
+        .prepare_cached("SELECT detail FROM workflow_run WHERE session_id = ?1 ORDER BY run_id")?;
+    let rows = statement.query_map(params![session_id], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let run = serde_json::from_str::<WorkflowRun>(&row?)?;
+        if wanted.contains(&run.run_id) {
+            runs.insert(run.run_id.clone(), run);
+        }
+    }
+    drop(statement);
+    if runs.is_empty() {
+        return Ok(());
+    }
+
+    let mut statement = conn.prepare_cached(
+        "SELECT detail FROM workflow_journal
+         WHERE session_id = ?1 ORDER BY run_id, observation_id",
+    )?;
+    let rows = statement.query_map(params![session_id], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let observation = serde_json::from_str::<WorkflowJournalObservation>(&row?)?;
+        if let Some(run) = runs.get_mut(&observation.run_id) {
+            run.journal.push(observation);
+        }
+    }
+    drop(statement);
+    for run in runs.values_mut() {
+        run.journal.sort_by(|left, right| {
+            left.source_offset
+                .cmp(&right.source_offset)
+                .then_with(|| left.observation_id.cmp(&right.observation_id))
+        });
+    }
+
+    let mut profiles = BTreeMap::<String, (Vec<String>, Vec<String>)>::new();
+    let mut statement = conn.prepare_cached(
+        "SELECT m.session_id, m.model, m.effort
+         FROM message m
+         JOIN session child ON child.id = m.session_id
+         WHERE child.parent_session_id = ?1
+           AND (m.model IS NOT NULL OR m.effort IS NOT NULL)
+         ORDER BY m.id",
+    )?;
+    let rows = statement.query_map(params![session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (child_session_id, model, effort) = row?;
+        let profile = profiles.entry(child_session_id).or_default();
+        if let Some(model) = model {
+            push_unique(&mut profile.0, model);
+        }
+        if let Some(effort) = effort {
+            push_unique(&mut profile.1, effort);
+        }
+    }
+    drop(statement);
+
+    for run in runs.values_mut() {
+        for worker in &mut run.workers {
+            let Some(child_session_id) = worker.child_session_id.as_ref() else {
+                continue;
+            };
+            if let Some((models, efforts)) = profiles.get(child_session_id) {
+                worker.observed_models.clone_from(models);
+                worker.observed_efforts.clone_from(efforts);
+            }
+        }
+        run.validate()
+            .map_err(|error| StoreError::ProjectionInvalid {
+                message: error.to_string(),
+            })?;
+    }
+
+    for entry in entries {
+        let TimelineBody::ToolUse { tool } = &mut entry.body else {
+            continue;
+        };
+        let ToolAction::Workflow { run_id, run, .. } = &mut tool.action else {
+            continue;
+        };
+        *run = run_id.as_ref().and_then(|run_id| runs.get(run_id)).cloned();
+    }
+    Ok(())
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if values.len() < WORKFLOW_RUNTIME_PROFILE_LIMIT && !values.contains(&value) {
+        values.push(value);
+    }
 }
 
 /// Deterministic UTC compatibility wrapper for a GitHub-style activity

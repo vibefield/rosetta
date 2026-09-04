@@ -15,7 +15,7 @@ use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, SessionUsageRow, TaskRow,
 };
-use rosetta_core::{TimelineBody, ToolAction};
+use rosetta_core::{TimelineBody, ToolAction, WorkflowJournalObservation, WorkflowRun};
 
 use crate::StoreError;
 use crate::hot::{Effects, MetaEffects, MetaTouch, Mutation, meta_touch};
@@ -397,6 +397,63 @@ fn apply_task(tx: &Transaction, row: &TaskRow, src_cursor: Option<i64>) -> Resul
     Ok(())
 }
 
+fn apply_workflow_run(
+    tx: &Transaction,
+    session_id: &str,
+    run: &WorkflowRun,
+    src_cursor: Option<i64>,
+) -> Result<(), StoreError> {
+    run.validate()
+        .map_err(|error| StoreError::ProjectionInvalid {
+            message: error.to_string(),
+        })?;
+    let detail = serde_json::to_string(run)?;
+    tx.prepare_cached(
+        "INSERT INTO workflow_run (run_id, session_id, detail, updated_at, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(run_id) DO UPDATE SET
+           session_id = excluded.session_id,
+           detail = excluded.detail,
+           updated_at = excluded.updated_at,
+           src_cursor = excluded.src_cursor",
+    )?
+    .execute(params![
+        run.run_id,
+        session_id,
+        detail,
+        run.updated_at,
+        src_cursor
+    ])?;
+    Ok(())
+}
+
+fn apply_workflow_journal(
+    tx: &Transaction,
+    session_id: &str,
+    observation: &WorkflowJournalObservation,
+    src_cursor: Option<i64>,
+) -> Result<(), StoreError> {
+    let detail = serde_json::to_string(observation)?;
+    tx.prepare_cached(
+        "INSERT INTO workflow_journal
+           (observation_id, run_id, session_id, detail, src_cursor)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(observation_id) DO UPDATE SET
+           run_id = excluded.run_id,
+           session_id = excluded.session_id,
+           detail = excluded.detail,
+           src_cursor = excluded.src_cursor",
+    )?
+    .execute(params![
+        observation.observation_id,
+        observation.run_id,
+        session_id,
+        detail,
+        src_cursor,
+    ])?;
+    Ok(())
+}
+
 fn apply_git_commit(
     tx: &Transaction,
     row: &GitCommitRow,
@@ -661,6 +718,8 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM task          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM workflow_run WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM workflow_journal WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session       WHERE title_src_cursor = ?1 LIMIT 1)",
         )?
         .query_row(params![cursor_id], |row| row.get(0))?;
@@ -712,6 +771,8 @@ fn remove_cursor_projection(
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
+        "DELETE FROM workflow_journal WHERE src_cursor = ?1",
+        "DELETE FROM workflow_run WHERE src_cursor = ?1",
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
     }
@@ -1125,7 +1186,10 @@ fn note_touch(fx: &mut Effects, op: &IngestOp) {
 fn action_affects_timeline_meta(action: &ToolAction) -> bool {
     matches!(
         action,
-        ToolAction::Task { .. } | ToolAction::Plan { .. } | ToolAction::Artifact { .. }
+        ToolAction::Task { .. }
+            | ToolAction::Plan { .. }
+            | ToolAction::Artifact { .. }
+            | ToolAction::Workflow { .. }
     )
 }
 
@@ -1133,6 +1197,9 @@ fn timeline_meta_session(op: &IngestOp) -> Option<&str> {
     match op {
         IngestOp::Task(row) => Some(&row.session_id),
         IngestOp::Plan(row) => Some(&row.session_id),
+        IngestOp::WorkflowRun { session_id, .. } | IngestOp::WorkflowJournal { session_id, .. } => {
+            Some(session_id)
+        }
         IngestOp::Message(row)
             if matches!(
                 &row.body,
@@ -1213,6 +1280,15 @@ fn apply_op(
         IngestOp::FileEdit(row) => profile_other(stats, || apply_file_edit(tx, row, src_cursor))?,
         IngestOp::Plan(row) => profile_other(stats, || apply_plan(tx, row, src_cursor))?,
         IngestOp::Task(row) => profile_other(stats, || apply_task(tx, row, src_cursor))?,
+        IngestOp::WorkflowRun { session_id, run } => profile_other(stats, || {
+            apply_workflow_run(tx, session_id, run, src_cursor)
+        })?,
+        IngestOp::WorkflowJournal {
+            session_id,
+            observation,
+        } => profile_other(stats, || {
+            apply_workflow_journal(tx, session_id, observation, src_cursor)
+        })?,
         IngestOp::GitCommit(row) => profile_other(stats, || apply_git_commit(tx, row, src_cursor))?,
         IngestOp::Drift(fact) => apply_drift(tx, fact, stats)?,
     }

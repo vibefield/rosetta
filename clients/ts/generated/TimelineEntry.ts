@@ -5,7 +5,7 @@ import type { TimelineBody } from "./TimelineBody";
 import type { TimelineGroup } from "./TimelineGroup";
 import type { TokenSnapshot } from "./TokenSnapshot";
 
-export type TimelineEntry = { timeline_id: string, session_id: string, ordinal: number, group: TimelineGroup, response: ResponseGroup | null, block_index: number | null, native_id: string | null, parent_native_id: string | null, at: number | null, model: string | null, effort: string | null, body: TimelineBody,
+export type TimelineEntry = { timeline_id: string, session_id: string, ordinal: number, group: TimelineGroup, response: ResponseGroup | null, block_index: number | null, native_id: string | null, parent_native_id: string | null, at: number | null, model: string | null, effort: string | null, body: TimelineBody, 
 /**
  * Native tool invocation that owns a spawned child-session entry.
  */

@@ -61,6 +61,19 @@ pub(crate) fn encode(entry: &TimelineEntry) -> Result<EncodedMessage, StoreError
             });
             ("thinking", Some(content), detail)
         }
+        TimelineBody::Collaboration { event } => {
+            let (content, body_member) = optional_text(event.body.as_ref());
+            let mut stored = event.clone();
+            stored.body = None;
+            (
+                "collaboration",
+                content,
+                Some(MessageDetail::Collaboration {
+                    event: stored,
+                    body_member,
+                }),
+            )
+        }
         TimelineBody::ToolUse { .. } => ("tool_use", None, None),
         TimelineBody::Notice { notice } => (
             "notice",
@@ -181,6 +194,21 @@ pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
                 text: text(content, member)
                     .ok_or_else(|| invalid("thinking row has no canonical text"))?,
             }
+        }
+        "collaboration" => {
+            let (mut event, body_member) = match detail {
+                Some(MessageDetail::Collaboration { event, body_member })
+                    if event.body.is_none() =>
+                {
+                    (event, body_member)
+                }
+                Some(MessageDetail::Collaboration { .. }) => {
+                    return Err(invalid("stored collaboration detail duplicates its body"));
+                }
+                _ => return Err(invalid("message detail does not match collaboration body")),
+            };
+            event.body = text(content, body_member);
+            TimelineBody::Collaboration { event }
         }
         "tool_use" => {
             if detail.is_some() || content.is_some() {

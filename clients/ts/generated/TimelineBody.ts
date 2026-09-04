@@ -2,8 +2,9 @@
 import type { AttachmentRef } from "./AttachmentRef";
 import type { CanonicalText } from "./CanonicalText";
 import type { CitationRef } from "./CitationRef";
+import type { CollaborationEvent } from "./CollaborationEvent";
 import type { Notice } from "./Notice";
 import type { SummaryPurpose } from "./SummaryPurpose";
 import type { ToolInteraction } from "./ToolInteraction";
 
-export type TimelineBody = { "type": "user", text: CanonicalText | null, attachments: Array<AttachmentRef>, } | { "type": "agent", text: CanonicalText | null, attachments: Array<AttachmentRef>, citations: Array<CitationRef>, } | { "type": "thinking", text: CanonicalText, } | { "type": "tool_use", tool: ToolInteraction, } | { "type": "notice", notice: Notice, } | { "type": "summary", purpose: SummaryPurpose, text: CanonicalText, };
+export type TimelineBody = { "type": "user", text: CanonicalText | null, attachments: Array<AttachmentRef>, } | { "type": "agent", text: CanonicalText | null, attachments: Array<AttachmentRef>, citations: Array<CitationRef>, } | { "type": "thinking", text: CanonicalText, } | { "type": "collaboration", event: CollaborationEvent, } | { "type": "tool_use", tool: ToolInteraction, } | { "type": "notice", notice: Notice, } | { "type": "summary", purpose: SummaryPurpose, text: CanonicalText, };

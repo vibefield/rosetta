@@ -54,7 +54,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 10,
+      "protocol_version": 11,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -130,6 +130,55 @@
             "input": 10,
             "output": 5,
             "thinking": 1
+          }
+        },
+        {
+          "at": 3800000,
+          "block_index": null,
+          "body": {
+            "event": {
+              "body": {
+                "text": "All design deltas landed.",
+                "type": "inline"
+              },
+              "channel": "team",
+              "color": "green",
+              "delivery_id": "delivery-2",
+              "kind": "report",
+              "recipient": "coordinator",
+              "sender": "w2-docs",
+              "status": "completed",
+              "summary": "design docs updated",
+              "task_id": "task-2",
+              "team": "refinement"
+            },
+            "type": "collaboration"
+          },
+          "effort": null,
+          "group": {
+            "derivation": "native",
+            "id": "team-delivery-1",
+            "kind": "system_cycle"
+          },
+          "model": null,
+          "native_id": "team-native-1",
+          "ordinal": 9,
+          "parent_native_id": "team-parent-1",
+          "parent_tool_native_id": null,
+          "provenance": {
+            "agent_version": "2.1.240",
+            "src_cursor": 4,
+            "src_offset": 3072
+          },
+          "response": null,
+          "session_id": "s1",
+          "timeline_id": "team-report-1",
+          "usage": {
+            "cache_read": null,
+            "cache_write": null,
+            "input": null,
+            "output": null,
+            "thinking": null
           }
         }
       ],
@@ -482,6 +531,56 @@
       }
     },
     {
+      "at": 3800000,
+      "block_index": null,
+      "body": {
+        "event": {
+          "body": {
+            "text": "All design deltas landed.",
+            "type": "inline"
+          },
+          "channel": "team",
+          "color": "green",
+          "delivery_id": "delivery-2",
+          "kind": "report",
+          "recipient": "coordinator",
+          "sender": "w2-docs",
+          "status": "completed",
+          "summary": "design docs updated",
+          "task_id": "task-2",
+          "team": "refinement"
+        },
+        "type": "collaboration"
+      },
+      "effort": null,
+      "group": {
+        "derivation": "native",
+        "id": "team-delivery-1",
+        "kind": "system_cycle"
+      },
+      "model": null,
+      "native_id": "team-native-1",
+      "ordinal": 9,
+      "parent_native_id": "team-parent-1",
+      "parent_tool_native_id": null,
+      "provenance": {
+        "agent_version": "2.1.240",
+        "src_cursor": 4,
+        "src_offset": 3072
+      },
+      "response": null,
+      "session_id": "s1",
+      "timeline_id": "team-report-1",
+      "type": "message",
+      "usage": {
+        "cache_read": null,
+        "cache_write": null,
+        "input": null,
+        "output": null,
+        "thinking": null
+      }
+    },
+    {
       "at": 3700000,
       "session_id": "s1",
       "timeline_id": "t1",
@@ -601,7 +700,7 @@
       }
     ]
   },
-  "protocol_version": 10,
+  "protocol_version": 11,
   "runtimes": {
     "runtimes": [
       {
@@ -753,8 +852,8 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 10,
-    "schema_version": 14,
+    "protocol_version": 11,
+    "schema_version": 15,
     "search": {
       "projection_epoch": "epoch-1",
       "readiness": "catching-up",
@@ -854,6 +953,55 @@
           "input": 10,
           "output": 5,
           "thinking": 1
+        }
+      },
+      {
+        "at": 3800000,
+        "block_index": null,
+        "body": {
+          "event": {
+            "body": {
+              "text": "All design deltas landed.",
+              "type": "inline"
+            },
+            "channel": "team",
+            "color": "green",
+            "delivery_id": "delivery-2",
+            "kind": "report",
+            "recipient": "coordinator",
+            "sender": "w2-docs",
+            "status": "completed",
+            "summary": "design docs updated",
+            "task_id": "task-2",
+            "team": "refinement"
+          },
+          "type": "collaboration"
+        },
+        "effort": null,
+        "group": {
+          "derivation": "native",
+          "id": "team-delivery-1",
+          "kind": "system_cycle"
+        },
+        "model": null,
+        "native_id": "team-native-1",
+        "ordinal": 9,
+        "parent_native_id": "team-parent-1",
+        "parent_tool_native_id": null,
+        "provenance": {
+          "agent_version": "2.1.240",
+          "src_cursor": 4,
+          "src_offset": 3072
+        },
+        "response": null,
+        "session_id": "s1",
+        "timeline_id": "team-report-1",
+        "usage": {
+          "cache_read": null,
+          "cache_write": null,
+          "input": null,
+          "output": null,
+          "thinking": null
         }
       }
     ]
