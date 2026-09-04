@@ -608,11 +608,11 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
   .wf-state-key { grid-template-columns: 1fr; margin-left: 32px; }
 }
 
-/* ═══ §05A — timeline_meta: three floating indexes, one island ═══
+/* ═══ §05A — timeline_meta: four floating indexes, one island ═══
    These controls belong to the message-view wrapper, not its grid. They sit
    above the document, spend the existing narrow-layout anchor gutter, and
-   never move the 68ch measure. The island is an index; task messages remain
-   in chronology and file bodies remain in the shared viewer. */
+   never move the 68ch measure. The island is an index; task and Workflow
+   messages remain in chronology and file bodies remain in the shared viewer. */
 .tr-meta-stage { position: relative; min-height: 560px; overflow: hidden; }
 .tr-meta-stage > .tr { min-height: 560px; }
 .tr-meta-launchers { position: absolute; z-index: 7; top: 14px; left: 14px; display: grid; gap: 7px; }
@@ -649,6 +649,7 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
 .tr-meta-status { position: relative; display: grid; width: 14px; height: 14px; place-items: center; border: 1px solid var(--vf-hairline-strong); border-radius: 4px; color: var(--vf-text-tertiary); font-family: var(--vf-font-mono); font-size: 9px; line-height: 1; }
 .tr-meta-row[data-state="completed"] .tr-meta-status { border-color: var(--vf-text-tertiary); }
 .tr-meta-row[data-state="completed"] .tr-meta-row__name { color: var(--vf-text-tertiary); text-decoration: line-through; }
+.tr-meta-row[data-kind="workflow"][data-state="completed"] .tr-meta-row__name { color: var(--vf-text-primary); text-decoration: none; }
 .tr-meta-row[data-state="running"] .tr-meta-status { border-color: var(--vf-green); }
 .tr-meta-row[data-state="running"] .tr-meta-status::after { width: 6px; height: 6px; border-radius: 999px; background: var(--vf-green); content: ""; animation: breathe 1.6s ease-in-out infinite; }
 .tr-meta-row[data-state="running"] .tr-meta-row__value { color: var(--vf-green); }
@@ -1370,9 +1371,9 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
 <section class="rec">
   <span class="eyebrow">§05A · timeline_meta</span>
   <h2>The work index floats inside the transcript</h2>
-  <p>Tasks, plans and artifacts are three possible small indexes into the session, not a fourth room column and not a replacement for their messages. A kind with no items has no button and no tab; when every kind is empty, the control is absent. The available buttons sit at the upper-left of the message-view wrapper, above the document. On a wide column that is empty margin; on a narrow column it is the same 60px gutter already reserved for time anchors. Nothing moves when the index appears.</p>
+  <p>Tasks, Workflow runs, plans and artifacts are four possible small indexes into the session, not a fourth room column and not a replacement for their messages. A kind with no items has no button and no tab; when every kind is empty, the control is absent. The available buttons sit at the upper-left of the message-view wrapper, above the document. On a wide column that is empty margin; on a narrow column it is the same 60px gutter already reserved for time anchors. Nothing moves when the index appears.</p>
   <blockquote class="claim"><p>The timeline remains the record. <code>timeline_meta</code> is the map back into it.</p></blockquote>
-  <p>Press a button to open the shared island on that tab; press it again, press Escape, or press outside to close. Try the task rows below: they land on the retained task message. Plan and artifact rows hand their exact resource to the file viewer the room already owns.</p>
+  <p>Press a button to open the shared island on that tab; press it again, press Escape, or press outside to close. Task and Workflow rows land on their retained message. Plan and artifact rows hand their exact resource to the file viewer the room already owns.</p>
 </section>
 
 <div class="spec spec--wide" id="timeline-meta-spec"><div class="spec__bar">Session work · floating inside the message wrapper<span class="note">tasks open · no transcript reflow</span></div>
@@ -1380,6 +1381,7 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   <div class="spec__body tr-col tr-meta-stage">
     <div class="tr-meta-launchers" role="group" aria-label="Session work">
       <button class="tr-meta-launch" type="button" data-meta-kind="tasks" aria-label="Tasks, 6" aria-expanded="true" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-task"/></svg><span class="tr-meta-launch__count">6</span></button>
+      <button class="tr-meta-launch" type="button" data-meta-kind="workflows" aria-label="Workflows, 2" aria-expanded="false" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-bolt"/></svg><span class="tr-meta-launch__count">2</span></button>
       <button class="tr-meta-launch" type="button" data-meta-kind="plans" aria-label="Plans, 2" aria-expanded="false" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-doc"/></svg><span class="tr-meta-launch__count">2</span></button>
       <button class="tr-meta-launch" type="button" data-meta-kind="artifacts" aria-label="Artifacts, 3" aria-expanded="false" aria-controls="timeline-meta-popover"><svg aria-hidden="true"><use href="#g-box"/></svg><span class="tr-meta-launch__count">3</span></button>
     </div>
@@ -1388,6 +1390,7 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
       <div class="tr-meta-top">
         <div class="tr-meta-tabs" role="tablist" aria-label="Session work type">
           <button class="tr-meta-tab" id="timeline-meta-tab-tasks" type="button" role="tab" data-meta-kind="tasks" aria-selected="true" aria-controls="timeline-meta-panel-tasks">Tasks</button>
+          <button class="tr-meta-tab" id="timeline-meta-tab-workflows" type="button" role="tab" data-meta-kind="workflows" aria-selected="false" aria-controls="timeline-meta-panel-workflows">Workflows</button>
           <button class="tr-meta-tab" id="timeline-meta-tab-plans" type="button" role="tab" data-meta-kind="plans" aria-selected="false" aria-controls="timeline-meta-panel-plans">Plans</button>
           <button class="tr-meta-tab" id="timeline-meta-tab-artifacts" type="button" role="tab" data-meta-kind="artifacts" aria-selected="false" aria-controls="timeline-meta-panel-artifacts">Artifacts</button>
         </div>
@@ -1403,6 +1406,14 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
           <li><button class="tr-meta-row" type="button" data-state="pending" data-meta-task="Wire the session snapshot" aria-label="Wire the session snapshot, pending, not started; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Wire the session snapshot</span><span class="tr-meta-row__meta">Pending · not started</span></span><span class="tr-meta-row__value">—</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
           <li><button class="tr-meta-row" type="button" data-state="pending" data-meta-task="Build the floating menu" aria-label="Build the floating menu, pending, not started; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Build the floating menu</span><span class="tr-meta-row__meta">Pending · not started</span></span><span class="tr-meta-row__value">—</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
           <li><button class="tr-meta-row" type="button" data-state="pending" data-meta-task="Verify file opening and anchors" aria-label="Verify file opening and anchors, pending, not started; jump to task message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Verify file opening and anchors</span><span class="tr-meta-row__meta">Pending · not started</span></span><span class="tr-meta-row__value">—</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+        </ol>
+      </div>
+
+      <div class="tr-meta-panel" id="timeline-meta-panel-workflows" role="tabpanel" aria-labelledby="timeline-meta-tab-workflows" hidden>
+        <div class="tr-meta-listhead"><span>Workflow · state · started</span><span>Duration</span></div>
+        <ol class="tr-meta-list" aria-label="Workflow runs">
+          <li><button class="tr-meta-row" type="button" data-kind="workflow" data-state="completed" data-meta-workflow="Parallel implementation review" aria-label="Parallel implementation review, completed, started 9:48 AM, 4 workers, duration 8 minutes 12 seconds; jump to workflow message"><span class="tr-meta-status" aria-hidden="true">✓</span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Parallel implementation review</span><span class="tr-meta-row__meta">Completed · started 09:48 · 4 workers</span></span><span class="tr-meta-row__value">8m 12s</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
+          <li><button class="tr-meta-row" type="button" data-kind="workflow" data-state="running" data-meta-workflow="Cross-adapter verification" aria-label="Cross-adapter verification, running, started 10:03 AM, 3 workers, running for 7 minutes; jump to workflow message"><span class="tr-meta-status" aria-hidden="true"></span><span class="tr-meta-row__body"><span class="tr-meta-row__name">Cross-adapter verification</span><span class="tr-meta-row__meta">Running · started 10:03 · 3 workers</span></span><span class="tr-meta-row__value">7m now</span><span class="tr-meta-row__chev"><svg aria-hidden="true"><use href="#g-chev"/></svg></span></button></li>
         </ol>
       </div>
 
@@ -1426,12 +1437,13 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
 
     <div class="tr">
       <div class="tr-turn">
-        <div class="tr-seg"><span class="tr-anchor" style="top:12px">09:36:11</span><div class="tr-prompt"><p>Keep the task messages as they are. Add quick access to every task, plan and artifact without turning the transcript into another dashboard.</p></div></div>
+        <div class="tr-seg"><span class="tr-anchor" style="top:12px">09:36:11</span><div class="tr-prompt"><p>Keep the task and Workflow messages as they are. Add quick access to every task, Workflow run, plan and artifact without turning the transcript into another dashboard.</p></div></div>
         <div class="tr-resp">
           <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">19m 02s · <b>28.4K</b></span></div>
           <div class="tr-seg tr-prose"><span class="tr-anchor">09:36:24</span><p>The message remains the point-in-time record. I’ll add a session index that points back to it and opens its files through the existing viewer.</p></div>
           <div class="tr-ledger">
             <div class="tr-line tr-meta-source" id="timeline-meta-task-message" tabindex="0"><span class="tr-line__g"><svg><use href="#g-task"/></svg></span><span class="tr-line__v">Started</span><span class="tr-line__o">Add the fast Rust query</span><span class="tr-line__r"><span>2 of 6 done</span><span class="t">09:47:03</span></span></div>
+            <div class="tr-line tr-meta-source" id="timeline-meta-workflow-message" tabindex="0"><span class="tr-line__g"><svg><use href="#g-bolt"/></svg></span><span class="tr-line__v">Ran workflow</span><span class="tr-line__o">Parallel implementation review</span><span class="tr-line__r"><span>4 workers</span><span class="t">09:48:17</span></span></div>
             <div class="tr-line" tabindex="0"><span class="tr-line__g"><svg><use href="#g-doc"/></svg></span><span class="tr-line__v">Updated plan</span><span class="tr-line__o">timeline_meta <span class="in">· query, protocol, client, view</span></span><span class="tr-line__r"><span>4 steps</span><span class="t">10:01:12</span></span></div>
             <div class="tr-line" tabindex="0"><span class="tr-line__g"><svg><use href="#g-box"/></svg></span><span class="tr-line__v">Created</span><span class="tr-line__o">timeline-meta-wire.json</span><span class="tr-line__r"><span>artifact</span><span class="t">10:09:44</span></span></div>
           </div>
@@ -1442,15 +1454,15 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   </div>
 </div>
 
-<section class="rec"><p class="cap"><b>The three controls are overlay chrome.</b> They are siblings of the scrolling document inside the message-view wrapper, not a grid track and not children of the 68ch transcript. The one open island overlays the record without a scrim, so the reader keeps their place.</p></section>
+<section class="rec"><p class="cap"><b>The four controls are overlay chrome.</b> They are siblings of the scrolling document inside the message-view wrapper, not a grid track and not children of the 68ch transcript. The one open island overlays the record without a scrim, so the reader keeps their place.</p></section>
 
 <table class="laws">
   <tr><td>M-1</td><td>No new column.</td><td>The vertical stack is absolutely positioned 14px from the message wrapper’s upper-left corner. It consumes no layout width. Under 760px it occupies the time-anchor gutter the transcript already reserves; it never covers prose.</td></tr>
-  <tr><td>M-2</td><td>Only useful buttons, one island.</td><td>Each non-empty kind gets one 42×30 button carrying a monochrome 14px glyph and its exact count, and only those kinds appear as tabs. Empty kinds add no button and no tab; if all three are empty, no index chrome renders. A press opens the one island directly beside the stack on that tab; pressing the active button, Escape, or outside closes it. If live data removes the open kind, the first remaining kind takes its place, or the island closes when none remain.</td></tr>
-  <tr><td>M-3</td><td>The count equals the list.</td><td>Tasks count the full canonical task board, plans count unique openable plan documents at their latest revision, and artifacts count individual openable resources—not tool calls. Every button shows the exact length of the list its tab opens.</td></tr>
-  <tr><td>M-4</td><td>Task time is evidence.</td><td><em>Started</em> is the first source-stamped explicit transition to in-progress. A terminal task’s duration is terminal time minus that start; a running task advances from that start; pending or missing timestamps show an em dash. The UI never substitutes local ingest time or guesses from order.</td></tr>
-  <tr><td>M-5</td><td>The index points; the record remains.</td><td>A task row lands on its exact task-message anchor, fetching that exact session-scoped row when it is older than the loaded tail. Plan and artifact rows open the room’s existing file viewer through a canonical resource reference. The rich task messages stay in chronology unchanged.</td></tr>
-  <tr><td>M-6</td><td>Metadata is light; bytes are lazy.</td><td>The initial session subscription receives one Rust-built <code>timeline_meta</code> snapshot: ids, names, states, times, counts, sizes and safe open references. Plan and artifact bodies are not in that frame; the file viewer reads them only when pressed.</td></tr>
+  <tr><td>M-2</td><td>Only useful buttons, one island.</td><td>Each non-empty kind gets one 42×30 button carrying a monochrome 14px glyph and its exact count, and only those kinds appear as tabs. Empty kinds add no button and no tab; if all four are empty, no index chrome renders. A press opens the one island directly beside the stack on that tab; pressing the active button, Escape, or outside closes it. If live data removes the open kind, the first remaining kind takes its place, or the island closes when none remain.</td></tr>
+  <tr><td>M-3</td><td>The count equals the list.</td><td>Tasks count the full canonical task board, Workflows count unique canonical runs rather than launch/resume attempts, plans count unique openable plan documents at their latest revision, and artifacts count individual openable resources—not tool calls. Every button shows the exact length of the list its tab opens.</td></tr>
+  <tr><td>M-4</td><td>Time is evidence.</td><td>A task’s <em>Started</em> time is its first source-stamped explicit transition to in-progress; terminal duration is terminal time minus that start. A Workflow uses its run snapshot’s recorded start and duration. A running task or Workflow advances only from a source-proven start; missing timestamps show an em dash. The UI never substitutes local ingest time or guesses from order.</td></tr>
+  <tr><td>M-5</td><td>The index points; the record remains.</td><td>A task row lands on its exact task-message anchor and a Workflow row on the newest attempt for that run, fetching the exact session-scoped row when it is older than the loaded tail. Plan and artifact rows open the room’s existing file viewer through a canonical resource reference. Rich messages and Workflow disclosures stay in chronology unchanged.</td></tr>
+  <tr><td>M-6</td><td>Metadata is light; bytes are lazy.</td><td>The initial session subscription receives one Rust-built <code>timeline_meta</code> snapshot: ids, names, states, times, counts, sizes and safe open references. Rich Workflow documents plus plan and artifact bodies are not copied into that frame; the retained timeline row or file viewer reads them only when pressed.</td></tr>
 </table>
 
 <section class="rec">
@@ -1995,7 +2007,7 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     foldact.title = folded ? 'Activity: open — press to fold every run' : 'Activity: folded — press to open every run';
   });
 
-  /* §05A — three floating launchers, one timeline_meta island. */
+  /* §05A — four floating launchers, one timeline_meta island. */
   var metaSpec = document.getElementById('timeline-meta-spec');
   if (metaSpec) {
     var metaPopover = document.getElementById('timeline-meta-popover');
@@ -2041,6 +2053,17 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
           setTimeout(function () { source.classList.remove('is-landed'); }, 1400);
         }
         say('Landed on the task message · ' + task.getAttribute('data-meta-task'));
+        return;
+      }
+      var workflow = e.target.closest('[data-meta-workflow]');
+      if (workflow) {
+        var workflowSource = document.getElementById('timeline-meta-workflow-message');
+        closeMeta(false);
+        if (workflowSource) {
+          workflowSource.scrollIntoView({ block: 'center', behavior: 'smooth' }); workflowSource.focus(); workflowSource.classList.add('is-landed');
+          setTimeout(function () { workflowSource.classList.remove('is-landed'); }, 1400);
+        }
+        say('Landed on the workflow message · ' + workflow.getAttribute('data-meta-workflow'));
         return;
       }
       var file = e.target.closest('[data-meta-file]');

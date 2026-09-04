@@ -24,6 +24,7 @@ import {
   linkedChildSessionIds,
   participantPresentation,
   runtimeProfile,
+  standaloneWorkerSessions,
   taskBoundedReportWork,
   teamMemberPresentations,
   teamChronology,
@@ -35,6 +36,7 @@ import {
 } from "../../lib/transcript";
 import type { TimelineFeed } from "../../lib/hooks";
 import { useTeamTimelines } from "../../lib/hooks";
+import { client } from "../../lib/rosetta";
 import { EmptyState } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
@@ -75,6 +77,12 @@ export interface TranscriptDocumentProps {
   /** The head of the document (§08), mounted above the first sitting. */
   readonly head?: ReactNode;
   readonly nested?: boolean;
+}
+
+interface LegacyWorkflowChildIndex {
+  readonly key: string;
+  readonly ids: ReadonlySet<string>;
+  readonly complete: boolean;
 }
 
 function staticTimelineFeed(rows: readonly TimelineEntry[]): TimelineFeed {
@@ -380,8 +388,89 @@ export function TranscriptDocument({
     () => workerThreadLinks(ledgerLines, session.id, index.byId, teamIdSet),
     [ledgerLines, session.id, index.byId, teamIdSet],
   );
-  const floating = workerChildren.filter(
-    (child) => !workerLinks.anchorRowByChild.has(child.id),
+  // Protocol-v14 daemons built before workflow child references were added
+  // omit `child_session_ids`. Resolve their lightweight workflow anchors once
+  // so a rolling client upgrade remains exact instead of guessing from a
+  // worker's arbitrary agent type/title. New daemons never take this path.
+  const legacyWorkflowRows = useMemo(
+    () => (feed.timelineMeta?.workflows ?? [])
+      .filter((workflow) => workflow.child_session_ids === undefined)
+      .map((workflow) => ({ id: workflow.id, timelineId: workflow.timeline_id })),
+    [feed.timelineMeta],
+  );
+  const legacyWorkflowKey = `${session.id}\u0002${legacyWorkflowRows
+    .map((workflow) => `${workflow.id}\u0000${workflow.timelineId ?? ""}`)
+    .join("\u0001")}`;
+  const [legacyWorkflowIndex, setLegacyWorkflowIndex] = useState<LegacyWorkflowChildIndex | null>(
+    null,
+  );
+  useEffect(() => {
+    if (legacyWorkflowRows.length === 0) {
+      setLegacyWorkflowIndex(null);
+      return;
+    }
+    let current = true;
+    const anchors = legacyWorkflowRows.flatMap((workflow) =>
+      workflow.timelineId === null ? [] : [workflow.timelineId]
+    );
+    void Promise.allSettled(
+      anchors.map(async (timelineId) => {
+        const row = await client.timelineEntry(session.id, timelineId);
+        return linkedChildSessionIds(row);
+      }),
+    ).then((results) => {
+      if (!current) return;
+      const ids = new Set(
+        results.flatMap((result) => result.status === "fulfilled" ? result.value : []),
+      );
+      setLegacyWorkflowIndex({
+        key: legacyWorkflowKey,
+        ids,
+        complete: anchors.length === legacyWorkflowRows.length
+          && results.every((result) => result.status === "fulfilled"),
+      });
+    });
+    return () => {
+      current = false;
+    };
+  }, [legacyWorkflowKey, session.id]);
+  const indexedWorkflowChildren = useMemo(
+    () => {
+      const ids = new Set(
+        (feed.timelineMeta?.workflows ?? []).flatMap(
+          (workflow) => workflow.child_session_ids ?? [],
+        ),
+      );
+      const legacyReady = feed.timelineMeta !== null
+        && (legacyWorkflowRows.length === 0
+          || (legacyWorkflowIndex?.key === legacyWorkflowKey && legacyWorkflowIndex.complete));
+      if (legacyWorkflowIndex?.key === legacyWorkflowKey) {
+        for (const id of legacyWorkflowIndex.ids) ids.add(id);
+      }
+      if (!legacyReady) {
+        // Until every old-daemon anchor answers, fail closed only for children
+        // whose sidecar proves delegation but supplies no ordinary Agent tool
+        // owner. Exact ordinary workers and parent-only children still render.
+        for (const child of workerChildren) {
+          if (
+            child.delegation !== null
+            && child.delegation.parent_tool_native_id == null
+          ) ids.add(child.id);
+        }
+      }
+      return ids;
+    }, [
+      feed.timelineMeta,
+      legacyWorkflowIndex,
+      legacyWorkflowKey,
+      legacyWorkflowRows.length,
+      workerChildren,
+    ]
+  );
+  const floating = standaloneWorkerSessions(
+    workerChildren,
+    workerLinks,
+    indexedWorkflowChildren,
   );
   const [revealedWorker, setRevealedWorker] = useState<{
     readonly childId: string;
@@ -724,7 +813,7 @@ export function TranscriptDocument({
   const showKnownTeam =
     knownTeamSessions.length > 0 &&
     (teamMembers.size === 0 || (partialParentHistory && !hasSafeRosterLine));
-  const empty = model.plan.length === 0 && workerChildren.length === 0 && !showKnownTeam;
+  const empty = model.plan.length === 0 && floating.length === 0 && !showKnownTeam;
   return (
     <>
       {head}

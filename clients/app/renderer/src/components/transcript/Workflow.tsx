@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { WorkflowRun, WorkflowWorker } from "@rosetta/protocol";
+import type { CanonicalText, WorkflowRun, WorkflowWorker } from "@rosetta/protocol";
 import { AgentMark } from "../../lib/agents";
 import { clock, tokenText } from "../../lib/format";
+import { client } from "../../lib/rosetta";
 import type {
   PathFact,
   WorkflowAttemptFact,
@@ -228,9 +229,14 @@ function Attempts({
   readonly run: WorkflowRun | null;
 }) {
   if (attempts.length === 0) return null;
+  const total = Math.max(run?.attempt_total_count ?? 0, attempts.length);
+  const omitted = total - attempts.length;
   return (
     <section className="wf-attempts" aria-label="Workflow attempts">
       <span className="wf-section-label">Attempts</span>
+      {omitted > 0 && (
+        <p className="wf-empty">{quantity(omitted, "earlier attempt")} omitted from this view</p>
+      )}
       {attempts.map((attempt, at) => {
         const outcome = attemptOutcome(attempt, at === attempts.length - 1, run);
         const state = ["failed", "denied", "timed out"].includes(outcome)
@@ -277,6 +283,51 @@ function resultFields(text: string): ResultField[] {
   }
 }
 
+function FullResult({ canonical }: { readonly canonical: CanonicalText }) {
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState<{
+    readonly digest: string;
+    readonly text: string | null;
+    readonly error: string | null;
+  } | null>(null);
+  const member = canonical.type === "member" ? canonical : null;
+
+  useEffect(() => {
+    if (
+      !open
+      || member === null
+      || (loaded?.digest === member.asset.digest && loaded.text !== null)
+    ) return;
+    const controller = new AbortController();
+    const digest = member.asset.digest;
+    setLoaded({ digest, text: null, error: null });
+    void client.readTextAsset(member.asset, controller.signal).then(
+      (text) => setLoaded({ digest, text, error: null }),
+      (error: unknown) => {
+        if (controller.signal.aborted) return;
+        setLoaded({
+          digest,
+          text: null,
+          error: error instanceof Error ? error.message : "stored result is unavailable",
+        });
+      },
+    );
+    return () => controller.abort();
+  }, [member, open]);
+
+  const body = canonical.type === "inline"
+    ? canonical.text
+    : loaded?.digest !== canonical.asset.digest
+      ? "Loading full result…"
+      : loaded.error ?? loaded.text ?? "Loading full result…";
+  return (
+    <details className="wf-full-result" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="wf-action">View full result</summary>
+      {open && <pre className="tr-diag">{body}</pre>}
+    </details>
+  );
+}
+
 function Result({
   fact,
   onOpenPath,
@@ -287,7 +338,7 @@ function Result({
   const run = fact.action.run ?? null;
   const canonical = run?.result ?? fact.action.callback_result ?? null;
   const text = canonical === null ? null : canonicalText(canonical);
-  const allFields = text === null ? [] : resultFields(text);
+  const allFields = canonical?.type === "inline" ? resultFields(canonical.text) : [];
   const resourcePaths = new Set(
     fact.resources.flatMap((resource) =>
       resource.resource.type === "file" ? [resource.resource.path] : [],
@@ -302,8 +353,11 @@ function Result({
     ? "final document"
     : "files";
   const journal = run?.journal ?? [];
-  const started = journal.filter((observation) => observation.kind === "started").length;
-  const returned = journal.filter((observation) => observation.kind === "result").length;
+  const loadedStarted = journal.filter((observation) => observation.kind === "started").length;
+  const loadedReturned = journal.filter((observation) => observation.kind === "result").length;
+  const journalTotal = Math.max(run?.journal_total_count ?? 0, journal.length);
+  const started = Math.max(run?.journal_started_count ?? 0, loadedStarted);
+  const returned = Math.max(run?.journal_result_count ?? 0, loadedReturned);
   const error = run?.error === null || run?.error === undefined ? null : canonicalText(run.error);
   if (text === null && fact.resources.length === 0 && error === null) return null;
   return (
@@ -325,23 +379,15 @@ function Result({
           ))}
         </dl>
       ) : text !== null ? (
-        <details className="wf-full-result">
-          <summary className="wf-action">View full result</summary>
-          <pre className="tr-diag">{text}</pre>
-        </details>
+        canonical !== null && <FullResult canonical={canonical} />
       ) : null}
       {error !== null && <pre className="tr-diag wf-result__error">{error}</pre>}
       <div className="wf-result__foot">
         <span>
           terminal evidence · {run === null ? "correlated task notification" : "run snapshot + correlated task notification"}
-          {journal.length === 0 ? "" : ` · journal ${started} started, ${returned} results`}
+          {journalTotal === 0 ? "" : ` · journal ${started} started, ${returned} results`}
         </span>
-        {fields.length > 0 && text !== null && (
-          <details className="wf-full-result">
-            <summary className="wf-action">View full result</summary>
-            <pre className="tr-diag">{text}</pre>
-          </details>
-        )}
+        {fields.length > 0 && canonical !== null && <FullResult canonical={canonical} />}
       </div>
     </section>
   );

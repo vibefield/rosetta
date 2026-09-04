@@ -346,6 +346,13 @@ export function noticeText(notice: Notice): string {
       return `handed off to ${notice.to_agent ?? notice.to_session_id ?? "another agent"}`;
     case "command_output":
       return canonicalText(notice.output);
+    case "async_task": {
+      const identity = notice.task_id ?? notice.tool_use_id;
+      const status = notice.status === "succeeded" ? "completed" : notice.status.replaceAll("_", " ");
+      return ["background task", identity, status, notice.summary]
+        .filter((value) => value !== null)
+        .join(" · ");
+    }
     case "runtime_error":
       return `runtime error · ${notice.kind.replaceAll("_", " ")} · ${notice.summary}`;
   }

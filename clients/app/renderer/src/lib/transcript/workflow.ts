@@ -4,6 +4,7 @@
 import type {
   TimelineEntry,
   ToolStatus,
+  WorkflowAttempt,
   WorkflowRunStatus,
   WorkflowWorker,
 } from "@rosetta/protocol";
@@ -48,6 +49,21 @@ function attemptFact(row: TimelineEntry, action: WorkflowAction): WorkflowAttemp
   };
 }
 
+function hydratedAttemptFact(attempt: WorkflowAttempt): WorkflowAttemptFact {
+  return {
+    timelineId: attempt.timeline_id,
+    attempt: attempt.attempt,
+    taskId: attempt.task_id,
+    runId: null,
+    resumed: attempt.resumed,
+    status: attempt.status,
+    at: attempt.at,
+    completedAt: attempt.completed_at,
+    durationMs: attempt.duration_ms,
+    summary: attempt.summary,
+  };
+}
+
 export function workflowAttemptIndex(rows: readonly TimelineEntry[]): WorkflowAttemptIndex {
   const mutableByRunId = new Map<string, WorkflowAttemptFact[]>();
   const byTimelineId = new Map<string, WorkflowAttemptFact>();
@@ -76,8 +92,24 @@ export function workflowAttemptsFor(
   row: TimelineEntry,
 ): readonly WorkflowAttemptFact[] {
   if (row.body.type !== "tool_use" || row.body.tool.action.type !== "workflow") return [];
-  const runId = row.body.tool.action.run_id;
-  if (runId !== null) return index.byRunId.get(runId) ?? [];
+  const action = row.body.tool.action;
+  const runId = action.run_id;
+  if (runId !== null) {
+    const attempts = new Map<string, WorkflowAttemptFact>(
+      (action.run?.attempts ?? []).map((attempt) => {
+        const fact = hydratedAttemptFact(attempt);
+        return [fact.timelineId, { ...fact, runId }] as const;
+      }),
+    );
+    // Rows already loaded by the client carry fresher live lifecycle facts
+    // than the read-time run join. Overlay them without making pagination the
+    // source of the attempt list.
+    for (const fact of index.byRunId.get(runId) ?? []) attempts.set(fact.timelineId, fact);
+    return [...attempts.values()].sort((left, right) =>
+      left.at === right.at
+        ? left.attempt - right.attempt
+        : (left.at ?? Number.MAX_SAFE_INTEGER) - (right.at ?? Number.MAX_SAFE_INTEGER));
+  }
   const attempt = index.byTimelineId.get(row.timeline_id);
   return attempt === undefined ? [] : [attempt];
 }

@@ -990,6 +990,14 @@ export function projectAction(
       const aside = workflowPhaseAside(action);
       return {
         ...base,
+        // A hydrated workflow is itself a small document: its attempts,
+        // phases, workers, and result are the useful message. Keeping that
+        // whole document behind the generic ledger disclosure made the real
+        // UI disagree with the open workflow state in the design, and left
+        // the nested worker-thread disclosure practically undiscoverable.
+        // Readers can still close it, but a fresh transcript must expose its
+        // structure without requiring a first, unlabeled click.
+        openByDefault: run !== null,
         glyph:
           run !== null && ["killed", "cancelled", "stopped"].includes(run.status)
             ? "clock"

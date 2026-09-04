@@ -19,6 +19,7 @@ import type {
   TimelineMetaArtifact,
   TimelineMetaPlan,
   TimelineMetaTask,
+  TimelineMetaWorkflow,
 } from "@rosetta/protocol";
 import { clockShort } from "../lib/format";
 import type { TimelineFeed } from "../lib/hooks";
@@ -69,6 +70,12 @@ interface TranscriptViewerTarget {
   readonly source: FileSource;
 }
 
+interface TimelineMetaFocus {
+  readonly timelineId: string;
+  readonly label: string;
+  readonly kind: "task" | "workflow";
+}
+
 export interface TranscriptColumnProps {
   readonly session: SessionRow | null;
   /** The cold backfill is running — threaded to every watermark. */
@@ -108,7 +115,7 @@ export function TranscriptColumn({
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
   const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
-  const [metaFocus, setMetaFocus] = useState<{ timelineId: string; subject: string } | null>(null);
+  const [metaFocus, setMetaFocus] = useState<TimelineMetaFocus | null>(null);
   const viewerRequest = useRef(0);
   const anchorRequest = useRef(0);
   const focusTries = useRef(0);
@@ -229,15 +236,18 @@ export function TranscriptColumn({
     );
   };
 
-  const openMetaTask = (task: TimelineMetaTask) => {
-    const timelineId = task.timeline_id;
+  const openMetaTimeline = (
+    timelineId: string | null,
+    label: string,
+    kind: TimelineMetaFocus["kind"],
+  ) => {
     if (timelineId === null) {
-      onReceipt("That task has no recorded message anchor");
+      onReceipt(`That ${kind} has no recorded message anchor`);
       return;
     }
     const land = () => {
       focusTries.current = 0;
-      setMetaFocus({ timelineId, subject: task.subject });
+      setMetaFocus({ timelineId, label, kind });
     };
     if (model.representatives.has(timelineId)) {
       land();
@@ -251,8 +261,16 @@ export function TranscriptColumn({
       })
       .catch((error: unknown) => {
         if (request !== anchorRequest.current) return;
-        onReceipt(error instanceof Error ? error.message : "Could not load that task message");
+        onReceipt(error instanceof Error ? error.message : `Could not load that ${kind} message`);
       });
+  };
+
+  const openMetaTask = (task: TimelineMetaTask) => {
+    openMetaTimeline(task.timeline_id, task.subject, "task");
+  };
+
+  const openMetaWorkflow = (workflow: TimelineMetaWorkflow) => {
+    openMetaTimeline(workflow.timeline_id, workflow.name, "workflow");
   };
 
   useEffect(() => {
@@ -286,7 +304,7 @@ export function TranscriptColumn({
         element.scrollIntoView({ block: "center" });
         setHighlightedTimelineId(drawnBy);
         if (targetIsMeta) {
-          onReceipt(`Landed on the task message · ${metaFocus.subject}`);
+          onReceipt(`Landed on the ${metaFocus.kind} message · ${metaFocus.label}`);
           setMetaFocus(null);
         } else {
           onFocusConsumed();
@@ -298,8 +316,9 @@ export function TranscriptColumn({
     // timeline_meta resolves exact anchors before setting focus. The bounded
     // blind walk remains only for external search landings.
     if (targetIsMeta) {
+      const kind = metaFocus.kind;
       setMetaFocus(null);
-      onReceipt("That task message is no longer available");
+      onReceipt(`That ${kind} message is no longer available`);
       return;
     }
     if (feed.earlier.kind !== "none" && focusTries.current < 8) {
@@ -393,6 +412,7 @@ export function TranscriptColumn({
         <TimelineMeta
           meta={feed.timelineMeta}
           onOpenTask={openMetaTask}
+          onOpenWorkflow={openMetaWorkflow}
           onOpenPlan={openMetaPlan}
           onOpenArtifact={openMetaArtifact}
         />

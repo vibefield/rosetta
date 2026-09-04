@@ -8,6 +8,7 @@ import {
   interleaveTeamCollaboration,
   participantPresentation,
   runtimeProfile,
+  standaloneWorkerSessions,
   taskBoundedReportWork,
   teamChronology,
   teamMemberPresentations,
@@ -505,5 +506,38 @@ describe("ordinary Agent worker ownership", () => {
       new Set(),
     );
     assert.equal(links.anchorRowByChild.get("worker"), "toolu-sidecar");
+  });
+
+  it("never floats workflow workers when their owning workflow row is off-page", () => {
+    const canonical = session("workflow", "parent", "subagent", "reader", {
+      delegation: { workflow_run_id: "wf_review" },
+    });
+    const legacy = session("legacy-workflow", "parent", "subagent", "workflow-subagent", {
+      delegation: {},
+    });
+    const indexedLegacy = session("indexed-workflow", "parent", "subagent", "general-purpose", {
+      delegation: {},
+    });
+    const ordinary = session("ordinary", "parent", "subagent", "Explore");
+    const emptyLinks = workerThreadLinks(
+      [],
+      "parent",
+      new Map([
+        [canonical.id, canonical],
+        [legacy.id, legacy],
+        [indexedLegacy.id, indexedLegacy],
+        [ordinary.id, ordinary],
+      ]),
+      new Set(),
+    );
+
+    assert.deepEqual(
+      standaloneWorkerSessions(
+        [canonical, legacy, indexedLegacy, ordinary],
+        emptyLinks,
+        new Set([indexedLegacy.id]),
+      ).map((child) => child.id),
+      ["ordinary"],
+    );
   });
 });

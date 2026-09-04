@@ -69,7 +69,12 @@ function run(over = {}) {
     result: inline(JSON.stringify({ finalDoc: "/w/api.md", findingCount: 3 })),
     error: null,
     resources: [file("/w/api.md")],
+    attempts: over.attempts ?? [],
+    attempt_total_count: over.attempt_total_count ?? 0,
     journal: [],
+    journal_total_count: 0,
+    journal_started_count: 0,
+    journal_result_count: 0,
   };
 }
 
@@ -133,6 +138,7 @@ describe("Workflow ledger projection", () => {
     assert.equal(objectText(line.object), "api-design · Design the collaborative editor API");
     assert.equal(line.result, "completed · 1/1");
     assert.equal(line.state, "done");
+    assert.equal(line.openByDefault, true);
     assert.equal(line.detail.kind, "workflow");
     assert.equal(line.detail.workflow.objective, "Design the collaborative editor API");
     assert.deepEqual(line.detail.workflow.script.read, {
@@ -159,6 +165,7 @@ describe("Workflow ledger projection", () => {
     }));
     assert.equal(failed.state, "failed");
     assert.equal(failed.result, "did not start · invalid option");
+    assert.equal(failed.openByDefault, false);
   });
 });
 
@@ -173,6 +180,29 @@ describe("Workflow attempts and worker evidence", () => {
     const attempts = workflowAttemptsFor(index, second);
     assert.deepEqual(attempts.map((attempt) => attempt.attempt), [1, 2]);
     assert.equal(attempts[1].resumed, true);
+    assert.equal(attempts[1].status, "running");
+  });
+
+  it("uses server-hydrated attempts outside the loaded page and overlays live rows", () => {
+    const history = [{
+      timeline_id: "older-attempt",
+      attempt: 1,
+      task_id: "task-old",
+      resumed: false,
+      status: "succeeded",
+      at: 1_000,
+      completed_at: 2_000,
+      duration_ms: 1_000,
+      summary: "first attempt completed",
+    }];
+    const current = row(action({
+      run: run({ attempts: history, attempt_total_count: 2 }),
+      run_id: "wf_run",
+      attempt: 2,
+      resume_id: "wf_run",
+    }), { timeline_id: "current-attempt", at: 4_000, status: "running" });
+    const attempts = workflowAttemptsFor(workflowAttemptIndex([current]), current);
+    assert.deepEqual(attempts.map((attempt) => attempt.timelineId), ["older-attempt", "current-attempt"]);
     assert.equal(attempts[1].status, "running");
   });
 

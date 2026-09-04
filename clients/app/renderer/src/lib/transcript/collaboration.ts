@@ -54,6 +54,31 @@ export interface WorkerThreadLinks {
   readonly referencedChildIdsByRow: ReadonlyMap<string, readonly string[]>;
 }
 
+/** Workflow workers belong to the workflow hierarchy even when pagination
+ * leaves their owning workflow row outside the loaded parent page. The title
+ * fallback keeps projections made before `workflow_run_id` was retained from
+ * leaking hundreds of legacy workflow workers into the parent timeline. */
+export function isWorkflowOwnedSession(session: SessionRow): boolean {
+  if ((session.delegation?.workflow_run_id?.trim().length ?? 0) > 0) return true;
+  return session.delegation !== null
+    && session.title?.trim().toLowerCase() === "workflow-subagent";
+}
+
+/** Only genuinely standalone workers may use the timestamp-based fallback.
+ * Workflow workers wait for their owning run and mount under their exact
+ * phase/worker row through `workerThreadLinks`. */
+export function standaloneWorkerSessions(
+  children: readonly SessionRow[],
+  links: WorkerThreadLinks,
+  indexedWorkflowChildren: ReadonlySet<string> = new Set(),
+): readonly SessionRow[] {
+  return children.filter(
+    (child) => !links.anchorRowByChild.has(child.id)
+      && !indexedWorkflowChildren.has(child.id)
+      && !isWorkflowOwnedSession(child),
+  );
+}
+
 export interface TeamReportWork {
   readonly rows: readonly TimelineEntry[];
   readonly actionCount: number;

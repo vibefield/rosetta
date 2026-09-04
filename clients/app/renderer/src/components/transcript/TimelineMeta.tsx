@@ -1,7 +1,7 @@
 // §05A — timeline_meta is the map back into the transcript, never a second
-// rendering of it. Up to three non-empty launchers share one non-modal island;
-// tasks land on their retained message and file rows hand off to the room's
-// existing viewer.
+// rendering of it. Up to four non-empty launchers share one non-modal island;
+// tasks and Workflow runs land on retained messages, while file rows hand off
+// to the room's existing viewer.
 
 import { useEffect, useId, useRef, useState } from "react";
 import type {
@@ -9,6 +9,7 @@ import type {
   TimelineMetaArtifact,
   TimelineMetaPlan,
   TimelineMetaTask,
+  TimelineMetaWorkflow,
 } from "@rosetta/protocol";
 import { clockShort, fmtBytes } from "../../lib/format";
 import { FamilyGlyph, LineChevron } from "./glyphs";
@@ -18,10 +19,10 @@ import {
   type TimelineMetaKind,
 } from "./timeline-meta-state";
 
-const GLYPH = { tasks: "task", plans: "doc", artifacts: "box" } as const;
+const GLYPH = { tasks: "task", workflows: "bolt", plans: "doc", artifacts: "box" } as const;
 
 function exactCount(meta: TimelineMetaValue, kind: TimelineMetaKind): number {
-  return meta[kind].length;
+  return (meta[kind] ?? []).length;
 }
 
 function titleCase(value: string): string {
@@ -56,6 +57,19 @@ function taskDuration(task: TimelineMetaTask, now: number): string {
   if (task.terminal_at === null) return "—";
   if (task.terminal_at < task.started_at) return "—";
   return spanText(task.terminal_at - task.started_at);
+}
+
+function workflowState(workflow: TimelineMetaWorkflow): string {
+  if (workflow.status === "running") return "running";
+  if (workflow.status === "failed") return "failed";
+  return workflow.status;
+}
+
+function workflowDuration(workflow: TimelineMetaWorkflow, now: number): string {
+  if (workflow.status === "running" && workflow.started_at !== null) {
+    return now < workflow.started_at ? "—" : `${spanText(now - workflow.started_at)} now`;
+  }
+  return workflow.duration_ms === null ? "—" : spanText(workflow.duration_ms);
 }
 
 function fileType(name: string): string {
@@ -105,6 +119,62 @@ function TaskPanel({
                 <span className="tr-meta-row__body">
                   <span className="tr-meta-row__name">{task.subject}</span>
                   <span className="tr-meta-row__meta">{status} · {started}</span>
+                </span>
+                <span className="tr-meta-row__value">{duration}</span>
+                <span className="tr-meta-row__chev"><LineChevron /></span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </>
+  );
+}
+
+function WorkflowPanel({
+  workflows,
+  now,
+  onOpen,
+}: {
+  readonly workflows: readonly TimelineMetaWorkflow[];
+  readonly now: number;
+  readonly onOpen: (workflow: TimelineMetaWorkflow) => void;
+}) {
+  if (workflows.length === 0) return <EmptyPanel kind="workflows" />;
+  return (
+    <>
+      <div className="tr-meta-listhead">
+        <span>Workflow · state · started</span>
+        <span>Duration</span>
+      </div>
+      <ol className="tr-meta-list" aria-label="Workflow runs">
+        {workflows.map((workflow) => {
+          const status = titleCase(workflow.status);
+          const started = workflow.started_at === null
+            ? "start not recorded"
+            : `started ${clockShort(workflow.started_at)}`;
+          const duration = workflowDuration(workflow, now);
+          const workers = workflow.worker_count === null
+            ? "worker count not recorded"
+            : `${workflow.worker_count} ${workflow.worker_count === 1 ? "worker" : "workers"}`;
+          const openable = workflow.timeline_id !== null;
+          return (
+            <li key={workflow.id}>
+              <button
+                className="tr-meta-row"
+                type="button"
+                data-kind="workflow"
+                data-state={workflowState(workflow)}
+                disabled={!openable}
+                aria-label={`${workflow.name}, ${status}, ${started}, ${workers}, duration ${duration}${openable ? "; jump to workflow message" : "; no workflow message anchor recorded"}`}
+                onClick={() => onOpen(workflow)}
+              >
+                <span className="tr-meta-status" aria-hidden="true">
+                  {workflow.status === "completed" ? "✓" : ""}
+                </span>
+                <span className="tr-meta-row__body">
+                  <span className="tr-meta-row__name">{workflow.name}</span>
+                  <span className="tr-meta-row__meta">{status} · {started} · {workers}</span>
                 </span>
                 <span className="tr-meta-row__value">{duration}</span>
                 <span className="tr-meta-row__chev"><LineChevron /></span>
@@ -202,11 +272,18 @@ function ArtifactPanel({
 export interface TimelineMetaProps {
   readonly meta: TimelineMetaValue;
   readonly onOpenTask: (task: TimelineMetaTask) => void;
+  readonly onOpenWorkflow: (workflow: TimelineMetaWorkflow) => void;
   readonly onOpenPlan: (plan: TimelineMetaPlan) => void;
   readonly onOpenArtifact: (artifact: TimelineMetaArtifact) => void;
 }
 
-export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: TimelineMetaProps) {
+export function TimelineMeta({
+  meta,
+  onOpenTask,
+  onOpenWorkflow,
+  onOpenPlan,
+  onOpenArtifact,
+}: TimelineMetaProps) {
   const [active, setActive] = useState<TimelineMetaKind | null>(null);
   const [now, setNow] = useState(Date.now());
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -220,11 +297,16 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
   }, [active, visibleActive]);
 
   useEffect(() => {
-    if (visibleActive !== "tasks" || !meta.tasks.some((task) => task.status === "in_progress")) return;
+    const running = visibleActive === "tasks"
+      ? meta.tasks.some((task) => task.status === "in_progress")
+      : visibleActive === "workflows"
+        ? meta.workflows.some((workflow) => workflow.status === "running")
+        : false;
+    if (!running) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [visibleActive, meta.tasks]);
+  }, [visibleActive, meta.tasks, meta.workflows]);
 
   useEffect(() => {
     if (visibleActive === null) return;
@@ -340,6 +422,16 @@ export function TimelineMeta({ meta, onOpenTask, onOpenPlan, onOpenArtifact }: T
                 onOpen={(task) => {
                   setActive(null);
                   onOpenTask(task);
+                }}
+              />
+            )}
+            {visibleActive === "workflows" && (
+              <WorkflowPanel
+                workflows={meta.workflows}
+                now={now}
+                onOpen={(workflow) => {
+                  setActive(null);
+                  onOpenWorkflow(workflow);
                 }}
               />
             )}

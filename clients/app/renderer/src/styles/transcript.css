@@ -471,7 +471,7 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-tasks__toggle button:focus-visible { outline: 1.5px solid var(--vf-select); outline-offset: 3px; }
 @container measure (max-width: 560px) { .tr-task__meta { display: none; } }
 
-/* ═══ §05A — timeline_meta: three floating indexes, one island ════════════
+/* ═══ §05A — timeline_meta: four floating indexes, one island ═════════════
    Overlay chrome belongs to the message-view wrapper, never the 68ch
    document. The controls therefore spend no grid track and cause no reflow. */
 .ah-col--measure { container-type: inline-size; container-name: message-view; }
@@ -576,6 +576,9 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-meta-row[data-state="completed"] .tr-meta-status { border-color: var(--vf-text-tertiary); }
 .tr-meta-row[data-state="completed"] .tr-meta-row__name {
   color: var(--vf-text-tertiary); text-decoration: line-through;
+}
+.tr-meta-row[data-kind="workflow"][data-state="completed"] .tr-meta-row__name {
+  color: var(--vf-text-primary); text-decoration: none;
 }
 .tr-meta-row[data-state="running"] .tr-meta-status { border-color: var(--vf-green); }
 .tr-meta-row[data-state="running"] .tr-meta-status::after {

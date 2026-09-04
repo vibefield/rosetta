@@ -533,7 +533,11 @@ function buildSegments(
           at: row.at,
           notice,
           text: noticeText(notice),
-          tone: notice.type === "runtime_error" ? "failed" : "plain",
+          tone: notice.type === "runtime_error"
+            || (notice.type === "async_task"
+              && ["failed", "denied", "timed_out"].includes(notice.status))
+              ? "failed"
+              : "plain",
         });
         break;
       }

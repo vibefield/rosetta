@@ -111,6 +111,10 @@ export type {
   TeamChronology,
   WorkerThreadLinks,
 } from "./collaboration.ts";
+export {
+  isWorkflowOwnedSession,
+  standaloneWorkerSessions,
+} from "./collaboration.ts";
 
 export type {
   WorkflowAttemptFact,

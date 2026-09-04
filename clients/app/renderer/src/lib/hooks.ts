@@ -214,7 +214,7 @@ export interface TimelineFeed {
    * status can arrive one frame earlier, so consumers must not infer an empty
    * transcript until this is true. */
   snapshotReady: boolean;
-  /** Complete task/plan/artifact index delivered beside the tail snapshot. */
+  /** Complete task/workflow/plan/artifact index delivered beside the tail snapshot. */
   timelineMeta: TimelineMeta | null;
   status: SubscriptionStatus;
   /** Rows with ordinal > watermark arrived after you did (D33's line). */
