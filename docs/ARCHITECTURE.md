@@ -927,6 +927,41 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   FTS is always a detached generation. Live batches
   and replacement swaps remain transactionally canonical and rebuild each distinct affected usage
   bucket once.
+- Detached search construction resolves message/tool column positions once per SELECT and reuses
+  the ordinary typed decoder and its validation. Single-row callers retain named-column decoding;
+  cached positions are derived from the actual statement, including session-scoped repair scans.
+  The unpublished FTS generation uses a 16 MiB pager cache, released when its build connection
+  closes. Search extraction, member verification, FTS integrity checks, SQLite quick checks, syncs,
+  and atomic generation publication remain part of the measured work. SQLite documents this
+  [connection-local, demand-allocated cache setting](https://www.sqlite.org/pragma.html#pragma_cache_size).
+  Frozen campaign `rosetta-cold-ingest-20260906` compared the retained `7e6b873` working-tree
+  binary with this change on an Apple M1 Max / 64 GiB, macOS 26.5.2 arm64, Rust 1.97.1 release,
+  system volume, warm filesystem cache. It reused 200 read-only Claude Code/Codex JSONL files,
+  200,000 records / 316,975,655 bytes; source manifest SHA-256
+  `f7c85b319eeb1779a0e29f3dba39bc6be29a221cda09a082109c37b3a3b2fb93`.
+  Three alternating pairs used `ingest --experiment-parallel-cold
+  --experiment-cold-completion-order --experiment-async-ledger --experiment-sqlite-in-memory`
+  with identical enrollment, source snapshot, and profiling. Full-command median elapsed fell
+  **13.718 → 11.677 s (−14.9%)**, with ranges 13.510–15.258 and 11.021–12.548 s;
+  detached-search median **8.175 → 5.710 s (−30.2%)**; median peak RSS
+  **1,448.9 → 1,421.4 MiB**. An additional ordinary fresh-`serve` pair, polled through
+  `/api/status` every 50 ms without a renderer, reached search-ready at 12.852 → 10.577 s;
+  canonical-ready was 5.801 → 5.292 s. This is corroborating evidence from one readiness pair.
+  All six finite builds, both fresh
+  serves, and a candidate replay of the frozen baseline ledger have identical normalized digests
+  across 17 canonical tables and all five search lanes: 120,151 messages/search documents,
+  200 sessions, 5,485 file edits, 836 usage buckets, zero drift. Normalization excludes only
+  process-time/audit/checkpoint bookkeeping and maps surrogate IDs to stable identities.
+  The required `search-bench` comparison passes with 16 product-grammar diagnostic cases
+  (six return hits), five warmups and 100 measured cycles in each shared/fresh backend lane:
+  6,400 measured queries across the pair, identical counts and ranked-result digests. Its frozen
+  campaign is `bedd27c9d6e301126edcdcce72b1d09ece99328318bcf980ef85ce2955fa3f27`;
+  query-suite SHA-256 is `9ce28aa99fe0eeda42a3769872b46deb993200b1e696424e3b40f4ee076ace44`.
+  This diagnostic mix does not establish production query weighting. Workspace validation passes
+  842 tests (one opt-in watcher test ignored); formatting passes, and workspace/all-target Clippy
+  passes with only the existing `large_enum_variant` category excluded.
+  Initial exploratory runs that exhausted disk headroom were discarded and both sides rerun;
+  retained repeat databases are losslessly archived with verified per-file hashes.
 - A first cold projection now requires both the projection and ledger destination to be
   absent. It buffer-flushes into a same-filesystem named `<ledger>.staged` tree whose durable
   manifest preserves enrollment/root binding across process exits, syncs every staged segment

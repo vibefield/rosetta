@@ -14,6 +14,37 @@ use rusqlite::types::Type;
 
 use crate::{StoreError, tool_codec};
 
+crate::columns::column_map! {
+    struct Columns {
+        detail: "detail",
+        kind: "type",
+        content: "content",
+        response_id: "response_id",
+        response_derivation: "response_derivation",
+        block_index: "block_index",
+        timeline_id: "timeline_id",
+        session_id: "session_id",
+        ordinal: "ordinal",
+        group_id: "group_id",
+        group_kind: "group_kind",
+        group_derivation: "group_derivation",
+        uuid: "uuid",
+        parent_uuid: "parent_uuid",
+        ts: "ts",
+        model: "model",
+        effort: "effort",
+        parent_tool_native_id: "parent_tool_native_id",
+        in_tokens: "in_tokens",
+        out_tokens: "out_tokens",
+        cache_r_tokens: "cache_r_tokens",
+        cache_w_tokens: "cache_w_tokens",
+        think_tokens: "think_tokens",
+        agent_version: "agent_version",
+        src_cursor: "src_cursor",
+        src_offset: "src_offset",
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct EncodedMessage {
     pub kind: &'static str,
@@ -128,8 +159,11 @@ fn invalid(message: impl Into<String>) -> rusqlite::Error {
     )
 }
 
-fn parse_detail(row: &Row<'_>) -> rusqlite::Result<Option<MessageDetail>> {
-    row.get::<_, Option<String>>("detail")?
+fn parse_detail(
+    row: &Row<'_>,
+    column: impl rusqlite::RowIndex,
+) -> rusqlite::Result<Option<MessageDetail>> {
+    row.get::<_, Option<String>>(column)?
         .map(|json| serde_json::from_str(&json).map_err(|error| decode_error(0, error)))
         .transpose()
 }
@@ -160,11 +194,39 @@ fn prose_detail(
     }
 }
 
+/// A statement-scoped decoder for full message scans. Column positions are
+/// resolved against the actual SELECT layout, never the schema's field order.
+pub(crate) struct Decoder {
+    message: Columns<usize>,
+    tool: tool_codec::Columns<usize>,
+}
+
+impl Decoder {
+    pub(crate) fn new(statement: &rusqlite::Statement<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            message: Columns::resolve(statement)?,
+            tool: tool_codec::Columns::resolve(statement)?,
+        })
+    }
+
+    pub(crate) fn decode(&self, row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
+        decode_columns(row, &self.message, &self.tool)
+    }
+}
+
 pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
-    let kind: String = row.get("type")?;
-    let content: Option<String> = row.get("content")?;
-    let detail = parse_detail(row)?;
-    let tool = tool_codec::decode(row)?;
+    decode_columns(row, &Columns::NAMED, &tool_codec::Columns::NAMED)
+}
+
+fn decode_columns<I: rusqlite::RowIndex + Copy>(
+    row: &Row<'_>,
+    columns: &Columns<I>,
+    tool_columns: &tool_codec::Columns<I>,
+) -> rusqlite::Result<TimelineEntry> {
+    let kind: String = row.get(columns.kind)?;
+    let content: Option<String> = row.get(columns.content)?;
+    let detail = parse_detail(row, columns.detail)?;
+    let tool = tool_codec::decode_columns(row, tool_columns)?;
     let body = match kind.as_str() {
         "user" => {
             let (member, attachments, citations) = prose_detail(detail)?;
@@ -237,8 +299,8 @@ pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
         },
         _ => return Err(invalid(format!("unknown canonical message type {kind:?}"))),
     };
-    let response_id: Option<String> = row.get("response_id")?;
-    let response_derivation: Option<String> = row.get("response_derivation")?;
+    let response_id: Option<String> = row.get(columns.response_id)?;
+    let response_derivation: Option<String> = row.get(columns.response_derivation)?;
     let response = match (response_id, response_derivation) {
         (Some(id), Some(derivation)) => Some(ResponseGroup {
             id,
@@ -248,39 +310,39 @@ pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
         _ => return Err(invalid("response id and derivation disagree")),
     };
     let block_index = row
-        .get::<_, Option<i64>>("block_index")?
+        .get::<_, Option<i64>>(columns.block_index)?
         .map(u32::try_from)
         .transpose()
         .map_err(|error| decode_error(0, error))?;
     let entry = TimelineEntry {
-        timeline_id: row.get("timeline_id")?,
-        session_id: row.get("session_id")?,
-        ordinal: row.get("ordinal")?,
+        timeline_id: row.get(columns.timeline_id)?,
+        session_id: row.get(columns.session_id)?,
+        ordinal: row.get(columns.ordinal)?,
         group: TimelineGroup {
-            id: row.get("group_id")?,
-            kind: parse_group_kind(&row.get::<_, String>("group_kind")?)?,
-            derivation: parse_derivation(&row.get::<_, String>("group_derivation")?)?,
+            id: row.get(columns.group_id)?,
+            kind: parse_group_kind(&row.get::<_, String>(columns.group_kind)?)?,
+            derivation: parse_derivation(&row.get::<_, String>(columns.group_derivation)?)?,
         },
         response,
         block_index,
-        native_id: row.get("uuid")?,
-        parent_native_id: row.get("parent_uuid")?,
-        at: row.get("ts")?,
-        model: row.get("model")?,
-        effort: row.get("effort")?,
+        native_id: row.get(columns.uuid)?,
+        parent_native_id: row.get(columns.parent_uuid)?,
+        at: row.get(columns.ts)?,
+        model: row.get(columns.model)?,
+        effort: row.get(columns.effort)?,
         body,
-        parent_tool_native_id: row.get("parent_tool_native_id")?,
+        parent_tool_native_id: row.get(columns.parent_tool_native_id)?,
         usage: TokenSnapshot {
-            input: row.get("in_tokens")?,
-            output: row.get("out_tokens")?,
-            cache_read: row.get("cache_r_tokens")?,
-            cache_write: row.get("cache_w_tokens")?,
-            thinking: row.get("think_tokens")?,
+            input: row.get(columns.in_tokens)?,
+            output: row.get(columns.out_tokens)?,
+            cache_read: row.get(columns.cache_r_tokens)?,
+            cache_write: row.get(columns.cache_w_tokens)?,
+            thinking: row.get(columns.think_tokens)?,
         },
         provenance: Provenance {
-            agent_version: row.get("agent_version")?,
-            src_cursor: row.get("src_cursor")?,
-            src_offset: row.get("src_offset")?,
+            agent_version: row.get(columns.agent_version)?,
+            src_cursor: row.get(columns.src_cursor)?,
+            src_offset: row.get(columns.src_offset)?,
         },
     };
     entry

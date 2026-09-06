@@ -6,6 +6,7 @@
 pub mod apply;
 pub mod assets;
 mod bulk;
+mod columns;
 pub mod hot;
 mod message_codec;
 pub mod queries;

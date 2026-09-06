@@ -12,6 +12,26 @@ use rusqlite::types::Type;
 
 use crate::StoreError;
 
+crate::columns::column_map! {
+    pub(crate) struct Columns {
+        tool_correlation_key: "tool_correlation_key",
+        tool_correlation_kind: "tool_correlation_kind",
+        tool_name: "tool_name",
+        tool_status: "tool_status",
+        tool_status_basis: "tool_status_basis",
+        tool_detail: "tool_detail",
+        tool_error_kind: "tool_error_kind",
+        tool_error_summary: "tool_error_summary",
+        tool_diagnostic: "tool_diagnostic",
+        tool_started_at: "tool_started_at",
+        tool_completed_at: "tool_completed_at",
+        tool_duration_ms: "tool_duration_ms",
+        tool_native_id: "tool_native_id",
+        tool_namespace: "tool_namespace",
+        tool_provider: "tool_provider",
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct EncodedTool {
     pub correlation_key: Option<String>,
@@ -90,31 +110,38 @@ fn required<T>(value: Option<T>, column: &'static str) -> rusqlite::Result<T> {
 }
 
 pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<Option<ToolInteraction>> {
-    let correlation_key: Option<String> = row.get("tool_correlation_key")?;
+    decode_columns(row, &Columns::NAMED)
+}
+
+pub(crate) fn decode_columns<I: rusqlite::RowIndex + Copy>(
+    row: &Row<'_>,
+    columns: &Columns<I>,
+) -> rusqlite::Result<Option<ToolInteraction>> {
+    let correlation_key: Option<String> = row.get(columns.tool_correlation_key)?;
     let Some(correlation_key) = correlation_key else {
         return Ok(None);
     };
-    let correlation_kind: String = row.get("tool_correlation_kind")?;
-    let name: String = row.get("tool_name")?;
-    let status: String = row.get("tool_status")?;
-    let status_basis: String = row.get("tool_status_basis")?;
-    let detail: String = row.get("tool_detail")?;
+    let correlation_kind: String = row.get(columns.tool_correlation_kind)?;
+    let name: String = row.get(columns.tool_name)?;
+    let status: String = row.get(columns.tool_status)?;
+    let status_basis: String = row.get(columns.tool_status_basis)?;
+    let detail: String = row.get(columns.tool_detail)?;
     let action: ToolAction =
         serde_json::from_str(&detail).map_err(|error| decode_error(0, error))?;
-    let failure_kind: Option<String> = row.get("tool_error_kind")?;
+    let failure_kind: Option<String> = row.get(columns.tool_error_kind)?;
     let failure = failure_kind
         .map(|kind| -> rusqlite::Result<ToolFailure> {
             Ok(ToolFailure {
                 kind: parse_failure(&kind)?,
-                summary: row.get("tool_error_summary")?,
-                diagnostic: row.get("tool_diagnostic")?,
+                summary: row.get(columns.tool_error_summary)?,
+                diagnostic: row.get(columns.tool_diagnostic)?,
             })
         })
         .transpose()?;
-    let started_at: Option<i64> = row.get("tool_started_at")?;
-    let completed_at: Option<i64> = row.get("tool_completed_at")?;
+    let started_at: Option<i64> = row.get(columns.tool_started_at)?;
+    let completed_at: Option<i64> = row.get(columns.tool_completed_at)?;
     let duration_ms = row
-        .get::<_, Option<i64>>("tool_duration_ms")?
+        .get::<_, Option<i64>>(columns.tool_duration_ms)?
         .map(u64::try_from)
         .transpose()
         .map_err(|error| decode_error(0, error))?;
@@ -130,10 +157,10 @@ pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<Option<ToolInteraction>>
             derivation: parse_correlation(&correlation_kind)?,
         },
         native: NativeToolRef {
-            id: row.get("tool_native_id")?,
-            namespace: row.get("tool_namespace")?,
+            id: row.get(columns.tool_native_id)?,
+            namespace: row.get(columns.tool_namespace)?,
             name,
-            provider: row.get("tool_provider")?,
+            provider: row.get(columns.tool_provider)?,
         },
         status: ToolStatusFact {
             value: parse_status(&status)?,

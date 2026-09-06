@@ -140,9 +140,13 @@ fn finish_private_generation(
     canonical_path: &Path,
     stop: &AtomicBool,
 ) -> Result<u64, SearchError> {
+    // This connection owns an unpublished generation and closes after the
+    // build. A bounded 16 MiB pager cache avoids repeated small-cache spills
+    // without retaining this allowance on query or live-repair connections.
     conn.execute_batch(
         "PRAGMA journal_mode = MEMORY;
-         PRAGMA synchronous = OFF;",
+         PRAGMA synchronous = OFF;
+         PRAGMA cache_size = -16384;",
     )
     .map_err(|error| backend(format!("configuring private search build: {error}")))?;
     conn.execute_batch(SEARCH_DDL)

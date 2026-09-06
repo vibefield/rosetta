@@ -2,7 +2,7 @@
 
 Yes, there is meaningful headroom. The clearest opportunities are shared-loop latency, using the existing faster cold topology consistently, and removing work that scales with unrelated sources or pending records. Replacing the JSON library is a later optimization.
 
-This review covers capture, JSONL framing, ledger writing/replay, metadata admission, live scheduling, canonical application/reconciliation, cold publication, and detached search construction. Baseline measurements used a release build of `a66259c4c9958622a814fefe79d08294951a69ef`, Rust 1.97.1, macOS/arm64, and temporary files on the system volume. Protocol/server/query edits appeared concurrently near the end; they are outside that baseline. The numbered findings describe the original review; the authorized follow-up below resolves findings 1 and 3.
+This review covers capture, JSONL framing, ledger writing/replay, metadata admission, live scheduling, canonical application/reconciliation, cold publication, and detached search construction. Baseline measurements used a release build of `a66259c4c9958622a814fefe79d08294951a69ef`, Rust 1.97.1, macOS/arm64, and temporary files on the system volume. Protocol/server/query edits appeared concurrently near the end; they are outside that baseline. The numbered findings describe the original review; the implemented follow-ups below resolve findings 1 and 3 and reduce the detached-search cost in finding 7.
 
 **Implemented follow-up — 2026-09-06**
 
@@ -30,6 +30,12 @@ A fresh ingest of the original 200 read-only source files preserved all checksum
 Strict workspace Clippy remains blocked by existing `large_enum_variant` diagnostics in unchanged `core` types; a changed-crate run also exposes the same existing issue in `store::DeferredOp`. These predate this patch. The full workspace passes Clippy with only that lint category excluded (`-D warnings -A clippy::large_enum_variant`). Formatting checks pass for every changed Rust file.
 
 Follow-up evidence is in `/private/tmp/rosetta-ingest-review-20260906/`: `implementation-manifest.json`, `paired-performance.json`, `paired-{before,after}-{pending,pending-message}.jsonl`, `paired-idle.jsonl`, both `reconciliation-*-probe` binaries, their harnesses, `implementation-final-tests.log`, and `after-fix-validation/verification.json` with its checksummed query suite. Re-run the retained binaries with `pending` or `pending-message`; the after binary also supports `idle` and `idle-shared`.
+
+**Cold-ingest follow-up — 2026-09-06**
+
+Search construction now caches message/tool column positions per statement while retaining the same typed decoder and validation, and gives its private build connection a 16 MiB SQLite pager cache. On the same read-only 317 MB corpus, three alternating pairs against the retained `7e6b873` binary reduced full parallel-RAM ingest median **13.72 → 11.68 s (14.9%)** and search construction **8.17 → 5.71 s (30.2%)**. These are newly paired measurements; they are not compared against the older baseline timings below. One ordinary fresh-serve pair reached search-ready at **12.85 → 10.58 s** without a renderer.
+
+All six cold builds, both serves, and a replay from the frozen baseline ledger match across 17 normalized canonical tables and all searchable document lanes. The required frozen `search-bench` comparison passes 16 diagnostic product-grammar cases, 100 measured cycles per shared/fresh backend lane, with identical ranked results. All **842 workspace tests pass**, with one opt-in watcher test ignored. See [the architecture performance record](ARCHITECTURE.md#71-cross-adapter-applicability-checkpoint-2026-08-27) for configuration, checksums, memory, and validation limits. Evidence is retained in `/private/tmp/rosetta-cold-ingest-20260906/`, including binaries, `cold-results.json`, `serve-results.json`, verification reports, and `search-validation/`; repeat databases are stored in verified lossless archives.
 
 **Measured baseline**
 

@@ -381,12 +381,13 @@ fn visit_search_documents_where(
          ORDER BY m.id"
     );
     let mut statement = conn.prepare(&sql)?;
+    let decoder = message_codec::Decoder::new(&statement)?;
     let mut rows = match session_id {
         Some(session_id) => statement.query(params![session_id])?,
         None => statement.query([])?,
     };
     while let Some(row) = rows.next()? {
-        let entry = message_codec::decode(row)?;
+        let entry = decoder.decode(row)?;
         let lanes = entry.search_lanes();
         let status = match &entry.body {
             TimelineBody::ToolUse { tool } => Some(tool.status.value),
