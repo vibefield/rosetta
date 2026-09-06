@@ -1201,10 +1201,7 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
     assert_eq!(stored.color, Some(ParticipantColor::Green));
     assert_eq!(stored.task_id.as_deref(), Some("task-2"));
     assert!(matches!(stored.body, Some(CanonicalText::Member { .. })));
-    assert_eq!(
-        stored.body.as_ref().unwrap().as_preview().len() <= 2 * 1024,
-        true
-    );
+    assert!(stored.body.as_ref().unwrap().as_preview().len() <= 2 * 1024);
     let (boundaries, runtimes) = queries::collaboration_timeline(store.conn(), "s1").unwrap();
     assert_eq!(
         boundaries
@@ -2278,6 +2275,234 @@ fn live_usage_waits_in_ram_until_its_response_arrives() {
     assert_eq!(page[0].usage.input, Some(23));
     assert_eq!(page[0].usage.output, Some(5));
     assert_tool_reconciliation_is_ram_only(&store);
+}
+
+fn late_usage(response: &str, input: i64) -> IngestOp {
+    IngestOp::Usage {
+        session_id: "s1".into(),
+        response: response.into(),
+        ts: 3_700_000,
+        model: Some("claude-opus-5".into()),
+        tokens: TokenSnapshot {
+            input: Some(input),
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn pending_usage_follows_its_latest_source_through_abandon_and_replacement() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let first = install_cursor(&mut store, "first.jsonl");
+    let second = install_cursor(&mut store, "second.jsonl");
+    let source_batch = |cursor_id, generation, mode, ops| Batch {
+        ops,
+        source: Some(SourceWrite {
+            cursor_id,
+            session_id: "s1".into(),
+            generation,
+            first_sequence: 0,
+            mode,
+        }),
+        ..Batch::default()
+    };
+    store
+        .apply(&source_batch(
+            first,
+            1,
+            SourceMode::Activate,
+            vec![
+                late_usage("moved", 10),
+                late_usage("removed", 20),
+                late_usage("survives-abandon", 25),
+            ],
+        ))
+        .unwrap();
+    store
+        .apply(&source_batch(
+            second,
+            1,
+            SourceMode::Activate,
+            vec![late_usage("moved", 30), late_usage("kept", 40)],
+        ))
+        .unwrap();
+
+    // An unclean replacement must retain the active source's pending facts.
+    store
+        .apply(&source_batch(
+            first,
+            2,
+            SourceMode::Stage,
+            vec![late_usage("survives-abandon", 99)],
+        ))
+        .unwrap();
+    let mut abandon = source_batch(first, 2, SourceMode::Abandon, vec![]);
+    abandon.source.as_mut().unwrap().first_sequence = 1;
+    store.apply(&abandon).unwrap();
+    store
+        .apply(&Batch {
+            ops: vec![message_op(message(
+                "survives-abandon",
+                0,
+                MessageKind::Agent,
+            ))],
+            ..Batch::default()
+        })
+        .unwrap();
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page[0].usage.input, Some(25));
+
+    // A clean replacement removes only first's unresolved facts. The newest
+    // snapshot for "moved" now belongs to second, even though first created it.
+    store
+        .apply(&source_batch(first, 3, SourceMode::Activate, vec![]))
+        .unwrap();
+    store
+        .apply(&Batch {
+            ops: ["moved", "removed", "kept"]
+                .iter()
+                .enumerate()
+                .map(|(i, id)| message_op(message(id, i as i64 + 1, MessageKind::Agent)))
+                .collect(),
+            ..Batch::default()
+        })
+        .unwrap();
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    let input = |id| {
+        page.iter()
+            .find(|row| row.timeline_id == id)
+            .unwrap()
+            .usage
+            .input
+    };
+    assert_eq!(input("moved"), Some(30));
+    assert_eq!(input("removed"), None);
+    assert_eq!(input("kept"), Some(40));
+}
+
+#[test]
+fn failed_checkpoint_keeps_pending_fragments_available_for_a_retry() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    install_cursor(&mut store, "retry.jsonl");
+    store
+        .apply(&Batch {
+            ops: vec![
+                status_update("retry-tool", ToolStatus::Running, 1),
+                status_update("retry-tool", ToolStatus::Succeeded, 2),
+                status_update("other-tool", ToolStatus::Failed, 3),
+                late_usage("retry-response", 23),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+    let mut opener = message("retry-call", 0, MessageKind::ToolUse);
+    opener.tool = Some(shell_tool("retry-tool", "true"));
+    let mut batch = Batch {
+        ops: vec![
+            message_op(opener),
+            message_op(message("retry-response", 1, MessageKind::Agent)),
+        ],
+        checkpoints: vec![CheckpointUpdate {
+            runtime_id: "rt1".into(),
+            stream: "transcript".into(),
+            path: "retry.jsonl".into(),
+            session_id: "s1".into(),
+            expected: Some("stale".into()),
+            next: "next".into(),
+            updated_at: None,
+        }],
+        source: None,
+    };
+    assert!(matches!(
+        store.apply(&batch),
+        Err(StoreError::CheckpointConflict { .. })
+    ));
+    assert!(
+        queries::timeline_page(store.conn(), "s1", None, 10)
+            .unwrap()
+            .is_empty()
+    );
+    batch.checkpoints[0].expected = Some("fresh".into());
+    let stats = store.apply(&batch).unwrap();
+    assert_eq!(stats.profile.tool_result_attempts, 2);
+    assert_eq!(stats.usage_applied, 1);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(
+        entry_tool(&page[0]).unwrap().status.value,
+        ToolStatus::Succeeded
+    );
+    assert_eq!(page[1].usage.input, Some(23));
+
+    // Draining the matching target must leave the unrelated evidence queued.
+    let mut other = message("other-call", 2, MessageKind::ToolUse);
+    other.tool = Some(shell_tool("other-tool", "false"));
+    let stats = store
+        .apply(&Batch {
+            ops: vec![message_op(other)],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(stats.profile.tool_result_attempts, 1);
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(
+        entry_tool(&page[2]).unwrap().status.value,
+        ToolStatus::Failed
+    );
+}
+
+#[test]
+fn failed_source_replacement_does_not_invalidate_pending_usage() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let cursor_id = install_cursor(&mut store, "replacement.jsonl");
+    let source = SourceWrite {
+        cursor_id,
+        session_id: "s1".into(),
+        generation: 1,
+        first_sequence: 0,
+        mode: SourceMode::Activate,
+    };
+    store
+        .apply(&Batch {
+            ops: vec![late_usage("retained-response", 17)],
+            source: Some(source.clone()),
+            ..Batch::default()
+        })
+        .unwrap();
+    let replacement = Batch {
+        source: Some(SourceWrite {
+            generation: 2,
+            ..source
+        }),
+        checkpoints: vec![CheckpointUpdate {
+            runtime_id: "rt1".into(),
+            stream: "transcript".into(),
+            path: "replacement.jsonl".into(),
+            session_id: "s1".into(),
+            expected: Some("stale".into()),
+            next: "next".into(),
+            updated_at: None,
+        }],
+        ..Batch::default()
+    };
+    assert!(matches!(
+        store.apply(&replacement),
+        Err(StoreError::CheckpointConflict { .. })
+    ));
+    store
+        .apply(&Batch {
+            ops: vec![message_op(message(
+                "retained-response",
+                0,
+                MessageKind::Agent,
+            ))],
+            ..Batch::default()
+        })
+        .unwrap();
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page[0].usage.input, Some(17));
 }
 
 #[test]

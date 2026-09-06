@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use rosetta_capture::NotifyEvents;
+use rosetta_capture::{NotifyEvents, SourceWake};
 use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
     RawCommandLocator, RebuildOptions, SessionFile, SliceBudget, StreamReport,
@@ -53,6 +53,10 @@ use crate::{
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
 const CONSENT_POLL: Duration = Duration::from_millis(200);
+
+#[cfg(test)]
+#[path = "serve_tests.rs"]
+mod tests;
 
 struct LedgerCommandReader {
     root: PathBuf,
@@ -513,6 +517,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // Phase one: skim every enrolled runtime before reading any transcript.
     // This publishes the whole project/session roster first, so one large
     // runtime cannot hide every smaller runtime's lists.
+    let wake = SourceWake::default();
     let mut backfills = Vec::new();
     let mut failures = Vec::new();
     for (adapter, discovery) in adapters.iter().zip(&discoveries) {
@@ -530,7 +535,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         let mut runtime = discovery.runtime.clone();
         runtime.enabled = true; // consent, persisted for the next start
 
-        let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let events = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+            .map_err(|error| error.to_string())?;
         let mut ledger = open_ledger(&public_ledgers, adapter.kind())?;
         health.ingest_skim(
             adapter.kind(),
@@ -744,15 +750,23 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         // The ingest loop: ticks ARE the existing phases; the drain feeds
         // the hub strictly after each batch's commit.
         let mut remaining = flags.ticks;
+        let mut more_hints = false;
         while !stop.load(Ordering::SeqCst) {
             match &mut remaining {
                 Some(0) => break,
                 Some(count) => *count -= 1,
                 None => {}
             }
+            if !more_hints {
+                wake.wait(live.tick);
+            }
+            more_hints = false;
             for (kind, runner, _) in &mut runners {
-                runner
-                    .tick(&mut store, &instrument)
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                more_hints |= runner
+                    .tick_ready(&mut store, &instrument)
                     .map_err(|error| error.to_string())?;
                 let report = runner.report();
                 health.update(
@@ -768,6 +782,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                     },
                     now_ms(),
                 );
+                absorbed += absorb_effects(&mut store, &hub)? as u64;
             }
             search_worker.wake();
             acknowledge_search(&mut store, &search_worker)?;
@@ -822,6 +837,7 @@ fn run_resumed_fresh_serve(
     started: Instant,
 ) -> Result<(Store, u64), String> {
     store.observe_meta_effects();
+    let wake = SourceWake::default();
     let stage_root = ledger_stage.path().to_path_buf();
     let cold_opts = IngestOptions {
         starter_budget: None,
@@ -852,7 +868,8 @@ fn run_resumed_fresh_serve(
 
         // Watch before touching either recovery evidence or today's inventory.
         // Hints queue while sealed generations rebuild into the fresh RAM view.
-        let watcher = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let watcher = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+            .map_err(|error| error.to_string())?;
         let mut runtime = discovery.runtime.clone();
         runtime.enabled = true;
         let ledger_dir = stage_root.join(adapter.kind());
@@ -1038,6 +1055,8 @@ fn run_resumed_fresh_serve(
         flags,
         &mut store,
         &mut runners,
+        &wake,
+        live.tick,
         instrument,
         health,
         hub,
@@ -1093,6 +1112,7 @@ fn run_fresh_fast_serve(
 
     // Watch before the first skim. Source changes during the RAM build queue
     // as hints and are replayed by the live runner after durable publication.
+    let wake = SourceWake::default();
     let mut events = std::collections::BTreeMap::new();
     let mut planned = Vec::new();
     let cold_opts = IngestOptions {
@@ -1106,7 +1126,8 @@ fn run_fresh_fast_serve(
         if stop.load(Ordering::SeqCst) {
             return Err("stopped before cold metadata completed".into());
         }
-        let watcher = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let watcher = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+            .map_err(|error| error.to_string())?;
         let worker_instrument = Arc::new(Instrument::new());
         let skim_baseline = worker_instrument.snapshot();
         health.ingest_skim(
@@ -1293,6 +1314,8 @@ fn run_fresh_fast_serve(
         flags,
         &mut store,
         &mut runners,
+        &wake,
+        live.tick,
         instrument,
         health,
         hub,
@@ -1318,6 +1341,7 @@ fn run_warm_live_serve(
     search_worker: &Fts5SearchWorker,
     stop: &Arc<AtomicBool>,
 ) -> Result<(Store, u64), String> {
+    let wake = SourceWake::default();
     let mut runners = Vec::new();
     for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
         if !consented.contains(adapter.kind()) {
@@ -1337,7 +1361,8 @@ fn run_warm_live_serve(
         // Watch before the bounded current inventory is skimmed. The forced
         // catch-up below then combines queued hints with cursor-relative stat
         // evidence, closing both the offline and scan/watch races.
-        let watcher = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let watcher = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+            .map_err(|error| error.to_string())?;
         let mut ledger = open_ledger(public_ledgers, adapter.kind())?;
         let mut runtime = discovery.runtime.clone();
         runtime.enabled = true;
@@ -1379,6 +1404,8 @@ fn run_warm_live_serve(
         flags,
         &mut store,
         &mut runners,
+        &wake,
+        live.tick,
         instrument,
         health,
         hub,
@@ -1393,6 +1420,8 @@ fn drive_live_runners(
     flags: &Flags,
     store: &mut Store,
     runners: &mut [(&'static str, LiveRunner<'static>)],
+    wake: &SourceWake,
+    idle_wait: Duration,
     instrument: &Instrument,
     health: &DaemonHealth,
     hub: &Hub,
@@ -1421,20 +1450,27 @@ fn drive_live_runners(
     }
 
     let mut remaining = flags.ticks;
+    let mut more_hints = false;
     while !stop.load(Ordering::SeqCst) {
         match &mut remaining {
             Some(0) => break,
             Some(count) => *count -= 1,
             None => {}
         }
-        if runners.is_empty() {
-            std::thread::sleep(Duration::from_millis(200));
+        if !more_hints {
+            wake.wait(idle_wait);
         }
+        more_hints = false;
         for (kind, runner) in runners.iter_mut() {
-            runner
-                .tick(store, instrument)
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            more_hints |= runner
+                .tick_ready(store, instrument)
                 .map_err(|error| error.to_string())?;
             update_live_health(health, kind, runner);
+            // Publish this runtime's commits before doing work for the next.
+            absorbed += absorb_effects(store, hub)? as u64;
         }
         search_worker.wake();
         acknowledge_search(store, search_worker)?;

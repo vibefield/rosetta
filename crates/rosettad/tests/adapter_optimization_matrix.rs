@@ -177,7 +177,7 @@ fn op_evidence(kind: &str) -> OpEvidence {
 fn every_driver_matches_its_declared_storage_contract() {
     let expected = [
         ("antigravity", 1, 0, 1),
-        ("claude-code", 2, 1, 0),
+        ("claude-code", 3, 2, 0),
         ("codex", 1, 0, 1),
         ("copilot", 1, 1, 0),
         ("grok", 1, 2, 0),

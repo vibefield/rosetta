@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, channel, sync_channel};
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
@@ -35,6 +35,31 @@ pub enum SourceEvent {
 /// means a quiet interval, which consumers use as their poll/audit tick.
 pub trait SourceEvents: Send {
     fn next_event(&mut self, timeout: Duration) -> Option<SourceEvent>;
+}
+
+/// One coalesced wake-up for a writer serving several filesystem watchers.
+/// Hints remain in each watcher's own queue; this channel only tells the
+/// writer to make a non-blocking pass over those queues. A signal sent before
+/// `wait` is retained, including one arriving during the preceding pass.
+pub struct SourceWake {
+    sender: SyncSender<()>,
+    receiver: Receiver<()>,
+}
+
+impl Default for SourceWake {
+    fn default() -> Self {
+        let (sender, receiver) = sync_channel(1);
+        Self { sender, receiver }
+    }
+}
+
+impl SourceWake {
+    /// Wait once for any attached watcher, bounded by the poll/shutdown tick.
+    /// Returns whether a watcher signalled; a timeout still requires a pass
+    /// so runners can perform their periodic recovery polls and audits.
+    pub fn wait(&self, timeout: Duration) -> bool {
+        self.receiver.recv_timeout(timeout).is_ok()
+    }
 }
 
 /// Deterministic scripted source for tests and replay harnesses. Each queued
@@ -78,19 +103,30 @@ impl SourceEvents for ScriptedEvents {
 pub struct NotifyEvents {
     // Field order is drop order: close the channel after the watcher thread
     // can no longer send into it.
-    receiver: Receiver<SourceEvent>,
     _watcher: notify::RecommendedWatcher,
+    receiver: Receiver<SourceEvent>,
+    disconnected: bool,
 }
 
 impl NotifyEvents {
     pub fn watch(root: &Path) -> Result<Self, CaptureError> {
+        Self::watch_inner(root, None)
+    }
+
+    /// Register before the initial scan, retaining hints throughout backfill
+    /// and waking the shared writer as soon as any runtime has queued work.
+    pub fn watch_with_wake(root: &Path, wake: &SourceWake) -> Result<Self, CaptureError> {
+        Self::watch_inner(root, Some(wake.sender.clone()))
+    }
+
+    fn watch_inner(root: &Path, wake: Option<SyncSender<()>>) -> Result<Self, CaptureError> {
         let (sender, receiver) = channel();
         // The OS reports resolved paths (macOS FSEvents says /private/var for
         // a /var root); strip against the canonical root or every hint would
         // degrade to Rescan.
         let event_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let mut watcher = notify::recommended_watcher(move |event| {
-            forward(&event_root, &sender, event);
+            forward(&event_root, &sender, event, wake.as_ref());
         })
         .map_err(|error| CaptureError::InvalidConfig(format!("starting watcher: {error}")))?;
         watcher
@@ -101,35 +137,54 @@ impl NotifyEvents {
         Ok(Self {
             receiver,
             _watcher: watcher,
+            disconnected: false,
         })
     }
 }
 
 impl SourceEvents for NotifyEvents {
     fn next_event(&mut self, timeout: Duration) -> Option<SourceEvent> {
+        if self.disconnected {
+            std::thread::sleep(timeout);
+            return None;
+        }
         match self.receiver.recv_timeout(timeout) {
             Ok(event) => Some(event),
             Err(RecvTimeoutError::Timeout) => None,
-            // The watcher died: the consumer must not trust silence again.
-            Err(RecvTimeoutError::Disconnected) => Some(SourceEvent::Rescan),
+            // Request recovery once, then rely on periodic polling. Repeating
+            // Rescan forever would keep a shared non-blocking writer spinning.
+            Err(RecvTimeoutError::Disconnected) => {
+                self.disconnected = true;
+                Some(SourceEvent::Rescan)
+            }
         }
     }
 }
 
-fn forward(root: &Path, sender: &Sender<SourceEvent>, event: notify::Result<notify::Event>) {
+fn forward(
+    root: &Path,
+    sender: &Sender<SourceEvent>,
+    event: notify::Result<notify::Event>,
+    wake: Option<&SyncSender<()>>,
+) {
     match event {
         Ok(event) => {
             if event.need_rescan() {
                 let _ = sender.send(SourceEvent::Rescan);
-                return;
-            }
-            for path in &event.paths {
-                let _ = sender.send(to_hint(root, path));
+            } else {
+                for path in &event.paths {
+                    let _ = sender.send(to_hint(root, path));
+                }
             }
         }
         Err(_) => {
             let _ = sender.send(SourceEvent::Rescan);
         }
+    }
+    if let Some(wake) = wake {
+        // Queue the hints first. A full wake channel already promises a
+        // pass, so producers never block or accumulate wake tokens.
+        let _ = wake.try_send(());
     }
 }
 
@@ -169,6 +224,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_wake_coalesces_runtimes_without_losing_their_hints() {
+        let wake = SourceWake::default();
+        let root = Path::new("/sources");
+        let queues: Vec<_> = (0..9).map(|_| channel()).collect();
+        assert!(!wake.wait(Duration::ZERO));
+        for (index, (sender, _)) in queues.iter().enumerate() {
+            forward(
+                root,
+                sender,
+                Ok(notify::Event::new(notify::EventKind::Any)
+                    .add_path(root.join(format!("{index}.jsonl")))),
+                Some(&wake.sender),
+            );
+        }
+        assert!(wake.wait(Duration::ZERO));
+        assert!(
+            !wake.wait(Duration::ZERO),
+            "only one wake token accumulates"
+        );
+        for (index, (_, receiver)) in queues.iter().enumerate() {
+            assert_eq!(
+                receiver.try_recv().unwrap(),
+                SourceEvent::Changed(format!("{index}.jsonl"))
+            );
+        }
+
+        // A watcher error arriving during the sweep must also survive until
+        // the next wait and nominate a recovery scan.
+        forward(
+            root,
+            &queues[8].0,
+            Err(notify::Error::generic("lost events")),
+            Some(&wake.sender),
+        );
+        assert!(wake.wait(Duration::ZERO));
+        assert_eq!(queues[8].1.try_recv().unwrap(), SourceEvent::Rescan);
+    }
+
+    #[test]
+    fn disconnected_watcher_requests_recovery_without_an_endless_ready_queue() {
+        let root = TempDir::new().unwrap();
+        let mut events = NotifyEvents::watch(root.path()).unwrap();
+        let (sender, receiver) = channel();
+        events.receiver = receiver;
+        drop(sender);
+        assert_eq!(events.next_event(Duration::ZERO), Some(SourceEvent::Rescan));
+        assert_eq!(events.next_event(Duration::ZERO), None);
+    }
+
+    #[test]
     fn scripted_events_replay_in_order_with_quiet_gaps() {
         let mut events = ScriptedEvents::default();
         events.push_changed("a.jsonl");
@@ -194,7 +299,8 @@ mod tests {
     fn notify_watcher_hints_about_a_write() {
         let root = TempDir::new().unwrap();
         std::fs::create_dir_all(root.path().join("projects")).unwrap();
-        let mut events = NotifyEvents::watch(root.path()).unwrap();
+        let wake = SourceWake::default();
+        let mut events = NotifyEvents::watch_with_wake(root.path(), &wake).unwrap();
 
         // Some backends finish installing their recursive watch on a helper
         // thread after `watch` returns.
@@ -203,7 +309,10 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            match events.next_event(Duration::from_millis(200)) {
+            if !wake.wait(Duration::from_millis(200)) {
+                continue;
+            }
+            match events.next_event(Duration::ZERO) {
                 // FSEvents commonly reports only the containing directory;
                 // Linux and Windows usually report the file. Both are valid
                 // hints because the live runner re-stats declared sources.

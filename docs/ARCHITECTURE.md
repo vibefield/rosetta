@@ -389,7 +389,12 @@ runtime in `crates/capture`; they are described here only to make the evidence â
 capture contract explicit.
 
 - **Watcher** (`notify`/kqueue): subscribe first, then initial scan (watch-before-scan),
-  ~20 ms coalescing, periodic audit sweep to catch anything missed.
+  with bounded hint coalescing and periodic recovery polls/audits. Every `serve` and
+  `watch` runtime shares one coalesced `SourceWake`; the writer waits at most 250 ms
+  once per quiet pass, then calls each runner's non-blocking `tick_ready`. An exhausted
+  hint budget requests another fair pass immediately. Serve publishes committed effects
+  after each runner, before visiting the next. Per-runtime stat polls remain on their
+  30-second cadence; a dead watcher requests one rescan and then falls back to polling.
 - **Tailer**: per-file cursor = byte offset + line count + hash of a head prefix.
   The head hash detects rewrite/truncation (Claude Code rewrites files on compaction);
   on mismatch, the file re-ingests under a new **epoch**. Partial trailing lines are
@@ -790,9 +795,12 @@ This makes the optimization boundary explicit:
 - Batch session timestamp touches and RAM-only late-arrival reconciliation are roster-wide:
   all captured adapters exercise the shared message/tool/usage store paths. A batch orders
   openers before updates, folds each tool correlation once, and writes the resolved row once.
-  Cross-file orphans wait in a process-local target map; unrelated sessions perform no SQLite
-  reconciliation probes. A restart intentionally discards the map and replays the affected
-  ledger scope.
+  Cross-file orphans wait in process-local maps indexed by relation target and source
+  cursor/generation. Openers look up only matching pending fragments; activation and
+  abandonment look up only the affected source generations. Ordinary append/stage batches
+  never scan unrelated pending state. All index updates happen after the SQLite commit,
+  including changes in ownership when a newer usage snapshot replaces an orphan. A restart
+  intentionally discards these maps and replays the affected ledger scope.
 - Same-batch tool-result folding is roster-wide in semantics, but the measured SQLite
   implementation is rejected. On the frozen mixed ledger it safely folded 358,790 of
   360,052 tool results plus 149,755 of 151,298 separate usage snapshots (99.45% overall)

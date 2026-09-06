@@ -35,7 +35,7 @@ pub use tailer::{
     CommittedVerification, RawRecord, TailBatch, TailCheckpoint, TailConfig, TailItem, TailRead,
     Tailer, Transition,
 };
-pub use watch::{NotifyEvents, ScriptedEvents, SourceEvent, SourceEvents};
+pub use watch::{NotifyEvents, ScriptedEvents, SourceEvent, SourceEvents, SourceWake};
 
 #[derive(Debug)]
 pub enum CaptureError {

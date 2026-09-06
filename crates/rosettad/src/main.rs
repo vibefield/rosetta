@@ -27,7 +27,7 @@ use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_opencode::OpenCodeAdapter;
 use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
-use rosetta_capture::{Ledger, NotifyEvents};
+use rosetta_capture::{Ledger, NotifyEvents, SourceWake};
 use rosetta_pipeline::{
     Discovery, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport,
     Metric, PreparedRuntime, RebuildOptions, StreamReport, apply_prepared_runtime, discover,
@@ -1561,6 +1561,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let db = flags.db.clone().ok_or("watch needs --db PATH")?;
     let opts = IngestOptions::default();
     let live = LiveOptions::default();
+    let wake = SourceWake::default();
     let instrument = Instrument::new();
     let adapters = selected(&flags)?;
     let _projection_lock = projection_lock(&db)?;
@@ -1585,7 +1586,8 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
 
         // Watch BEFORE the backfill scan: a write landing mid-backfill still
         // produces a hint for the first live tick.
-        let events = NotifyEvents::watch(&discovery.root).map_err(|error| error.to_string())?;
+        let events = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+            .map_err(|error| error.to_string())?;
         let mut ledger = open_ledger(&public_ledgers, adapter.kind())?;
 
         let (meta, files) = meta_ingest_into(
@@ -1675,15 +1677,20 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     }
 
     let mut remaining = flags.ticks;
+    let mut more_hints = false;
     loop {
         match &mut remaining {
             Some(0) => break,
             Some(count) => *count -= 1,
             None => {}
         }
+        if !more_hints {
+            wake.wait(live.tick);
+        }
+        more_hints = false;
         for (kind, runner, seen_batches) in &mut runners {
-            runner
-                .tick(&mut store, &instrument)
+            more_hints |= runner
+                .tick_ready(&mut store, &instrument)
                 .map_err(|error| error.to_string())?;
             let report = runner.report();
             if report.stream.batches > *seen_batches {

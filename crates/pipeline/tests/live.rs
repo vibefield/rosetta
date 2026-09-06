@@ -10,7 +10,7 @@ use std::time::Duration;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
-use rosetta_capture::ScriptedEvents;
+use rosetta_capture::{ScriptedEvents, SourceEvent, SourceEvents};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
     IngestOptions, Instrument, LiveOptions, LiveRunner, PipeCheckpoint, discover, expand_data_root,
@@ -113,6 +113,80 @@ fn resumed_runner<'a>(
         live,
         None,
     )
+}
+
+#[test]
+fn ready_pass_reaches_the_last_runtime_without_waiting_on_quiet_ones() {
+    struct ReadyOnly(ScriptedEvents);
+    impl SourceEvents for ReadyOnly {
+        fn next_event(&mut self, timeout: Duration) -> Option<SourceEvent> {
+            assert_eq!(timeout, Duration::ZERO, "shared passes must never wait");
+            self.0.next_event(timeout)
+        }
+    }
+
+    let mut h = backfilled_harness();
+    let target = h.files[0].clone();
+    append_user_line(
+        &h.root.join(&target.relative_path),
+        &target.native_session_id,
+        "ready after eight quiet runtimes",
+    );
+    let mut runners = (0..9)
+        .map(|index| {
+            let mut events = ScriptedEvents::default();
+            if index == 8 {
+                events.push_changed(&target.relative_path);
+            }
+            LiveRunner::resume_from_roster(
+                &ClaudeCodeAdapter,
+                h.runtime.clone(),
+                h.root.clone(),
+                Box::new(ReadyOnly(events)),
+                if index == 8 { h.files.clone() } else { vec![] },
+                h.opts.clone(),
+                LiveOptions {
+                    tick: Duration::from_secs(60),
+                    ..hot_live()
+                },
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    for runner in &mut runners {
+        assert!(!runner.tick_ready(&mut h.store, &h.instrument).unwrap());
+    }
+    assert_eq!(runners[8].report().stream.stats.messages_inserted, 1);
+    assert_eq!(runners[8].report().polls, 0);
+}
+
+#[test]
+fn exhausted_ready_budget_requests_another_pass_until_the_queue_is_empty() {
+    let mut h = backfilled_harness();
+    let mut events = ScriptedEvents::default();
+    for file in &h.files[..2] {
+        append_user_line(
+            &h.root.join(&file.relative_path),
+            &file.native_session_id,
+            "bounded ready drain",
+        );
+        events.push_changed(&file.relative_path);
+    }
+    let mut runner = resumed_runner(
+        &h,
+        &ClaudeCodeAdapter,
+        events,
+        LiveOptions {
+            max_coalesced: 1,
+            ..hot_live()
+        },
+    );
+    assert!(runner.tick_ready(&mut h.store, &h.instrument).unwrap());
+    assert_eq!(runner.report().stream.stats.messages_inserted, 1);
+    assert!(runner.tick_ready(&mut h.store, &h.instrument).unwrap());
+    assert_eq!(runner.report().stream.stats.messages_inserted, 2);
+    assert!(!runner.tick_ready(&mut h.store, &h.instrument).unwrap());
+    assert_eq!(runner.report().events, 2);
 }
 
 #[test]
@@ -299,7 +373,7 @@ fn poll_fallback_catches_silent_appends() {
         max_coalesced: 16,
     };
     let mut runner = runner(&mut h, adapter, ScriptedEvents::default(), live);
-    runner.tick(&mut h.store, &h.instrument).unwrap();
+    runner.tick_ready(&mut h.store, &h.instrument).unwrap();
 
     let report = runner.report();
     assert_eq!(report.events, 0);
@@ -411,7 +485,7 @@ fn poll_ticks_carry_the_rotating_audit_sweep() {
         max_coalesced: 16,
     };
     let mut runner = runner(&mut h, adapter, ScriptedEvents::default(), live);
-    runner.tick(&mut h.store, &h.instrument).unwrap();
+    runner.tick_ready(&mut h.store, &h.instrument).unwrap();
     runner.tick(&mut h.store, &h.instrument).unwrap();
 
     let report = runner.report();

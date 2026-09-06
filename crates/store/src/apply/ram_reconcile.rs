@@ -36,24 +36,17 @@ enum RelationTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum PendingKey {
-    /// Tool patches retain every distinct evidence position until their
-    /// opener arrives; the fold needs all of them.
-    Tool {
-        target: ToolTarget,
-        evidence: EvidenceOrder,
-    },
-    /// Usage is a replacement snapshot. The newest observed value for one
-    /// response supersedes an older value just like the canonical update.
-    Usage(UsageTarget),
+struct PendingKey {
+    target: RelationTarget,
+    /// Tool patches retain every evidence position. Usage keeps one latest
+    /// snapshot (`None`). Ordering by target then optional evidence also lets
+    /// an opener seek to `None` and visit only its own pending fragments.
+    evidence: Option<EvidenceOrder>,
 }
 
 impl PendingKey {
     fn target(&self) -> RelationTarget {
-        match self {
-            Self::Tool { target, .. } => RelationTarget::Tool(target.clone()),
-            Self::Usage(target) => RelationTarget::Usage(target.clone()),
-        }
+        self.target.clone()
     }
 }
 
@@ -72,6 +65,10 @@ struct PendingEntry {
 #[derive(Debug, Default)]
 pub(crate) struct RamReconciliationBuffer {
     pending: BTreeMap<PendingKey, PendingEntry>,
+    /// Source transitions invalidate only their own generations. This index
+    /// changes with `pending` after the SQL commit; target lookups use the
+    /// primary map's ordering and need no second copy of every orphan key.
+    by_source: BTreeMap<SourceKey, BTreeSet<PendingKey>>,
     /// Complete normalized source positions for a not-yet-active live
     /// replacement. This is deliberately not serialized.
     staged: BTreeMap<SourceKey, BTreeMap<u64, IngestOp>>,
@@ -191,19 +188,24 @@ impl RamReconciliationBuffer {
         // ledger replay; no hidden inverse facts are retained here or in SQL.
         let mut invalidated = BTreeSet::new();
         if let Some(source) = batch.source.as_ref() {
-            invalidated.extend(self.pending.iter().filter_map(|(key, entry)| {
-                entry
-                    .source
-                    .filter(|stamp| {
-                        stamp.cursor_id == source.cursor_id
-                            && match source.mode {
-                                SourceMode::Activate => stamp.generation < source.generation,
-                                SourceMode::Abandon => stamp.generation == source.generation,
-                                SourceMode::Stage | SourceMode::Append => false,
-                            }
-                    })
-                    .map(|_| key.clone())
-            }));
+            let stamp = source_key(source.cursor_id, source.generation);
+            match source.mode {
+                SourceMode::Activate => {
+                    for keys in self
+                        .by_source
+                        .range(source_key(source.cursor_id, 0)..stamp)
+                        .map(|(_, keys)| keys)
+                    {
+                        invalidated.extend(keys.iter().cloned());
+                    }
+                }
+                SourceMode::Abandon => {
+                    if let Some(keys) = self.by_source.get(&stamp) {
+                        invalidated.extend(keys.iter().cloned());
+                    }
+                }
+                SourceMode::Stage | SourceMode::Append => {}
+            }
         }
 
         let may_drain = track_relations
@@ -213,22 +215,26 @@ impl RamReconciliationBuffer {
                 _ => true,
             };
         let mut drained = BTreeSet::new();
-        let mut drain_ops = Vec::new();
         if may_drain {
-            for (key, entry) in &self.pending {
-                if invalidated.contains(key)
-                    || !openers.contains(&key.target())
-                    || observed.contains_key(key)
-                {
-                    continue;
+            for target in &openers {
+                let start = PendingKey {
+                    target: target.clone(),
+                    evidence: None,
+                };
+                for (key, _) in self.pending.range(start..) {
+                    if &key.target != target {
+                        break;
+                    }
+                    if !invalidated.contains(key) && !observed.contains_key(key) {
+                        drained.insert(key.clone());
+                    }
                 }
-                drained.insert(key.clone());
-                drain_ops.push(entry.op.clone());
             }
         }
-        if !drain_ops.is_empty() {
+        if !drained.is_empty() {
             let ops = projected_ops.get_or_insert_with(|| batch.ops.clone());
-            ops.extend(drain_ops);
+            // Preserve PendingKey/evidence order across all matching targets.
+            ops.extend(drained.iter().map(|key| self.pending[key].op.clone()));
         }
 
         Ok(RamReconciliationDelta {
@@ -268,6 +274,9 @@ impl RamReconciliationBuffer {
             .chain(&delta.drained)
             .map(PendingKey::target)
             .collect::<BTreeSet<_>>();
+        if targets.is_empty() {
+            return Ok(outcome);
+        }
         let mut matched = BTreeSet::new();
         let mut tool_statement = conn.prepare_cached(
             "SELECT EXISTS(
@@ -313,10 +322,33 @@ impl RamReconciliationBuffer {
 
     pub(crate) fn commit(&mut self, outcome: RamReconciliationOutcome) {
         for key in outcome.remove {
-            self.pending.remove(&key);
+            self.remove_pending(&key);
         }
         for (key, entry) in outcome.insert {
+            // A newer usage snapshot (or exact tool retry) may now belong to
+            // another source. Remove its old ownership before reindexing it.
+            self.remove_pending(&key);
+            if let Some(source) = entry.source {
+                self.by_source
+                    .entry(source)
+                    .or_default()
+                    .insert(key.clone());
+            }
             self.pending.insert(key, entry);
+        }
+    }
+
+    fn remove_pending(&mut self, key: &PendingKey) {
+        let Some(entry) = self.pending.remove(key) else {
+            return;
+        };
+        if let Some(source) = entry.source
+            && let Some(keys) = self.by_source.get_mut(&source)
+        {
+            keys.remove(key);
+            if keys.is_empty() {
+                self.by_source.remove(&source);
+            }
         }
     }
 
@@ -405,21 +437,24 @@ fn pending_key(op: &IngestOp) -> Option<PendingKey> {
             correlation_key,
             evidence,
             ..
-        } => Some(PendingKey::Tool {
-            target: ToolTarget {
+        } => Some(PendingKey {
+            target: RelationTarget::Tool(ToolTarget {
                 session_id: session_id.clone(),
                 correlation_key: correlation_key.clone(),
-            },
-            evidence: evidence.clone(),
+            }),
+            evidence: Some(evidence.clone()),
         }),
         IngestOp::Usage {
             session_id,
             response,
             ..
-        } => Some(PendingKey::Usage(UsageTarget {
-            session_id: session_id.clone(),
-            response: response.clone(),
-        })),
+        } => Some(PendingKey {
+            target: RelationTarget::Usage(UsageTarget {
+                session_id: session_id.clone(),
+                response: response.clone(),
+            }),
+            evidence: None,
+        }),
         _ => None,
     }
 }
@@ -429,7 +464,7 @@ fn validate_pending_identity(
     previous: &IngestOp,
     current: &IngestOp,
 ) -> Result<(), StoreError> {
-    if matches!(key, PendingKey::Tool { .. }) && previous != current {
+    if matches!(key.target, RelationTarget::Tool(_)) && previous != current {
         return Err(StoreError::ProjectionInvalid {
             message: format!("conflicting RAM tool updates share evidence order for {key:?}"),
         });

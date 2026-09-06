@@ -263,6 +263,20 @@ impl<'a> LiveRunner<'a> {
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
         self.tick_inner(store, instrument, self.live.tick, false, true)
+            .map(|_| ())
+    }
+
+    /// Drain ready hints and run due recovery work without waiting on this
+    /// runtime. A shared writer waits once on `rosetta_capture::SourceWake`
+    /// between passes, and publishes committed effects after each runner.
+    /// Returns true when the coalescing budget was exhausted: more hints may
+    /// remain, so make another fair pass before waiting again.
+    pub fn tick_ready(
+        &mut self,
+        store: &mut Store,
+        instrument: &Instrument,
+    ) -> Result<bool, PipelineError> {
+        self.tick_inner(store, instrument, Duration::ZERO, false, true)
     }
 
     /// Perform the process-start handoff without sleeping: drain every queued
@@ -278,6 +292,7 @@ impl<'a> LiveRunner<'a> {
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
         self.tick_inner(store, instrument, Duration::ZERO, true, false)
+            .map(|_| ())
     }
 
     fn tick_inner(
@@ -287,7 +302,7 @@ impl<'a> LiveRunner<'a> {
         initial_wait: Duration,
         force_poll: bool,
         run_audit: bool,
-    ) -> Result<(), PipelineError> {
+    ) -> Result<bool, PipelineError> {
         self.report.ticks += 1;
         let mut changed: BTreeSet<String> = BTreeSet::new();
         let mut needs_admission = false;
@@ -389,7 +404,7 @@ impl<'a> LiveRunner<'a> {
                 self.report.stream.merge_from(&outcome);
             }
         }
-        Ok(())
+        Ok(budget == 0 && self.live.max_coalesced > 0)
     }
 
     /// Stat scan: the fallback signal, and it must be self-healing — it

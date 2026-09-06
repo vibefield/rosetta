@@ -438,12 +438,27 @@ fn claude_multi_session_slices_match_one_shot() {
     for file in &sliced_files {
         let session = &file.session_id;
         assert_eq!(session_state(&sliced_store, session), StreamState::Indexed);
-        let page = timeline(&sliced_store, session);
+        let mut page = timeline(&sliced_store, session);
         assert!(!page.is_empty(), "{session} projected nothing");
         tools += page
             .iter()
             .filter(|entry| tool_status(entry).is_some())
             .count();
+        // Independent projections can admit files in different orders and
+        // assign different cursor IDs. Prove the same source identity before
+        // mapping those local IDs; byte offsets and all other fields still
+        // compare exactly.
+        let sliced_cursor =
+            queries::cursor_state(sliced_store.conn(), &runtime.id, &file.relative_path)
+                .unwrap()
+                .unwrap();
+        let one_cursor = queries::cursor_state(one_store.conn(), &runtime.id, &file.relative_path)
+            .unwrap()
+            .unwrap();
+        for entry in &mut page {
+            assert_eq!(entry.provenance.src_cursor, Some(sliced_cursor.id));
+            entry.provenance.src_cursor = Some(one_cursor.id);
+        }
         assert_eq!(page, timeline(&one_store, session));
     }
     assert!(tools > 0, "the compared pages must carry tool merges");
