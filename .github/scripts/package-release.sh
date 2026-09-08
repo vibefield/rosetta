@@ -25,7 +25,7 @@ mkdir -p "$staging/empty-home" "$staging/$bundle" dist
 cp "$binary" "$staging/$bundle/rosettad"
 cp README.md "$staging/$bundle/README.md"
 python3 - "$version" "$target" "$staging/$bundle/BUILD.json" <<'PY'
-import json, pathlib, subprocess, sys
+import gzip, json, pathlib, subprocess, sys, tarfile
 version, target, path = sys.argv[1:]
 metadata = {
     "version": version,
@@ -34,8 +34,23 @@ metadata = {
     "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
 }
 pathlib.Path(path).write_text(json.dumps(metadata, indent=2) + "\n")
+root = pathlib.Path(path).parent
+timestamp = int(subprocess.check_output(["git", "log", "-1", "--format=%ct"], text=True))
+
+def normalize(member):
+    member.uid = member.gid = 0
+    member.uname = member.gname = ""
+    member.mtime = timestamp
+    member.mode = 0o755 if member.isdir() or member.name.endswith("/rosettad") else 0o644
+    member.pax_headers = {}
+    return member
+
+# Python's tar writer excludes macOS AppleDouble files and extended attributes.
+with open(f"dist/{root.name}.tar.gz", "wb") as output:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=timestamp) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w") as archive:
+            archive.add(root, arcname=root.name, filter=normalize)
 PY
-tar -czf "dist/$bundle.tar.gz" -C "$staging" "$bundle"
 (
   cd dist
   shasum -a 256 "$bundle.tar.gz" > "$bundle.tar.gz.sha256"
