@@ -73,18 +73,7 @@ export async function handleForTimelineMetaArtifact(
     );
   }
 
-  let url: URL;
-  try {
-    url = new URL(source.asset.url, `${client.baseUrl}/`);
-  } catch {
-    throw new Error("that stored artifact is no longer available");
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("that stored artifact has an unsupported address");
-  }
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`artifact read failed · HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await client.readAsset(source.asset);
   return handle(
     `timeline-meta:artifact:${sessionId}:${artifact.id}`,
     nameWithType(artifact.name, artifact.media_type ?? source.asset.media_type),

@@ -23,10 +23,11 @@ export function RollCallPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     let timer: number | undefined;
     const load = () => {
       client
-        .discoveries()
+        .discoveries(controller.signal)
         .then((response) => {
           if (cancelled) return;
           setRows(response.discoveries);
@@ -45,6 +46,7 @@ export function RollCallPanel() {
     load();
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, []);

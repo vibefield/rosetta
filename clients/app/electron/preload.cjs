@@ -26,6 +26,12 @@ ipcRenderer.on("ah-worktree-status", (_event, payload) => {
 });
 
 contextBridge.exposeInMainWorld("agentHistoryHost", {
+  daemonState: () => ipcRenderer.invoke("ah-daemon-state"),
+  onDaemonState: (listener) => {
+    const handler = (_event, state) => listener(state);
+    ipcRenderer.on("ah-daemon-state", handler);
+    return () => ipcRenderer.removeListener("ah-daemon-state", handler);
+  },
   /** The user's home directory, so paths can set as `~/…` the way the design
    * record writes them. The daemon cannot answer this: it reports agent data
    * roots already shortened to `~/.claude`, which names no home. */

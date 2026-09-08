@@ -64,13 +64,39 @@ pub enum HubItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Topic {
     Session(String),
+    Collaboration(String),
     Meta,
+}
+
+impl Topic {
+    fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::Session(id) | Self::Collaboration(id) => Some(id),
+            Self::Meta => None,
+        }
+    }
+
+    fn accepts(&self, session_id: &str, mutation: &Mutation) -> bool {
+        match self {
+            Self::Session(id) => id == session_id,
+            Self::Collaboration(id) if id == session_id => match mutation {
+                Mutation::Message(row) => {
+                    matches!(row.body, rosetta_core::TimelineBody::Collaboration { .. })
+                        || (row.response.is_some() && (row.model.is_some() || row.effort.is_some()))
+                }
+                Mutation::Usage { .. } => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
 struct SubShared {
     queue: Mutex<VecDeque<HubItem>>,
     ready: Condvar,
+    async_ready: tokio::sync::Notify,
     /// The barrier: while set, publishes skip this subscriber.
     needs_resync: AtomicBool,
     closed: AtomicBool,
@@ -84,6 +110,16 @@ pub struct Subscription {
 }
 
 impl Subscription {
+    /// One async consumer sleeps until publication; no bridge thread or polling.
+    pub async fn recv(&self) -> HubItem {
+        loop {
+            let notified = self.shared.async_ready.notified();
+            if let Some(item) = self.try_recv() {
+                return item;
+            }
+            notified.await;
+        }
+    }
     /// Block for the next item, up to `timeout`.
     pub fn recv_timeout(&self, timeout: Duration) -> Option<HubItem> {
         let deadline = Instant::now() + timeout;
@@ -248,6 +284,25 @@ impl Hub {
         (sub, stamp)
     }
 
+    /// Capture registration, the replay gap, and its endpoint under one lock.
+    pub fn subscribe_resuming(
+        &self,
+        session_id: &str,
+        resume: Option<Stamp>,
+        now: Ms,
+    ) -> (Subscription, Stamp, Option<Replay>) {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        let stamp = state.rings.stamp(session_id, now);
+        let replay = resume.map(|resume| state.rings.replay_after(session_id, resume, now));
+        let sub = register(&mut state, Topic::Session(session_id.to_owned()));
+        (sub, stamp, replay)
+    }
+
+    pub fn subscribe_collaboration(&self, session_id: &str) -> Subscription {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        register(&mut state, Topic::Collaboration(session_id.to_owned()))
+    }
+
     /// Subscribe to the metadata surface. Read the current lists via
     /// [`Hub::sessions`]/[`Hub::projects`]/[`Hub::runtimes`] after
     /// subscribing; diffs stream from there.
@@ -268,10 +323,7 @@ impl Hub {
         state
             .subs
             .values()
-            .filter_map(|entry| match &entry.topic {
-                Topic::Session(session_id) => Some(session_id.clone()),
-                Topic::Meta => None,
-            })
+            .filter_map(|entry| entry.topic.session_id().map(str::to_owned))
             .collect()
     }
 
@@ -284,7 +336,7 @@ impl Hub {
         sub.shared.needs_resync.store(false, Ordering::SeqCst);
         match entry_topic {
             Topic::Session(session_id) => Some(state.rings.stamp(&session_id, now)),
-            Topic::Meta => None,
+            Topic::Meta | Topic::Collaboration(_) => None,
         }
     }
 
@@ -312,7 +364,7 @@ impl Hub {
         for session_id in session_ids {
             state.rings.invalidate(session_id, now);
             for entry in state.subs.values() {
-                if matches!(&entry.topic, Topic::Session(topic) if topic == session_id) {
+                if entry.topic.session_id() == Some(session_id) {
                     resyncs += u64::from(raise_barrier(&entry.shared));
                 }
             }
@@ -377,9 +429,7 @@ impl Hub {
                 swept_sessions.insert(session_id.clone());
                 state.rings.invalidate(session_id, now);
                 for entry in state.subs.values() {
-                    if let Topic::Session(topic_session) = &entry.topic
-                        && topic_session == session_id
-                    {
+                    if entry.topic.session_id() == Some(session_id.as_str()) {
                         report.resyncs += u64::from(raise_barrier(&entry.shared));
                     }
                 }
@@ -392,9 +442,7 @@ impl Hub {
             let stamp = state.rings.push(&session_id, item.clone());
             report.session_mutations += 1;
             for entry in state.subs.values() {
-                if let Topic::Session(topic_session) = &entry.topic
-                    && topic_session == &session_id
-                {
+                if entry.topic.accepts(&session_id, &item) {
                     report.resyncs += u64::from(deliver(
                         &entry.shared,
                         self.config.subscriber_queue,
@@ -448,7 +496,7 @@ impl Hub {
             .values()
             .filter_map(|entry| match &entry.topic {
                 Topic::Session(session_id) => Some(session_id.clone()),
-                Topic::Meta => None,
+                Topic::Meta | Topic::Collaboration(_) => None,
             })
             .collect();
         report.rings_evicted = state.rings.evict_idle(now, &keep) as u64;
@@ -480,6 +528,7 @@ fn register(state: &mut HubState, topic: Topic) -> Subscription {
     let shared = Arc::new(SubShared {
         queue: Mutex::new(VecDeque::new()),
         ready: Condvar::new(),
+        async_ready: tokio::sync::Notify::new(),
         needs_resync: AtomicBool::new(false),
         closed: AtomicBool::new(false),
     });
@@ -530,6 +579,7 @@ fn deliver(shared: &SubShared, capacity: usize, item: HubItem) -> bool {
     }
     queue.push_back(item);
     shared.ready.notify_all();
+    shared.async_ready.notify_one();
     false
 }
 
@@ -542,5 +592,6 @@ fn raise_barrier(shared: &SubShared) -> bool {
     queue.clear();
     queue.push_back(HubItem::Resync);
     shared.ready.notify_all();
+    shared.async_ready.notify_one();
     true
 }

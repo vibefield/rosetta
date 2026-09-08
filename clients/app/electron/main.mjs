@@ -6,8 +6,7 @@
 // already honors. The archive is the app's own; the user's first launch is
 // the roll call, because a fresh db reads nothing until consent. Dev loads
 // the Vite server (a loopback origin the daemon's CORS policy admits);
-// packaged builds will need an app:// scheme admitted by the daemon before
-// file:// is ever an origin — deliberately not wired yet.
+// built renderers use the registered rosetta://app origin admitted by the daemon.
 //
 // The worktree column adds the one native concern this shell owns: the mille
 // engine runs in a UtilityProcess per project root (killed and re-forked on
@@ -17,15 +16,27 @@
 //
 // The file viewer adds exactly one act that leaves the app, and it is gated
 // here rather than there: see `ah-file-open-browser-preview`.
-import { execFile, spawn } from "node:child_process";
-import { mkdirSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, MessageChannelMain, app, ipcMain, net, shell, utilityProcess } from "electron";
+import {
+  BrowserWindow,
+  MessageChannelMain,
+  app,
+  ipcMain,
+  net,
+  protocol,
+  shell,
+  utilityProcess,
+} from "electron";
+import { createDaemonService } from "./daemon-service.mjs";
+import { APP_SCHEME, APP_ORIGIN, APP_PRIVILEGES, rendererFileUrl } from "./app-protocol.mjs";
 import { createBrowserPreviewService } from "./browser-preview.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: APP_PRIVILEGES }]);
 
 // ── Single instance ──────────────────────────────────────────────────────
 // Two shells would race two daemons for one db (rosettad's projection lock
@@ -51,7 +62,14 @@ if (!singleInstance) {
 // clearing can reach it. `AH_DB` repoints the file (e.g. onto an external
 // disk); `AH_DAEMON` skips the spawn entirely and uses an already-running
 // daemon.
-let daemonProcess = null;
+let daemonService = null;
+let daemonState = { phase: "starting", origin: null, error: null, revision: 0 };
+function publishDaemonState(state) {
+  daemonState = { ...state, revision: daemonState.revision + 1 };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("ah-daemon-state", daemonState);
+  }
+}
 
 function resolveDbPath() {
   return process.env.AH_DB ?? path.join(app.getPath("userData"), "archive", "rosetta.db");
@@ -89,73 +107,6 @@ async function resolveDaemonBin() {
     }
   }
   return null;
-}
-
-/** Spawn `rosettad serve` on the app's db and resolve the origin from its
- * bind-early serving line. Resolves null if it dies or stalls first — the
- * room then draws its honest disconnected state. No `--agent` flags: a fresh
- * db awaits consent, so first launch IS the roll call. */
-function startDaemon(bin, dbPath) {
-  mkdirSync(path.dirname(dbPath), { recursive: true });
-  console.log(`starting optimized rosettad: ${bin}`);
-  const proc = spawn(
-    bin,
-    ["serve", "--db", dbPath, "--addr", "127.0.0.1:0"],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-  daemonProcess = proc;
-  return new Promise((resolve) => {
-    let greeting = "";
-    let settled = false;
-    const settle = (origin) => {
-      if (!settled) {
-        settled = true;
-        resolve(origin);
-      }
-    };
-    proc.stdout.on("data", (chunk) => {
-      process.stdout.write(`[rosettad] ${chunk}`);
-      if (settled) return;
-      greeting += String(chunk);
-      const served = greeting.match(/serving (http:\/\/[0-9.]+:[0-9]+)/);
-      if (served) settle(served[1]);
-    });
-    proc.stderr.on("data", (chunk) => process.stderr.write(`[rosettad] ${chunk}`));
-    proc.on("exit", (code) => {
-      if (proc === daemonProcess) daemonProcess = null;
-      if (!settled) console.error(`rosettad exited before serving (code ${code})`);
-      settle(null);
-    });
-    proc.on("error", (err) => {
-      if (proc === daemonProcess) daemonProcess = null;
-      if (!settled) console.error(`rosettad failed to start: ${err.message}`);
-      settle(null);
-    });
-    // The listener binds at process start; seconds of silence mean wedged.
-    setTimeout(() => settle(null), 8000);
-  });
-}
-
-/** SIGINT cooperatively cancels a fresh private RAM build (or stops an
- * existing resumable writer at a bounded seam). Give Rust time to join its
- * workers; the hard kill is only for a wedged process. */
-function stopDaemon() {
-  if (daemonProcess === null) return;
-  const proc = daemonProcess;
-  daemonProcess = null;
-  try {
-    proc.kill("SIGINT");
-  } catch {
-    return;
-  }
-  const hardKill = setTimeout(() => {
-    try {
-      proc.kill("SIGKILL");
-    } catch {
-      /* already gone */
-    }
-  }, 10000);
-  proc.on("exit", () => clearTimeout(hardKill));
 }
 
 /** The origin the renderer should talk to, threaded through the `?daemon=`
@@ -283,11 +234,7 @@ function openWorktree(contents, root) {
         failFxSession(session, "The worktree window closed before it connected.");
         return;
       }
-      contents.postMessage(
-        "ah-worktree-ports",
-        { root, generation },
-        [tree.port2, git.port2],
-      );
+      contents.postMessage("ah-worktree-ports", { root, generation }, [tree.port2, git.port2]);
     } catch (error) {
       failFxSession(
         session,
@@ -335,14 +282,17 @@ async function gitFacts(root) {
     for (const block of listed.split("\n\n")) {
       const lines = block.split("\n");
       const p = lines.find((l) => l.startsWith("worktree "))?.slice(9);
-      const b = lines.find((l) => l.startsWith("branch "))?.slice(7).replace("refs/heads/", "");
+      const b = lines
+        .find((l) => l.startsWith("branch "))
+        ?.slice(7)
+        .replace("refs/heads/", "");
       if (p) worktrees.push({ path: p, branch: b ?? null });
     }
   }
   return { branch, dirty, worktrees };
 }
 
-function createWindow(daemonOrigin) {
+function createWindow() {
   // `--frame WxH` (smoke only): prove H-3 at a chosen width.
   const frameAt = process.argv.indexOf("--frame");
   const frame = frameAt !== -1 ? process.argv[frameAt + 1]?.split("x").map(Number) : null;
@@ -370,11 +320,8 @@ function createWindow(daemonOrigin) {
     return { action: "deny" };
   });
 
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (devUrl) win.loadURL(withDaemonParam(devUrl, daemonOrigin));
-  else if (daemonOrigin !== null)
-    win.loadFile(path.join(here, "../dist/index.html"), { query: { daemon: daemonOrigin } });
-  else win.loadFile(path.join(here, "../dist/index.html"));
+  const url = process.env.ELECTRON_RENDERER_URL ?? `${APP_ORIGIN}/index.html`;
+  win.loadURL(withDaemonParam(url, daemonState.origin ?? "http://127.0.0.1:0"));
   return win;
 }
 
@@ -399,6 +346,14 @@ async function smoke(win, out, delayMs) {
 
 app.whenReady().then(async () => {
   if (!singleInstance) return;
+  protocol.handle(APP_SCHEME, (request) => {
+    if (request.method !== "GET") return new Response(null, { status: 405 });
+    const file = rendererFileUrl(request.url, path.join(here, "../dist"));
+    return file === null
+      ? new Response(null, { status: 404 })
+      : net.fetch(file, { bypassCustomProtocolHandlers: true });
+  });
+  ipcMain.handle("ah-daemon-state", () => daemonState);
 
   // An explicit daemon — `AH_DAEMON`, or a `?daemon=` already in the dev
   // URL (the smoke recipes) — means someone else owns the archive; only
@@ -408,14 +363,28 @@ app.whenReady().then(async () => {
   const devHasDaemon = devUrl ? new URL(devUrl).searchParams.has("daemon") : false;
   if (daemonOrigin === null && !devHasDaemon) {
     const bin = await resolveDaemonBin();
+    if (shutdownStarted) return;
     if (bin === null) {
-      console.error("no rosettad binary — set ROSETTAD_BIN or `cargo build -p rosettad`");
+      publishDaemonState({
+        phase: "failed",
+        origin: null,
+        error: "No daemon binary was found. Build rosettad or set ROSETTAD_BIN.",
+      });
     } else {
-      daemonOrigin = await startDaemon(bin, resolveDbPath());
+      daemonService = createDaemonService({
+        bin,
+        dbPath: resolveDbPath(),
+        onState: publishDaemonState,
+      });
+      await daemonService.start();
     }
+  } else {
+    daemonOrigin = devHasDaemon ? new URL(devUrl).searchParams.get("daemon") : daemonOrigin;
+    publishDaemonState({ phase: "external", origin: daemonOrigin, error: null });
   }
 
-  const win = createWindow(daemonOrigin);
+  if (shutdownStarted) return;
+  const win = createWindow();
 
   // The renderer names the project root it is reading (learned from
   // rosettad); this process validates it is a real directory before any
@@ -462,7 +431,10 @@ app.whenReady().then(async () => {
     tempDirectory: app.getPath("temp"),
     openPath: (target) => shell.openPath(target),
   });
-  ipcMain.handle("ah-file-open-browser-preview", (_event, raw) => browserPreviews?.open(raw) ?? false);
+  ipcMain.handle(
+    "ah-file-open-browser-preview",
+    (_event, raw) => browserPreviews?.open(raw) ?? false,
+  );
 
   // A web line's site icon. The renderer names a host it read out of a
   // transcript and asks; this side decides whether that host is dialled at
@@ -495,7 +467,7 @@ app.whenReady().then(async () => {
     smoke(win, out, delayMs);
   }
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(daemonOrigin);
+    if (!shutdownStarted && BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
@@ -503,12 +475,21 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+let shutdownStarted = false;
+let shutdownComplete = false;
+app.on("before-quit", (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   const session = fxSession;
   fxSession = null;
   worktreeRoot = null;
   stopFxSession(session);
   browserPreviews?.dispose();
   browserPreviews = null;
-  stopDaemon();
+  void (daemonService?.stop() ?? Promise.resolve()).then(() => {
+    shutdownComplete = true;
+    app.quit();
+  });
 });

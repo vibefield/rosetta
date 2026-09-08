@@ -294,7 +294,17 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .await
         }
     });
-    println!("serving http://{local} — {warmed} mirror rows warm (ctrl-c to stop)");
+    if flags.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "event": "ready", "origin": format!("http://{local}"),
+                "protocol_version": rosetta_server::PROTOCOL_VERSION,
+            })
+        );
+    } else {
+        println!("serving http://{local} — {warmed} mirror rows warm (ctrl-c to stop)");
+    }
 
     // Mid-backfill readers ride the metadata effects seam: every committed
     // batch names exactly the identity rows it may have moved, and the

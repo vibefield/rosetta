@@ -26,7 +26,7 @@ use rosetta_protocol::{
     ContributionResponse, DiscoveriesResponse, EnableRequest, EnableResponse, ErrorCode,
     HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse, RuntimesResponse, SearchRequest,
     SearchResponse, SessionResponse, SessionsResponse, StatusResponse, TimelineCursor,
-    TimelinePage, UsageResponse,
+    TimelineEntryResponse, TimelinePage, UsageResponse,
 };
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
@@ -255,6 +255,10 @@ pub fn router(state: AppState) -> Router {
             get(command),
         )
         .route(
+            "/api/sessions/{id}/timeline/{timeline_id}/work",
+            get(report_work),
+        )
+        .route(
             "/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}",
             get(read_file_target)
                 .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
@@ -279,6 +283,22 @@ pub fn router(state: AppState) -> Router {
             get(crate::ws::session)
                 .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
         )
+        .route(
+            "/ws/collaboration/{id}",
+            get(crate::ws::collaboration)
+                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+        )
+        .layer(axum::middleware::from_fn(
+            |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                let mut response = next.run(request).await;
+                response.headers_mut().insert(
+                    "x-rosetta-protocol-version",
+                    HeaderValue::from_str(&PROTOCOL_VERSION.to_string())
+                        .expect("numeric protocol version"),
+                );
+                response
+            },
+        ))
         .layer(cors_layer())
         .with_state(state)
 }
@@ -294,17 +314,20 @@ fn cors_layer() -> tower_http::cors::CorsLayer {
         .allow_origin(AllowOrigin::predicate(|origin, _| origin_allowed(origin)))
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
         .allow_headers(tower_http::cors::Any)
+        .expose_headers([axum::http::HeaderName::from_static(
+            "x-rosetta-protocol-version",
+        )])
 }
 
 /// The origin policy, shared with the WebSocket upgrade guard: any port on a
-/// loopback host, plus the packaged Tauri shell. A `null` origin (sandboxed
+/// loopback host, plus the Tauri and Electron shells. A `null` origin (sandboxed
 /// iframes, some file:// contexts) is deliberately NOT allowed — any site
 /// can manufacture one.
 pub(crate) fn origin_allowed(origin: &axum::http::HeaderValue) -> bool {
     let Ok(text) = origin.to_str() else {
         return false;
     };
-    if text == "tauri://localhost" {
+    if text == "tauri://localhost" || text == "rosetta://app" {
         return true;
     }
     let rest = match text.split_once("://") {
@@ -396,6 +419,9 @@ where
 {
     tokio::task::spawn_blocking(move || {
         let conn = projection.open()?;
+        // Watermarks and their rows must come from the same SQLite snapshot.
+        conn.execute_batch("BEGIN DEFERRED")
+            .map_err(|error| store_err(error.into()))?;
         read(&conn)
     })
     .await
@@ -798,47 +824,62 @@ async fn timeline(
     let limit = clamp_limit(query.limit, DEFAULT_LIST_LIMIT);
     let hide_pending = !state.projection.is_published();
     let page = with_read(state.projection.clone(), move |conn| {
-        let Some(session) = queries::session(conn, &id).map_err(store_err)? else {
-            return Err(Failure::not_found(format!("no session {id}")));
-        };
-        // A fresh runtime's source batches and RAM reconciliation use
-        // separate physical commits. Metadata remains immediately public,
-        // but its payload is admitted only when the final readiness commit
-        // changes Pending to Streaming/Indexed.
-        if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
-            return Ok(TimelinePage {
-                entries: Vec::new(),
-                cursor: None,
-            });
-        }
-        let watermark = queries::session_watermark(conn, &id).map_err(store_err)?;
-        let before = match &query.cursor {
-            None => None,
-            Some(text) => {
-                let cursor = TimelineCursor::decode(text).ok_or_else(Failure::cursor_expired)?;
-                if cursor.session_id != id || cursor.watermark != watermark {
-                    return Err(Failure::cursor_expired());
-                }
-                Some(cursor.before)
-            }
-        };
-        let entries = queries::timeline_page(conn, &id, before, limit).map_err(store_err)?;
-        let cursor = if entries.len() as i64 == limit {
-            entries.first().map(|oldest| {
-                TimelineCursor {
-                    session_id: id.clone(),
-                    before: oldest.ordinal,
-                    watermark,
-                }
-                .encode()
-            })
-        } else {
-            None
-        };
-        Ok(TimelinePage { entries, cursor })
+        read_timeline_page(conn, &id, limit, query.cursor.as_deref(), hide_pending)
     })
     .await?;
     Ok(Json(page))
+}
+
+pub(crate) fn read_timeline_page(
+    conn: &Connection,
+    id: &str,
+    limit: i64,
+    cursor: Option<&str>,
+    hide_pending: bool,
+) -> Result<TimelinePage, Failure> {
+    let Some(session) = queries::session(conn, id).map_err(store_err)? else {
+        return Err(Failure::not_found(format!("no session {id}")));
+    };
+    let watermark = queries::session_watermark(conn, id).map_err(store_err)?;
+    // A fresh runtime's source batches and RAM reconciliation use
+    // separate physical commits. Metadata remains immediately public,
+    // but its payload is admitted only when the final readiness commit
+    // changes Pending to Streaming/Indexed.
+    if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+        return Ok(TimelinePage {
+            entries: Vec::new(),
+            cursor: None,
+            watermark,
+        });
+    }
+    let before = match cursor {
+        None => None,
+        Some(text) => {
+            let cursor = TimelineCursor::decode(text).ok_or_else(Failure::cursor_expired)?;
+            if cursor.session_id != id || cursor.watermark != watermark {
+                return Err(Failure::cursor_expired());
+            }
+            Some(cursor.before)
+        }
+    };
+    let entries = queries::timeline_page(conn, id, before, limit).map_err(store_err)?;
+    let cursor = if entries.len() as i64 == limit {
+        entries.first().map(|oldest| {
+            TimelineCursor {
+                session_id: id.to_owned(),
+                before: oldest.ordinal,
+                watermark: watermark.clone(),
+            }
+            .encode()
+        })
+    } else {
+        None
+    };
+    Ok(TimelinePage {
+        entries,
+        cursor,
+        watermark,
+    })
 }
 
 async fn collaboration_timeline(
@@ -869,7 +910,7 @@ async fn collaboration_timeline(
 async fn timeline_entry(
     State(state): State<AppState>,
     UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
-) -> Result<Json<rosetta_core::TimelineEntry>, Failure> {
+) -> Result<Json<TimelineEntryResponse>, Failure> {
     let hide_pending = !state.projection.is_published();
     with_read(state.projection.clone(), move |conn| {
         let Some(session) = queries::session(conn, &session_id).map_err(store_err)? else {
@@ -878,10 +919,26 @@ async fn timeline_entry(
         if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
             return Err(Failure::not_found("that timeline row is not available"));
         }
+        let watermark = queries::session_watermark(conn, &session_id).map_err(store_err)?;
         queries::timeline_entry(conn, &session_id, &timeline_id)
             .map_err(store_err)?
-            .map(Json)
+            .map(|entry| Json(TimelineEntryResponse { entry, watermark }))
             .ok_or_else(|| Failure::not_found("that timeline row is not available"))
+    })
+    .await
+}
+
+/// The report itself authorizes the exact source session and inclusive bounds.
+/// Private worker content is loaded only when the work disclosure is opened.
+async fn report_work(
+    State(state): State<AppState>,
+    UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
+) -> Result<Json<Vec<rosetta_core::TimelineEntry>>, Failure> {
+    with_read(state.projection.clone(), move |conn| {
+        queries::report_work(conn, &session_id, &timeline_id)
+            .map_err(store_err)?
+            .map(Json)
+            .ok_or_else(|| Failure::not_found("that report has no available recorded work"))
     })
     .await
 }

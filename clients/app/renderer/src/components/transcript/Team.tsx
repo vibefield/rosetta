@@ -443,7 +443,7 @@ function TeamReport({
   const workFacts =
     work === null
       ? null
-      : [work.actionCount === 0 ? "recorded work" : `${work.actionCount} ${work.actionCount === 1 ? "action" : "actions"}`, workSpan]
+      : [work.actionCount === null || work.actionCount === 0 ? "recorded work" : `${work.actionCount} ${work.actionCount === 1 ? "action" : "actions"}`, workSpan]
           .filter((fact): fact is string => fact !== null)
           .join(" · ");
   return (
@@ -520,7 +520,7 @@ export interface TeamEventProps {
 
 export interface TeamReportWorkPresentation {
   readonly content: ReactNode;
-  readonly actionCount: number;
+  readonly actionCount: number | null;
   readonly startedAt: number | null;
   readonly endedAt: number | null;
 }

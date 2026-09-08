@@ -2,6 +2,7 @@
 import type { ApiError } from "./ApiError";
 import type { Mutation } from "./Mutation";
 import type { ProjectRow } from "./ProjectRow";
+import type { ResponseRuntime } from "./ResponseRuntime";
 import type { RuntimeRow } from "./RuntimeRow";
 import type { SessionRow } from "./SessionRow";
 import type { Stamp } from "./Stamp";
@@ -10,9 +11,9 @@ import type { TimelineMeta } from "./TimelineMeta";
 
 /**
  * Server→client WebSocket frames. The subscribe protocol is the hub's:
- * `Hello` stamps the position, a snapshot frame covers everything up to it,
- * mutations continue from there (at-least-once; clients key by
+ * `Hello` advertises the target position; only an applied snapshot or complete
+ * replay (`CaughtUp`) acknowledges it. Mutations continue from there (at-least-once; clients key by
  * `timeline_id`), and `Resync` announces a barrier — the server re-stamps
  * and sends a fresh snapshot immediately after.
  */
-export type ServerFrame = { "frame": "hello", protocol_version: number, stamp: Stamp | null, } | { "frame": "timeline_snapshot", stamp: Stamp, entries: Array<TimelineEntry>, timeline_meta: TimelineMeta, } | { "frame": "timeline_meta_snapshot", stamp: Stamp | null, timeline_meta: TimelineMeta, } | { "frame": "meta_snapshot", runtimes: Array<RuntimeRow>, projects: Array<ProjectRow>, sessions: Array<SessionRow>, } | { "frame": "mutation", stamp: Stamp | null, mutation: Mutation, } | { "frame": "resync" } | { "frame": "error", error: ApiError, };
+export type ServerFrame = { "frame": "hello", protocol_version: number, stamp: Stamp | null, } | { "frame": "timeline_snapshot", stamp: Stamp, entries: Array<TimelineEntry>, timeline_meta: TimelineMeta, cursor: string | null, watermark: string, } | { "frame": "caught_up", stamp: Stamp, } | { "frame": "collaboration_snapshot", entries: Array<TimelineEntry>, response_runtimes: Array<ResponseRuntime>, } | { "frame": "response_runtime", observation: ResponseRuntime, } | { "frame": "timeline_meta_snapshot", stamp: Stamp | null, timeline_meta: TimelineMeta, } | { "frame": "meta_snapshot", runtimes: Array<RuntimeRow>, projects: Array<ProjectRow>, sessions: Array<SessionRow>, } | { "frame": "mutation", stamp: Stamp | null, mutation: Mutation, } | { "frame": "resync" } | { "frame": "error", error: ApiError, };

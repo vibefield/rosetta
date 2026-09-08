@@ -31,7 +31,7 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -283,10 +283,19 @@ pub struct SessionResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TimelinePage {
     pub entries: Vec<TimelineEntry>,
+    /// Projection generation shared by the snapshot, pages, and exact reads.
+    pub watermark: String,
     /// Opaque continuation for the next older page; `None` at the top of
     /// the timeline. Expires (HTTP 410, [`ErrorCode::CursorExpired`]) when
     /// the session's projection was rewritten under it.
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TimelineEntryResponse {
+    pub entry: TimelineEntry,
+    pub watermark: String,
 }
 
 /// Complete shared speech for one team-member session. Private work is not
@@ -385,6 +394,7 @@ pub struct UsageResponse {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum ErrorCode {
+    IncompatibleProtocol,
     NotFound,
     BadRequest,
     /// The requested derived surface is unavailable until canonical publish.
@@ -402,8 +412,8 @@ pub struct ApiError {
 }
 
 /// Server→client WebSocket frames. The subscribe protocol is the hub's:
-/// `Hello` stamps the position, a snapshot frame covers everything up to it,
-/// mutations continue from there (at-least-once; clients key by
+/// `Hello` advertises the target position; only an applied snapshot or complete
+/// replay (`CaughtUp`) acknowledges it. Mutations continue from there (at-least-once; clients key by
 /// `timeline_id`), and `Resync` announces a barrier — the server re-stamps
 /// and sends a fresh snapshot immediately after.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -420,6 +430,21 @@ pub enum ServerFrame {
         stamp: Stamp,
         entries: Vec<TimelineEntry>,
         timeline_meta: TimelineMeta,
+        cursor: Option<String>,
+        watermark: String,
+    },
+    /// Commits the resume position only after the entire replay was applied.
+    /// Also completes a reconnect with an empty replay.
+    CaughtUp {
+        stamp: Stamp,
+    },
+    /// Complete shared conversation; private work stays behind exact lazy reads.
+    CollaborationSnapshot {
+        entries: Vec<TimelineEntry>,
+        response_runtimes: Vec<ResponseRuntime>,
+    },
+    ResponseRuntime {
+        observation: ResponseRuntime,
     },
     /// A coalesced replacement of the session work index after a relevant
     /// committed mutation. Bodies remain behind their lazy read references.
@@ -433,8 +458,8 @@ pub enum ServerFrame {
         projects: Vec<ProjectRow>,
         sessions: Vec<SessionRow>,
     },
-    /// Replayed ring history between the client's resume stamp and `Hello`'s
-    /// stamp. Same shape as live mutations.
+    /// Live mutations carry a stamp on session streams. Replayed mutations
+    /// carry None and commit together at CaughtUp; collaboration/meta are unstamped.
     Mutation {
         stamp: Option<Stamp>,
         mutation: Mutation,

@@ -4,8 +4,7 @@
 //! (at-least-once — clients key by `timeline_id`), and a `Resync` frame
 //! announces the barrier before a replacement snapshot.
 //!
-//! The hub is synchronous; each connection runs one bridge thread that
-//! blocks on the subscription and forwards items into an async channel. The
+//! The synchronous hub wakes async subscribers directly through Notify. The
 //! stream loops are generic over [`FrameSink`] so tests drive them without
 //! sockets — the axum upgrade handlers are thin glue.
 
@@ -22,12 +21,13 @@ use rosetta_protocol::{PROTOCOL_VERSION, ServerFrame, Stamp};
 use rosetta_store::hot::{Mutation, Replay};
 use rosetta_store::{queries, timeline_meta};
 
-use crate::http::{AppState, Failure, ProjectionReader, origin_allowed, with_read};
+use crate::http::{
+    AppState, Failure, ProjectionReader, origin_allowed, read_timeline_page, with_read,
+};
 use crate::hub::{Hub, HubItem, Subscription};
 
 /// Messages in the initial timeline snapshot; older history pages via REST.
 const SNAPSHOT_LIMIT: i64 = 200;
-const BRIDGE_POLL: Duration = Duration::from_millis(200);
 /// Idle interval before the server pings. A vanished client fails the ping
 /// (or a later send) instead of holding its subscription forever. Unit
 /// tests compile the short interval so liveness is provable in real time.
@@ -99,30 +99,6 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Forward hub items into async land from a dedicated bridge thread. The
-/// thread exits when the receiver is dropped; the shared [`Subscription`]
-/// stays available to the async side for resync calls.
-fn bridge(sub: Arc<Subscription>) -> tokio::sync::mpsc::Receiver<HubItem> {
-    let (tx, rx) = tokio::sync::mpsc::channel(64);
-    std::thread::spawn(move || {
-        loop {
-            match sub.recv_timeout(BRIDGE_POLL) {
-                Some(item) => {
-                    if tx.blocking_send(item).is_err() {
-                        break;
-                    }
-                }
-                None => {
-                    if tx.is_closed() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-    rx
-}
-
 #[derive(serde::Deserialize)]
 pub(crate) struct ResumeQuery {
     epoch: Option<u64>,
@@ -149,7 +125,7 @@ pub(crate) async fn session(
         let mut sink = WsSink(sender);
         // Either side ending tears the connection down: a Close/error on the
         // read half cancels the stream, dropping the subscription so the hub
-        // prunes it and the bridge thread exits.
+        // prunes it.
         tokio::select! {
             _ = run_session_stream(state, id, resume.stamp(), &mut sink) => {}
             _ = drain_until_close(receiver) => {}
@@ -168,6 +144,136 @@ pub(crate) async fn meta(State(state): State<AppState>, upgrade: WebSocketUpgrad
     })
 }
 
+pub(crate) async fn collaboration(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    upgrade.on_upgrade(move |socket| async move {
+        let (sender, receiver) = socket.split();
+        let mut sink = WsSink(sender);
+        tokio::select! {
+            _ = run_collaboration_stream(state, id, &mut sink) => {}
+            _ = drain_until_close(receiver) => {}
+        }
+    })
+}
+
+async fn collaboration_snapshot(state: &AppState, id: String) -> Result<ServerFrame, Failure> {
+    let hide_pending = !state.projection.is_published();
+    with_read(state.projection.clone(), move |conn| {
+        let session =
+            queries::session(conn, &id).map_err(|error| Failure::internal(error.to_string()))?;
+        let hidden = hide_pending
+            && session
+                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
+        let (entries, response_runtimes) = if hidden {
+            (vec![], vec![])
+        } else {
+            queries::collaboration_timeline(conn, &id)
+                .map_err(|error| Failure::internal(error.to_string()))?
+        };
+        Ok(ServerFrame::CollaborationSnapshot {
+            entries,
+            response_runtimes,
+        })
+    })
+    .await
+}
+
+fn runtime_frame(row: &rosetta_core::TimelineEntry) -> Option<ServerFrame> {
+    if row.model.is_none() && row.effort.is_none() {
+        return None;
+    }
+    Some(ServerFrame::ResponseRuntime {
+        observation: rosetta_protocol::ResponseRuntime {
+            response_id: row.response.as_ref()?.id.clone(),
+            model: row.model.clone(),
+            effort: row.effort.clone(),
+        },
+    })
+}
+
+/// A light, complete conversation projection. No private row or timeline-meta
+/// body is serialized; the hub filters irrelevant tool updates before queuing.
+pub(crate) async fn run_collaboration_stream<S: FrameSink>(
+    state: AppState,
+    id: String,
+    sink: &mut S,
+) {
+    let sub = state.hub.subscribe_collaboration(&id);
+    if sink
+        .send(ServerFrame::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            stamp: None,
+        })
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let Ok(frame) = collaboration_snapshot(&state, id.clone()).await else {
+        return;
+    };
+    if sink.send(frame).await.is_err() {
+        return;
+    }
+    loop {
+        match next_or_ping(&sub, sink).await {
+            ItemOrEnd::End => return,
+            ItemOrEnd::Item(HubItem::Resync) => {
+                if sink.send(ServerFrame::Resync).await.is_err() {
+                    return;
+                }
+                state.hub.resync(&sub, now_ms());
+                let Ok(frame) = collaboration_snapshot(&state, id.clone()).await else {
+                    return;
+                };
+                if sink.send(frame).await.is_err() {
+                    return;
+                }
+            }
+            ItemOrEnd::Item(HubItem::Mutation { mutation, .. }) => {
+                let observation = match &*mutation {
+                    Mutation::Message(row) => {
+                        if matches!(row.body, rosetta_core::TimelineBody::Collaboration { .. })
+                            && sink
+                                .send(ServerFrame::Mutation {
+                                    stamp: None,
+                                    mutation: (*mutation).clone(),
+                                })
+                                .await
+                                .is_err()
+                        {
+                            return;
+                        }
+                        runtime_frame(row)
+                    }
+                    Mutation::Usage { timeline_id, .. } => {
+                        let session_id = id.clone();
+                        let timeline_id = timeline_id.clone();
+                        let Ok(observation) = with_read(state.projection.clone(), move |conn| {
+                            queries::response_runtime(conn, &session_id, &timeline_id)
+                                .map_err(|error| Failure::internal(error.to_string()))
+                        })
+                        .await
+                        else {
+                            return;
+                        };
+                        observation.map(|observation| ServerFrame::ResponseRuntime { observation })
+                    }
+                    _ => None,
+                };
+                if let Some(frame) = observation
+                    && sink.send(frame).await.is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 async fn timeline_snapshot(
     projection: Arc<ProjectionReader>,
     session_id: String,
@@ -180,20 +286,19 @@ async fn timeline_snapshot(
         let hidden = hide_pending
             && session
                 .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
-        let (entries, timeline_meta) = if hidden {
-            (Vec::new(), timeline_meta::TimelineMeta::default())
+        let page = read_timeline_page(conn, &session_id, SNAPSHOT_LIMIT, None, hide_pending)?;
+        let timeline_meta = if hidden {
+            timeline_meta::TimelineMeta::default()
         } else {
-            (
-                queries::timeline_page(conn, &session_id, None, SNAPSHOT_LIMIT)
-                    .map_err(|error| Failure::internal(format!("{error}")))?,
-                timeline_meta::read(conn, &session_id)
-                    .map_err(|error| Failure::internal(format!("{error}")))?,
-            )
+            timeline_meta::read(conn, &session_id)
+                .map_err(|error| Failure::internal(format!("{error}")))?
         };
         Ok(ServerFrame::TimelineSnapshot {
             stamp,
-            entries,
+            entries: page.entries,
             timeline_meta,
+            cursor: page.cursor,
+            watermark: page.watermark,
         })
     })
     .await
@@ -233,7 +338,7 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
     resume: Option<Stamp>,
     sink: &mut S,
 ) {
-    let (sub, stamp) = state.hub.subscribe_session(&session_id, now_ms());
+    let (sub, stamp, replay) = state.hub.subscribe_resuming(&session_id, resume, now_ms());
     let sub = Arc::new(sub);
     if sink
         .send(ServerFrame::Hello {
@@ -247,12 +352,10 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
     }
 
     // A resumable stamp replays the ring gap; anything else takes a full
-    // snapshot. Replayed mutations carry no stamp — `Hello`'s stamp is the
-    // client's position once the replay is drained.
+    // snapshot. Unstamped replay commits only at CaughtUp, after all data
+    // and metadata were delivered. An interrupted replay is safely repeated.
     let mut replayed = false;
-    if let Some(resume) = resume
-        && let Replay::Mutations(items) = state.hub.replay_session(&session_id, resume, now_ms())
-    {
+    if let Some(Replay::Mutations(items)) = replay {
         let mut refresh_timeline_meta = false;
         for mutation in items {
             if matches!(&*mutation, Mutation::TimelineMetaChanged { .. }) {
@@ -277,6 +380,9 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
                 Err(_) => return,
             }
         }
+        if sink.send(ServerFrame::CaughtUp { stamp }).await.is_err() {
+            return;
+        }
         replayed = true;
     }
     if !replayed {
@@ -300,9 +406,8 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
         }
     }
 
-    let mut items = bridge(sub.clone());
     loop {
-        let item = match next_or_ping(&mut items, sink).await {
+        let item = match next_or_ping(&sub, sink).await {
             ItemOrEnd::Item(item) => item,
             ItemOrEnd::End => return,
         };
@@ -360,14 +465,10 @@ enum ItemOrEnd {
 
 /// Wait for the next hub item, pinging on idle so a dead transport surfaces
 /// within one keepalive interval instead of never.
-async fn next_or_ping<S: FrameSink>(
-    items: &mut tokio::sync::mpsc::Receiver<HubItem>,
-    sink: &mut S,
-) -> ItemOrEnd {
+async fn next_or_ping<S: FrameSink>(sub: &Subscription, sink: &mut S) -> ItemOrEnd {
     loop {
-        match tokio::time::timeout(KEEPALIVE, items.recv()).await {
-            Ok(Some(item)) => return ItemOrEnd::Item(item),
-            Ok(None) => return ItemOrEnd::End,
+        match tokio::time::timeout(KEEPALIVE, sub.recv()).await {
+            Ok(item) => return ItemOrEnd::Item(item),
             Err(_idle) => {
                 if sink.ping().await.is_err() {
                     return ItemOrEnd::End;
@@ -413,9 +514,8 @@ pub(crate) async fn run_meta_stream<S: FrameSink>(hub: Arc<Hub>, sink: &mut S) {
         return;
     }
 
-    let mut items = bridge(sub.clone());
     loop {
-        let item = match next_or_ping(&mut items, sink).await {
+        let item = match next_or_ping(&sub, sink).await {
             ItemOrEnd::Item(item) => item,
             ItemOrEnd::End => return,
         };
@@ -849,11 +949,12 @@ mod tests {
             let mut sink = sink;
             run_session_stream(state, "s1".into(), Some(resume), &mut sink).await;
         });
-        wait_for_frames(&frames, 3).await;
+        wait_for_frames(&frames, 4).await;
         {
             let seen = frames.lock().unwrap();
             assert!(matches!(seen[0], ServerFrame::Hello { .. }));
-            let replayed: Vec<&str> = seen[1..]
+            assert!(matches!(seen[3], ServerFrame::CaughtUp { .. }));
+            let replayed: Vec<&str> = seen[1..3]
                 .iter()
                 .map(|frame| match frame {
                     ServerFrame::Mutation {
@@ -865,6 +966,214 @@ mod tests {
                 .collect();
             assert_eq!(replayed, vec!["m1", "m2"]);
         }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn empty_replay_and_metadata_replay_end_with_an_explicit_checkpoint() {
+        let mut h = harness();
+        let (_sub, resume) = h.state.hub.subscribe_session("s1", now_ms());
+        for with_metadata in [false, true] {
+            if with_metadata {
+                h.store
+                    .apply(&Batch {
+                        ops: vec![IngestOp::Plan(PlanRow {
+                            session_id: "s1".into(),
+                            revision: 1,
+                            content: "# Plan".into(),
+                            updated_at: 20_000,
+                        })],
+                        ..Batch::default()
+                    })
+                    .unwrap();
+                h.absorb();
+            }
+            let sink = RecordingSink::default();
+            let frames = sink.frames.clone();
+            let state = h.state.clone();
+            let task = tokio::spawn(async move {
+                run_session_stream(state, "s1".into(), Some(resume), &mut sink.clone()).await;
+            });
+            wait_for_frames(&frames, if with_metadata { 3 } else { 2 }).await;
+            let seen = frames.lock().unwrap();
+            assert!(matches!(seen.last(), Some(ServerFrame::CaughtUp { .. })));
+            if with_metadata {
+                assert!(
+                    matches!(&seen[1], ServerFrame::TimelineMetaSnapshot { stamp: None, timeline_meta } if timeline_meta.plans.len() == 1)
+                );
+            } else {
+                assert_eq!(seen[1], ServerFrame::CaughtUp { stamp: resume });
+            }
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_cursor_continues_above_the_window_in_the_same_generation() {
+        let mut h = harness();
+        for i in 0..205 {
+            h.append(&format!("m{i}"));
+        }
+        h.absorb();
+        let (_sub, stamp) = h.state.hub.subscribe_session("s1", now_ms());
+        let frame = timeline_snapshot(h.state.projection.clone(), "s1".into(), stamp)
+            .await
+            .ok()
+            .unwrap();
+        let ServerFrame::TimelineSnapshot {
+            entries,
+            cursor,
+            watermark,
+            ..
+        } = frame
+        else {
+            panic!("snapshot")
+        };
+        assert_eq!(entries.len(), 200);
+        let page = with_read(h.state.projection.clone(), move |conn| {
+            read_timeline_page(conn, "s1", 200, cursor.as_deref(), false)
+        })
+        .await
+        .ok()
+        .unwrap();
+        assert_eq!(page.watermark, watermark);
+        assert_eq!(page.entries.len(), 5);
+        assert!(page.entries.last().unwrap().ordinal < entries[0].ordinal);
+        assert!(page.cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn collaboration_stream_sends_only_boundaries_and_runtime_observations() {
+        use rosetta_core::timeline::{
+            CollaborationChannel, CollaborationEvent, CollaborationEventKind, GroupDerivation,
+            ResponseGroup, TimelineBody,
+        };
+        let mut h = harness();
+        h.append("private");
+        let mut private = queries::timeline_entry(h.store.conn(), "s1", "private")
+            .unwrap()
+            .unwrap();
+        private.response = Some(ResponseGroup {
+            id: "r1".into(),
+            derivation: GroupDerivation::Native,
+        });
+        private.block_index = Some(0);
+        private.model = Some("model-1".into());
+        let mut boundary = private.clone();
+        boundary.timeline_id = "boundary".into();
+        boundary.ordinal = private.ordinal + 1;
+        boundary.response = None;
+        boundary.block_index = None;
+        boundary.model = None;
+        boundary.body = TimelineBody::Collaboration {
+            event: CollaborationEvent {
+                kind: CollaborationEventKind::Message,
+                channel: CollaborationChannel::Team,
+                sender: None,
+                recipient: None,
+                team: None,
+                color: None,
+                summary: Some("delivered boundary".into()),
+                body: None,
+                task_id: None,
+                delivery_id: None,
+                status: None,
+                authored_at: None,
+                source_session_id: None,
+                source_response_id: None,
+                work_start_timeline_id: None,
+                work_end_timeline_id: None,
+            },
+        };
+        h.store
+            .apply(&Batch {
+                ops: vec![
+                    IngestOp::Message(Box::new(private.clone())),
+                    IngestOp::Message(Box::new(boundary.clone())),
+                ],
+                ..Batch::default()
+            })
+            .unwrap();
+        h.absorb();
+        let sink = RecordingSink::default();
+        let frames = sink.frames.clone();
+        let state = h.state.clone();
+        let task = tokio::spawn(async move {
+            run_collaboration_stream(state, "s1".into(), &mut sink.clone()).await;
+        });
+        wait_for_frames(&frames, 2).await;
+        {
+            let seen = frames.lock().unwrap();
+            let ServerFrame::CollaborationSnapshot {
+                entries,
+                response_runtimes,
+            } = &seen[1]
+            else {
+                panic!("boundary snapshot")
+            };
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].timeline_id, "boundary");
+            assert_eq!(response_runtimes.len(), 1);
+            assert_eq!(response_runtimes[0].model.as_deref(), Some("model-1"));
+        }
+        private.timeline_id = "private-live".into();
+        private.model = Some("model-2".into());
+        private.ordinal += 2;
+        private.block_index = Some(1);
+        boundary.timeline_id = "boundary-live".into();
+        boundary.ordinal += 2;
+        h.store
+            .apply(&Batch {
+                ops: vec![
+                    IngestOp::Message(Box::new(private)),
+                    IngestOp::Message(Box::new(boundary)),
+                ],
+                ..Batch::default()
+            })
+            .unwrap();
+        h.absorb();
+        wait_for_frames(&frames, 4).await;
+        {
+            let seen = frames.lock().unwrap();
+            assert!(
+                matches!(&seen[2], ServerFrame::ResponseRuntime { observation } if observation.model.as_deref() == Some("model-2"))
+            );
+            assert!(
+                matches!(&seen[3], ServerFrame::Mutation { mutation: Mutation::Message(row), .. } if row.timeline_id == "boundary-live")
+            );
+            assert!(
+                !serde_json::to_string(&*seen)
+                    .unwrap()
+                    .contains("content of private")
+            );
+        }
+        h.state.hub.invalidate_sessions(["s1"], now_ms());
+        wait_for_frames(&frames, 6).await;
+        {
+            let seen = frames.lock().unwrap();
+            assert_eq!(seen[4], ServerFrame::Resync);
+            assert!(
+                matches!(&seen[5], ServerFrame::CollaborationSnapshot { entries, .. } if entries.len() == 2)
+            );
+        }
+        h.store
+            .apply(&Batch {
+                ops: vec![IngestOp::Usage {
+                    session_id: "s1".into(),
+                    response: "private-live".into(),
+                    ts: 3_600_100,
+                    model: Some("model-3".into()),
+                    tokens: rosetta_core::TokenSnapshot::default(),
+                }],
+                ..Batch::default()
+            })
+            .unwrap();
+        h.absorb();
+        wait_for_frames(&frames, 7).await;
+        assert!(
+            matches!(&frames.lock().unwrap()[6], ServerFrame::ResponseRuntime { observation }
+            if observation.response_id == "r1" && observation.model.as_deref() == Some("model-3"))
+        );
         task.abort();
     }
 

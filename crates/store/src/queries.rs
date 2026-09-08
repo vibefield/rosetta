@@ -746,6 +746,30 @@ pub fn collaboration_timeline(
     Ok((entries, runtimes))
 }
 
+/// Read only the runtime fields affected by a usage update. Collaboration
+/// subscribers never need to decode a private tool or hydrate its workflow.
+pub fn response_runtime(
+    conn: &Connection,
+    session_id: &str,
+    timeline_id: &str,
+) -> Result<Option<ResponseRuntime>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT response_id, model, effort FROM message
+         WHERE session_id = ?1 AND timeline_id = ?2 AND response_id IS NOT NULL
+           AND (model IS NOT NULL OR effort IS NOT NULL)",
+            params![session_id, timeline_id],
+            |row| {
+                Ok(ResponseRuntime {
+                    response_id: row.get(0)?,
+                    model: row.get(1)?,
+                    effort: row.get(2)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 /// One exact canonical timeline row, scoped to its owning session. This is
 /// the lazy landing path for indexes such as `timeline_meta`; callers do not
 /// need to walk every intervening history page to reach an old anchor.
@@ -765,6 +789,72 @@ pub fn timeline_entry(
     let mut entries = vec![entry];
     hydrate_workflows(conn, session_id, &mut entries)?;
     Ok(entries.pop())
+}
+
+/// Resolve a report's recorded bounds without accepting caller-supplied paths
+/// or ordinal ranges. All reads must share the caller's read transaction.
+pub fn report_work(
+    conn: &Connection,
+    session_id: &str,
+    timeline_id: &str,
+) -> Result<Option<Vec<TimelineEntry>>, StoreError> {
+    if session(conn, session_id)?
+        .is_none_or(|row| row.stream_state == rosetta_core::rows::StreamState::Pending)
+    {
+        return Ok(None);
+    }
+    let Some(report) = timeline_entry(conn, session_id, timeline_id)? else {
+        return Ok(None);
+    };
+    let TimelineBody::Collaboration { event } = report.body else {
+        return Ok(None);
+    };
+    if event.kind != rosetta_core::timeline::CollaborationEventKind::Report {
+        return Ok(None);
+    }
+    let (Some(source), Some(response), Some(start), Some(end)) = (
+        event.source_session_id,
+        event.source_response_id,
+        event.work_start_timeline_id,
+        event.work_end_timeline_id,
+    ) else {
+        return Ok(None);
+    };
+    let Some(source_session) = session(conn, &source)? else {
+        return Ok(None);
+    };
+    if source_session.stream_state == rosetta_core::rows::StreamState::Pending {
+        return Ok(None);
+    }
+    let ordinal = |id: &str| -> Result<Option<i64>, StoreError> {
+        Ok(conn
+            .query_row(
+                "SELECT ordinal FROM message WHERE session_id = ?1 AND timeline_id = ?2",
+                params![source, id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    };
+    let (Some(start), Some(end)) = (ordinal(&start)?, ordinal(&end)?) else {
+        return Ok(None);
+    };
+    if end < start {
+        return Ok(None);
+    }
+    let mut statement = conn.prepare_cached(
+        "SELECT * FROM message WHERE session_id = ?1 AND ordinal BETWEEN ?2 AND ?3 ORDER BY ordinal, timeline_id"
+    )?;
+    let mut entries = statement
+        .query_map(params![source, start, end], message_codec::decode)?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !entries
+        .iter()
+        .any(|row| row.response.as_ref().is_some_and(|r| r.id == response))
+    {
+        return Ok(None);
+    }
+    hydrate_workflows(conn, &source, &mut entries)?;
+    Ok(Some(entries))
 }
 
 /// Join the generation-owned Workflow document onto each chronological

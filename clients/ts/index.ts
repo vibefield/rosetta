@@ -1,4 +1,5 @@
 export type * from "./generated/ApiError";
+export type * from "./generated/AssetRef";
 export type * from "./generated/CanonicalText";
 export type * from "./generated/CommandResponse";
 export type * from "./generated/AttachmentKind";
@@ -59,6 +60,7 @@ export type * from "./generated/StreamState";
 export type * from "./generated/SummaryPurpose";
 export type * from "./generated/TimelineBody";
 export type * from "./generated/TimelineEntry";
+export type * from "./generated/TimelineEntryResponse";
 export type * from "./generated/TimelineMeta";
 export type * from "./generated/TimelineMetaArtifact";
 export type * from "./generated/TimelineMetaArtifactSource";

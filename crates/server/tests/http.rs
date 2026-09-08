@@ -259,7 +259,9 @@ async fn exact_timeline_row_is_scoped_and_does_not_require_paging() {
 
     let (status, body) = h.get("/api/sessions/s1/timeline/old-task-anchor").await;
     assert_eq!(status, StatusCode::OK);
-    let entry: rosetta_core::TimelineEntry = serde_json::from_value(body).unwrap();
+    let result: rosetta_protocol::TimelineEntryResponse = serde_json::from_value(body).unwrap();
+    let entry = result.entry;
+    assert!(!result.watermark.is_empty());
     assert_eq!(entry.timeline_id, "old-task-anchor");
 
     let (wrong_session, _) = h.get("/api/sessions/s2/timeline/old-task-anchor").await;
@@ -337,6 +339,176 @@ async fn collaboration_history_returns_boundaries_without_private_rows() {
             .unwrap()
             .contains("secret implementation detail")
     );
+}
+
+#[tokio::test]
+async fn report_work_resolves_only_its_recorded_source_response_and_bounds() {
+    let mut h = harness();
+    h.append(vec![
+        message("before", MessageKind::Agent, "outside the report"),
+        message("start", MessageKind::Agent, "first action"),
+        message("end", MessageKind::Agent, "last action"),
+        message("after", MessageKind::Agent, "outside the report"),
+    ]);
+    let mut start = queries::timeline_entry(h.store.conn(), "s1", "start")
+        .unwrap()
+        .unwrap();
+    start.response = Some(rosetta_core::timeline::ResponseGroup {
+        id: "response-1".into(),
+        derivation: GroupDerivation::Native,
+    });
+    start.block_index = Some(0);
+    let mut report = start.clone();
+    report.timeline_id = "report".into();
+    report.session_id = "s2".into();
+    report.response = None;
+    report.block_index = None;
+    report.provenance.src_cursor = None;
+    report.body = TimelineBody::Collaboration {
+        event: CollaborationEvent {
+            kind: CollaborationEventKind::Report,
+            channel: CollaborationChannel::Team,
+            sender: None,
+            recipient: None,
+            team: None,
+            color: None,
+            summary: Some("completed report".into()),
+            body: None,
+            task_id: Some("task-1".into()),
+            delivery_id: None,
+            status: None,
+            authored_at: None,
+            source_session_id: Some("s1".into()),
+            source_response_id: Some("response-1".into()),
+            work_start_timeline_id: Some("start".into()),
+            work_end_timeline_id: Some("end".into()),
+        },
+    };
+    h.store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Message(Box::new(start)),
+                IngestOp::Message(Box::new(report.clone())),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+    let (status, body) = h.get("/api/sessions/s2/timeline/report/work").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows: Vec<TimelineEntry> = serde_json::from_value(body).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| r.timeline_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["start", "end"]
+    );
+    for route in [
+        "/api/sessions/s1/timeline/report/work",
+        "/api/sessions/s1/timeline/start/work",
+    ] {
+        assert_eq!(h.get(route).await.0, StatusCode::NOT_FOUND);
+    }
+    // A response mismatch, reversed range, or absent endpoint cannot be
+    // guessed from nearby work. The report must retain all of its evidence.
+    for (response, start, end) in [
+        ("wrong", "start", "end"),
+        ("response-1", "end", "start"),
+        ("response-1", "missing", "end"),
+    ] {
+        let mut invalid = report.clone();
+        let TimelineBody::Collaboration { event } = &mut invalid.body else {
+            unreachable!()
+        };
+        event.source_response_id = Some(response.into());
+        event.work_start_timeline_id = Some(start.into());
+        event.work_end_timeline_id = Some(end.into());
+        h.store
+            .apply(&Batch {
+                ops: vec![IngestOp::Message(Box::new(invalid))],
+                ..Batch::default()
+            })
+            .unwrap();
+        assert_eq!(
+            h.get("/api/sessions/s2/timeline/report/work").await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::Message(Box::new(report))],
+            ..Batch::default()
+        })
+        .unwrap();
+    let mut pending = session("s1");
+    pending.stream_state = StreamState::Pending;
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionMeta(pending)],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        h.get("/api/sessions/s2/timeline/report/work").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn electron_origin_receives_the_version_header_but_null_and_foreign_origins_do_not_get_cors()
+{
+    let h = harness();
+    for origin in [
+        "rosetta://app",
+        "null",
+        "rosetta://foreign",
+        "https://evil.example",
+    ] {
+        let result = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .header("origin", origin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result.headers()["x-rosetta-protocol-version"],
+            rosetta_protocol::PROTOCOL_VERSION.to_string()
+        );
+        assert_eq!(
+            result
+                .headers()
+                .get("access-control-allow-origin")
+                .is_some(),
+            origin == "rosetta://app"
+        );
+        if origin == "rosetta://app" {
+            assert_eq!(
+                result.headers()["access-control-expose-headers"],
+                "x-rosetta-protocol-version"
+            );
+        }
+        for route in ["/ws/meta", "/ws/sessions/s1", "/ws/collaboration/s1"] {
+            let result = h
+                .app
+                .clone()
+                .oneshot(ws_upgrade_request(route, Some(origin)))
+                .await
+                .unwrap();
+            assert_eq!(
+                result.status(),
+                if origin == "rosetta://app" {
+                    StatusCode::UPGRADE_REQUIRED
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+        }
+    }
 }
 
 #[tokio::test]

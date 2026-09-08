@@ -30,7 +30,16 @@ export type WorktreeOpenResult =
   | { readonly ok: true; readonly generation: number }
   | { readonly ok: false; readonly error: string };
 
+export interface DesktopDaemonState {
+  readonly phase: "starting" | "ready" | "restarting" | "failed" | "stopped" | "external";
+  readonly origin: string | null;
+  readonly error: string | null;
+  readonly revision: number;
+}
+
 export interface DesktopHost {
+  daemonState?(): Promise<DesktopDaemonState>;
+  onDaemonState?(listener: (state: DesktopDaemonState) => void): () => void;
   /** The user's home directory, for writing paths as `~/…`. */
   readonly homeDir?: string;
   /** Point the worktree engine at a project root. Each accepted request gets

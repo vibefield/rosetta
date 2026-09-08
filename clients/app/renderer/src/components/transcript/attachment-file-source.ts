@@ -29,7 +29,7 @@ export function attachmentAssetUrl(fact: AttachmentFact): string | null {
   if (source === undefined || source === null || source.type !== "asset") return null;
   try {
     const url = new URL(source.asset.url, `${client.baseUrl}/`);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === new URL(client.baseUrl).origin ? url.toString() : null;
   } catch {
     return null;
   }
@@ -58,7 +58,7 @@ export function handleForAttachment(fact: AttachmentFact): FileHandle | null {
     name: viewerName(fact),
     path: null,
     size: fact.byteLen ?? source.asset.byte_len,
-    ref: url,
+    ref: source.asset,
   };
 }
 
@@ -69,10 +69,8 @@ export function canOpenAttachment(fact: AttachmentFact): boolean {
 /** Stable by construction: `useFileContent` treats source identity as a read. */
 export const attachmentFileSource: FileSource = {
   async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
-    const url = handle.ref;
-    if (typeof url !== "string") throw new Error("that attachment is no longer available");
-    const response = await fetch(url, { signal });
-    if (!response.ok) throw new Error(`attachment read failed · HTTP ${response.status}`);
-    return new Uint8Array(await response.arrayBuffer());
+    const asset = handle.ref as import("@rosetta/protocol").AssetRef;
+    if (!asset || typeof asset.url !== "string") throw new Error("that attachment is no longer available");
+    return client.readAsset(asset, signal);
   },
 };

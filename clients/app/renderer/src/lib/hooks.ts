@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
+  SessionSubscription,
+  CollaborationSubscription,
+  CollaborationTimeline,
   IngestProgress,
   MetaState,
   SearchReadiness,
@@ -16,7 +19,7 @@ import type {
 import { CursorExpiredError } from "@rosetta/protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
-import { client } from "./rosetta";
+import { client, desktopDaemonState, onDesktopDaemonState } from "./rosetta";
 import type {
   EarlierAction,
   EarlierContext,
@@ -59,6 +62,8 @@ export function useMeta(): MetaFeed {
 }
 
 export interface DaemonStatusFeed {
+  /** A connection or startup failure suitable for the disconnected state. */
+  readonly connectionError: string | null;
   /** The exact durable-publication gate for global derived reads. */
   readonly canonicalReady: boolean | null;
   /** null until the first answer, and after the daemon stops answering. */
@@ -72,7 +77,18 @@ export interface DaemonStatusFeed {
  * truth during a cold start. Polls fast while a backfill runs (the meters
  * are moving), quietly once the phase is live. */
 export function useDaemonStatus(): DaemonStatusFeed {
+  const [connectionRevision, setConnectionRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setConnectionRevision((value) => value + 1);
+    const removeConnection = client.onConnectionChange(changed);
+    const removeDesktop = onDesktopDaemonState(changed);
+    return () => {
+      removeConnection();
+      removeDesktop();
+    };
+  }, []);
   const [feed, setFeed] = useState<DaemonStatusFeed>({
+    connectionError: null,
     canonicalReady: null,
     searchReadiness: null,
     ingest: null,
@@ -80,21 +96,29 @@ export function useDaemonStatus(): DaemonStatusFeed {
   const phase = feed.ingest?.phase ?? null;
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     let timer: number | undefined;
     const poll = () => {
       client
-        .status()
+        .status(controller.signal)
         .then((status) => {
           if (cancelled) return;
           setFeed({
+            connectionError: null,
             canonicalReady: status.canonical_ready,
             searchReadiness: status.search.readiness,
             ingest: status.daemon?.ingest ?? null,
           });
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (!cancelled)
-            setFeed({ canonicalReady: null, searchReadiness: null, ingest: null });
+            setFeed({
+              connectionError:
+                desktopDaemonState()?.error ?? (error instanceof Error ? error.message : null),
+              canonicalReady: null,
+              searchReadiness: null,
+              ingest: null,
+            });
         })
         .finally(() => {
           if (cancelled) return;
@@ -105,9 +129,10 @@ export function useDaemonStatus(): DaemonStatusFeed {
     poll();
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
-  }, [phase]);
+  }, [phase, connectionRevision]);
   return feed;
 }
 
@@ -115,20 +140,19 @@ export function useDaemonStatus(): DaemonStatusFeed {
  * so they begin only after the daemon's canonical publication gate. Four
  * workers hydrate the list progressively; unbounded Promise.all here once
  * launched two full-corpus queries per project and starved cold ingestion. */
-export function useProjectStats(
-  projectIds: string[],
-  ready = false,
-): Map<string, ProjectStats> {
+export function useProjectStats(projectIds: string[], ready = false): Map<string, ProjectStats> {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
   const key = projectIds.join("\n");
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     let timer: number | undefined;
     const ids = key === "" ? [] : key.split("\n");
     if (!ready || ids.length === 0) {
       setStats(new Map());
       return () => {
         cancelled = true;
+        controller.abort();
       };
     }
     async function loadAll() {
@@ -142,8 +166,8 @@ export function useProjectStats(
           if (id === undefined) return;
           try {
             const [heat, contribution] = await Promise.all([
-              client.heatmap(id, { sinceMs, offsetMinutes }),
-              client.contribution(id),
+              client.heatmap(id, { sinceMs, offsetMinutes }, controller.signal),
+              client.contribution(id, controller.signal),
             ]);
             if (!cancelled) {
               setStats((current) => {
@@ -167,6 +191,7 @@ export function useProjectStats(
     loadAll();
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [key, ready]);
@@ -175,21 +200,23 @@ export function useProjectStats(
 
 /** The selected project's usage decomposition — per-model days and the
  * hour-of-day profile, over the same 53-week window the heatmap draws. */
-export function useProjectUsage(
-  projectId: string | null,
-  ready = false,
-): UsageResponse | null {
+export function useProjectUsage(projectId: string | null, ready = false): UsageResponse | null {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   useEffect(() => {
     setUsage(null);
     if (projectId === null || !ready) return;
     let cancelled = false;
+    const controller = new AbortController();
     const load = () => {
       client
-        .usage(projectId, {
-          sinceMs: getActivityGridStartTimestamp(Date.now()),
-          offsetMinutes: getViewerUtcOffsetMinutes(),
-        })
+        .usage(
+          projectId,
+          {
+            sinceMs: getActivityGridStartTimestamp(Date.now()),
+            offsetMinutes: getViewerUtcOffsetMinutes(),
+          },
+          controller.signal,
+        )
         .then((res) => {
           if (!cancelled) setUsage(res);
         })
@@ -201,6 +228,7 @@ export function useProjectUsage(
     const timer = setInterval(load, 60_000);
     return () => {
       cancelled = true;
+      controller.abort();
       clearInterval(timer);
     };
   }, [projectId, ready]);
@@ -248,14 +276,12 @@ export interface TimelineFeed {
 
 export function useTimeline(sessionId: string | null): TimelineFeed {
   const [tail, setTail] = useState<TimelineEntry[]>([]);
-  const [anchors, setAnchors] = useState<TimelineEntry[]>([]);
+  const subscription = useRef<SessionSubscription | null>(null);
   const [timelineMeta, setTimelineMeta] = useState<TimelineMeta | null>(null);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [watermark, setWatermark] = useState<number | null>(null);
   const sawSnapshot = useRef(false);
-  const activeSession = useRef(sessionId);
-  activeSession.current = sessionId;
 
   // The head of the document is a state machine, not a boolean: it holds a
   // page beside the document until the reader pulls (§08, Q7 B). The ref is
@@ -277,15 +303,19 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
   ctxRef.current = ctx;
 
   const apply = useCallback((action: EarlierAction) => {
-    const next = reduceEarlier(modelRef.current, action, ctxRef.current);
-    if (next === modelRef.current) return;
+    const previous = modelRef.current;
+    const next = reduceEarlier(previous, action, ctxRef.current);
+    if (next === previous) return;
     modelRef.current = next;
     setModel(next);
+    // The head owns reveal intent and counts. Canonical values live only in
+    // the subscription, which patches held pages and visible history together.
+    if (next.older !== previous.older && next.older.length > 0)
+      subscription.current?.reveal(next.older);
   }, []);
 
   useEffect(() => {
     setTail([]);
-    setAnchors([]);
     setTimelineMeta(null);
     setWatermark(null);
     setStatus("connecting");
@@ -295,6 +325,15 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     apply({ type: "reset" });
     if (sessionId === null) return;
     const sub = client.subscribeSession(sessionId, {
+      onReset: () => {
+        setTail([]);
+        setTimelineMeta(null);
+        setSnapshotReady(false);
+        setWatermark(null);
+        sawSnapshot.current = false;
+        apply({ type: "reset" });
+      },
+      onSnapshot: (page) => apply({ type: "snapshot", cursor: page.cursor }),
       onChange: (entries) => {
         setTail(entries);
         setSnapshotReady(true);
@@ -306,8 +345,16 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
       },
       onTimelineMetaChange: setTimelineMeta,
       onStatus: setStatus,
+      onError: (error) => {
+        if (error.code === "cursor_expired")
+          apply({ type: "expired", seq: modelRef.current.fetchSeq });
+      },
     });
-    return () => sub.close();
+    subscription.current = sub;
+    return () => {
+      subscription.current = null;
+      sub.close();
+    };
   }, [sessionId, apply]);
 
   /** One fetch of the page above, held rather than inserted. */
@@ -318,40 +365,16 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     const started = modelRef.current;
     if (started.phase !== "fetching" || started.fetchSeq === before) return;
     const seq = started.fetchSeq;
-    // The reducer only enters `fetching` when there is provably history above,
-    // so a settled null cursor cannot get here.
-    const from: string | undefined = started.cursor ?? undefined;
-    void (async () => {
-      try {
-        const head = await client.timeline(
-          sessionId,
-          from === undefined
-            ? { limit: EARLIER_PAGE_SIZE }
-            : { limit: EARLIER_PAGE_SIZE, cursor: from },
-        );
-        if (from !== undefined || head.cursor === null) {
-          apply({ type: "page", seq, entries: head.entries, cursor: head.cursor });
-          return;
-        }
-        // The first page repeats the snapshot the subscription already
-        // delivered; it exists to mint the cursor. Take the page ABOVE it in
-        // the same breath, so the reader's pull is instant rather than a
-        // press that visibly does nothing.
-        const above = await client.timeline(sessionId, {
-          limit: EARLIER_PAGE_SIZE,
-          cursor: head.cursor,
-        });
-        apply({
-          type: "page",
-          seq,
-          entries: [...above.entries, ...head.entries],
-          cursor: above.cursor,
-        });
-      } catch (error) {
+    const from = started.cursor;
+    const sub = subscription.current;
+    if (typeof from !== "string" || sub === null) return;
+    void sub.fetchPage(from, EARLIER_PAGE_SIZE).then(
+      (page) => apply({ type: "page", seq, entries: page.entries, cursor: page.cursor }),
+      (error: unknown) => {
         if (error instanceof CursorExpiredError) apply({ type: "expired", seq });
         else apply({ type: "fail", seq, message: EARLIER_FAILED_MESSAGE });
-      }
-    })();
+      },
+    );
   }, [sessionId, apply]);
 
   const revealEarlier = useCallback(() => apply({ type: "reveal" }), [apply]);
@@ -360,25 +383,17 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     startFetch();
     apply({ type: "reveal" });
   }, [startFetch, apply]);
-
   const loadAnchor = useCallback(async (timelineId: string): Promise<boolean> => {
-    if (sessionId === null) return false;
-    const entry = await client.timelineEntry(sessionId, timelineId);
-    if (activeSession.current !== sessionId || entry.session_id !== sessionId) return false;
-    setAnchors((current) => [
-      ...current.filter((row) => row.timeline_id !== entry.timeline_id),
-      entry,
-    ]);
-    return true;
-  }, [sessionId]);
-
-  const rows = useMemo(() => {
-    const seen = new Map<string, TimelineEntry>();
-    for (const row of model.older) seen.set(row.timeline_id, row);
-    for (const row of anchors) seen.set(row.timeline_id, row);
-    for (const row of tail) seen.set(row.timeline_id, row);
-    return [...seen.values()].sort((a, b) => a.ordinal - b.ordinal);
-  }, [model.older, anchors, tail]);
+    const sub = subscription.current;
+    if (sub === null) return false;
+    try {
+      return await sub.loadEntry(timelineId);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return false;
+      throw error;
+    }
+  }, []);
+  const rows = tail;
 
   const earlier = useMemo(() => earlierState(model, ctx), [model, ctx]);
 
@@ -409,14 +424,14 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
 }
 
 export interface TeamTimelineFeed {
-  /** Tail snapshots for the known team members. Only boundary rows are merged
-   * by the transcript model; private work remains in these source sessions. */
+  /** Complete boundary histories for the known team members. Private work is
+   * fetched separately when its report disclosure opens. */
   readonly rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>;
   /** Content-free response model/effort observations across full history. */
   readonly responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]>;
   /** True only after every current member's complete boundary query succeeds. */
   readonly historyReady: boolean;
-  /** Pull one exact older boundary row for a search landing. */
+  /** Confirm that the complete boundary history contains a search landing. */
   readonly loadAnchor: (sessionId: string, timelineId: string) => Promise<boolean>;
 }
 
@@ -427,148 +442,74 @@ export interface TeamTimelineFeed {
 export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFeed {
   const key = [...new Set(sessionIds)].sort().join("\n");
   const ids = useMemo(() => (key === "" ? [] : key.split("\n")), [key]);
-  const [tailBySession, setTailBySession] = useState<
-    ReadonlyMap<string, readonly TimelineEntry[]>
-  >(new Map());
-  const [boundaryBySession, setBoundaryBySession] = useState<
-    ReadonlyMap<string, readonly TimelineEntry[]>
-  >(new Map());
-  const [responseRuntimesBySession, setResponseRuntimesBySession] = useState<
-    ReadonlyMap<string, readonly ResponseRuntime[]>
-  >(new Map());
-  const [completeHistoryIds, setCompleteHistoryIds] = useState<ReadonlySet<string>>(
-    new Set(),
+  const records = useRef(
+    new Map<
+      string,
+      { sub: CollaborationSubscription | null; history: CollaborationTimeline | null }
+    >(),
   );
-  const activeIds = useRef(new Set(ids));
-  activeIds.current = new Set(ids);
-
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
-    let active = true;
-    setTailBySession(new Map());
-    setBoundaryBySession(new Map());
-    setResponseRuntimesBySession(new Map());
-    setCompleteHistoryIds(new Set());
-    const refreshBoundary = async (sessionId: string) => {
-      try {
-        const history = await client.collaborationTimeline(sessionId);
-        if (!active || !activeIds.current.has(sessionId)) return;
-        setBoundaryBySession((current) => {
-          const next = new Map(current);
-          next.set(sessionId, history.entries);
-          return next;
-        });
-        setResponseRuntimesBySession((current) => {
-          const next = new Map(current);
-          next.set(sessionId, history.response_runtimes);
-          return next;
-        });
-        setCompleteHistoryIds((current) => new Set(current).add(sessionId));
-      } catch {
-        // The live tail remains useful, but callers must continue to treat
-        // history as incomplete and avoid historical claims.
-      }
-    };
-    const subscriptions = ids.map((sessionId) => {
-      let refreshAfterSnapshot = false;
-      void refreshBoundary(sessionId);
-      return client.subscribeSession(sessionId, {
-        onChange: (entries) => {
-          if (!active) return;
-          setTailBySession((current) => {
-            const next = new Map(current);
-            next.set(sessionId, entries);
-            return next;
-          });
-          if (refreshAfterSnapshot) {
-            refreshAfterSnapshot = false;
-            void refreshBoundary(sessionId);
-          }
-        },
-        onStatus: (status) => {
-          if (status === "resyncing") refreshAfterSnapshot = true;
-        },
-      });
-    });
-    return () => {
-      active = false;
-      subscriptions.forEach((subscription) => subscription.close());
-    };
-  }, [ids]);
-
-  const rowsBySession = useMemo(() => {
-    const merged = new Map<string, readonly TimelineEntry[]>();
-    for (const sessionId of ids) {
-      const rows = new Map<string, TimelineEntry>();
-      for (const row of boundaryBySession.get(sessionId) ?? []) {
-        rows.set(row.timeline_id, row);
-      }
-      for (const row of tailBySession.get(sessionId) ?? []) {
-        rows.set(row.timeline_id, row);
-      }
-      if (rows.size > 0) {
-        merged.set(
-          sessionId,
-          [...rows.values()].sort(
-            (left, right) =>
-              left.ordinal - right.ordinal || left.timeline_id.localeCompare(right.timeline_id),
-          ),
-        );
+    const wanted = new Set(ids);
+    for (const [id, record] of records.current) {
+      if (!wanted.has(id)) {
+        records.current.delete(id);
+        record.sub?.close();
       }
     }
-    return merged;
-  }, [ids, boundaryBySession, tailBySession]);
+    for (const id of ids) {
+      if (records.current.has(id)) continue;
+      const record = {
+        sub: null as CollaborationSubscription | null,
+        history: null as CollaborationTimeline | null,
+      };
+      records.current.set(id, record);
+      record.sub = client.subscribeCollaboration(id, {
+        onReset: () => {
+          if (records.current.get(id) !== record) return;
+          record.history = null;
+          setRevision((value) => value + 1);
+        },
+        onChange: (history) => {
+          if (records.current.get(id) !== record) return;
+          record.history = history;
+          setRevision((value) => value + 1);
+        },
+      });
+    }
+    setRevision((value) => value + 1);
+  }, [ids]);
+  useEffect(
+    () => () => {
+      const previous = [...records.current.values()];
+      records.current.clear();
+      previous.forEach((record) => record.sub?.close());
+    },
+    [],
+  );
 
-  const loadAnchor = useCallback(async (sessionId: string, timelineId: string) => {
-    if (!activeIds.current.has(sessionId)) return false;
-    const entry = await client.timelineEntry(sessionId, timelineId);
-    if (!activeIds.current.has(sessionId) || entry.session_id !== sessionId) return false;
-    setTailBySession((current) => {
-      const next = new Map(current);
-      const rows = current.get(sessionId) ?? [];
-      next.set(
-        sessionId,
-        [...rows.filter((row) => row.timeline_id !== entry.timeline_id), entry].sort(
-          (left, right) => left.ordinal - right.ordinal,
-        ),
-      );
-      return next;
-    });
-    return true;
-  }, []);
-
-  // A changed roster must not briefly replay a removed member while the
-  // subscription effect is cleaning up. Keeping the returned object stable
-  // also prevents focus effects from rerunning on unrelated parent renders.
-  const activeRows = useMemo(
-    () =>
-      new Map(
-        ids.flatMap((sessionId) => {
-          const rows = rowsBySession.get(sessionId);
-          return rows === undefined ? [] : [[sessionId, rows] as const];
-        }),
-      ),
-    [ids, rowsBySession],
+  const loadAnchor = useCallback(
+    async (sessionId: string, timelineId: string) =>
+      records.current
+        .get(sessionId)
+        ?.history?.entries.some((row) => row.timeline_id === timelineId) ?? false,
+    [],
   );
-  const activeRuntimes = useMemo(
-    () =>
-      new Map(
-        ids.flatMap((sessionId) => {
-          const runtimes = responseRuntimesBySession.get(sessionId);
-          return runtimes === undefined ? [] : [[sessionId, runtimes] as const];
-        }),
-      ),
-    [ids, responseRuntimesBySession],
-  );
-  const historyReady = ids.every((sessionId) => completeHistoryIds.has(sessionId));
-  return useMemo(
-    () => ({
-      rowsBySession: activeRows,
-      responseRuntimesBySession: activeRuntimes,
-      historyReady,
-      loadAnchor,
-    }),
-    [activeRows, activeRuntimes, historyReady, loadAnchor],
-  );
+  return useMemo(() => {
+    const rowsBySession = new Map<string, readonly TimelineEntry[]>();
+    const responseRuntimesBySession = new Map<string, readonly ResponseRuntime[]>();
+    let historyReady = true;
+    for (const id of ids) {
+      const history = records.current.get(id)?.history;
+      if (!history) {
+        historyReady = false;
+        continue;
+      }
+      rowsBySession.set(id, history.entries);
+      responseRuntimesBySession.set(id, history.response_runtimes);
+    }
+    return { rowsBySession, responseRuntimesBySession, historyReady, loadAnchor };
+  }, [ids, revision, loadAnchor]);
 }
 
 export interface SearchFeed {
@@ -590,32 +531,47 @@ export function useSearch(query: string): SearchFeed {
       setSearching(false);
       return;
     }
+    const controller = new AbortController();
+    let cancelled = false;
+    setResponse(null);
+    setError(null);
     setSearching(true);
     const timer = setTimeout(() => {
       client
-        .search({
-          q,
-          limit: 200,
-          session: null,
-          runtime: null,
-          agent: null,
-          project: null,
-          kind: null,
-          is_error: null,
-          after_ts: null,
-          before_ts: null,
-        })
+        .search(
+          {
+            q,
+            limit: 200,
+            session: null,
+            runtime: null,
+            agent: null,
+            project: null,
+            kind: null,
+            is_error: null,
+            after_ts: null,
+            before_ts: null,
+          },
+          controller.signal,
+        )
         .then((res) => {
+          if (cancelled) return;
           setResponse(res);
           setError(null);
         })
         .catch((err: unknown) => {
+          if (cancelled) return;
           setResponse(null);
           setError(err instanceof Error ? err.message : String(err));
         })
-        .finally(() => setSearching(false));
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
     }, 220);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query]);
   return { query: query.trim(), response, error, searching };
 }

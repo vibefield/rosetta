@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { RosettaClient } from "../../ts/client.ts";
+import { RosettaClient, PROTOCOL_VERSION } from "../../ts/client.ts";
 
 class FakeSocket {
   static instances = [];
@@ -33,6 +33,7 @@ test("a timeline_meta replacement updates only the light work index", () => {
   const client = new RosettaClient({
     baseUrl: "http://127.0.0.1:4640",
     WebSocketImpl: FakeSocket,
+    notificationIntervalMs: 0,
     fetchFn: () => {
       throw new Error("the metadata stream must not make an HTTP request");
     },
@@ -48,11 +49,13 @@ test("a timeline_meta replacement updates only the light work index", () => {
   socket.open();
   socket.frame({
     frame: "hello",
-    protocol_version: 10,
+    protocol_version: PROTOCOL_VERSION,
     stamp: { epoch: 4, seq: 8 },
   });
   socket.frame({
     frame: "timeline_snapshot",
+    watermark: "generation-a",
+    cursor: null,
     stamp: { epoch: 4, seq: 8 },
     entries: [],
     // A rolling restart can briefly pair this client with a daemon from
@@ -100,6 +103,7 @@ test("a live workflow update preserves the read-hydrated run document", () => {
   const client = new RosettaClient({
     baseUrl: "http://127.0.0.1:4640",
     WebSocketImpl: FakeSocket,
+    notificationIntervalMs: 0,
     fetchFn: () => {
       throw new Error("the timeline stream must not make an HTTP request");
     },
@@ -150,9 +154,11 @@ test("a live workflow update preserves the read-hydrated run document", () => {
   });
   const socket = FakeSocket.instances[0];
   socket.open();
-  socket.frame({ frame: "hello", protocol_version: 14, stamp: { epoch: 1, seq: 1 } });
+  socket.frame({ frame: "hello", protocol_version: PROTOCOL_VERSION, stamp: { epoch: 1, seq: 1 } });
   socket.frame({
     frame: "timeline_snapshot",
+    watermark: "generation-a",
+    cursor: null,
     stamp: { epoch: 1, seq: 1 },
     entries: [row],
     timeline_meta: EMPTY_META,
@@ -209,10 +215,11 @@ test("oversized canonical text is read from its daemon asset", async () => {
   const client = new RosettaClient({
     baseUrl: "http://127.0.0.1:4640",
     WebSocketImpl: FakeSocket,
+    notificationIntervalMs: 0,
     fetchFn: async (input, init) => {
       requested = String(input);
       requestInit = init;
-      return new Response("the complete workflow result");
+      return new Response("the complete workflow result", { headers: { "x-rosetta-protocol-version": String(PROTOCOL_VERSION) } });
     },
   });
   const text = await client.readTextAsset({

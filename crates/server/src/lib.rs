@@ -18,4 +18,4 @@ pub use consent::{BoostLedger, ConsentGate, GrantError};
 pub use health::{DaemonHealth, IngestCounterSource, IngestCounters, RuntimeTick};
 pub use http::{AppState, ProjectionReader, RawCommandReader, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};
-pub use rosetta_protocol::DiscoveryRow;
+pub use rosetta_protocol::{DiscoveryRow, PROTOCOL_VERSION};

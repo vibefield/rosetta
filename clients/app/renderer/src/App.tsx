@@ -50,7 +50,7 @@ function useNow(): number {
 export default function App() {
   const nowMs = useNow();
   const { meta, status: metaStatus } = useMeta();
-  const { canonicalReady, searchReadiness: readiness, ingest } = useDaemonStatus();
+  const { connectionError, canonicalReady, searchReadiness: readiness, ingest } = useDaemonStatus();
   const ingestActive = isIngestActive(ingest);
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
@@ -259,13 +259,13 @@ export default function App() {
                 ? "rosettad is not answering"
                 : "Connecting to rosettad"
             }
-            description={
+            description={connectionError ?? (
               <>
                 Looking for the daemon at <code>{client.baseUrl}</code>. Start it with{" "}
                 <code>rosettad serve --db &lt;projection&gt;</code> and this room fills in on
                 its own.
               </>
-            }
+            )}
           >
             <div className="ah-meter">
               <i style={{ width: metaStatus === "connecting" ? "30%" : "8%" }} />

@@ -657,26 +657,62 @@ selectors, and inverted ranges are HTTP 400 errors rather than successful empty 
 **Observe (job 2)** — the flagship contract, successor to `observeSession`:
 
 ```
-WS /ws/sessions/<id>?resume=<stamp>
-  server → { frame: "hello", protocol_version: 10, stamp }
-  server → { frame: "timeline_snapshot", stamp, entries, timeline_meta }
+WS /ws/sessions/<id>?epoch=<epoch>&seq=<seq>
+  server → { frame: "hello", protocol_version: 15, stamp }
+  server → { frame: "timeline_snapshot", stamp, entries, timeline_meta, cursor, watermark }
   server → { frame: "mutation", stamp, mutation } …
   server → { frame: "timeline_meta_snapshot", stamp, timeline_meta }
   server → { frame: "resync" }                # gap/epoch change → replacement snapshot
 ```
 
-Snapshot-then-delta with resumable `(epoch, seq)` cursors, same concepts chopsticks
-already implements (epoch / overflow / resync). The contract is versioned **in the
-handshake**, its types live in `rosetta-protocol`, and a generated TypeScript package
-(`ts-rs`) is published semver'd — never again a `link:` dep pinned by string, never
-again a silently breaking revision-id derivation. Golden contract tests freeze the wire
-format per protocol version.
+On a resumable reconnect, the snapshot is replaced by unstamped replay mutations,
+an optional unstamped metadata replacement, then `caught_up { stamp }`. Even an
+empty replay ends with this checkpoint. `hello` advertises the replay target; the
+client advances its resume stamp only after applying a snapshot, a stamped live
+frame, or the complete replay. A disconnect halfway through replay repeats the
+unacknowledged gap safely. Registration, replay capture, and its endpoint share
+one hub lock. Async subscribers wait on `Notify`, with transport keepalive pings;
+no thread or periodic polling bridge is allocated per socket.
+
+The snapshot's cursor fetches the preceding page directly. HTTP timeline pages
+and exact-row envelopes carry a generation watermark, read in the same SQLite
+transaction as their rows. The TypeScript subscription owns visible rows, held
+history, and anchors in one cache, applies live patches to all loaded identities,
+and aborts outstanding reads on replacement. A stale watermark requests a fresh
+snapshot. Notifications coalesce over 16 ms; ordered metadata caches update only
+the changed collection and retain unaffected published arrays.
+
+The contract lives in `rosetta-protocol`; `ts-rs` generates its TypeScript types.
+Both HTTP's exposed `x-rosetta-protocol-version` header and WebSocket's `hello`
+are checked before the client accepts data. Golden tests pin the JSON shapes
+and check the Rust and TypeScript version constants. HTTP requests have a 30 s
+default deadline and accept caller cancellation; changing the daemon origin
+aborts requests and reconnects active subscriptions. Search cancels superseded
+requests and ignores their late results.
 
 `GET /api/runtimes`, `/api/projects`, root-only `/api/sessions`, and addressable
 `/api/sessions/{id}` serve the metadata/browse side of the agent-view app; `/ws/meta`
 streams the complete topology so descendant timelines can be embedded recursively.
 `GET /api/sessions/{id}/timeline/{timeline_id}` resolves one exact canonical landing row;
 scoped plan and file routes resolve bytes only after an explicit open action.
+
+`WS /ws/collaboration/{id}` carries a complete collaboration-boundary snapshot,
+content-free response model/effort observations, then filtered live changes. It
+does not send private transcript windows or timeline metadata. Team roster
+changes add/remove only the affected subscriptions. Opening a report's work
+disclosure calls `GET /api/sessions/{id}/timeline/{timeline_id}/work`; the daemon
+resolves the source session, response, and inclusive bounds from that canonical
+report and returns only the proven range. Pending or missing evidence fails closed.
+
+Electron owns one managed daemon generation at a time. `serve --json` emits a
+versioned readiness event with its bound loopback origin. Startup failure and
+shutdown send SIGINT, escalating to SIGKILL after a grace period; replacement
+waits for actual child exit and retries with capped backoff. Main sends revised
+daemon state through the preload so the renderer reconnects when a new child
+binds another port. Quit waits for daemon exit. Explicit external daemons remain
+externally owned. Built renderers load from the registered `rosetta://app` origin,
+which shares the daemon's HTTP and WebSocket origin allowlist with development;
+opaque `null` origins remain disallowed.
 
 **Metrics (job 3):**
 `WS /v1/metrics?families=usage,lifecycle&agent=…` — live distilled feed. Hot path is

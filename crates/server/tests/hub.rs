@@ -15,6 +15,64 @@ use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, que
 
 const TICK: Duration = Duration::from_millis(200);
 
+#[tokio::test]
+async fn async_delivery_starts_strictly_after_the_captured_replay_endpoint() {
+    let mut h = harness(HubConfig::default());
+    let (_first, resume) = h.hub.subscribe_session("s1", 0);
+    h.append("replayed");
+    h.absorb(1);
+    let (sub, endpoint, replay) = h.hub.subscribe_resuming("s1", Some(resume), 2);
+    let Some(Replay::Mutations(items)) = replay else {
+        panic!("expected replay")
+    };
+    assert_eq!(items.len(), 1);
+    assert!(matches!(&*items[0], Mutation::Message(row) if row.timeline_id == "replayed"));
+    assert!(sub.try_recv().is_none());
+    // Cancelling an idle async wait must not lose the next notification.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), sub.recv())
+            .await
+            .is_err()
+    );
+    h.append("live");
+    h.absorb(3);
+    let item = tokio::time::timeout(TICK, sub.recv()).await.unwrap();
+    assert!(
+        matches!(item, HubItem::Mutation { stamp: Some(stamp), mutation }
+        if stamp.seq == endpoint.seq + 1 && matches!(&*mutation, Mutation::Message(row) if row.timeline_id == "live"))
+    );
+}
+
+#[tokio::test]
+async fn collaboration_interest_filters_private_traffic_before_queuing_and_resyncs() {
+    let mut h = harness(HubConfig {
+        subscriber_queue: 1,
+        ..HubConfig::default()
+    });
+    let sub = h.hub.subscribe_collaboration("s1");
+    assert!(h.hub.watched_sessions().contains("s1"));
+    for i in 0..10 {
+        h.append(&format!("private-{i}"));
+    }
+    h.absorb(0);
+    assert!(
+        sub.try_recv().is_none(),
+        "private rows do not consume collaboration queue capacity"
+    );
+    assert_eq!(
+        h.hub.status().rings,
+        0,
+        "boundary streams do not retain private replay rings"
+    );
+    assert_eq!(h.hub.invalidate_sessions(["s1"], 1), 1);
+    assert_eq!(
+        tokio::time::timeout(TICK, sub.recv()).await.unwrap(),
+        HubItem::Resync
+    );
+    assert!(h.hub.resync(&sub, 2).is_none());
+    assert!(sub.try_recv().is_none());
+}
+
 fn base_batch() -> Batch {
     Batch {
         ops: vec![

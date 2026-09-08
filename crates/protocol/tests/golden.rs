@@ -21,9 +21,9 @@ use rosetta_protocol::{
     ProjectsResponse, ResponseRuntime, RuntimeBackfill, RuntimeIngestStatus, RuntimeRow,
     RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState,
     ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse,
-    StreamState, TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
-    TimelineMetaPlanSource, TimelineMetaTask, TimelineMetaWorkflow, TimelinePage, TokenSnapshot,
-    UsageResponse,
+    StreamState, TimelineEntryResponse, TimelineMeta, TimelineMetaArtifact,
+    TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
+    TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -428,10 +428,24 @@ fn exemplars() -> serde_json::Value {
             stamp: stamp(),
             entries: vec![timeline_entry(), collaboration_entry()],
             timeline_meta: timeline_meta(),
+            cursor: None,
+            watermark: "1.2.3".into(),
         },
         ServerFrame::TimelineMetaSnapshot {
             stamp: Some(stamp()),
             timeline_meta: timeline_meta(),
+        },
+        ServerFrame::CaughtUp { stamp: stamp() },
+        ServerFrame::CollaborationSnapshot {
+            entries: vec![collaboration_entry()],
+            response_runtimes: vec![],
+        },
+        ServerFrame::ResponseRuntime {
+            observation: ResponseRuntime {
+                response_id: "r1".into(),
+                model: Some("model".into()),
+                effort: None,
+            },
         },
         ServerFrame::MetaSnapshot {
             runtimes: vec![runtime_row()],
@@ -460,6 +474,7 @@ fn exemplars() -> serde_json::Value {
         "sessions": SessionsResponse { sessions: vec![session_row()] },
         "session": SessionResponse { session: session_row() },
         "timeline_page": TimelinePage {
+            watermark: "1.2.3".into(),
             entries: vec![timeline_entry(), collaboration_entry()],
             cursor: Some("{\"session_id\":\"s1\",\"before\":7,\"watermark\":\"1.2.3\"}".into()),
         },
@@ -471,6 +486,7 @@ fn exemplars() -> serde_json::Value {
                 effort: Some("high".into()),
             }],
         },
+        "timeline_entry": TimelineEntryResponse { entry: timeline_entry(), watermark: "1.2.3".into() },
         "task_action": task_action(),
         "command": CommandResponse { command: "printf 'full source'".into() },
         "search_request": SearchRequest {
@@ -502,6 +518,7 @@ fn exemplars() -> serde_json::Value {
             SearchReadiness::Failed,
         ],
         "error_codes": [
+            ErrorCode::IncompatibleProtocol,
             ErrorCode::NotFound,
             ErrorCode::BadRequest,
             ErrorCode::NotReady,
@@ -576,5 +593,16 @@ fn the_wire_shape_is_pinned() {
          contract change — bump PROTOCOL_VERSION, regenerate the TypeScript\n\
          bindings, and refresh this golden with\n\
          UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol\n"
+    );
+}
+
+#[test]
+fn typescript_protocol_version_matches() {
+    let expected = format!(
+        "// Shared wire version; checked against Rust in the wire tests.\nexport const PROTOCOL_VERSION = {PROTOCOL_VERSION};\n"
+    );
+    assert_eq!(
+        include_str!("../../../clients/ts/protocol-version.mjs"),
+        expected
     );
 }

@@ -57,7 +57,7 @@ export interface EarlierLanding {
 }
 
 export interface EarlierModel {
-  /** Paged history, oldest-first. The live tail is merged over it elsewhere. */
+  /** Page identities for reveal receipts. The subscription owns row values. */
   readonly older: readonly TimelineEntry[];
   /** `undefined` = untried · `null` = top of history · string = next page back. */
   readonly cursor: string | null | undefined;
@@ -103,6 +103,7 @@ export interface EarlierContext {
 export type EarlierAction =
   /** The session changed: drop the paged history AND the held page. */
   | { readonly type: "reset" }
+  | { readonly type: "snapshot"; readonly cursor: string | null }
   /** Fetch the page above and keep it aside. No-op unless idle or failed. */
   | { readonly type: "hold" }
   /** Spend the bar. Lands a held page now, or marks a fetch to land on arrival. */
@@ -187,6 +188,7 @@ export function reduceEarlier(
   ctx: EarlierContext,
 ): EarlierModel {
   switch (action.type) {
+    case "snapshot": return { ...model, cursor: action.cursor };
     case "reset": {
       // A held page belongs to the session it was fetched for. It never
       // survives the switch, and neither does a stale 410 sentence. Bumping

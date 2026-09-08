@@ -10,7 +10,7 @@
 // a parent-only link and anchored under their own delegate line when the link
 // is proven, and the honest states for a session the daemon has not reached.
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import type { ParticipantColor, SessionRow, TimelineEntry } from "@rosetta/protocol";
 import type {
   AttachmentFact,
@@ -55,6 +55,34 @@ import { Thinking } from "./Thinking";
 import { canOpenAttachment } from "./attachment-file-source";
 import type { TeamReportWorkPresentation } from "./Team";
 import { KnownTeamRoster, TeamEvent, TeamWorkthread } from "./Team";
+
+/** Mounted only by an open work disclosure; ordinary team traffic carries no private work. */
+function LazyReportWork({ report, ...props }: {
+  report: TimelineEntry;
+} & Omit<ComponentProps<typeof ReportWorkDocument>, "rows" | "startedAt" | "endedAt">) {
+  const [rows, setRows] = useState<TimelineEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    setRows(null);
+    setError(null);
+    void client.reportWork(report.session_id, report.timeline_id, controller.signal).then(
+      (rows) => { if (!controller.signal.aborted) setRows(rows); },
+      (error: unknown) => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "The recorded work is unavailable"); },
+    );
+    return () => controller.abort();
+  }, [report]);
+  if (error !== null) return <p className="tr-quiet">{error}</p>;
+  if (rows === null) return <p className="tr-quiet">Loading recorded work…</p>;
+  const work = taskBoundedReportWork(report, rows);
+  if (work === null) return <p className="tr-quiet">The recorded work is no longer available.</p>;
+  return (
+    <>
+      <p className="tr-quiet">{work.actionCount} {work.actionCount === 1 ? "action" : "actions"}</p>
+      <ReportWorkDocument {...props} rows={work.rows} startedAt={work.startedAt} endedAt={work.endedAt} />
+    </>
+  );
+}
 
 export interface TranscriptDocumentProps {
   readonly session: SessionRow;
@@ -514,52 +542,22 @@ export function TranscriptDocument({
 
   const reportWorkFor = (row: TimelineEntry): TeamReportWorkPresentation | null => {
     if (row.body.type !== "collaboration") return null;
-    const participant = participantPresentation(
-      participants,
-      row.body.event.sender,
-      row.body.event.team,
-    );
-    const memberSessionId = row.body.event.source_session_id;
-    if (memberSessionId === null || memberSessionId === undefined) return null;
-    const sourceRows = teamFeed.rowsBySession.get(memberSessionId);
-    const memberSession = index.byId.get(memberSessionId);
-    if (
-      sourceRows === undefined ||
-      memberSession === undefined ||
-      !teamIdSet.has(memberSession.id)
-    ) {
-      return null;
-    }
-    const work = taskBoundedReportWork(row, sourceRows);
-    if (work === null) return null;
+    const event = row.body.event;
+    if (event.kind !== "report" || event.source_session_id === null || event.source_response_id === null
+        || event.work_start_timeline_id === null || event.work_end_timeline_id === null) return null;
+    const memberSession = index.byId.get(event.source_session_id);
+    if (memberSession === undefined || !teamIdSet.has(memberSession.id)) return null;
+    const participant = participantPresentation(participants, event.sender, event.team);
     return {
-      actionCount: work.actionCount,
-      startedAt: work.startedAt,
-      endedAt: work.endedAt,
-      content: (
-        <ReportWorkDocument
-          session={memberSession}
-          rows={work.rows}
-          name={row.body.event.sender}
-          color={row.body.event.color ?? participant?.color ?? null}
-          runtime={
-            participant?.runtime ??
-            runtimeProfile(
-              work.rows,
-              memberSession.delegation?.configured_model ?? null,
-              teamFeed.responseRuntimesBySession.get(memberSession.id) ?? [],
-            )
-          }
-          startedAt={work.startedAt}
-          endedAt={work.endedAt}
-          index={index}
-          onReceipt={onReceipt}
-          onOpenAttachment={onOpenAttachment}
-          onOpenPath={onOpenPath}
-          getRuntimeKind={getRuntimeKind}
-          homeDirectory={homeDirectory}
-        />
-      ),
+      actionCount: null,
+      startedAt: null,
+      endedAt: null,
+      content: <LazyReportWork key={`${row.session_id}:${row.timeline_id}`} report={row} session={memberSession}
+        name={event.sender} color={event.color ?? participant?.color ?? null}
+        runtime={participant?.runtime ?? runtimeProfile([], memberSession.delegation?.configured_model ?? null,
+          teamFeed.responseRuntimesBySession.get(memberSession.id) ?? [])}
+        index={index} onReceipt={onReceipt} onOpenAttachment={onOpenAttachment} onOpenPath={onOpenPath}
+        getRuntimeKind={getRuntimeKind} homeDirectory={homeDirectory} />,
     };
   };
 

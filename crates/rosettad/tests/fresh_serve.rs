@@ -39,6 +39,7 @@ fn run_serve(home: &Path, db: &Path) -> std::process::Output {
             "127.0.0.1:0",
             "--ticks",
             "0",
+            "--json",
         ])
         .output()
         .unwrap()
@@ -51,7 +52,23 @@ fn assert_success(output: &std::process::Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let greeting = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["event"] == "ready")
+        .expect("structured readiness event");
+    assert_eq!(
+        greeting["protocol_version"],
+        rosetta_server::PROTOCOL_VERSION
+    );
+    assert!(
+        greeting["origin"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://127.0.0.1:")
+    );
+    stdout
 }
 
 fn ledger_segments(root: &Path) -> usize {
