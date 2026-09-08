@@ -9,7 +9,7 @@
 // the focus landing from a search hit, subthreads interleaved by timestamp for
 // a parent-only link and anchored under their own delegate line when the link
 // is proven, and the honest states for a session the daemon has not reached.
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import type { ParticipantColor, SessionRow, TimelineEntry } from "@rosetta/protocol";
 import type {
@@ -35,6 +35,7 @@ import {
   workflowAttemptsFor,
 } from "../../lib/transcript";
 import type { TimelineFeed } from "../../lib/hooks";
+import type { TimelineLayout } from "../../lib/transcript/use-transcript-tail";
 import { useTeamTimelines } from "../../lib/hooks";
 import { client } from "../../lib/rosetta";
 import { EmptyState } from "../ui";
@@ -105,6 +106,8 @@ export interface TranscriptDocumentProps {
   /** The head of the document (§08), mounted above the first sitting. */
   readonly head?: ReactNode;
   readonly nested?: boolean;
+  /** Root scroll surface observes the actual rendered team chronology. */
+  readonly onTimelineLayout?: (layout: TimelineLayout) => void;
 }
 
 interface LegacyWorkflowChildIndex {
@@ -229,6 +232,7 @@ export function TranscriptDocument({
   onPillPress,
   head,
   nested = false,
+  onTimelineLayout,
 }: TranscriptDocumentProps) {
   const runtimeKind = getRuntimeKind(session.runtime_id);
   const live = session.stream_state === "streaming" && !duringBackfill;
@@ -319,6 +323,15 @@ export function TranscriptDocument({
       : null;
   const domIdOf = (timelineId: string) =>
     messageDomId(sessionByTimelineId.get(timelineId) ?? session.id, timelineId);
+  useLayoutEffect(() => {
+    onTimelineLayout?.({
+      sessionId: session.id,
+      rows: displayedRows,
+      ready: feed.snapshotReady && (feed.rows[0]?.session_id ?? session.id) === session.id,
+      readySessionIds: [session.id, ...(teamFeed.historyReady ? teamIds : [])],
+      elementForRow: (row) => document.getElementById(messageDomId(row.session_id, row.timeline_id)),
+    });
+  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamIds]);
   const teamFocus = focus !== null && teamIdSet.has(focus.sessionId) ? focus : null;
   const [teamHighlight, setTeamHighlight] = useState<string | null>(null);
   const teamFocusRequest = useRef<string | null>(null);

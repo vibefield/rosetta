@@ -90,6 +90,7 @@ export function ProjectListItem({
     <button
       type="button"
       className={`ah-project-list-item${isSelected ? " is-selected" : ""}`}
+      data-motion-key={project.row.id}
       data-cooking={isCooking ? "" : undefined}
       data-fill={ingestFill !== null ? "" : undefined}
       style={{

@@ -1,5 +1,6 @@
 import type { ProjectBackfill } from "@rosetta/protocol";
 import type { ProjectViewModel } from "../../lib/model";
+import { useListMotion } from "../../lib/use-list-motion";
 import { EmptyState } from "../ui";
 import { ProjectListItem } from "./ProjectListItem";
 
@@ -35,9 +36,10 @@ export function ProjectList({
   onProjectSelect,
 }: ProjectListProps) {
   const isSearching = searchHitCounts !== null;
+  const motionRef = useListMotion(JSON.stringify(projects.map((project) => project.row.id)), "projects");
 
   return (
-    <div className="ah-scroll">
+    <div className="ah-scroll ah-motion-list" ref={motionRef}>
       {projects.map((project) => (
         <ProjectListItem
           key={project.row.id}

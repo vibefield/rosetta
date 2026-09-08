@@ -54,6 +54,7 @@ export function SessionListItem({
     <button
       type="button"
       className={`ah-session-list-item${isSelected ? " is-selected" : ""}`}
+      data-motion-key={session.id}
       data-role={session.role}
       data-cooking={isCooking ? "" : undefined}
       aria-current={isSelected ? "true" : undefined}

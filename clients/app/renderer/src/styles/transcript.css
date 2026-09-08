@@ -26,7 +26,11 @@
    Removing the room's 6px top inset lets the fade begin at the literal
    scrollport edge; the pill keeps its own inset above that painted ground.
    The same 6px stays in the document's resting headroom. */
-.tr-scroll { padding-top: 0; overflow-x: hidden; }
+.tr-scroll { padding-top: 0; overflow-x: hidden; overscroll-behavior-y: contain; }
+/* Native anchoring holds a paused reader in place. While following, the
+   tail controller owns the position, including images and streamed text. */
+.tr-scroll[data-following] { overflow-anchor: none; }
+.tr-scroll:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
 .tr {
   --tr-action-gap: 14px;
   position: relative; max-width: 68ch; margin: 0 auto; padding: 28px 28px 30px;

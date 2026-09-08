@@ -1,6 +1,6 @@
-import { Fragment, useMemo } from "react";
 import type { SessionRow } from "@rosetta/protocol";
 import { dayLabel } from "../../lib/format";
+import { useListMotion } from "../../lib/use-list-motion";
 import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { EmptyState, ResultGroupHeader } from "../ui";
 import { SessionListItem } from "./SessionListItem";
@@ -83,75 +83,60 @@ function SessionItem({
   );
 }
 
-function BrowseSessionItems({
-  sessions,
-  common,
-}: {
-  readonly sessions: readonly SessionRow[];
-  readonly common: SessionListCommonProps;
-}) {
-  const groups = useMemo(
-    () => groupSessionsByDay(sessions, common.currentTimestamp),
-    [common.currentTimestamp, sessions],
-  );
-
-  return groups.map((group) => (
-    <Fragment key={group.label}>
-      <div className="ah-day">{group.label}</div>
-      {group.sessions.map((session) => (
-        <SessionItem
-          key={session.id}
-          session={session}
-          searchHitCount={null}
-          common={common}
-        />
-      ))}
-    </Fragment>
-  ));
-}
-
-function SearchSessionItems({
-  groups,
-  common,
-}: {
-  readonly groups: readonly ProjectSearchResultGroup[];
-  readonly common: SessionListCommonProps;
-}) {
-  return groups.map((group) => {
-    return (
-      <div key={group.project.row.id}>
-        <ResultGroupHeader
-          label={group.project.row.name}
-          count={group.hitCount}
-          countLabel={`${group.hitCount} ${group.hitCount === 1 ? "hit" : "hits"}`}
-          tint={group.project.tint}
-        />
-        {group.sessions.map((result) => (
-          <SessionItem
-            key={result.session.id}
-            session={result.session}
-            searchHitCount={result.hits.length}
-            common={common}
-          />
-        ))}
-      </div>
-    );
-  });
-}
-
 export function SessionList(props: SessionListProps) {
   const common: SessionListCommonProps = props;
-  const totalSessionCount = props.mode === "browse"
-    ? props.sessions.length
-    : props.groups.reduce((total, group) => total + group.sessions.length, 0);
+  const days =
+    props.mode === "browse" ? groupSessionsByDay(props.sessions, props.currentTimestamp) : [];
+  const order =
+    props.mode === "browse"
+      ? days.map((day) => [day.label, ...day.sessions.map((session) => session.id)])
+      : props.groups.map((group) => [
+          group.project.row.id,
+          ...group.sessions.map((result) => result.session.id),
+        ]);
+  const scope =
+    props.mode === "browse" ? `browse:${props.sessions[0]?.project_id ?? "empty"}` : "search";
+  const motionRef = useListMotion(JSON.stringify(order), scope);
+  const totalSessionCount =
+    props.mode === "browse"
+      ? props.sessions.length
+      : props.groups.reduce((total, group) => total + group.sessions.length, 0);
 
   return (
-    <div className="ah-scroll ah-session-list">
-      {props.mode === "search" ? (
-        <SearchSessionItems groups={props.groups} common={common} />
-      ) : (
-        <BrowseSessionItems sessions={props.sessions} common={common} />
-      )}
+    <div className="ah-scroll ah-session-list ah-motion-list" ref={motionRef}>
+      {/* Headers and rows share one key space. Moving from Yesterday to Today
+          preserves the actual button, its keyboard focus and its animation. */}
+      {props.mode === "search"
+        ? props.groups.flatMap((group) => [
+            <ResultGroupHeader
+              key={`project:${group.project.row.id}`}
+              label={group.project.row.name}
+              count={group.hitCount}
+              countLabel={`${group.hitCount} ${group.hitCount === 1 ? "hit" : "hits"}`}
+              tint={group.project.tint}
+            />,
+            ...group.sessions.map((result) => (
+              <SessionItem
+                key={`session:${result.session.id}`}
+                session={result.session}
+                searchHitCount={result.hits.length}
+                common={common}
+              />
+            )),
+          ])
+        : days.flatMap((group) => [
+            <div key={`day:${group.label}`} className="ah-day">
+              {group.label}
+            </div>,
+            ...group.sessions.map((session) => (
+              <SessionItem
+                key={`session:${session.id}`}
+                session={session}
+                searchHitCount={null}
+                common={common}
+              />
+            )),
+          ])}
       {totalSessionCount === 0 && !props.pending && (
         <EmptyState
           title={

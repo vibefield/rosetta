@@ -25,6 +25,8 @@ import { clockShort } from "../lib/format";
 import { desktopHost } from "../lib/desktop-host";
 import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
+import { useTranscriptTail } from "../lib/transcript/use-transcript-tail";
+import { prefersReducedMotion } from "../lib/motion";
 import type { AttachmentFact, PathFact } from "../lib/transcript";
 import type { ProjectViewModel } from "../lib/model";
 import { parseSnippet } from "../lib/model";
@@ -111,8 +113,6 @@ export function TranscriptColumn({
   homeDirectory,
 }: TranscriptColumnProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const seenMax = useRef<number>(-1);
-  const [unseen, setUnseen] = useState(0);
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
   const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
@@ -124,7 +124,6 @@ export function TranscriptColumn({
   const fold = useFoldPreference();
 
   const searching = searchResults !== null;
-  const maxOrdinal = feed.rows.length ? feed.rows[feed.rows.length - 1].ordinal : -1;
   const live = session?.stream_state === "streaming";
   const requestedTimelineId =
     focus !== null && focus.sessionId === session?.id ? focus.timelineId : null;
@@ -139,36 +138,14 @@ export function TranscriptColumn({
     enabled: !searching && session !== null,
   });
 
-  const atFoot = () => {
-    const element = scrollRef.current;
-    if (!element) return true;
-    return element.scrollTop + element.clientHeight >= element.scrollHeight - 32;
-  };
-
-  const wasAtFoot = useRef(true);
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return;
-    if (wasAtFoot.current) {
-      element.scrollTop = element.scrollHeight;
-      seenMax.current = maxOrdinal;
-      setUnseen(0);
-    } else if (feed.watermark !== null) {
-      const fresh = feed.rows.filter(
-        (row) => row.ordinal > feed.watermark! && row.ordinal > seenMax.current,
-      ).length;
-      if (fresh > 0) setUnseen((value) => value + fresh);
-      seenMax.current = maxOrdinal;
-    }
-    // Only a new tail row should trigger live-follow behavior. Loading older
-    // pages changes `feed.rows` without changing the tail and must not jump.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxOrdinal]);
+  const tail = useTranscriptTail(
+    scrollRef,
+    session?.id ?? null,
+    !searching && session !== null,
+    focus !== null || metaFocus !== null,
+  );
 
   useEffect(() => {
-    seenMax.current = -1;
-    wasAtFoot.current = true;
-    setUnseen(0);
     setHighlightedTimelineId(null);
     setMenu(null);
     viewerRequest.current += 1;
@@ -301,7 +278,7 @@ export function TranscriptColumn({
     if (drawnBy !== null) {
       const element = document.getElementById(messageDomId(session.id, drawnBy));
       if (element) {
-        wasAtFoot.current = false;
+        tail.pause();
         element.scrollIntoView({ block: "center" });
         setHighlightedTimelineId(drawnBy);
         if (targetIsMeta) {
@@ -353,10 +330,10 @@ export function TranscriptColumn({
     );
     if (target === null) return;
     // Section-relative offsets do not survive a sticky pill; the rects do.
-    wasAtFoot.current = false;
+    tail.pause();
     scroller.scrollTo({
       top: target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 4,
-      behavior: "smooth",
+      behavior: prefersReducedMotion() ? "instant" : "smooth",
     });
     const prompt = target.querySelector<HTMLElement>(".tr-prompt");
     if (prompt === null) return;
@@ -422,11 +399,10 @@ export function TranscriptColumn({
         className="ah-scroll tr-scroll"
         data-flush=""
         ref={scrollRef}
-        onScroll={() => {
-          wasAtFoot.current = atFoot();
-          if (wasAtFoot.current && unseen > 0) setUnseen(0);
-          markStuckPills(scrollRef.current);
-        }}
+        tabIndex={0}
+        role="region"
+        aria-label={searching ? "Search results" : "Session messages"}
+        onScroll={() => markStuckPills(scrollRef.current)}
       >
         {/* The top fade is the pinned pill's ground, and it must be the first
             child of the scroller: `useHeadOfDocument` writes `--frost` here. */}
@@ -485,6 +461,7 @@ export function TranscriptColumn({
                 onOpenPath={openReadPath}
                 getRuntimeKind={getRuntimeKind}
                 homeDirectory={homeDirectory}
+                onTimelineLayout={tail.onLayout}
                 onPillPress={(element: HTMLElement, dayKey: string | null) => {
                   const frame = element.closest(".ah-col");
                   if (frame === null) return;
@@ -515,22 +492,36 @@ export function TranscriptColumn({
         />
       )}
       <ReceiptPill receipt={headOfDocument.receipt} top={RECEIPT_TOP} />
-      {unseen > 0 && (
+      {!searching && session !== null && (
         <button
           type="button"
           className="ah-newpill"
+          data-visible={tail.away || undefined}
+          data-unread={tail.unseen > 0 || undefined}
+          inert={!tail.away}
+          aria-hidden={!tail.away}
+          aria-label={tail.unseen > 0
+            ? `Scroll to latest · ${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}`
+            : "Scroll to latest message"}
           onClick={() => {
-            const element = scrollRef.current;
-            if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-            setUnseen(0);
+            // Keep keyboard navigation on the reading surface after the
+            // button fades, instead of leaving focus on an inert control.
+            scrollRef.current?.focus({ preventScroll: true });
+            tail.latest();
           }}
         >
-          <i />
-          <span>
-            {unseen} new {unseen === 1 ? "message" : "messages"}
-          </span>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 3v10m-4-4 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>{tail.unseen > 0 ? `${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}` : "Latest"}</span>
+          {tail.unseen > 0 && <i aria-hidden="true" />}
         </button>
       )}
+      <span className="ah-tail-announcement" role="status" aria-live="polite" aria-atomic="true">
+        {tail.away && tail.unseen > 0
+          ? `${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}. Scroll to latest to read.`
+          : ""}
+      </span>
       <FileViewerDialog
         handle={viewerTarget?.handle ?? null}
         source={viewerTarget?.source ?? attachmentFileSource}
