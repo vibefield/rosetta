@@ -1,0 +1,14 @@
+name: Rust toolchain and cache
+description: Install the repository's pinned toolchain and cache Cargo dependencies.
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Rust
+      shell: bash
+      run: |
+        toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+        rustup toolchain install "$toolchain" --profile minimal --component rustfmt --component clippy
+        rustc --version
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      with:
+        save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

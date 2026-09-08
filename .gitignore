@@ -5,5 +5,12 @@ target/
 __pycache__/
 *.py[cod]
 
+# Release output and local credentials.
+/dist/
+.env
+.env.*
+!.env.example
+!.env.*.example
+
 # machine-local cargo config (absolute SSD path — never commit)
 /.cargo/

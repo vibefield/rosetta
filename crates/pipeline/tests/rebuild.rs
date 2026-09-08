@@ -306,7 +306,7 @@ fn rebuild_never_activates_a_generation_that_normalizes_with_hard_errors() {
     )
     .unwrap();
     assert!(report.hard_errors > 0);
-    let cursor = queries::cursor_state(&rebuilt.conn(), &world.runtime.id, &source.relative_path)
+    let cursor = queries::cursor_state(rebuilt.conn(), &world.runtime.id, &source.relative_path)
         .unwrap()
         .unwrap();
     assert_eq!(cursor.active_generation, 0);
