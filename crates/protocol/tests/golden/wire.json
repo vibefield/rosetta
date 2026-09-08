@@ -120,7 +120,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 15,
+      "protocol_version": 16,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -592,6 +592,9 @@
     "awaiting_consent",
     "backfilling",
     "metadata_ready",
+    "restoring",
+    "finalizing",
+    "publishing",
     "live"
   ],
   "mutations": [
@@ -883,7 +886,7 @@
       }
     ]
   },
-  "protocol_version": 15,
+  "protocol_version": 16,
   "runtimes": {
     "runtimes": [
       {
@@ -936,6 +939,7 @@
       }
     ],
     "state": {
+      "progress": null,
       "projection_epoch": "epoch-1",
       "readiness": "catching-up",
       "revision": 42
@@ -1037,9 +1041,10 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 15,
+    "protocol_version": 16,
     "schema_version": 16,
     "search": {
+      "progress": null,
       "projection_epoch": "epoch-1",
       "readiness": "catching-up",
       "revision": 42

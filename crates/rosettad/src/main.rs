@@ -41,6 +41,7 @@ use rosetta_store::Store;
 
 mod bench;
 mod brutal;
+mod cold_progress;
 mod cold_stage;
 mod engine;
 mod ledger_cmd;

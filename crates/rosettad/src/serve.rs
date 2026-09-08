@@ -98,7 +98,8 @@ fn counter_source(
         let delta = instrument.snapshot().delta_since(&baseline);
         IngestCounters {
             files_skimmed: delta.get(Metric::FilesSkimmed),
-            bytes_read: delta.get(Metric::BytesRead),
+            bytes_read: delta.get(Metric::PayloadBytes),
+            sessions_discovered: delta.get(Metric::SessionsDiscovered),
             records: delta.get(Metric::RecordsFramed),
         }
     })
@@ -859,6 +860,9 @@ fn run_resumed_fresh_serve(
     let mut applied = Vec::new();
     let mut failures = Vec::new();
     let mut handled = BTreeSet::new();
+    let board = Arc::new(rosetta_server::ProgressBoard::new());
+    let status_board = board.clone();
+    health.ingest_project_source(Arc::new(move || status_board.snapshot()));
 
     for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
         if !consented.contains(adapter.kind()) {
@@ -885,6 +889,7 @@ fn run_resumed_fresh_serve(
         let ledger_dir = stage_root.join(adapter.kind());
         let baseline = instrument.snapshot();
         health.ingest_stream(adapter.kind(), counter_source(instrument, baseline));
+        health.ingest_phase(rosetta_server::IngestPhase::Restoring);
 
         let unsealed = if has_ledger_segments(&ledger_dir)? {
             let report = rebuild_runtime_with_options(
@@ -933,6 +938,10 @@ fn run_resumed_fresh_serve(
         let mut ledger = open_ledger(&stage_root, adapter.kind())?
             .defer_sync_until_flush()
             .into_async(4);
+        health.ingest_skim(
+            adapter.kind(),
+            counter_source(instrument, instrument.snapshot()),
+        );
         let (meta, roster) = meta_ingest_inventory_into(
             adapter,
             &runtime,
@@ -975,13 +984,36 @@ fn run_resumed_fresh_serve(
             .map_err(|error| format!("reserving {path} generation: {error}"))?;
         }
 
+        health.ingest_skim_done(
+            adapter.kind(),
+            meta.sessions as u64,
+            meta.files_skimmed as u64,
+        );
+        let ownership = queries::session_list(store.conn(), None, i64::MAX)
+            .map_err(|error| format!("reading resumed progress ownership: {error}"))?
+            .into_iter()
+            .map(|session| (session.id, session.project_id))
+            .collect();
+        let mut observed_opts = cold_opts.clone();
+        observed_opts.progress = Some(crate::cold_progress::ColdProgress::observe(
+            adapter.kind(),
+            &roster,
+            &ownership,
+            board.clone(),
+            health.clone(),
+            false,
+        ));
+        health.ingest_stream(
+            adapter.kind(),
+            counter_source(instrument, instrument.snapshot()),
+        );
         let stream = stream_backfill_into(
             adapter,
             &runtime,
             &discovery.root,
             &mut store,
             &roster,
-            &cold_opts,
+            &observed_opts,
             instrument,
             Some(&mut ledger),
         )
@@ -1004,6 +1036,12 @@ fn run_resumed_fresh_serve(
             .map(|session| session.id)
             .collect::<Vec<_>>();
         hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
+        for session_id in &session_ids {
+            board.session_done(
+                ownership.get(session_id).and_then(Option::as_deref),
+                session_id,
+            );
+        }
         health.ingest_done(adapter.kind(), stream.payload_bytes, stream.records);
         events.insert(adapter.kind().to_string(), watcher);
         applied.push(AppliedColdRuntime {
@@ -1035,8 +1073,15 @@ fn run_resumed_fresh_serve(
     for output in &mut applied {
         drop(output.ledger.take());
     }
-    let mut store =
-        publish_fresh_ram_projection(store, temp, db, ledger_stage, projection_reader, instrument)?;
+    let mut store = publish_fresh_ram_projection(
+        store,
+        temp,
+        db,
+        ledger_stage,
+        projection_reader,
+        instrument,
+        health,
+    )?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
@@ -1194,6 +1239,25 @@ fn run_fresh_fast_serve(
         started.elapsed().as_secs_f64()
     );
 
+    let ownership = queries::session_list(store.conn(), None, i64::MAX)
+        .map_err(|error| format!("reading cold progress ownership: {error}"))?
+        .into_iter()
+        .map(|session| (session.id, session.project_id))
+        .collect();
+    let board = Arc::new(rosetta_server::ProgressBoard::new());
+    let status_board = board.clone();
+    health.ingest_project_source(Arc::new(move || status_board.snapshot()));
+    for plan in &mut planned {
+        plan.opts.progress = Some(crate::cold_progress::ColdProgress::observe(
+            plan.adapter.kind(),
+            &plan.files,
+            &ownership,
+            board.clone(),
+            health.clone(),
+            true,
+        ));
+    }
+
     // Every producer owns one planner and ledger. The consumer is the only
     // canonical writer and admits completion-order results, so small agents
     // become browseable while a large agent is still parsing.
@@ -1240,6 +1304,7 @@ fn run_fresh_fast_serve(
             let kind = captured.adapter.kind().to_string();
             let payload_bytes = captured.stream.payload_bytes;
             let records = captured.stream.records;
+            health.ingest_runtime_stage(&kind, rosetta_server::BackfillState::Applying);
             captured.prepared.mark_metadata_preapplied();
             let output = apply_captured_cold_runtime(
                 flags,
@@ -1256,6 +1321,12 @@ fn run_fresh_fast_serve(
                 .map(|session| session.id)
                 .collect::<Vec<_>>();
             hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
+            for session_id in &session_ids {
+                board.session_done(
+                    ownership.get(session_id).and_then(Option::as_deref),
+                    session_id,
+                );
+            }
             health.ingest_done(&kind, payload_bytes, records);
             println!(
                 "{kind}: canonical RAM public — {records} records, {} sessions",
@@ -1274,6 +1345,9 @@ fn run_fresh_fast_serve(
         return Err(failures.join("; "));
     }
 
+    health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
+    drop(ownership);
+    drop(board);
     // Async ledger workers have overlapped almost all payload IO. One
     // pre-publication barrier now drains and fsyncs each runtime, after which
     // no staged writer survives the directory rename.
@@ -1291,8 +1365,15 @@ fn run_fresh_fast_serve(
         drop(output.ledger.take());
     }
 
-    let mut store =
-        publish_fresh_ram_projection(store, temp, db, ledger_stage, projection_reader, instrument)?;
+    let mut store = publish_fresh_ram_projection(
+        store,
+        temp,
+        db,
+        ledger_stage,
+        projection_reader,
+        instrument,
+        health,
+    )?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
@@ -1515,6 +1596,7 @@ fn update_live_health(health: &DaemonHealth, kind: &str, runner: &LiveRunner<'_>
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_fresh_ram_projection(
     mut store: Store,
     temp: tempfile::TempPath,
@@ -1522,10 +1604,13 @@ fn publish_fresh_ram_projection(
     mut ledger_stage: ServeColdStage,
     projection_reader: &ProjectionReader,
     instrument: &Instrument,
+    health: &DaemonHealth,
 ) -> Result<Store, String> {
+    health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
     instrument
         .finish_bulk_load(&mut store)
         .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
+    health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
         store
             .conn()

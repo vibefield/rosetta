@@ -8,4 +8,4 @@
  * streamed. `Live` means the watch loop owns the store and the cold backfill
  * is history.
  */
-export type IngestPhase = "discovering" | "awaiting_consent" | "backfilling" | "metadata_ready" | "live";
+export type IngestPhase = "discovering" | "awaiting_consent" | "backfilling" | "metadata_ready" | "restoring" | "finalizing" | "publishing" | "live";

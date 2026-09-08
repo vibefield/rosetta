@@ -327,10 +327,19 @@ pub(crate) fn apply_snapshot_records(
     let mut prev_blob = cursor.checkpoint.clone();
     let mut ops: Vec<IngestOp> = Vec::new();
     let mut conflicted = false;
+    let mut progress_bytes = 0;
     for (index, record) in records.iter().enumerate() {
         opts.check_cancelled()?;
         report.records += 1;
         report.payload_bytes += record.len() as u64;
+        progress_bytes += record.len() as u64;
+        if (index + 1).is_multiple_of(64) || index + 1 == records.len() {
+            instrument.add(Metric::PayloadBytes, progress_bytes);
+            if let Some(progress) = &opts.progress {
+                progress.source_bytes(file, progress_bytes);
+            }
+            progress_bytes = 0;
+        }
         instrument.add(Metric::RecordsFramed, 1);
         ctx.src_offset = Some(index as i64);
         let outcome = instrument.time(Metric::NormalizeNanos, || {

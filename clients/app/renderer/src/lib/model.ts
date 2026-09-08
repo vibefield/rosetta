@@ -44,9 +44,11 @@ export interface ProjectViewModel {
   readonly sessionCount: number;
   /** Sessions the stream phase has fully indexed. */
   readonly indexedSessionCount: number;
-  /** Folded over the sessions' stream_state: ready = every figure on this
-   * project is final. Readiness is data, never a timer. */
+  /** Folded over session stream_state. Aggregate requests have their own
+   * statsReady gate and may finish after transcripts become browseable. */
   readonly readiness: "pending" | "partial" | "ready";
+  /** Aggregate requests finish separately from transcript publication. */
+  readonly statsReady: boolean;
 }
 
 const DAY_IN_MS = 86_400_000;
@@ -208,6 +210,7 @@ export function buildProjectViewModel(
     sessionCount: projectSessions.length,
     indexedSessionCount,
     readiness,
+    statsReady: projectStats !== undefined,
   };
 }
 

@@ -34,6 +34,7 @@ struct BoardState {
     /// Idempotence guards: canonical session ids are globally unique.
     seeded: BTreeSet<String>,
     done: BTreeSet<String>,
+    unknown_byte_totals: BTreeSet<Option<String>>,
 }
 
 #[derive(Default)]
@@ -44,6 +45,16 @@ pub struct ProgressBoard {
 impl ProgressBoard {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Serialized snapshot payload and a database's on-disk size are different
+    /// units. Preserve the processed-byte count but do not invent a percentage.
+    pub fn mark_bytes_unknown(&self, project_id: Option<&str>) {
+        self.state
+            .lock()
+            .expect("board state poisoned")
+            .unknown_byte_totals
+            .insert(project_id.map(str::to_owned));
     }
 
     /// Enter one planned session under its settled project. Idempotent per
@@ -92,6 +103,9 @@ impl ProgressBoard {
     /// monotone: a later live requeue does not un-finish cold progress.
     pub fn session_done(&self, project_id: Option<&str>, session_id: &str) {
         let mut state = self.state.lock().expect("board state poisoned");
+        if !state.seeded.contains(session_id) {
+            return;
+        }
         if !state.done.insert(session_id.to_owned()) {
             return;
         }
@@ -113,7 +127,11 @@ impl ProgressBoard {
                 project_id: project_id.clone(),
                 sessions_total: progress.sessions_total,
                 sessions_done: progress.sessions_done,
-                bytes_total: progress.bytes_total,
+                bytes_total: if state.unknown_byte_totals.contains(project_id) {
+                    0
+                } else {
+                    progress.bytes_total
+                },
                 bytes_streamed: progress.bytes_streamed,
             })
             .collect();
@@ -170,5 +188,18 @@ mod tests {
         let rows = board.snapshot();
         assert_eq!((rows[0].bytes_total, rows[0].bytes_streamed), (140, 200));
         assert_eq!((rows[0].sessions_total, rows[0].sessions_done), (1, 1));
+    }
+
+    #[test]
+    fn snapshot_payload_has_no_physical_byte_percentage_and_unplanned_parents_do_not_overcount() {
+        let board = ProgressBoard::new();
+        board.seed_session(Some("p"), "s", 4_096);
+        board.mark_bytes_unknown(Some("p"));
+        board.advance(Some("p"), 12_000);
+        board.session_done(Some("p"), "metadata-only-parent");
+        let row = &board.snapshot()[0];
+        assert_eq!(row.bytes_total, 0);
+        assert_eq!(row.bytes_streamed, 12_000);
+        assert_eq!(row.sessions_done, 0);
     }
 }

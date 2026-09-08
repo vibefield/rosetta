@@ -1,0 +1,51 @@
+/* Progress describes its named step and never covers available content. */
+.ah-ingest-status {
+  flex: 0 0 auto; margin: 10px 10px 2px; padding: 13px 14px 8px; min-width: 0;
+  border: 1px solid var(--vf-hairline-strong); border-radius: 11px;
+  background: var(--vf-chrome-surface); color: var(--vf-text-primary);
+  font-size: 11px; text-align: left; font-variant-numeric: tabular-nums;
+}
+.ah-ingest-status__eyebrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--vf-text-secondary); font-size: 9px; font-weight: 600; letter-spacing: .045em; }
+.ah-ingest-status h3 { margin: 7px 0 5px; font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: -.015em; }
+.ah-ingest-status .ah-ingest-status__detail { margin: 0 0 13px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; }
+.ah-ingest-status__amount { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 7px; line-height: 1.4; }
+.ah-ingest-status__amount b { font-size: 11px; font-weight: 500; }
+.ah-ingest-meter { overflow: hidden; height: 4px; border-radius: 4px; background: var(--vf-hairline-strong); }
+.ah-ingest-meter i { display: block; height: 100%; border-radius: inherit; background: var(--vf-select); transition: width 450ms linear; }
+.ah-ingest-meter[data-indeterminate] i { width: 34%; animation: ah-ingest-travel 1.8s ease-in-out infinite; }
+.ah-ingest-meter[data-paused] i { animation: none; transition: none; }
+.ah-ingest-status__footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px; color: var(--vf-text-secondary); margin: 8px 0 4px; font-size: 10px; line-height: 1.5; }
+.ah-ingest-status__footer > span:last-child { white-space: nowrap; }
+.ah-ingest-status__agents { border-top: 1px solid var(--vf-hairline); margin-top: 8px; }
+.ah-ingest-status__agents summary { list-style: none; cursor: pointer; min-height: 30px; display: flex; align-items: center; justify-content: space-between; color: var(--vf-text-secondary); font-size: 10px; border-radius: 4px; }
+.ah-ingest-status__agents summary::-webkit-details-marker { display: none; }
+.ah-ingest-status__agents summary:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+.ah-ingest-status__agents summary > span { font-size: 14px; transition: transform 160ms ease; }
+.ah-ingest-status__agents[open] summary > span { transform: rotate(180deg); }
+.ah-ingest-status__agents ul { max-height: 195px; overflow-y: auto; list-style: none; padding: 0 4px 2px 0; margin: 2px 0 0; scrollbar-width: thin; }
+.ah-ingest-status__agents li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px; padding: 7px 0; }
+.ah-ingest-status__agents li > .ah-agent { margin-top: 2px; opacity: .8; }
+.ah-ingest-status__agent-name { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.ah-ingest-status__agent-name strong { font-size: 11px; font-weight: 500; }
+.ah-ingest-status__agent-name > span { color: var(--vf-text-secondary); }
+.ah-ingest-status__agent-caption { display: block; font-size: 10px; line-height: 1.5; color: var(--vf-text-secondary); margin: 2px 0 5px; }
+.ah-ingest-status__agents .ah-ingest-meter { height: 3px; }
+.ah-ingest-status[data-state="complete"] .ah-ingest-status__eyebrow { color: var(--vf-text-primary); }
+.ah-ingest-status[data-state="complete"] .ah-ingest-meter i { background: var(--vf-green); }
+.ah-ingest-status[data-state="disconnected"] .ah-ingest-meter i,
+.ah-ingest-status[data-state="search_failed"] .ah-ingest-meter i { background: var(--vf-orange); }
+.ah-cold-start { flex: 1; }
+.ah-cold-start > .ah-ingest-status { width: min(100%, 340px); box-sizing: border-box; margin: 22px auto 0; padding: 18px 20px 10px; }
+.ah-cold-start .ah-ingest-status h3 { font-size: 15px; }
+.ah-project-list-item__progress { grid-column: 2; color: var(--vf-text-secondary); font-size: 10px; line-height: 1.4; margin-top: 5px; font-variant-numeric: tabular-nums; }
+.ah-project-list-item[data-cooking] .ah-project-list-item__metrics { animation: none; }
+.ah-project-list-item__metrics[data-cooking]::after { display: none; }
+.ah-project-list-item[data-cooking]:not([data-fill]) .ah-project-list-item__accent { animation: none; opacity: .3; }
+@keyframes ah-ingest-travel { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
+@media (prefers-reduced-motion: reduce) {
+  .ah-ingest-meter i, .ah-ingest-status__agents summary > span { animation: none; transition: none; }
+  .ah-ingest-meter[data-indeterminate] i { width: 100%; opacity: .35; animation: none; }
+  .ah-project-list-item__accent { animation: none !important; transition: none !important; }
+}
+
+.ah-ingest-note { flex: 0 0 auto; margin: 0; padding: 9px 14px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; }

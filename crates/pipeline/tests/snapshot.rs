@@ -230,6 +230,11 @@ fn database_sessions_flow_end_to_end() {
     assert_eq!(stream.hard_errors, 0);
     assert_eq!(stream.sessions_indexed, 2);
     assert_eq!(
+        h.instrument.snapshot().get(Metric::PayloadBytes),
+        stream.payload_bytes
+    );
+    assert_eq!(h.instrument.snapshot().get(Metric::SessionsDiscovered), 2);
+    assert_eq!(
         queries::search(h.store.conn(), "ometeotl", 5)
             .unwrap()
             .len(),

@@ -1112,6 +1112,7 @@ async fn detached_backend_never_masquerades_as_ready_empty_search() {
     let mut h = harness();
     let state = SearchState {
         readiness: SearchReadiness::Building,
+        progress: None,
         projection_epoch: Some("projection-7".into()),
         revision: Some(12),
     };

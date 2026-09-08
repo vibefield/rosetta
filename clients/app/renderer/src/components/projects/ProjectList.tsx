@@ -1,4 +1,4 @@
-import type { ProjectBackfill } from "@rosetta/protocol";
+import type { ProjectBackfill, RuntimeBackfill } from "@rosetta/protocol";
 import type { ProjectViewModel } from "../../lib/model";
 import { useListMotion } from "../../lib/use-list-motion";
 import { EmptyState } from "../ui";
@@ -15,6 +15,7 @@ export interface ProjectListProps {
   readonly currentTimestamp: number;
   /** A backfill is running: unfinished projects cook rather than lie. */
   readonly ingestActive: boolean;
+  readonly runtimes?: readonly RuntimeBackfill[];
   /** The daemon's per-project backfill fold, keyed by project id. */
   readonly projectBackfills: ReadonlyMap<string, ProjectBackfill>;
   /** The list itself is still being censused — only the ready may claim
@@ -31,6 +32,7 @@ export function ProjectList({
   homeDirectory,
   currentTimestamp,
   ingestActive,
+  runtimes,
   projectBackfills,
   pending,
   onProjectSelect,
@@ -50,6 +52,7 @@ export function ProjectList({
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
+          runtimeStates={runtimes?.filter((runtime) => project.agents.some((agent) => agent.kind === runtime.kind)).map((runtime) => runtime.state)}
           backfill={projectBackfills.get(project.row.id) ?? null}
           onProjectSelect={onProjectSelect}
         />

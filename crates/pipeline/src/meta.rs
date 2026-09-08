@@ -312,6 +312,7 @@ pub fn meta_ingest_inventory_into(
             },
             skim,
             native_session_id,
+            instrument,
         );
     }
 
@@ -387,7 +388,6 @@ pub fn meta_ingest_inventory_into(
     report.sessions = output.sessions.len();
     report.projects = output.projects.len();
     instrument.add(Metric::FilesMatched, report.files_matched as u64);
-    instrument.add(Metric::SessionsDiscovered, report.sessions as u64);
 
     // FK order: runtime → projects → sessions, one transaction.
     let MetaOutput {
@@ -700,7 +700,9 @@ fn admit_identified(
     source: AdmitSource,
     mut skim: SkimResult,
     native_session_id: String,
+    instrument: &Instrument,
 ) {
+    let sessions_before = output.sessions.len();
     let session_id = ids::session_id(&runtime.id, &native_session_id);
 
     if let Some(project) = skim
@@ -836,6 +838,10 @@ fn admit_identified(
         agent_version: skim.agent_version,
         source_missing: false,
     });
+    instrument.add(
+        Metric::SessionsDiscovered,
+        (output.sessions.len() - sessions_before) as u64,
+    );
 }
 
 fn canonical_project_hint(runtime_id: &str, hint: ProjectHint) -> Option<ProjectHint> {
@@ -926,6 +932,7 @@ fn admit_document(
             },
             skim,
             native,
+            instrument,
         );
     }
 
@@ -1026,6 +1033,7 @@ fn admit_database(
             },
             skim,
             native,
+            instrument,
         );
     }
 

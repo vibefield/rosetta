@@ -98,6 +98,94 @@ fn cancelled_cold_stream_stops_before_publishing_payload_rows() {
 }
 
 #[test]
+fn progress_observes_batches_within_a_source_without_counting_read_amplification() {
+    use rosetta_pipeline::{Metric, SessionFile, progress::ColdProgressObserver};
+    use std::sync::Mutex;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Debug, Default)]
+    struct Observer {
+        batches: Mutex<Vec<(String, u64)>>,
+        reading_finished: AtomicBool,
+    }
+    impl ColdProgressObserver for Observer {
+        fn source_bytes(&self, file: &SessionFile, bytes: u64) {
+            if bytes > 0 {
+                self.batches
+                    .lock()
+                    .unwrap()
+                    .push((file.relative_path.clone(), bytes));
+            }
+        }
+        fn reading_finished(&self) {
+            self.reading_finished.store(true, Ordering::Relaxed);
+        }
+    }
+    let adapter = &ClaudeCodeAdapter;
+    let mut h = harness(adapter, Agent::ClaudeCode, 1, 500);
+    let (meta, files) = meta_ingest(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+    )
+    .unwrap();
+    assert_eq!(
+        h.instrument.snapshot().get(Metric::SessionsDiscovered),
+        meta.sessions as u64
+    );
+    let observer = Arc::new(Observer::default());
+    h.opts.progress = Some(observer.clone());
+    h.opts.tail.max_records_per_batch = 64;
+    let report = stream_backfill(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+    )
+    .unwrap();
+    let batches = observer.batches.lock().unwrap();
+    assert!(
+        batches.len() >= 7,
+        "one large source needs continuous observations"
+    );
+    assert!(
+        batches
+            .iter()
+            .all(|(path, bytes)| path == &files[0].relative_path && *bytes > 0)
+    );
+    assert_eq!(
+        batches.iter().map(|(_, bytes)| bytes).sum::<u64>(),
+        report.payload_bytes
+    );
+    assert_eq!(
+        h.instrument.snapshot().get(Metric::PayloadBytes),
+        report.payload_bytes
+    );
+    assert!(h.instrument.snapshot().get(Metric::BytesRead) > report.payload_bytes);
+    assert!(observer.reading_finished.load(Ordering::Relaxed));
+    let previous_count = batches.len();
+    drop(batches);
+    let quiet = stream_backfill(
+        adapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+    )
+    .unwrap();
+    assert_eq!(quiet.payload_bytes, 0);
+    assert_eq!(observer.batches.lock().unwrap().len(), previous_count);
+}
+
+#[test]
 fn claude_code_phases_end_to_end() {
     let adapter = &ClaudeCodeAdapter;
     let mut h = harness(adapter, Agent::ClaudeCode, 8, 300);

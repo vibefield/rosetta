@@ -19,6 +19,7 @@ pub mod instrument;
 pub mod live;
 pub mod meta;
 pub mod plan;
+pub mod progress;
 mod project;
 pub mod replay;
 pub mod sched;
@@ -150,6 +151,8 @@ pub struct IngestOptions {
     /// checkpoint or canonical fact; cold workers check it at bounded record
     /// batches so app shutdown can discard the private build cleanly.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// RAM-only cold progress; absent on the ordinary live path.
+    pub progress: Option<Arc<dyn progress::ColdProgressObserver>>,
 }
 
 impl IngestOptions {
@@ -179,6 +182,7 @@ impl Default for IngestOptions {
             audit_files_per_run: 1,
             starter_budget: None,
             cancel: None,
+            progress: None,
         }
     }
 }

@@ -8,7 +8,6 @@ import type { UsageResponse } from "@rosetta/protocol";
 import { CalendarHeatmap, Streamgraph, Treemap } from "./charts";
 import type { TreemapData } from "./charts";
 import { ColumnHeading, SegmentedControl, Veil } from "./ui";
-import { sessionCountLabel } from "../lib/ingest";
 import {
   calculateActivityStats,
   createCalendarHeatmapData,
@@ -104,9 +103,9 @@ export function ProjectSummaryPanel({
   isWorktreeVisible,
   onToggleWorktree,
 }: ProjectSummaryPanelProps) {
-  // Veiled until every one of THIS project's sessions is indexed — beneath
-  // the frost the charts keep drawing the partial sums as they grow.
-  const isVeiled = ingestActive && project.readiness !== "ready";
+  // Aggregate figures become available after canonical publication and
+  // their own requests finish, independently of transcript readiness.
+  const isVeiled = ingestActive || !project.statsReady;
   const [isExpanded, setIsExpanded] = useState(true);
   const [activeChart, setActiveChart] = useState<ProjectChart>(() =>
     new URLSearchParams(window.location.search).get("tab") === "models" ? "models" : "activity",
@@ -199,19 +198,10 @@ export function ProjectSummaryPanel({
         <div className="ah-meta__body ah-veilhost">
           {isVeiled && (
             <Veil
-              label={
-                censusRunning
-                  ? "waiting on the census"
-                  : `counting · ${sessionCountLabel(
-                      project.indexedSessionCount,
-                      project.sessionCount,
-                    )}`
-              }
-              progress={
-                !censusRunning && project.sessionCount > 0
-                  ? project.indexedSessionCount / project.sessionCount
-                  : null
-              }
+              label={ingestActive
+                ? censusRunning ? "Discovering conversations…" : "Preparing activity summaries…"
+                : "Loading activity summaries…"}
+              progress={null}
             />
           )}
           <SummaryStats
@@ -324,17 +314,7 @@ export function PortfolioSummaryPanel({
   onProjectSelect,
 }: PortfolioSummaryPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const readinessCounts = useMemo(
-    () =>
-      projects.reduce(
-        (sum, project) => ({
-          indexed: sum.indexed + project.indexedSessionCount,
-          total: sum.total + project.sessionCount,
-        }),
-        { indexed: 0, total: 0 },
-      ),
-    [projects],
-  );
+  const summariesPending = ingestActive || projects.some((project) => !project.statsReady);
   const summary = useMemo(() => {
     const activeDayIndices = new Set<number>();
     for (const project of projects) {
@@ -405,41 +385,32 @@ export function PortfolioSummaryPanel({
       </div>
       {isExpanded && (
         <div className="ah-meta__body ah-veilhost">
-          {ingestActive && (
+          {summariesPending && (
             <Veil
-              label={
-                censusRunning
-                  ? "waiting on the census"
-                  : `preparing · ${sessionCountLabel(
-                      readinessCounts.indexed,
-                      readinessCounts.total,
-                    )}`
-              }
-              progress={
-                !censusRunning && readinessCounts.total > 0
-                  ? readinessCounts.indexed / readinessCounts.total
-                  : null
-              }
+              label={ingestActive
+                ? censusRunning ? "Discovering conversations…" : "Preparing activity summaries…"
+                : "Loading activity summaries…"}
+              progress={null}
             />
           )}
           <SummaryStats
             stats={[
               { value: <b>{summary.sessionCount}</b>, label: "sessions" },
               {
-                value: <CountFigure value={summary.messageCount} veiled={ingestActive} />,
+                value: <CountFigure value={summary.messageCount} veiled={summariesPending} />,
                 label: "messages",
               },
               {
                 value: (
                   <TokenSummaryValue
                     value={summary.tokenCount}
-                    unknown={ingestActive && summary.tokenCount === 0}
+                    unknown={summariesPending && summary.tokenCount === 0}
                   />
                 ),
                 label: "tokens",
               },
               {
-                value: <CountFigure value={summary.activeDayCount} veiled={ingestActive} />,
+                value: <CountFigure value={summary.activeDayCount} veiled={summariesPending} />,
                 label: "active days",
               },
             ]}

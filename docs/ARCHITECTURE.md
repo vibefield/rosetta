@@ -86,9 +86,58 @@ seconds, file-change → consumer latency in the low tens of milliseconds.
 > Watchers were armed before metadata, so source suffixes written during the build feed the live
 > runner after handoff. RAM is a temporary location for the one canonical projection, not a third
 > representation or a recovery source. The app keeps one HTTP/WS contract across the switch.
-> Current payload progress is runtime-granular; exposing a partially reconciled multi-file runtime
+> Canonical payload visibility is runtime-granular; exposing a partially reconciled multi-file runtime
 > for cosmetically finer progress is forbidden. A future session-partitioned plan must first prove
 > that every correlation and replacement boundary is closed inside the partition.
+>
+> **Cold progress (2026-09-07, protocol v16).** Observation is independent of publication.
+> Metadata's atomic session count advances with each admitted identity, before ownership settlement
+> publishes the adapter's complete metadata batch. A `ColdProgressObserver` reports framed payload
+> at bounded record-batch boundaries; `PayloadBytes` excludes audit, anchor, and prefix rereads.
+> Fresh and resumed serve populate a shared RAM `ProgressBoard` from metadata's settled ownership.
+> `/api/status` snapshots that board while the writer is busy, and a project's `sessions_done`
+> advances only after the complete runtime becomes public. Metadata-only parent placeholders do
+> not overcount the source plan. Database/document payloads and resumed suffixes have an unknown
+> byte denominator (`bytes_total: 0`); serialized records must never be divided by SQLite file size.
+> JSONL byte totals remain source-size estimates, with UI clamping for delimiters and growing files.
+> Recovery explicitly reports `restoring`; runtimes distinguish `preparing` and `applying` after
+> input reading, and the final canonical phases distinguish `finalizing` from `publishing`.
+>
+> Detached search reports `SearchState.progress` for its unpublished generation: document counts
+> during `indexing`, then `optimizing`, `validating`, and `publishing`. The denominator comes from
+> the same canonical snapshot, and its atomic numerator advances every 256 documents. Progress is
+> scoped to the projection epoch, reset for retries, and cleared after publication; it cannot leak
+> an old full-build observation into ordinary live search repair. These observations persist
+> nothing and never change either canonical or search readiness.
+>
+> The renderer polls status every 500 ms until canonical **and** search readiness are satisfied,
+> then returns to 30-second polling (intentional consent/audit pauses use 2.5 seconds). Requests
+> are serial, abort after five seconds, retain the last observed progress on failure, and retry
+> after one second. A compact panel above the project list describes four user-facing steps:
+> discovery, reading, preparation/saving, and search. Step-local meters use real denominators;
+> opaque preparation/validation work stays indeterminate. Throughput uses an eight-second window
+> of observations, expires after four seconds without movement, and resets on phase changes,
+> restarts, or regressing counters. Longer counter pauses distinguish an answering service from
+> unchanging work counters. Errors explicitly pause the indicator instead of resetting it.
+> Available projects and sessions remain selectable, aggregate figures have a separate
+> `statsReady` gate, and completion briefly confirms success before the panel closes. Stage-only
+> polite announcements, native disclosure controls, tabular figures, and reduced-motion styles
+> keep frequent updates readable without repeatedly announcing changing counts.
+>
+> **Progress validation.** Campaign `/private/tmp/rosetta-ingest-progress-20260907` retains three
+> before/after fresh-serve pairs on the same read-only 200-file, 316,975,655-byte Claude/Codex
+> corpus (source manifest SHA-256 `f7c85b319eeb1779a0e29f3dba39bc6be29a221cda09a082109c37b3a3b2fb93`)
+> and 12-query ranked-result suite (`e8f727b1d2e12b99e25a145665019c67b5e0eb9c3d0575b64b8acfe51b89d65d`).
+> All 17 normalized canonical table digests and all 120,151 search documents/ranked results match
+> across six runs. With identical 50 ms diagnostic polling, the new board exposes 40–71 distinct
+> project folds and search exposes 52–82 document counts per run; the baseline exposes neither.
+> At the renderer's 2 Hz cadence, the short fixture yields 7–10 project observations. Baseline
+> byte numerators regress at runtime completion; the new payload numerator has zero regressions.
+> Median user CPU is 11.634 → 11.618 s, system CPU 1.968 → 1.993 s, and peak RSS 1,590.3 → 1,600.2
+> MiB on the same M1 Max/64 GiB Mac. Wall times vary with shared-machine I/O (median full readiness
+> 15.863 → 13.396 s), so this is evidence of low observation overhead, not a throughput speedup
+> claim. Binary hashes, commands, full status traces, digests, and timings live in `campaign.json`,
+> `serve-results.json`, `progress-analysis.json`, and `verification.json` in that campaign.
 >
 > The progressive read contract is intentionally asymmetric. Project and top-level-session lists,
 > bounded session lookups, and timelines may read the canonical shared-memory generation. Global
@@ -658,7 +707,7 @@ selectors, and inverted ranges are HTTP 400 errors rather than successful empty 
 
 ```
 WS /ws/sessions/<id>?epoch=<epoch>&seq=<seq>
-  server → { frame: "hello", protocol_version: 15, stamp }
+  server → { frame: "hello", protocol_version: 16, stamp }
   server → { frame: "timeline_snapshot", stamp, entries, timeline_meta, cursor, watermark }
   server → { frame: "mutation", stamp, mutation } …
   server → { frame: "timeline_meta_snapshot", stamp, timeline_meta }

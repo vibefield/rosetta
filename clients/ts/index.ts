@@ -48,6 +48,8 @@ export type * from "./generated/SearchReadiness";
 export type * from "./generated/SearchRequest";
 export type * from "./generated/SearchResponse";
 export type * from "./generated/SearchState";
+export type * from "./generated/SearchBuildProgress";
+export type * from "./generated/SearchBuildStage";
 export type * from "./generated/ServerFrame";
 export type * from "./generated/SessionResponse";
 export type * from "./generated/SessionRole";

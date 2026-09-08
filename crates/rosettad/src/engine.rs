@@ -205,6 +205,13 @@ impl ColdEngine {
         for (_, session_id, row) in plan.sessions() {
             board.seed_session(row.project_id.as_deref(), session_id, row.bytes);
         }
+        for (runtime, roster) in rosters.iter().enumerate() {
+            for file in roster {
+                if file.driver != rosetta_adapter_support::StreamDriver::JsonLines {
+                    board.mark_bytes_unknown(plan.source_project_of(runtime, file));
+                }
+            }
+        }
         let starter_files = rosters.iter().map(Vec::len).sum();
         let schedule = ColdSchedule::new(rosters);
         // The milestone line exists for the sweep harness; without slicing

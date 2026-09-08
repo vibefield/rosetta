@@ -26,6 +26,8 @@ pub enum Metric {
     OpsEmitted,
     BatchesApplied,
     BytesRead,
+    /// Framed payload, excluding physical read amplification.
+    PayloadBytes,
     CheckpointConflicts,
     WalkNanos,
     SkimNanos,
@@ -95,7 +97,7 @@ pub enum Metric {
     SearchSyncNanos,
 }
 
-const METRIC_COUNT: usize = 77;
+const METRIC_COUNT: usize = 78;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -110,6 +112,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::OpsEmitted, "ops emitted"),
     (Metric::BatchesApplied, "batches applied"),
     (Metric::BytesRead, "bytes read"),
+    (Metric::PayloadBytes, "payload bytes processed"),
     (Metric::CheckpointConflicts, "checkpoint conflicts"),
     (Metric::WalkNanos, "walk time"),
     (Metric::SkimNanos, "skim time"),

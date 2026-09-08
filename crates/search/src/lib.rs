@@ -19,6 +19,8 @@ mod worker;
 
 pub use sidecar::Fts5SidecarSearch;
 pub use worker::{Fts5SearchWorker, SearchAck, synchronize_fts5_once};
+mod progress;
+pub use progress::{SearchBuildProgress, SearchBuildStage};
 
 pub const MAX_SEARCH_TEXT_BYTES: usize = 4_096;
 pub const MAX_SEARCH_CLAUSES: usize = 64;
@@ -181,6 +183,10 @@ pub enum SearchReadiness {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SearchState {
     pub readiness: SearchReadiness,
+    /// Live work in an unpublished generation; absent for ready, failed, or
+    /// synchronous search. It is never persisted in the canonical projection.
+    #[serde(default)]
+    pub progress: Option<SearchBuildProgress>,
     /// Owning canonical projection identifier for a detached search index.
     /// Synchronous FTS5 has no independent projection identity.
     pub projection_epoch: Option<String>,
@@ -194,6 +200,7 @@ impl SearchState {
     pub fn building() -> Self {
         Self {
             readiness: SearchReadiness::Building,
+            progress: None,
             projection_epoch: None,
             revision: None,
         }
@@ -202,6 +209,7 @@ impl SearchState {
     pub fn synchronous() -> Self {
         Self {
             readiness: SearchReadiness::Ready,
+            progress: None,
             projection_epoch: None,
             revision: None,
         }
@@ -210,6 +218,7 @@ impl SearchState {
     pub fn failed() -> Self {
         Self {
             readiness: SearchReadiness::Failed,
+            progress: None,
             projection_epoch: None,
             revision: None,
         }
@@ -414,6 +423,7 @@ mod tests {
     fn unavailable_answers_are_explicitly_non_ready() {
         let output = SearchOutput::unavailable(SearchState {
             readiness: SearchReadiness::Building,
+            progress: None,
             projection_epoch: Some("epoch-1".into()),
             revision: Some(0),
         });

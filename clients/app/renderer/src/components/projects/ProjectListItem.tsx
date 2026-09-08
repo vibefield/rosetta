@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
-import type { ProjectBackfill } from "@rosetta/protocol";
+import type { ProjectBackfill, BackfillState } from "@rosetta/protocol";
 import { AgentBadges } from "../../lib/agents";
+import { progressBytes } from "../../lib/ingest-activity";
 import { projectBackfillProgress } from "../../lib/ingest";
 import { fmtTokens, lastActive, tildePath, tokenText } from "../../lib/format";
 import type { ProjectViewModel } from "../../lib/model";
@@ -39,8 +40,9 @@ export interface ProjectListItemProps {
   readonly searchHitCount: number | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
-  /** A backfill is running — projects with unindexed sessions cook. */
+  /** Canonical publication is still pending, so aggregate figures wait. */
   readonly ingestActive: boolean;
+  readonly runtimeStates?: readonly BackfillState[];
   /** This project's row in the daemon's per-project backfill fold; null
    * before the plan settles, and on a daemon too old to carry it. */
   readonly backfill: ProjectBackfill | null;
@@ -55,23 +57,29 @@ export function ProjectListItem({
   homeDirectory,
   currentTimestamp,
   ingestActive,
+  runtimeStates,
   backfill,
   onProjectSelect,
 }: ProjectListItemProps) {
   // The cooking card: identity (name, path, agents) renders as itself from
   // the first skim; only the quantitative slots carry the processing state.
-  const isCooking = ingestActive && project.readiness !== "ready";
-  // The board's fold turns the stove determinate: the accent fills to the
-  // project's byte meter instead of breathing. No fold (old daemon, plan
-  // not settled) degrades to the indeterminate breathe it always had.
+  const isCooking = ingestActive || !project.statsReady;
+  // Fill the accent from observed bytes when the source plan has a known
+  // total. Unknown work keeps a quiet accent and an explicit stage label.
   const ingestFill = isCooking && backfill !== null
     ? projectBackfillProgress(backfill)
     : null;
   const cookingLabel = isCooking
     ? backfill !== null
-      ? `figures still cooking · ${backfill.sessions_done.toLocaleString()} of ${backfill.sessions_total.toLocaleString()} sessions` +
-        (ingestFill !== null ? ` · ${Math.round(ingestFill * 100)}% read` : "")
-      : `figures still cooking · ${project.indexedSessionCount} of ${project.sessionCount} sessions indexed`
+      ? backfill.sessions_done >= backfill.sessions_total
+        ? "Preparing activity summaries"
+        : runtimeStates?.includes("streaming")
+          ? ingestFill !== null
+            ? `Reading conversations · ${Math.floor(ingestFill * 100)}%`
+            : `Reading conversations · ${progressBytes(backfill.bytes_streamed)}`
+          : runtimeStates?.some((state) => state === "preparing" || state === "applying")
+            ? "Organizing conversations" : "Waiting for conversations"
+      : project.readiness === "ready" ? "Preparing activity summaries" : "Waiting for conversations"
     : null;
   const spendShare = maximumLifetimeTokens > 0
     ? (project.lifetimeTokens / maximumLifetimeTokens) * 100
@@ -97,13 +105,12 @@ export function ProjectListItem({
         "--project-color": project.tint,
         "--spend-share": `${spendShare.toFixed(2)}%`,
         ...(ingestFill !== null
-          ? { "--ingest-fill": `${Math.max(2, ingestFill * 100).toFixed(1)}%` }
+          ? { "--ingest-fill": `${(ingestFill * 100).toFixed(1)}%` }
           : {}),
       } as ProjectListItemStyle}
       aria-current={isSelected ? "true" : undefined}
-      aria-label={`${project.row.name} · ${tokenText(
-        project.lifetimeTokens,
-      )} lifetime tokens${searchHitLabel}${
+      aria-label={`${project.row.name} · ${isCooking && project.lifetimeTokens === 0
+        ? "activity summaries pending" : `${tokenText(project.lifetimeTokens)} lifetime tokens`}${searchHitLabel}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
       }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
       onClick={() => onProjectSelect(project.row.id)}
@@ -121,6 +128,7 @@ export function ProjectListItem({
       <span className="ah-project-list-item__path">
         <small title={workspacePath}>{workspacePath}</small>
       </span>
+      {cookingLabel && <span className="ah-project-list-item__progress">{cookingLabel}</span>}
       <span className="ah-project-list-item__footer">
         <span
           className="ah-project-list-item__metrics"

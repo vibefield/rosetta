@@ -246,6 +246,7 @@ fn collaboration_entry() -> TimelineEntry {
 fn search_state() -> SearchState {
     SearchState {
         readiness: SearchReadiness::CatchingUp,
+        progress: None,
         projection_epoch: Some("epoch-1".into()),
         revision: Some(42),
     }
@@ -540,6 +541,9 @@ fn exemplars() -> serde_json::Value {
             IngestPhase::AwaitingConsent,
             IngestPhase::Backfilling,
             IngestPhase::MetadataReady,
+            IngestPhase::Restoring,
+            IngestPhase::Finalizing,
+            IngestPhase::Publishing,
             IngestPhase::Live,
         ],
         "discoveries": DiscoveriesResponse {

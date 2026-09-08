@@ -1,9 +1,11 @@
 import { useMemo } from "react";
 import type { IngestProgress } from "@rosetta/protocol";
-import { censusProgress, isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
+import { isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { PortfolioSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader, ListToolbar, SegmentedControl, Veil } from "../ui";
+import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
+import { IngestStatus } from "../IngestStatus";
+import type { IngestActivity } from "../../lib/ingest-activity";
 import { ProjectList } from "./ProjectList";
 
 export type ProjectSort = "recent" | "token";
@@ -24,6 +26,7 @@ export interface ProjectsColumnProps {
   readonly currentTimestamp: number;
   /** The daemon's cold-start block; null on a daemon too old to carry it. */
   readonly ingest: IngestProgress | null;
+  readonly activity: IngestActivity | null;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -36,21 +39,17 @@ export function ProjectsColumn({
   homeDirectory,
   currentTimestamp,
   ingest,
+  activity,
   onProjectSelect,
 }: ProjectsColumnProps) {
   const isSearching = searchHitCounts !== null;
   const ingestActive = isIngestActive(ingest);
-  // While the census (skim) runs the LIST ITSELF is incomplete — the veil
-  // is down and rows keep materializing beneath it. Once every runtime is
-  // streaming, the list is whole and only the figures still cook.
+  // Metadata can arrive progressively; the status panel explains this
+  // without covering projects that are already available.
   const censusRunning = isCensusRunning(ingest);
   // The daemon's per-project fold: each cooking card draws its own byte
   // meter from this, so progress reads at the row you actually care about.
   const backfills = useMemo(() => projectBackfills(ingest), [ingest]);
-  const sessionsFound = useMemo(
-    () => projects.reduce((total, project) => total + project.sessionCount, 0),
-    [projects],
-  );
   const maximumLifetimeTokens = useMemo(
     () => projects.reduce(
       (maximum, project) => Math.max(maximum, project.lifetimeTokens),
@@ -80,6 +79,8 @@ export function ProjectsColumn({
           count={visibleProjects.length}
           singularNoun="project"
         />
+      ) : activity !== null ? (
+        <ListSummaryHeader label="Projects" count={projects.length} singularNoun="project" />
       ) : (
         <PortfolioSummaryPanel
           projects={projects}
@@ -89,6 +90,7 @@ export function ProjectsColumn({
           onProjectSelect={onProjectSelect}
         />
       )}
+      <IngestStatus activity={activity} />
       <ListToolbar label="lifetime tokens">
         <SegmentedControl
           value={sort}
@@ -107,16 +109,11 @@ export function ProjectsColumn({
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
+          runtimes={ingest?.runtimes}
           projectBackfills={backfills}
           pending={censusRunning}
           onProjectSelect={onProjectSelect}
         />
-        {censusRunning && !isSearching && (
-          <Veil
-            label={`taking the census · ${sessionsFound.toLocaleString()} sessions found`}
-            progress={censusProgress(ingest)}
-          />
-        )}
       </div>
     </div>
   );

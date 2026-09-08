@@ -9,6 +9,7 @@ import type {
   IngestProgress,
   MetaState,
   SearchReadiness,
+  SearchBuildProgress,
   SearchResponse,
   ResponseRuntime,
   SubscriptionStatus,
@@ -66,16 +67,20 @@ export interface DaemonStatusFeed {
   readonly connectionError: string | null;
   /** The exact durable-publication gate for global derived reads. */
   readonly canonicalReady: boolean | null;
-  /** null until the first answer, and after the daemon stops answering. */
+  /** Last observed readiness; null until the first successful answer. */
   readonly searchReadiness: SearchReadiness | null;
   /** The cold-start block; null on a daemon too old to carry it. */
   readonly ingest: IngestProgress | null;
+  readonly searchProgress: SearchBuildProgress | null;
+  readonly startedAt: number | null;
+  readonly uptimeMs: number;
+  readonly receivedAt: number | null;
 }
 
 /** The daemon's status surface. It answers from the daemon's first breath —
  * before the projection is even readable — so it is the room's connectivity
- * truth during a cold start. Polls fast while a backfill runs (the meters
- * are moving), quietly once the phase is live. */
+ * truth during a cold start. Polls fast through canonical publication and
+ * search preparation, then quietly once both are ready. */
 export function useDaemonStatus(): DaemonStatusFeed {
   const [connectionRevision, setConnectionRevision] = useState(0);
   useEffect(() => {
@@ -92,47 +97,60 @@ export function useDaemonStatus(): DaemonStatusFeed {
     canonicalReady: null,
     searchReadiness: null,
     ingest: null,
+    searchProgress: null,
+    startedAt: null,
+    uptimeMs: 0,
+    receivedAt: null,
   });
-  const phase = feed.ingest?.phase ?? null;
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
+    let controller: AbortController | undefined;
     let timer: number | undefined;
-    const poll = () => {
-      client
-        .status(controller.signal)
-        .then((status) => {
-          if (cancelled) return;
-          setFeed({
-            connectionError: null,
-            canonicalReady: status.canonical_ready,
-            searchReadiness: status.search.readiness,
-            ingest: status.daemon?.ingest ?? null,
-          });
-        })
-        .catch((error: unknown) => {
-          if (!cancelled)
-            setFeed({
-              connectionError:
-                desktopDaemonState()?.error ?? (error instanceof Error ? error.message : null),
-              canonicalReady: null,
-              searchReadiness: null,
-              ingest: null,
-            });
-        })
-        .finally(() => {
-          if (cancelled) return;
-          const moving = phase !== null && phase !== "live" && phase !== "metadata_ready";
-          timer = window.setTimeout(poll, moving ? 2_500 : 30_000);
+    let deadline: number | undefined;
+    const poll = async () => {
+      const request = new AbortController();
+      controller = request;
+      let delay = 1_000;
+      deadline = window.setTimeout(() => request.abort(), 5_000);
+      try {
+        const status = await client.status(request.signal);
+        if (cancelled) return;
+        setFeed({
+          connectionError: null,
+          canonicalReady: status.canonical_ready,
+          searchReadiness: status.search.readiness,
+          ingest: status.daemon?.ingest ?? null,
+          searchProgress: status.search.progress ?? null,
+          startedAt: status.daemon?.started_at ?? null,
+          uptimeMs: status.daemon?.uptime_ms ?? 0,
+          receivedAt: Date.now(),
         });
+        const phase = status.daemon?.ingest?.phase;
+        // Keep search visible after canonical publication. Audit/consent are
+        // intentional pauses; an unanswered first request retries promptly.
+        const paused = phase === "metadata_ready" || phase === "awaiting_consent";
+        const complete = status.canonical_ready && status.search.readiness === "ready";
+        delay = complete ? 30_000 : paused ? 2_500 : 500;
+      } catch (error: unknown) {
+        if (!cancelled) setFeed((previous) => ({
+          ...previous,
+          connectionError: desktopDaemonState()?.error ??
+            (request.signal.aborted ? "Progress updates timed out. Reconnecting…" :
+              error instanceof Error ? error.message : "Unable to reach the background service."),
+        }));
+      } finally {
+        window.clearTimeout(deadline);
+        if (!cancelled) timer = window.setTimeout(poll, delay);
+      }
     };
-    poll();
+    void poll();
     return () => {
       cancelled = true;
-      controller.abort();
+      controller?.abort();
+      window.clearTimeout(deadline);
       window.clearTimeout(timer);
     };
-  }, [phase, connectionRevision]);
+  }, [connectionRevision]);
   return feed;
 }
 

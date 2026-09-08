@@ -214,6 +214,7 @@ fn compare_state(canonical: &ProjectionState, generation: Option<&GenerationStat
     if !canonical.canonical_ready {
         return SearchState {
             readiness: SearchReadiness::Building,
+            progress: None,
             projection_epoch: Some(canonical.projection_epoch.clone()),
             revision: generation.map(|state| state.revision),
         };
@@ -221,6 +222,7 @@ fn compare_state(canonical: &ProjectionState, generation: Option<&GenerationStat
     let Some(generation) = generation else {
         return SearchState {
             readiness: SearchReadiness::Building,
+            progress: None,
             projection_epoch: Some(canonical.projection_epoch.clone()),
             revision: None,
         };
@@ -236,6 +238,7 @@ fn compare_state(canonical: &ProjectionState, generation: Option<&GenerationStat
     };
     SearchState {
         readiness,
+        progress: None,
         projection_epoch: Some(generation.projection_epoch.clone()),
         revision: Some(generation.revision),
     }
@@ -247,6 +250,7 @@ pub struct Fts5SidecarSearch {
     canonical: PathBuf,
     pub(crate) layout: SidecarLayout,
     worker_error: Arc<Mutex<Option<String>>>,
+    pub(crate) progress: Arc<crate::progress::BuildProgress>,
 }
 
 impl Fts5SidecarSearch {
@@ -256,6 +260,7 @@ impl Fts5SidecarSearch {
             layout: SidecarLayout::new(&canonical),
             canonical,
             worker_error: Arc::new(Mutex::new(None)),
+            progress: Arc::new(crate::progress::BuildProgress::default()),
         }
     }
 
@@ -407,9 +412,17 @@ fn query_generation(
 
 impl SearchBackend for Fts5SidecarSearch {
     fn state(&self) -> SearchState {
-        self.observed_state()
+        let mut state = self
+            .observed_state()
             .map(|(state, _)| state)
-            .unwrap_or_else(|_| SearchState::failed())
+            .unwrap_or_else(|_| SearchState::failed());
+        if !matches!(
+            state.readiness,
+            SearchReadiness::Ready | SearchReadiness::Failed
+        ) {
+            state.progress = self.progress.snapshot(state.projection_epoch.as_deref());
+        }
+        state
     }
 
     fn search(&self, query: SearchQuery) -> Result<SearchOutput, SearchError> {

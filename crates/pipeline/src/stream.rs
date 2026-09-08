@@ -262,6 +262,9 @@ pub fn stream_backfill_into(
         store.set_audit_path(&runtime.id, path)?;
     }
 
+    if let Some(progress) = &opts.progress {
+        progress.reading_finished();
+    }
     // The private projection is still unpublished, so relational lifecycle
     // fragments from every source in this runtime can be reconciled together
     // in RAM. Emit each closed tool row once before readiness is evaluated.
@@ -649,6 +652,7 @@ fn ingest_file(
             ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
         }
 
+        let payload_before = report.payload_bytes;
         let mut ops: Vec<IngestOp> = Vec::with_capacity(batch.items.len());
         for item in &batch.items {
             opts.check_cancelled()?;
@@ -717,6 +721,11 @@ fn ingest_file(
             }
         }
 
+        let payload_bytes = report.payload_bytes - payload_before;
+        instrument.add(Metric::PayloadBytes, payload_bytes);
+        if let Some(progress) = &opts.progress {
+            progress.source_bytes(file, payload_bytes);
+        }
         let last_reading = *ctx.cumulative.last_reading();
         let adapter_state = adapter
             .checkpoint_state(ctx.state.as_deref())

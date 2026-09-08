@@ -31,7 +31,7 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -75,6 +75,9 @@ pub enum IngestPhase {
     AwaitingConsent,
     Backfilling,
     MetadataReady,
+    Restoring,
+    Finalizing,
+    Publishing,
     Live,
 }
 
@@ -86,6 +89,8 @@ pub enum BackfillState {
     Queued,
     Skimming,
     Streaming,
+    Preparing,
+    Applying,
     Done,
 }
 
@@ -117,9 +122,11 @@ pub struct ProjectBackfill {
     pub sessions_total: u64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub sessions_done: u64,
+    /// Source-size estimate; zero when the payload total is unknown, including
+    /// database/document snapshots and recovery from a partially captured run.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub bytes_total: u64,
-    /// Framed payload bytes ingested for this project's sessions — never
+    /// Framed payload bytes processed for this project's sessions — never
     /// physical read amplification, so the meter tracks `bytes_total`
     /// honestly. May still run past it when sources grow mid-backfill;
     /// meters clamp.
@@ -135,9 +142,12 @@ pub struct ProjectBackfill {
 pub struct RuntimeBackfill {
     pub kind: String,
     pub state: BackfillState,
-    /// Census denominators from discovery's walk.
+    /// Census file denominator from discovery's walk.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub files_total: u64,
+    /// Streamable source size; zero when the payload total is unknown (for
+    /// example serialized database rows). It excludes inventory-only files
+    /// once the fresh plan settles. Not an estimate of total ingest work.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub bytes_total: u64,
     /// Skim meter numerator: files skimmed so far.
@@ -146,7 +156,8 @@ pub struct RuntimeBackfill {
     /// Stream meter numerator: transcript bytes read so far.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub bytes_streamed: u64,
-    /// Sessions the skim identified; 0 until the skim lands.
+    /// Sessions identified so far; advances during the bounded skim before
+    /// the complete, ownership-settled metadata batch becomes public.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub sessions_total: u64,
     /// Transcript records parsed so far.

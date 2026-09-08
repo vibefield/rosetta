@@ -25,7 +25,8 @@ import {
   useSearch,
   useTimeline,
 } from "./lib/hooks";
-import { backfillProgress, isIngestActive } from "./lib/ingest";
+import { useIngestActivity } from "./lib/use-ingest-activity";
+import { isIngestActive } from "./lib/ingest";
 import {
   UNASSIGNED_PROJECT_ID,
   buildProjectViewModel,
@@ -50,7 +51,9 @@ function useNow(): number {
 export default function App() {
   const nowMs = useNow();
   const { meta, status: metaStatus } = useMeta();
-  const { connectionError, canonicalReady, searchReadiness: readiness, ingest } = useDaemonStatus();
+  const daemonStatus = useDaemonStatus();
+  const { connectionError, canonicalReady, searchReadiness: readiness, ingest } = daemonStatus;
+  const activity = useIngestActivity(daemonStatus);
   const ingestActive = isIngestActive(ingest);
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
@@ -219,23 +222,14 @@ export default function App() {
   };
 
   const kinds = (meta?.runtimes ?? []).map((r) => r.kind);
-  const warming = backfillProgress(ingest);
   const scope = search.error
     ? `search: ${search.error}`
     : [
         "your whole agentic past",
         ...kinds,
-        // "warming" belongs to the backfill alone — the roll call's wait
-        // heats nothing.
-        ...(ingest?.phase === "backfilling"
-          ? [`warming${warming !== null ? ` ${Math.round(warming * 100)}%` : ""}`]
-          : []),
-        ...(ingest?.phase === "metadata_ready" ? ["metadata audit · transcripts paused"] : []),
-        // A fresh install has no index yet — that is warming, not failure;
-        // "index failed" is reserved for a live daemon whose index broke.
-        ...(readiness && readiness !== "ready" && !(ingestActive && readiness === "failed")
-          ? [`index ${readiness}`]
-          : []),
+        ...(ingest?.phase === "metadata_ready" ? ["transcript import paused"]
+          : readiness && readiness !== "ready"
+            ? [readiness === "failed" && canonicalReady ? "search unavailable" : canonicalReady ? "search is being prepared" : "history is being imported"] : []),
       ].join(" · ");
 
   const disconnected = meta === null;
@@ -245,13 +239,13 @@ export default function App() {
   // meters move, but there is not yet a canonical project to render. Once
   // RAM metadata arrives the ordinary room takes over progressively.
   const coldStarting =
-    !disconnected && projectRows.length === 0 && ingestActive && ingest !== null;
+    projectRows.length === 0 && ingestActive && ingest !== null && !awaitingConsent;
 
   return (
     <div className="ah-frame is-tall">
       <div className="ah-room">
         <SearchStrip query={query} onQuery={setQuery} scope={scope} />
-        {disconnected ? (
+        {disconnected && !coldStarting ? (
           <EmptyState
             style={{ flex: 1 }}
             title={
@@ -274,7 +268,7 @@ export default function App() {
         ) : awaitingConsent ? (
           <RollCallPanel />
         ) : coldStarting ? (
-          <ColdStartPanel ingest={ingest} />
+          <ColdStartPanel activity={activity} />
         ) : (
           <div
             className="ah-cols"
@@ -290,6 +284,7 @@ export default function App() {
               homeDirectory={home}
               currentTimestamp={nowMs}
               ingest={ingest}
+              activity={activity}
               onProjectSelect={(id) => {
                 setProjectId(id);
                 setSessionId(null);

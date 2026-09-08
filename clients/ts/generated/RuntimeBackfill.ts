@@ -6,23 +6,30 @@ import type { BackfillState } from "./BackfillState";
  * census walk; numerators advance live while the writer streams, so both
  * meters are determinate: skims measure in files, streams in bytes.
  */
-export type RuntimeBackfill = { kind: string, state: BackfillState, 
+export type RuntimeBackfill = { kind: string, state: BackfillState,
 /**
- * Census denominators from discovery's walk.
+ * Census file denominator from discovery's walk.
  */
-files_total: number, bytes_total: number, 
+files_total: number,
+/**
+ * Streamable source size; zero when the payload total is unknown (for
+ * example serialized database rows). It excludes inventory-only files
+ * once the fresh plan settles. Not an estimate of total ingest work.
+ */
+bytes_total: number,
 /**
  * Skim meter numerator: files skimmed so far.
  */
-files_skimmed: number, 
+files_skimmed: number,
 /**
  * Stream meter numerator: transcript bytes read so far.
  */
-bytes_streamed: number, 
+bytes_streamed: number,
 /**
- * Sessions the skim identified; 0 until the skim lands.
+ * Sessions identified so far; advances during the bounded skim before
+ * the complete, ownership-settled metadata batch becomes public.
  */
-sessions_total: number, 
+sessions_total: number,
 /**
  * Transcript records parsed so far.
  */

@@ -139,6 +139,7 @@ fn finish_private_generation(
     canonical: &Connection,
     canonical_path: &Path,
     stop: &AtomicBool,
+    progress: &crate::progress::BuildProgress,
 ) -> Result<u64, SearchError> {
     // This connection owns an unpublished generation and closes after the
     // build. A bounded 16 MiB pager cache avoids repeated small-cache spills
@@ -171,6 +172,9 @@ fn finish_private_generation(
     let mut documents = 0_u64;
     queries::visit_search_documents(canonical, |document| {
         documents += 1;
+        if documents.is_multiple_of(256) {
+            progress.documents(documents);
+        }
         if documents.is_multiple_of(STOP_CHECK_ROWS) && stop.load(Ordering::SeqCst) {
             return Err(StoreError::ProjectionInvalid {
                 message: "search build interrupted".into(),
@@ -179,6 +183,7 @@ fn finish_private_generation(
         insert_document(canonical_path, document, &mut metadata, &mut fts)
     })
     .map_err(|error| backend(format!("building search documents: {error}")))?;
+    progress.documents(documents);
     drop(fts);
     drop(metadata);
     tx.execute(
@@ -193,8 +198,10 @@ fn finish_private_generation(
         ],
     )
     .map_err(|error| backend(format!("recording private search state: {error}")))?;
+    progress.stage(crate::SearchBuildStage::Optimizing);
     tx.execute_batch(SEARCH_INDEXES)
         .map_err(|error| backend(format!("building search metadata indexes: {error}")))?;
+    progress.stage(crate::SearchBuildStage::Validating);
     tx.execute(
         "INSERT INTO message_fts(message_fts, rank) VALUES('integrity-check', 1)",
         [],
@@ -256,7 +263,19 @@ fn full_build(
     let temporary = temporary.into_temp_path();
     let mut conn = Connection::open(&temporary)
         .map_err(|error| backend(format!("opening private search generation: {error}")))?;
-    finish_private_generation(&mut conn, state, canonical, search.canonical_path(), stop)?;
+    let documents: u64 = canonical
+        .query_row("SELECT count(*) FROM message", [], |row| row.get(0))
+        .map_err(|error| backend(format!("counting search work: {error}")))?;
+    search.progress.start(&state.projection_epoch, documents);
+    finish_private_generation(
+        &mut conn,
+        state,
+        canonical,
+        search.canonical_path(),
+        stop,
+        &search.progress,
+    )?;
+    search.progress.stage(crate::SearchBuildStage::Publishing);
     drop(conn);
     if stop.load(Ordering::SeqCst) {
         return Err(backend("search build interrupted"));
@@ -279,6 +298,7 @@ fn full_build(
             search_schema: SEARCH_SCHEMA_VERSION,
         },
     )?;
+    search.progress.clear();
     Ok(SearchAck {
         projection_epoch: state.projection_epoch.clone(),
         revision: state.search_revision,

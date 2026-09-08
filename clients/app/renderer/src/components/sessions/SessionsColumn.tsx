@@ -1,9 +1,9 @@
 import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
-import { censusProgress, isCensusRunning, isIngestActive, sessionCountLabel } from "../../lib/ingest";
+import { isCensusRunning, isIngestActive } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { ProjectSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader, ListToolbar, Veil } from "../ui";
+import { ListSummaryHeader, ListToolbar } from "../ui";
 import { SessionList } from "./SessionList";
 import type { SessionFacts } from "./types";
 
@@ -71,6 +71,7 @@ export function SessionsColumn({
         />
       )}
       <ListToolbar label={isSearching ? "ranked by hits" : "session threads"} />
+      {censusRunning && !isSearching && <p className="ah-ingest-note">More conversations will appear as discovery finishes.</p>}
       <div className="ah-veilhost">
         {searchGroups === null ? (
           <SessionList
@@ -103,19 +104,6 @@ export function SessionsColumn({
             duringBackfill={ingestActive}
             pending={censusRunning}
             onSessionSelect={onSessionSelect}
-          />
-        )}
-        {censusRunning && !isSearching && (
-          <Veil
-            label={
-              project === null
-                ? "taking the census"
-                : `taking the census · ${sessionCountLabel(
-                    project.indexedSessionCount,
-                    project.sessionCount,
-                  )}`
-            }
-            progress={censusProgress(ingest)}
           />
         )}
       </div>

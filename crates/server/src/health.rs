@@ -24,6 +24,7 @@ pub struct IngestCounters {
     pub files_skimmed: u64,
     pub bytes_read: u64,
     pub records: u64,
+    pub sessions_discovered: u64,
 }
 
 pub type IngestCounterSource = Arc<dyn Fn() -> IngestCounters + Send + Sync>;
@@ -48,6 +49,7 @@ struct IngestState {
     /// The ProgressBoard's latest per-project fold, pushed by the serve
     /// loop between passes. A view of RAM state — never authoritative.
     projects: Vec<ProjectBackfill>,
+    project_source: Option<Arc<dyn Fn() -> Vec<ProjectBackfill> + Send + Sync>>,
 }
 
 /// One runtime's cumulative live-ingest counters, as the daemon reads them
@@ -90,6 +92,7 @@ impl DaemonHealth {
                 phase: IngestPhase::Discovering,
                 entries: Vec::new(),
                 projects: Vec::new(),
+                project_source: None,
             }),
         }
     }
@@ -161,6 +164,15 @@ impl DaemonHealth {
         }
     }
 
+    /// Replace discovery's whole inventory with the streamable plan's bytes.
+    /// Zero denotes an unknown payload total (document/database snapshots).
+    pub fn ingest_stream_total(&self, kind: &str, bytes_total: u64) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+            entry.bytes_total = bytes_total;
+        }
+    }
+
     /// One runtime's backfill is done: freeze its final numerators.
     pub fn ingest_done(&self, kind: &str, bytes_streamed: u64, records: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
@@ -172,11 +184,38 @@ impl DaemonHealth {
         }
     }
 
+    /// Keep live numerators visible during the CPU/write stages after reading.
+    pub fn ingest_runtime_stage(&self, kind: &str, state: BackfillState) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+            entry.state = state;
+        }
+    }
+
+    pub fn ingest_phase(&self, phase: IngestPhase) {
+        self.ingest.lock().expect("ingest state poisoned").phase = phase;
+    }
+
+    /// Fresh parallel workers update the board while the sole writer is busy.
+    /// Status snapshots it on demand; no SQL or timer on an ingest worker.
+    pub fn ingest_project_source(
+        &self,
+        source: Arc<dyn Fn() -> Vec<ProjectBackfill> + Send + Sync>,
+    ) {
+        self.ingest
+            .lock()
+            .expect("ingest state poisoned")
+            .project_source = Some(source);
+    }
+
     /// The watch loop owns ingest now. Any entry still mid-phase (a graceful
     /// interrupt) freezes where it stood.
     pub fn ingest_live(&self) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::Live;
+        if let Some(source) = ingest.project_source.take() {
+            ingest.projects = source();
+        }
         for entry in &mut ingest.entries {
             entry.live = None;
         }
@@ -192,7 +231,10 @@ impl DaemonHealth {
         let ingest = self.ingest.lock().expect("ingest state poisoned");
         IngestProgress {
             phase: ingest.phase,
-            projects: ingest.projects.clone(),
+            projects: ingest
+                .project_source
+                .as_ref()
+                .map_or_else(|| ingest.projects.clone(), |source| source()),
             runtimes: ingest
                 .entries
                 .iter()
@@ -210,8 +252,13 @@ impl DaemonHealth {
                     };
                     if let Some(live) = live {
                         match entry.state {
-                            BackfillState::Skimming => row.files_skimmed = live.files_skimmed,
-                            BackfillState::Streaming => {
+                            BackfillState::Skimming => {
+                                row.files_skimmed = live.files_skimmed;
+                                row.sessions_total = live.sessions_discovered;
+                            }
+                            BackfillState::Streaming
+                            | BackfillState::Preparing
+                            | BackfillState::Applying => {
                                 row.bytes_streamed = live.bytes_read;
                                 row.records = live.records;
                             }
@@ -402,5 +449,72 @@ mod tests {
         // Each push replaces the fold wholesale — the board owns the math.
         health.ingest_projects(Vec::new());
         assert!(health.snapshot(&hub, 3_000).ingest.projects.is_empty());
+    }
+
+    #[test]
+    fn fresh_worker_observations_survive_preparation_and_freeze_only_when_public() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let health = DaemonHealth::new(1_000);
+        let hub = Hub::new(HubConfig::default(), 1);
+        let counter = Arc::new(AtomicU64::new(4));
+        let observed = counter.clone();
+        health.ingest_register("agent", 100, 1_000);
+        health.ingest_skim(
+            "agent",
+            Arc::new(move || IngestCounters {
+                files_skimmed: observed.load(Ordering::Relaxed),
+                sessions_discovered: observed.load(Ordering::Relaxed),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(
+            health.snapshot(&hub, 1_200).ingest.runtimes[0].sessions_total,
+            4
+        );
+        counter.store(40, Ordering::Relaxed);
+        assert_eq!(
+            health.snapshot(&hub, 1_300).ingest.runtimes[0].sessions_total,
+            40
+        );
+
+        let board = Arc::new(crate::ProgressBoard::new());
+        board.seed_session(Some("project"), "session", 1_000);
+        let observed = board.clone();
+        health.ingest_project_source(Arc::new(move || observed.snapshot()));
+        health.ingest_skim_done("agent", 40, 100);
+        let observed = counter.clone();
+        health.ingest_stream(
+            "agent",
+            Arc::new(move || IngestCounters {
+                bytes_read: observed.load(Ordering::Relaxed),
+                records: 8,
+                ..Default::default()
+            }),
+        );
+        board.advance(Some("project"), 400);
+        counter.store(400, Ordering::Relaxed);
+        health.ingest_runtime_stage("agent", BackfillState::Preparing);
+        let status = health.snapshot(&hub, 2_000).ingest;
+        assert_eq!(status.runtimes[0].bytes_streamed, 400);
+        assert_eq!(status.projects[0].bytes_streamed, 400);
+        assert_eq!(
+            status.projects[0].sessions_done, 0,
+            "processed is not public"
+        );
+        health.ingest_runtime_stage("agent", BackfillState::Applying);
+        assert_eq!(health.snapshot(&hub, 2_100).ingest.runtimes[0].records, 8);
+        board.session_done(Some("project"), "session");
+        health.ingest_done("agent", 400, 8);
+        health.ingest_phase(IngestPhase::Publishing);
+        assert_eq!(
+            health.snapshot(&hub, 2_200).ingest.phase,
+            IngestPhase::Publishing
+        );
+        health.ingest_live();
+        board.advance(Some("project"), 800);
+        assert_eq!(
+            health.snapshot(&hub, 2_500).ingest.projects[0].bytes_streamed,
+            400
+        );
     }
 }

@@ -3,4 +3,4 @@
 /**
  * One runtime's position in the cold backfill queue.
  */
-export type BackfillState = "queued" | "skimming" | "streaming" | "done";
+export type BackfillState = "queued" | "skimming" | "streaming" | "preparing" | "applying" | "done";
