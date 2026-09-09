@@ -555,21 +555,24 @@ enum CanonicalFact {
 
 ### 4.1.1 Strict public message boundary
 
-**Internal session exclusion (2026-09-09, schema 18).** An adapter may mark an
+**Internal session exclusion (2026-09-09, schema 21).** An adapter may mark an
 identified source `ledger_only` during bounded metadata normalization. Capture
 still records its complete native bytes, but metadata admits no session, project,
 or title for it and stream normalization emits no canonical operations. Its nullable
 `ingest_cursor.session_id` retains only resumable capture progress; no dummy session,
 message, asset, usage rollup, or search repair key is created. The admission bit lives
 in the raw ledger's source definition so a fresh-ledger replay cannot recreate a
-placeholder. Existing source definitions default to ordinary projection. Codex's
-internal guardian approval reviews use this policy; ordinary delegated work and
-code-review subagents remain visible. This is a fresh-ingest boundary, not a cleanup
-or migration of an existing archive.
-Rescanning an older, already projected source retains its stored cursor/source
-binding while capturing subsequent raw records. Reclassifying that binding during
-startup would conflict with its ledger identity and abort catch-up; the fresh
-admission policy does not perform that conversion.
+placeholder. On rebuild, the election pass also asks the current adapter to skim
+archived opening records. Only elected generations can exclude a session; the
+result suppresses its old metadata/title batches and placeholder creation across
+all sibling sources, including empty metadata snapshots. The normalizer-versioned
+election cache retains those session ids for parallel replay. Raw source definitions
+remain unchanged, while the new projection receives ownerless capture cursors that
+agree with the next metadata skim. Codex's internal guardian approval reviews use
+this policy; ordinary delegated work and code-review subagents remain visible.
+Rescanning an older projection without rebuilding retains its existing cursor/source
+binding while capturing subsequent raw records. Reclassification happens only in a
+new, validated projection, never as an in-place cursor or session migration.
 
 > **Activation status (2026-08-30): shipped in projection schema 12.** Core types, every captured
 > adapter, canonical store/search, protocol, and the client share one closed user-facing timeline

@@ -402,3 +402,218 @@ fn fresh_parallel_planning_does_not_recreate_omitted_sessions() {
     store.finish_bulk_load().unwrap();
     assert_projection(&f, &store);
 }
+
+#[test]
+fn old_archives_rebuild_without_empty_review_headers_and_resume_capture() {
+    let f = fixture(true);
+    let opts = options();
+    let instrument = Instrument::new();
+    let mut captured = Store::open_in_memory().unwrap();
+    let mut ledger = Ledger::open(&f.ledger_dir).unwrap();
+    let (_, files) = meta_ingest_into(
+        &CodexAdapter,
+        &f.runtime,
+        &f.root,
+        &mut captured,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    stream_backfill_into(
+        &CodexAdapter,
+        &f.runtime,
+        &f.root,
+        &mut captured,
+        &files,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+
+    // Reproduce the archive written before internal-source admission existed:
+    // public source definitions and both early and late title/header batches.
+    let mut internal_meta = Vec::new();
+    let parent = queries::session(captured.conn(), &ids::session_id(&f.runtime.id, "parent"))
+        .unwrap()
+        .unwrap();
+    for native in ["legacy-guardian", "modern-guardian"] {
+        let mut row = parent.clone();
+        row.id = ids::session_id(&f.runtime.id, native);
+        row.native_session_id = native.into();
+        row.parent_session_id = Some(parent.id.clone());
+        row.role = rosetta_core::rows::SessionRole::Subagent;
+        row.title = Some("The following is the Codex agent hi…".into());
+        internal_meta.push(IngestOp::SessionTitle(
+            rosetta_core::rows::SessionTitleRow {
+                session_id: row.id.clone(),
+                title: row.title.clone().unwrap(),
+                kind: rosetta_core::rows::TitleKind::Fallback,
+                at: 1,
+            },
+        ));
+        internal_meta.push(IngestOp::SessionMeta(row));
+    }
+    let old_dir = f._temp.path().join("old-ledger");
+    let mut old = Ledger::open(&old_dir).unwrap();
+    for entry in scan_ledger(&f.ledger_dir).unwrap().entries {
+        match entry {
+            LedgerEntry::Meta {
+                schema_version,
+                payload,
+            } => {
+                let mut ops: Vec<IngestOp> = serde_json::from_str(&payload).unwrap();
+                ops.extend(internal_meta.clone());
+                old.append_meta(schema_version, &serde_json::to_string(&ops).unwrap())
+                    .unwrap();
+            }
+            LedgerEntry::Raw {
+                mut source,
+                generation,
+                start_offset,
+                payload,
+            } => {
+                source.ledger_only = false;
+                old.append_raw(&source, generation, [(start_offset, payload)])
+                    .unwrap();
+            }
+            LedgerEntry::GenerationComplete {
+                mut source,
+                generation,
+                ..
+            } => {
+                source.ledger_only = false;
+                old.complete_generation(&source, generation, 13, true)
+                    .unwrap();
+            }
+        }
+    }
+    old.append_meta(
+        rosetta_pipeline::LEDGER_META_SCHEMA_VERSION,
+        &serde_json::to_string(&internal_meta).unwrap(),
+    )
+    .unwrap();
+    old.flush().unwrap();
+    drop(old);
+
+    // Rebuild must work from the archive even when the native files are gone.
+    let offline = f.root.with_extension("offline");
+    std::fs::rename(&f.root, &offline).unwrap();
+    let cache = old_dir.join("election.json");
+    let mut replay = Store::open_in_memory_for_rebuild().unwrap();
+    let report = rebuild_runtime_with_options(
+        &CodexAdapter,
+        &f.runtime,
+        &old_dir,
+        &mut replay,
+        &instrument,
+        RebuildOptions {
+            election_cache: Some(cache.clone()),
+            ..RebuildOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.sessions_stubbed, 0);
+    replay.finish_bulk_load().unwrap();
+    assert_projection(&f, &replay);
+
+    let prepared = prepare_runtime(
+        &CodexAdapter,
+        &f.runtime,
+        &old_dir,
+        &instrument,
+        RebuildOptions {
+            election_cache: Some(cache),
+            ..RebuildOptions::default()
+        },
+    )
+    .unwrap();
+    let mut parallel = Store::open_in_memory_for_rebuild().unwrap();
+    let report = apply_prepared_runtime(
+        &CodexAdapter,
+        &f.runtime,
+        prepared,
+        &mut parallel,
+        &instrument,
+    )
+    .unwrap();
+    assert_eq!(report.sessions_stubbed, 0);
+    parallel.finish_bulk_load().unwrap();
+    assert_projection(&f, &parallel);
+    assert!(
+        scan_ledger(&old_dir)
+            .unwrap()
+            .entries
+            .iter()
+            .all(|entry| match entry {
+                LedgerEntry::Raw { source, .. }
+                | LedgerEntry::GenerationComplete { source, .. } => !source.ledger_only,
+                _ => true,
+            }),
+        "replay never rewrites archived source definitions"
+    );
+
+    // After publication the cursor's new admission must agree with a current
+    // metadata skim, and a suffix must remain resumable and raw-ledger-only.
+    std::fs::rename(&offline, &f.root).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(
+            f.root
+                .join("sessions/2026/09/09/rollout-legacy-guardian.jsonl"),
+        )
+        .unwrap()
+        .write_all(message(4, "user", "private-review-sentinel after rebuild").as_bytes())
+        .unwrap();
+    let mut old = Ledger::open(&old_dir).unwrap();
+    let (_, files) = meta_ingest_into(
+        &CodexAdapter,
+        &f.runtime,
+        &f.root,
+        &mut replay,
+        &opts,
+        &instrument,
+        Some(&mut old),
+    )
+    .unwrap();
+    assert_eq!(files.iter().filter(|file| file.ledger_only).count(), 4);
+    let report = stream_backfill_into(
+        &CodexAdapter,
+        &f.runtime,
+        &f.root,
+        &mut replay,
+        &files,
+        &opts,
+        &instrument,
+        Some(&mut old),
+    )
+    .unwrap();
+    assert_eq!(report.hard_errors, 0);
+    assert_projection(&f, &replay);
+    old.flush().unwrap();
+    drop(old);
+    assert!(
+        scan_ledger(&old_dir)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry,
+                LedgerEntry::Raw { source, payload, .. }
+                if source.ledger_only && String::from_utf8_lossy(payload).contains("after rebuild")
+            ))
+    );
+    let mut resumed = Store::open_in_memory_for_rebuild().unwrap();
+    rebuild_runtime(
+        &CodexAdapter,
+        &f.runtime,
+        &old_dir,
+        &mut resumed,
+        &instrument,
+    )
+    .unwrap();
+    resumed.finish_bulk_load().unwrap();
+    assert_projection(&f, &resumed);
+}

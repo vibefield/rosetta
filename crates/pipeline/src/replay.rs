@@ -30,6 +30,9 @@ use crate::meta::SessionFile;
 use crate::stream::StreamReport;
 use crate::stream::merge_stats;
 
+mod admission;
+use admission::{AdmissionScan, ReplayAdmission};
+
 /// Rebuild-only controls. The live path keeps its independently bounded
 /// scheduler; these knobs let a private, unpublished rebuild spend more RAM
 /// to amortize transaction and reconciliation overhead.
@@ -94,6 +97,7 @@ struct ElectionCache {
     latest_seals: BTreeMap<String, (u64, SourceDef, bool)>,
     only_dirty: HashSet<String>,
     unsealed: BTreeMap<String, (u64, SourceDef)>,
+    admission: ReplayAdmission,
 }
 
 struct ElectionState {
@@ -102,6 +106,7 @@ struct ElectionState {
     latest_seals: BTreeMap<String, (u64, SourceDef, bool)>,
     only_dirty: HashSet<String>,
     unsealed: BTreeMap<String, (u64, SourceDef)>,
+    admission: ReplayAdmission,
 }
 
 fn segment_stamps(ledger_dir: &Path) -> Result<Vec<SegmentStamp>, PipelineError> {
@@ -148,7 +153,7 @@ fn load_election_cache(
 ) -> Option<ElectionState> {
     let payload = std::fs::read(path).ok()?;
     let cache: ElectionCache = serde_json::from_slice(&payload).ok()?;
-    if cache.schema != 2
+    if cache.schema != 3
         || cache.normalizer_version != normalizer_version
         || cache.segments != segments
     {
@@ -164,6 +169,7 @@ fn load_election_cache(
         latest_seals: cache.latest_seals,
         only_dirty: cache.only_dirty,
         unsealed: cache.unsealed,
+        admission: cache.admission,
     })
 }
 
@@ -185,7 +191,7 @@ fn save_election_cache(
         })?;
     }
     let cache = ElectionCache {
-        schema: 2,
+        schema: 3,
         normalizer_version,
         segments,
         visit_segments: state.visit.segments,
@@ -195,6 +201,7 @@ fn save_election_cache(
         latest_seals: state.latest_seals.clone(),
         only_dirty: state.only_dirty.clone(),
         unsealed: state.unsealed.clone(),
+        admission: state.admission.clone(),
     };
     let payload = serde_json::to_vec(&cache).map_err(|error| {
         PipelineError::Config(format!(
@@ -580,6 +587,7 @@ pub fn rebuild_runtime_with_options(
         let mut surviving: BTreeMap<String, (u64, SourceDef)> = BTreeMap::new();
         let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
         let mut raw_generations: BTreeMap<(String, u64), SourceDef> = BTreeMap::new();
+        let mut admission = AdmissionScan::default();
         let visit = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
             if options
                 .cancel
@@ -590,8 +598,12 @@ pub fn rebuild_runtime_with_options(
             }
             match entry {
                 LedgerEntry::Raw {
-                    source, generation, ..
+                    source,
+                    generation,
+                    start_offset,
+                    payload,
                 } => {
+                    admission.observe(adapter, &source, generation, start_offset, &payload);
                     raw_generations
                         .entry((source.relative_path.clone(), generation))
                         .or_insert(source);
@@ -660,7 +672,9 @@ pub fn rebuild_runtime_with_options(
                 never_sealed.join(", ")
             )));
         }
+        let admission = admission.finish(&surviving);
         let state = ElectionState {
+            admission,
             visit,
             surviving,
             latest_seals,
@@ -680,6 +694,7 @@ pub fn rebuild_runtime_with_options(
         latest_seals,
         only_dirty,
         unsealed,
+        admission,
     } = election;
     report.segments = first.segments;
     report.torn_segments = first.torn_segments;
@@ -721,9 +736,10 @@ pub fn rebuild_runtime_with_options(
                         "unsupported ledger meta schema version {schema_version}"
                     )));
                 }
-                let ops: Vec<IngestOp> = serde_json::from_str(&payload).map_err(|error| {
+                let mut ops: Vec<IngestOp> = serde_json::from_str(&payload).map_err(|error| {
                     PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
                 })?;
+                admission.filter_meta(&mut ops);
                 for op in &ops {
                     if let IngestOp::SessionMeta(row) = op {
                         sessions_seen.insert(row.id.clone());
@@ -741,11 +757,12 @@ pub fn rebuild_runtime_with_options(
                 merge_stats(&mut report.stats, &stats);
             }
             LedgerEntry::Raw {
-                source,
+                mut source,
                 generation,
                 start_offset,
                 payload,
             } => {
+                admission.project_source(&mut source);
                 let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
                     return Ok(());
                 };
@@ -842,8 +859,11 @@ pub fn rebuild_runtime_with_options(
                 }
             }
             LedgerEntry::GenerationComplete {
-                source, generation, ..
+                mut source,
+                generation,
+                ..
             } => {
+                admission.project_source(&mut source);
                 let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
                     return Ok(());
                 };
@@ -1045,18 +1065,20 @@ pub fn prepare_runtime(
                         "unsupported ledger meta schema version {schema_version}"
                     )));
                 }
-                let ops = serde_json::from_str(&payload).map_err(|error| {
+                let mut ops = serde_json::from_str(&payload).map_err(|error| {
                     PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
                 })?;
+                election.admission.filter_meta(&mut ops);
                 meta_ops.push(ops);
                 report.meta_batches += 1;
             }
             LedgerEntry::Raw {
-                source,
+                mut source,
                 generation,
                 start_offset,
                 payload,
             } => {
+                election.admission.project_source(&mut source);
                 let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
                     return Ok(());
                 };
@@ -1116,8 +1138,11 @@ pub fn prepare_runtime(
                 file.ops.extend(outcome.ops);
             }
             LedgerEntry::GenerationComplete {
-                source, generation, ..
+                mut source,
+                generation,
+                ..
             } => {
+                election.admission.project_source(&mut source);
                 let Some((surviving_generation, _)) = surviving.get(&source.relative_path) else {
                     return Ok(());
                 };
