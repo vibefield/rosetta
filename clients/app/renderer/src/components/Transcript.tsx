@@ -52,6 +52,7 @@ import type { FileHandle, FileSource } from "./file-viewer";
 import {
   attachmentFileSource,
   handleForAttachment,
+  attachmentViewerName,
 } from "./transcript/attachment-file-source";
 import {
   handleForReadPath,
@@ -192,6 +193,10 @@ export function TranscriptColumn({
   }, [session?.id]);
 
   const openAttachment = (fact: AttachmentFact) => {
+    if (fact.readPath) {
+      openReadPath(fact.readPath, fact.readBytes, attachmentViewerName(fact));
+      return;
+    }
     viewerRequest.current += 1;
     const handle = handleForAttachment(fact);
     if (handle === null) {
@@ -208,9 +213,9 @@ export function TranscriptColumn({
       source: message.recordedText?.type === "member" ? attachmentFileSource : messageFileSource, message });
   }, []);
 
-  const openReadPath = (path: PathFact) => {
+  const openReadPath = (path: PathFact, previewBytes?: Uint8Array, name?: string) => {
     const request = (viewerRequest.current += 1);
-    void handleForReadPath(path)
+    void handleForReadPath(path, previewBytes, name)
       .then((handle) => {
         if (request !== viewerRequest.current) return;
         if (handle === null) {

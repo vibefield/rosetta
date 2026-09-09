@@ -5,9 +5,8 @@
 // scans in one pass it is because exactly one thing on it is filled.
 //
 // Two variants the record draws:
-//   · attachments are tiles INSIDE the panel (3:2, radius 8, hairline), with
-//     the facts in tabular figures beneath. A missing image is the dashed tile
-//     with what is known — absence stated, never faked (§06).
+//   · attachments sit in one scrolling strip BELOW the text panel. Missing
+//     images keep their place; image-only prompts need no empty bubble (§06A).
 //   · a prompt that is a local command wears a PILL instead of a panel, and
 //     its `command_output` rides beside it in the caption ramp. The pair is one
 //     object, which is why `turns.ts` absorbed the notice rather than leaving
@@ -38,15 +37,17 @@ export function PromptPanel({
 }: PromptPanelProps) {
   return (
     <div
-      className={landed ? "tr-prompt is-landed" : "tr-prompt"}
+      className={landed ? "tr-prompt-message is-landed" : "tr-prompt-message"}
       id={domId}
       data-timeline-id={prompt.row.timeline_id}
     >
-      {prompt.text === null && prompt.attachments.length === 0 && <p className="tr-quiet">no text recorded</p>}
       <AuthoredMessage text={prompt.text} attachments={prompt.attachments}
         recordedText={prompt.row.body.type === "user" ? prompt.row.body.text : null}
         messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`} role="user"
-        onReceipt={onReceipt} onOpenAttachment={onOpenAttachment} />
+        onReceipt={onReceipt} onOpenAttachment={onOpenAttachment}
+        renderText={content => content !== null || prompt.attachments.length === 0
+          ? <div className="tr-prompt">{content ?? <p className="tr-quiet">no text recorded</p>}</div>
+          : null} />
     </div>
   );
 }

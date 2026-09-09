@@ -9,7 +9,22 @@ export default mergeConfig(base, {
   root: ".",
   plugins: [{ name: "image-retry-fixture", configureServer(server) {
     const failed = new Set<string>();
+    const reads: Record<string, number> = {};
     server.middlewares.use((request, response, next) => {
+      if (request.url === "/test/image-reads") {
+        response.setHeader("content-type", "application/json"); response.end(JSON.stringify(reads)); return;
+      }
+      const target = /^\/api\/sessions\/s1\/timeline\/(image-read|image-artifact)\/read\/(\d+)$/.exec(request.url ?? "");
+      if (target) {
+        const key = `${target[1]}:${target[2]}`;
+        reads[key] = (reads[key] ?? 0) + 1;
+        if (target[1] === "image-read" && target[2] === "0") { response.statusCode = 400; response.end("Not an image"); return; }
+        if (key === "image-read:3" && reads[key] === 1) { response.statusCode = 503; response.end("Temporary fixture failure"); return; }
+        response.setHeader("content-type", "application/octet-stream");
+        response.setHeader("x-rosetta-protocol-version", String(PROTOCOL_VERSION));
+        response.end(readFileSync(new URL(`./fixtures/prompt-images/${Number(target[2]) % 2 ? "landscape" : "portrait"}.png`, import.meta.url)));
+        return;
+      }
       if (request.url?.startsWith("/test/fixtures/prompt-images/full-message.md")) {
         response.setHeader("content-type", "text/plain; charset=utf-8");
         response.setHeader("x-rosetta-protocol-version", String(PROTOCOL_VERSION));

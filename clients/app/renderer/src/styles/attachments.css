@@ -1,17 +1,29 @@
-/* Transcript record §06A: a bounded gallery inside its authored message. */
-.tr-attachments { container-type: inline-size; margin-top: 12px; min-width: 0; }
-.tr-att { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 480px; max-width: 100%; margin: 0; }
-.tr-att[data-single] { grid-template-columns: minmax(0, 1fr); width: 360px; }
-.tr-att figure { display: grid; align-content: start; gap: 6px; min-width: 0; margin: 0; }
-.tr-att__tile { display: grid; place-items: center; position: relative; width: 100%; height: auto; aspect-ratio: 3 / 2; box-sizing: border-box; overflow: hidden; border-radius: 8px; background: var(--vf-fill); box-shadow: inset 0 0 0 1px var(--vf-hairline); }
+/* §06A: image strips sit below authored text and outside both activity folds. */
+.tr-prompt-message { min-width: 0; max-width: 100%; width: 100%; }
+.tr-attachments { container-type: inline-size; position: relative; margin-top: 10px; min-width: 0; max-width: 100%; }
+.tr-att { display: flex; gap: 10px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding: 4px; margin: -4px; scroll-padding-inline: 4px; }
+.tr-att::-webkit-scrollbar { display: none; }
+.tr-att figure { flex: 0 0 144px; width: 144px; min-width: 0; margin: 0; }
+.tr-att__tile { display: grid; place-items: center; position: relative; width: 100%; aspect-ratio: 1; box-sizing: border-box; overflow: hidden; border-radius: 16px; background: var(--vf-fill); box-shadow: inset 0 0 0 1px var(--vf-hairline); }
 button.tr-att__tile { padding: 0; border: 0; color: inherit; cursor: pointer; appearance: none; }
-.tr-att__tile img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-.tr-att__tile--missing { align-content: center; gap: 8px; border: 1px dashed var(--vf-hairline-strong); box-shadow: none; padding: 16px; color: var(--vf-text-tertiary); font-size: 12px; line-height: 1.45; text-align: center; }
-.tr-att figcaption { display: grid; gap: 2px; min-width: 0; color: var(--vf-text-tertiary); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.tr-att__label { color: var(--vf-text-secondary); font-size: 12px; }
-.tr-att__more, .tr-att__retry { appearance: none; border: 0; padding: 5px 0; background: transparent; color: var(--vf-text-secondary); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-.tr-att__more { margin-top: 6px; }
-.tr-att__tile:focus-visible, .tr-att__more:focus-visible, .tr-att__retry:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 3px; }
-@container (max-width: 360px) { .tr-att { grid-template-columns: minmax(0, 1fr); width: 360px; } }
-.tr-prompt:has(.tr-attachments) { min-width: min(100%, 510px); box-sizing: border-box; }
-.tr-prompt:has(.tr-att[data-single]) { min-width: min(100%, 390px); }
+.tr-att__tile img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tr-att__tile--missing, .tr-att__tile--loading { align-content: center; gap: 6px; padding: 12px; color: var(--vf-text-tertiary); font-size: 11px; line-height: 1.4; text-align: center; }
+.tr-att__tile--missing { border: 1px dashed var(--vf-hairline-strong); box-shadow: none; }
+.tr-att__tile--loading { color: var(--vf-text-faint); }
+.tr-att__retry { appearance: none; border: 0; padding: 3px 6px; background: transparent; color: var(--vf-text-secondary); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.tr-att__nav { position: absolute; top: calc(50% - 15px); width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--vf-hairline-strong); border-radius: 50%; background: var(--vf-chrome-solid); color: var(--vf-text-secondary); box-shadow: var(--vf-shadow-island); font: 24px/1 var(--vf-font-sans); padding: 0 0 2px; cursor: pointer; }
+.tr-att__nav[data-edge] { visibility: hidden; }
+.tr-att__nav[data-edge]:focus-visible { visibility: visible; opacity: 0.5; }
+.tr-att__nav--previous { left: 6px; }
+.tr-att__nav--next { right: 6px; }
+.tr-att__tile:focus-visible, .tr-att__nav:focus-visible, .tr-att__retry:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+@media (hover: hover) {
+  .tr-att__nav { opacity: 0; transition: opacity 120ms; }
+  .tr-attachments:hover .tr-att__nav, .tr-attachments:focus-within .tr-att__nav { opacity: 1; }
+  button.tr-att__tile:hover { outline: 1px solid var(--vf-hairline-strong); outline-offset: 2px; }
+}
+@media (prefers-reduced-motion: reduce) { .tr-att__nav { transition: none; } }
+@container (max-width: 440px) { .tr-att figure { flex-basis: 112px; width: 112px; } .tr-att { gap: 8px; } }
+@container (max-width: 300px) { .tr-att__tile--missing svg, .tr-att__tile--loading svg { display: none; } .tr-att__tile--missing, .tr-att__tile--loading { padding: 10px; } .tr-att figure { flex-basis: 96px; width: 96px; } .tr-att__tile { border-radius: 13px; } }
+.tr-ledger > .tr-attachments { margin-top: 8px; margin-bottom: 12px; }
+.tr-prompt-message + .tr-prompt-message:has(.tr-attachments), .tr-prompt-message:has(.tr-attachments) + .tr-prompt-message { margin-top: 8px; }

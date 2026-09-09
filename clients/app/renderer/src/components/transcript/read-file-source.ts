@@ -17,17 +17,17 @@ interface ReadFilePayload {
 }
 
 /** Resolve and read one exact canonical target before opening the viewer. */
-export async function handleForReadPath(path: PathFact): Promise<FileHandle | null> {
+export async function handleForReadPath(path: PathFact, previewBytes?: Uint8Array, name?: string): Promise<FileHandle | null> {
   const address = path.read;
   if (address === undefined || path.resource.type !== "file") return null;
-  const bytes = await client.readFileTarget(
+  const bytes = previewBytes ?? await client.readFileTarget(
     address.sessionId,
     address.timelineId,
     address.targetIndex,
   );
   return {
     key: `read:${address.sessionId}:${address.timelineId}:${address.targetIndex}`,
-    name: path.name || "file",
+    name: name || path.name || "file",
     path: path.resource.path,
     size: bytes.byteLength,
     ref: { type: "transcript-read", bytes } satisfies ReadFilePayload,

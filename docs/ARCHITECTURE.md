@@ -783,9 +783,19 @@ table, Base64 field in canonical JSON, or frontend native parser is introduced.
 The adapter removes transport text only when structural evidence identifies it;
 human-authored quotations of the same syntax survive. Human text blocks retain their
 relative order, attachment slots retain their relative order, and the initial UI
-presents images together below the text within the prompt. That is an intentional
+presents images in a horizontal strip below the prompt’s text bubble. Agent replies
+and full-message views use the same strip beneath their prose. That is an intentional
 gallery layout, not a claim to reproduce arbitrary text/image interleaving. The raw
 ledger remains available if a future consumer needs an ordered rich-content model.
+Activity image references are collected from canonical file reads, artifacts, workflow
+resources, and structured/external tool resources. One strip sits outside both activity
+fold levels and keeps its DOM identity as the folds open. Stored assets use the usual
+asset route; exact canonical tool file targets use the existing bounded read endpoint,
+lazily when near the visible area. These previews describe the **current file**, and
+opening the viewer reuses the same in-memory bytes. Unavailable or remote-only
+references keep a placeholder. No arbitrary tool output or Markdown URL is parsed
+into an image request. This is renderer composition, with no protocol/schema change.
+
 This feature adds no OCR, invented captions, or image-content search. Existing
 authored prose and attachment filenames remain the search inputs; labels, source
 wrappers, encoded bytes, and temporary-path transport are not injected into prose.
@@ -806,8 +816,8 @@ repeated bytes, missing first image, exact labels, literal markup, malformed enc
 unsupported media, reference-only content, tool media exclusion, and late/out-of-order
 asset joins. Verify deterministic ids and source-generation replacement, asset durability
 before publication, ledger-only replay, absence of encoded bytes from timeline/search
-JSON, and no new canonical reconciliation state. The renderer must pass whole-image
-previews at wide/narrow widths, long text with visible attachments, keyboard open/close
+JSON, and no new canonical reconciliation state. The renderer must pass compact thumbnail strips and uncropped full-image
+viewing at wide/narrow widths, long text with visible attachments, keyboard open/close
 and focus restoration, failed-load retry, paging/search landing, light/dark themes, and
 stable scroll geometry while images load. Runtime performance claims require the usual
 frozen paired campaign; this implementation makes none.
@@ -818,7 +828,7 @@ Adapter conformance tests cover occurrence identity, invalid/missing inputs, exa
 bindings, checkpointed joins and replacement snapshots. These synthetic inputs are
 tests of the pinned grammar, not substitutes for native fixture captures.
 `clients/app/test/prompt-images.html` mounts the production transcript and nested file
-viewer with seven synthetic cases. Run it from `clients/app` using
+viewer with synthetic authored-image and tool-activity cases. Run it from `clients/app` using
 `npm run dev:web -- --config test/prompt-images.vite.config.ts`. It includes a one-shot
 HTTP failure for Retry, inline and externally stored long-message links, an unavailable
 first image and a theme switch. Opening an externally stored message reads its immutable

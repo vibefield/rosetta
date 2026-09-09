@@ -2,6 +2,23 @@
 // strip's 24-grid where the proto drew them there) — transcribed from
 // protos/agent-history-proto.
 
+export function SunGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1v1M8 14v1M1 8h1M14 8h1M3.05 3.05l.7.7M12.25 12.25l.7.7M3.05 12.95l.7-.7M12.25 3.75l.7-.7" />
+    </svg>
+  );
+}
+
+export function MoonGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M13.6 9.1A5.8 5.8 0 0 1 6.9 2.4a5.8 5.8 0 1 0 6.7 6.7Z" />
+    </svg>
+  );
+}
+
 export function SearchGlyph() {
   return (
     <svg

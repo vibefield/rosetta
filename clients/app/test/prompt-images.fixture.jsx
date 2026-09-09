@@ -4,7 +4,7 @@ client.setBaseUrl(window.location.origin);
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TranscriptColumn } from "../renderer/src/components/Transcript";
-import { entry, inline } from "./support/ledger-fixtures.mjs";
+import { entry, inline, tool, file } from "./support/ledger-fixtures.mjs";
 import { memberText } from "./prompt-images-data.mjs";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/room.css";
@@ -40,12 +40,25 @@ function message(text, id, attachments) {
     group: { id: `g${ordinal}`, kind: "human_turn", derivation: "native" },
   });
 }
-const single = "😀 [Image #1] Can we keep the whole image visible?";
+function activity() {
+  const rows = [
+    tool({ type: "file_read", targets: [
+      { resource: file("/demo/README.md"), range: null, media_kind: null },
+      ...Array.from({ length: 5 }, (_, index) => ({ resource: file(`/demo/capture-${index}.png`), range: null, media_kind: "image" })),
+    ], outcome: null }, { timeline_id: "image-read" }),
+    tool({ type: "artifact", operation: "create", artifact_kind: "image", name: "Revised view", description: null,
+      resources: [file("/demo/revised.png")], media: { media_type: "image/png", width: 960, height: 480, duration_ms: null } }, { timeline_id: "image-artifact" }),
+    entry({ type: "agent", text: inline("The revised screens keep the reading area quiet. Here is the final comparison."), attachments: [image("reply-image", "landscape.png")], citations: [] }, { timeline_id: "image-reply" }),
+  ];
+  return rows.map(row => ({ ...row, ordinal: ++ordinal, at: now + ordinal * 1000, group: { id: "image-activity", kind: "agent_cycle", derivation: "native" } }));
+}
+const single = "😀 [Image #1] Can we make these screens easier to scan?";
 const long = "Please review [Image #1].\n\n" + "## Review notes\n\nKeep the image beside the original prompt and preserve every detail.\n\n".repeat(36)
   + "Full message end. Compare [Image #1] again.\n\n`[Image #1]` is code, and [Image #1](https://example.com) is an ordinary link.";
 const initial = [
   message(single, "single", [image("1", "landscape.png", markerRanges(single, "[Image #1]"))]),
   message("Six views of the same screen.", "gallery", Array.from({ length: 6 }, (_, i) => image(String(i + 1), i % 2 ? "portrait.png" : "landscape.png"))),
+  ...activity(),
   message(null, "image-only", [image("1", "portrait.png")]),
   message("[Image #1] is missing; [Image #4] was recorded.", "missing", [
     image("1", "absent.png", [{ start: 0, end: 10 }], { type: "unavailable", reason: "not_recorded" }),

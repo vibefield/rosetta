@@ -9,13 +9,21 @@
    receding (M5). Nothing in the four columns changes content or geometry.
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* ── the strip: traffic lights, then the launcher, centred ─────────────── */
+/* ── the strip: centred search, with a theme control at the right edge ── */
 .ah-searchbar {
+  position: relative;
   display: flex; align-items: center; justify-content: center; flex: none;
   min-height: 50px; padding: 9px 84px;
   border-bottom: 1px solid var(--vf-hairline);
   -webkit-app-region: drag;
 }
+.ah-theme-toggle {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  width: 32px; height: 32px; border-radius: 999px;
+  color: var(--vf-text-secondary);
+  -webkit-app-region: no-drag;
+}
+.ah-theme-toggle svg { width: 16px; height: 16px; }
 .ah-launcher {
   position: relative; display: flex; align-items: center;
   width: min(460px, 100%); height: 32px; border-radius: 999px;

@@ -637,6 +637,7 @@ export function TranscriptDocument({
                 .find((member) => member !== null) ?? null
             }
             onOpenPath={onOpenPath}
+            onOpenAttachment={onOpenAttachment}
           />
         );
       case "thinking":

@@ -16,6 +16,7 @@
     "test": "node --test test/*.test.mjs",
     "test:ui-motion": "electron test/ui-motion.electron.mjs",
     "test:web-search": "electron test/web-search.electron.mjs",
+    "test:image-strips": "electron test/image-strips.electron.mjs",
     "test:message-preview": "electron test/message-preview.electron.mjs",
     "test:worktree-actions": "electron test/worktree-actions.electron.mjs",
     "typecheck": "tsc --noEmit"

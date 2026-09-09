@@ -22,10 +22,11 @@
 //        `running` row in a finished transcript is a record that stopped, and
 //        it reads muted rather than pretending to be alive.
 import type { ReactNode } from "react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { TimelineEntry } from "@rosetta/protocol";
 import { clock } from "../../lib/format";
 import type {
+  AttachmentFact,
   LedgerLine,
   LedgerMember,
   ObjectPart,
@@ -35,6 +36,8 @@ import type {
   WorkflowAttemptFact,
 } from "../../lib/transcript";
 import { objectText, spanText } from "../../lib/transcript";
+import { activityImages } from "../../lib/transcript/images";
+import { Attachments } from "./Attachments";
 import { FaviconStack, Favicon } from "./Favicon";
 import { FailGlyph, FamilyGlyph, LineChevron } from "./glyphs";
 import { useFoldPreference } from "./fold-preference";
@@ -247,6 +250,7 @@ export interface LedgerProps {
    * roster operation. Ordinary Agent workers return null and keep Line. */
   readonly teamMemberFor: (line: LedgerLine) => TeamMemberPresentation | null;
   readonly onOpenPath: (path: PathFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
 }
 
 const TEAM_START_BURST_MS = 5 * 60_000;
@@ -280,7 +284,9 @@ export function Ledger({
   onOpenLinkedChild,
   teamMemberFor,
   onOpenPath,
+  onOpenAttachment,
 }: LedgerProps) {
+  const images = useMemo(() => activityImages(members), [members]);
   const inside = (member: LedgerMember) =>
     (member.kind === "line" && childFocused(member.line)) ||
     (focusTimelineId !== null &&
@@ -480,6 +486,7 @@ export function Ledger({
           )}
         </span>
       </div> : null}
+      <Attachments facts={images} onOpenAttachment={onOpenAttachment} />
       {/* One wrapper in both states keeps each line's open state (R-5).
           Always in the DOM, shown by the head's own `aria-expanded`. */}
       <div className={closed ? "tr-ladder" : undefined}>{drawn}</div>

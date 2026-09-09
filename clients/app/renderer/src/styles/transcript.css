@@ -118,7 +118,7 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
   .tr-prompt, .tr-seg.tr-prose { transition: none; }
 }
 
-/* Claude's numbered paste marker is a second handle for the same image. It
+/* A recorded image marker is a second handle for the same image. It
    reads like a link and acts like the thumbnail, without navigating away. */
 .tr-image-link {
   margin: 0; padding: 0; border: 0; background: none; color: var(--vf-cyan);
@@ -345,7 +345,7 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
 /* R-5 — a live run's head carries the line that is happening, in green */
 .tr-fold .cur { color: var(--vf-green); }
 .tr-fold .cur .tr-line__o { display: inline; font-family: var(--vf-font-mono); font-size: 11.5px; color: inherit; }
-.tr-fold[aria-expanded="false"] + .tr-ladder { display: none; }
+.tr-fold[aria-expanded="false"] ~ .tr-ladder { display: none; }
 .tr-ladder { margin-left: 2px; padding-left: 12px; border-left: 1px solid var(--vf-hairline); }
 /* inside the ladder every member keeps the form it had as a segment */
 .tr-ladder > .tr-seg { margin: 6px 0 6px 26px; }
@@ -1204,8 +1204,8 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
   display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; justify-items: start;
 }
 .tr-cluster .tr-prompt { border-radius: 10px; }
-.tr-cluster .tr-prompt + .tr-prompt { border-top-left-radius: 4px; }
-.tr-cluster .tr-prompt:has(+ .tr-prompt) { border-bottom-left-radius: 4px; }
+.tr-cluster .tr-prompt-message + .tr-prompt-message .tr-prompt { border-top-left-radius: 4px; }
+.tr-cluster .tr-prompt-message:has(+ .tr-prompt-message) .tr-prompt { border-bottom-left-radius: 4px; }
 /* the day list the pill opens into */
 .tr-daymenu {
   position: absolute; left: 50%; transform: translateX(-50%); z-index: 12;
@@ -1222,4 +1222,5 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
 .tr-daymenu button[aria-current="true"] { background: var(--vf-fill); }
 
 /* the landing ring — a day jump lands the way a search hit does */
-.tr-prompt.is-landed { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.tr-prompt.is-landed, .tr-prompt-message.is-landed > .tr-prompt,
+.tr-prompt-message.is-landed > .tr-attachments .tr-att__tile { box-shadow: inset 0 0 0 1.5px var(--vf-select); }

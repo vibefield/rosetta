@@ -35,7 +35,7 @@ export function attachmentAssetUrl(fact: AttachmentFact): string | null {
   }
 }
 
-function viewerName(fact: AttachmentFact): string {
+export function attachmentViewerName(fact: AttachmentFact): string {
   const source = fact.ref?.source;
   const base =
     fact.name?.trim() ||
@@ -55,7 +55,7 @@ export function handleForAttachment(fact: AttachmentFact): FileHandle | null {
   if (source === undefined || source === null || source.type !== "asset" || url === null) return null;
   return {
     key: `attachment:${source.asset.digest}`,
-    name: viewerName(fact),
+    name: attachmentViewerName(fact),
     path: null,
     size: fact.byteLen ?? source.asset.byte_len,
     ref: source.asset,
@@ -63,7 +63,7 @@ export function handleForAttachment(fact: AttachmentFact): FileHandle | null {
 }
 
 export function canOpenAttachment(fact: AttachmentFact): boolean {
-  return fact.kind === "image" && handleForAttachment(fact) !== null;
+  return fact.kind === "image" && (handleForAttachment(fact) !== null || fact.readPath?.read !== undefined);
 }
 
 /** Stable by construction: `useFileContent` treats source identity as a read. */

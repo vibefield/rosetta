@@ -157,6 +157,8 @@ function linkedAttachments(
     const label = value.slice(start, start + length);
     nodes.push(<button className="tr-image-link" type="button" key={target.start}
       aria-label={`${label} — ${target.target.missing ? "image unavailable" : "open image"}`}
+      aria-haspopup={target.target.missing ? undefined : "dialog"}
+      title={`${target.target.missing ? "Image unavailable" : "Open image"}${target.target.name ? ` · ${target.target.name}` : ""}`}
       onClick={() => onOpen(target.target)}>{label}</button>);
     cursor = start + length;
   }

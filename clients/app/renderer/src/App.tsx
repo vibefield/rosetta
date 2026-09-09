@@ -15,6 +15,7 @@ import type { ProjectSort } from "./components/projects";
 import { SearchLauncher, SearchSheet, hasPrimaryModifier } from "./components/search";
 import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { TranscriptColumn } from "./components/Transcript";
 import type { MatchStepperState, ThreadFocus } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
@@ -377,6 +378,7 @@ export default function App() {
             onOpen={() => setSheetOpen(true)}
             onClear={clearSearch}
           />
+          <ThemeToggle />
         </div>
         {disconnected && !coldStarting ? (
           <EmptyState

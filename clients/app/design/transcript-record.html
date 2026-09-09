@@ -184,12 +184,12 @@ blockquote.claim p { margin: 0; color: inherit; font-size: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .tr-prompt, .tr-seg.tr-prose { transition: none; }
 }
-.tr-att { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-.tr-att figure { margin: 0; display: grid; gap: 4px; }
-.tr-att__tile { width: 176px; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--vf-hairline-strong); background: var(--vf-chrome-solid); cursor: zoom-in; }
+.tr-att { display: flex; gap: 10px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; }
+.tr-att figure { margin: 0; flex: 0 0 144px; }
+.tr-att__tile { width: 144px; aspect-ratio: 1; border-radius: 16px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--vf-hairline-strong); background: var(--vf-chrome-solid); cursor: zoom-in; }
 .tr-att__tile canvas { display: block; width: 100%; height: 100%; }
 .tr-att__tile--missing { display: grid; place-items: center; box-shadow: none; border: 1px dashed var(--vf-hairline-strong); background: transparent; color: var(--vf-text-faint); font-size: 11px; cursor: default; }
-.tr-att figcaption { color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.tr-att figcaption { display: none; color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 
 /* a prompt that is a command wears a pill, and its output rides beside it */
 .tr-cmd { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
@@ -722,25 +722,22 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
 .im-stage { width: 100%; max-width: 760px; margin: 0 auto; container: image-prompt / inline-size; }
 .im-stage[data-narrow="true"] { max-width: 360px; }
 .im-stage .tr { padding: 30px 24px 24px; }
-.im-stage .tr-prompt { display: block; }
+.im-stage .tr-prompt { display: inline-block; }
 .im-stage .tr-resp { margin-top: 24px; }
 .im-note { margin: 0; padding: 14px 18px; border-top: 1px solid var(--vf-hairline); color: var(--vf-text-tertiary); font-size: 12px; line-height: 1.55; }
 .im-live { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .im-link { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; text-decoration-color: var(--vf-hairline-strong); text-underline-offset: 3px; cursor: pointer; }
-.im-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; max-width: 480px; margin-top: 14px; }
-.im-gallery[data-single="true"] { grid-template-columns: minmax(0, 1fr); max-width: 360px; }
-.im-gallery figure { min-width: 0; margin: 0; }
-.im-tile { display: grid; place-items: center; width: 100%; height: 156px; padding: 8px; box-sizing: border-box; border: 1px solid var(--vf-hairline-strong); border-radius: 8px; background: var(--vf-chrome-solid); overflow: hidden; cursor: zoom-in; }
-.im-gallery[data-single="true"] .im-tile { height: auto; aspect-ratio: 3 / 2; max-height: 240px; }
+.im-gallery { display: flex; gap: 10px; width: 100%; overflow-x: auto; scrollbar-width: none; margin-top: 10px; padding: 4px; margin-left: -4px; }
+.im-gallery figure { min-width: 0; margin: 0; flex: 0 0 144px; }
+.im-tile { display: grid; place-items: center; width: 144px; height: 144px; padding: 0; box-sizing: border-box; border: 1px solid var(--vf-hairline-strong); border-radius: 16px; background: var(--vf-chrome-solid); overflow: hidden; cursor: pointer; }
 .im-tile svg { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
 .im-tile:hover { border-color: var(--vf-text-faint); }
-.im-gallery figcaption { display: grid; gap: 1px; margin-top: 6px; color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; line-height: 1.45; }
+.im-gallery figcaption { display: none; gap: 1px; margin-top: 6px; color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; line-height: 1.45; }
 .im-gallery figcaption strong { font-weight: 500; color: var(--vf-text-secondary); }
-.im-unavailable { cursor: default; border-style: dashed; background: none; text-align: center; align-content: center; gap: 5px; color: var(--vf-text-secondary); }
+.im-unavailable { padding: 10px; cursor: default; border-style: dashed; background: none; text-align: center; align-content: center; gap: 5px; color: var(--vf-text-secondary); }
 .im-unavailable b { font-size: 12px; font-weight: 500; }
 .im-unavailable span { max-width: 24ch; font-size: 11px; color: var(--vf-text-tertiary); line-height: 1.45; }
 .im-unavailable .im-retry { margin-top: 5px; padding: 4px 10px; border: 1px solid var(--vf-hairline-strong); border-radius: 6px; background: var(--vf-chrome-solid); color: var(--vf-text-secondary); font: 11px var(--vf-font-sans); cursor: pointer; }
-.im-more { grid-column: 1 / -1; justify-self: start; min-height: 28px; padding: 2px 0; border: 0; background: none; color: var(--vf-text-secondary); font: 12px var(--vf-font-sans); text-decoration: underline; text-decoration-color: var(--vf-hairline-strong); text-underline-offset: 3px; cursor: pointer; }
 .im-quiet { margin: 9px 0; color: var(--vf-text-tertiary); font-size: 12px; }
 .im-quiet summary { cursor: pointer; width: fit-content; }
 .im-quiet p { margin: 8px 0 0 15px; }
@@ -766,7 +763,9 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
 .im-viewer-tools[hidden] { display: none; }
 .im-contract { margin: 18px 0 24px; padding: 14px 18px; border: 1px solid var(--vf-hairline-strong); border-radius: 10px; background: var(--vf-chrome-solid); overflow: auto; color: var(--vf-text-secondary); font: 12px/1.65 var(--vf-font-mono); }
 @container image-prompt (max-width: 410px) {
-  .im-gallery { grid-template-columns: minmax(0, 1fr); }
+  .im-gallery { gap: 8px; }
+  .im-gallery figure { flex-basis: 112px; }
+  .im-tile { width: 112px; height: 112px; }
   .im-stage .tr { padding: 24px 16px; }
 }
 @media (max-width: 600px) {
@@ -957,9 +956,8 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   <div class="spec__body tr-col"><div class="tr" id="anat">
     <div class="tr-turn">
       <div class="tr-seg" style="position:relative"><i class="anno" style="left:-34px;top:8px">A</i><span class="tr-anchor" style="top:12px">23:41:06</span>
-        <div class="tr-prompt"><p>this is what i see at 2× — the concave corner is wrong on the right bay, and the shadow is being clipped with the plate. fix the fillet first, then the shadow.</p>
-          <div class="tr-att"><figure><div class="tr-att__tile" title="Open"><canvas data-fake="card" width="352" height="220"></canvas></div><figcaption>3000×1816 · PNG · 1.2 MB</figcaption></figure></div>
-        </div>
+        <div class="tr-prompt"><p>this is what i see at 2× — the concave corner is wrong on the right bay, and the shadow is being clipped with the plate. fix the fillet first, then the shadow.</p></div>
+        <div class="tr-att"><figure><div class="tr-att__tile" title="Open"><canvas data-fake="card" width="352" height="220"></canvas></div><figcaption>3000×1816 · PNG · 1.2 MB</figcaption></figure></div>
         <div class="tr-acts"><button type="button">copy</button><button type="button">→ chip</button><button type="button">⊕ canvas</button></div>
       </div>
       <div class="tr-resp" style="position:relative"><i class="anno" style="left:-34px;top:2px">B</i>
@@ -1443,7 +1441,8 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
       </div>
     </div>
     <div class="tr-turn">
-      <div class="tr-seg"><span class="tr-anchor" style="top:12px">23:41:06</span><div class="tr-prompt"><p>this is what i see at 2× — the concave corner is wrong on the right bay. fix the fillet first, then the shadow.</p><div class="tr-att"><figure><div class="tr-att__tile"><canvas data-fake="card" width="352" height="220"></canvas></div><figcaption>3000×1816 · PNG · 1.2 MB</figcaption></figure></div></div></div>
+      <div class="tr-seg"><span class="tr-anchor" style="top:12px">23:41:06</span><div class="tr-prompt"><p>this is what i see at 2× — the concave corner is wrong on the right bay. fix the fillet first, then the shadow.</p></div>
+        <div class="tr-att"><figure><div class="tr-att__tile"><canvas data-fake="card" width="352" height="220"></canvas></div><figcaption>3000×1816 · PNG · 1.2 MB</figcaption></figure></div></div>
       <div class="tr-resp">
         <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">9m 52s · <b>41.2K</b></span></div>
         <div class="tr-seg tr-prose"><span class="tr-anchor">23:41:19</span><p>Several real issues visible. Let me fix them.</p></div>
@@ -1603,7 +1602,8 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
     <div class="tr-mark tr-mark--error">runtime error · provider · API 500 · the model is at capacity</div>
     <div class="tr-mark">permission denied · Bash</div>
     <button class="tr-mark tr-mark--gap" type="button">gap · 4 messages not indexed</button>
-    <div class="tr-turn"><div class="tr-seg"><div class="tr-prompt"><p>and the one from the ipad?</p><div class="tr-att"><figure><div class="tr-att__tile tr-att__tile--missing">image · not stored</div><figcaption>2048×1536 · JPEG</figcaption></figure></div></div></div></div>
+    <div class="tr-turn"><div class="tr-seg"><div class="tr-prompt"><p>and the one from the ipad?</p></div>
+        <div class="tr-att"><figure><div class="tr-att__tile tr-att__tile--missing">image · not stored</div><figcaption>2048×1536 · JPEG</figcaption></figure></div></div></div>
     <div class="tr-summary"><span class="eyebrow">Session summary</span>We built a standalone WebGPU magnet-grid experiment in <code>draft/magnet-grid</code>: ICE lattice as GPU needles, cursor and rounded-rect card SDFs as 1/r² magnets, plus a size-based dot mode.</div>
   </div></div>
 </div>
@@ -1616,10 +1616,10 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
 </ul>
 <section class="rec" id="prompt-images">
   <span class="eyebrow">§06A · implemented 2026-09-09 · authored images</span>
-  <h2>The image belongs to the prompt</h2>
+  <h2>Images stay in view</h2>
   <p class="lead">Read the question and see what it points to, together. A screenshot is part of the human's message; it should not arrive as a path, a transport tag, or another turn.</p>
   <p>The reported Codex record contains the image bytes. Its adapter now preserves those bytes and removes only structurally proven transport delimiters. Seven adapters with known image-input fields share the attachment contract; references and missing bytes keep an honest unavailable tile. The <a href="../../../docs/groundtruth/RESEARCH_PLAN.md#512-authored-image-audit-2026-09-09">evidence matrix</a> separates implemented writer shapes from native-capture gaps.</p>
-  <p><strong>Layout.</strong> The prompt keeps its one filled panel. Its text comes first, followed by ordered image previews. A single image gets up to 360×240px; several share a two-column grid that becomes one column in a narrow room. Every preview contains the whole image. A press opens the existing image viewer; Escape returns to the same point in the conversation.</p>
+  <p><strong>Layout.</strong> The prompt keeps its filled text bubble, with images in a separate scrolling row beneath it. Replies use the same row beneath their prose. Tool activity collects its images below the run summary, outside both fold levels. Rounded square thumbnails are 144px wide (112px in a narrow column), and keep the row compact even for long screenshots. A press opens the whole image in the existing viewer; Escape returns to the same place.</p>
 </section>
 <div class="im-review" id="image-review">
   <div class="im-controls">
@@ -1642,11 +1642,11 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
 <p class="cap">Interactive design specimen with synthetic images. Try a thumbnail or its text link, <b>100%</b> in the viewer, Escape, a missing first image, Retry, and the narrow column. The production viewer remains the implementation home; this page models its open/close and fit behavior.</p>
 <table class="laws">
   <tr><td>I-1</td><td>One message, ordered slots.</td><td>Text and images share the prompt and its anchor. An image-only prompt has no invented sentence. Repeated image bytes can share an asset, but remain distinct attachment occurrences. The gallery keeps attachment order; it does not reproduce arbitrary text/image interleaving.</td></tr>
-  <tr><td>I-2</td><td>See the whole image.</td><td>Fit inside the preview without cropping. Reserve the tile's geometry before loading, lazy-load offscreen bytes, and show only recorded or decoded facts. Portrait images keep their aspect ratio. Up to four previews are shown initially; <em>Show all N images</em> reveals the rest without changing the prompt's text.</td></tr>
+  <tr><td>I-2</td><td>One compact image row.</td><td>Square thumbnails crop to fill; the viewer shows the whole original. Reserve geometry before loading. Scroll horizontally with touch, trackpad, arrow keys or the paging buttons. Keep all occurrences in order without expanding the message vertically. Filenames and recorded facts belong in thumbnail tooltips.</td></tr>
   <tr><td>I-3</td><td>Labels point exactly.</td><td>A proven image mention opens its own attachment. Missing image 1 cannot make image 2 become its target. An unavailable mention focuses the matching explanation. Unproven labels stay plain text. Filenames are secondary metadata; transport paths and tags are removed only by the native adapter when the structure proves their role.</td></tr>
   <tr><td>I-4</td><td>Absence has a reason.</td><td><em>Image data was not recorded</em> covers a recorded reference or missing bytes. <em>Image omitted from the recording</em> requires explicit source evidence. <em>Recorded image data is invalid</em> and <em>Image format is not supported</em> describe other source states. A transient <em>Could not load image</em> keeps the same slot and offers Retry. Missing source bytes have no misleading Retry button.</td></tr>
-  <tr><td>I-5</td><td>Keep the context visible.</td><td>Images stay outside the long-text preview's height cap. Activity folds never hide a user attachment. Tool runs still close by default when they contain a single line; questions to the reader stay visible. No new response head or activity disclosure is introduced for an upload.</td></tr>
-  <tr><td>I-6</td><td>Use the room's viewer.</td><td>Thumbnail buttons and exact text mentions share one open action. Give each an accessible label, retain original bytes, allow fit/zoom in the viewer, and restore focus without moving the transcript. No remote image fetch or attempt to open today's temporary file is implied by a historical reference.</td></tr>
+  <tr><td>I-5</td><td>Keep the context visible.</td><td>Images stay outside the long-text preview's height cap. Both activity folds leave the run’s image row visible; opening a fold does not duplicate or remount its thumbnails. Tool runs still close by default when they contain a single line; questions to the reader stay visible. No new response head or activity disclosure is introduced for an upload.</td></tr>
+  <tr><td>I-6</td><td>Use the room's viewer.</td><td>Thumbnail buttons and exact text mentions share one open action. Give each an accessible label, retain original bytes, allow fit/zoom in the viewer, and restore focus without moving the transcript. Authored references without archived bytes stay unavailable. Canonical tool file targets use the existing bounded file-read endpoint, are identified as current files, and reuse the loaded thumbnail bytes in the viewer. Remote references are not fetched.</td></tr>
 </table>
 <section class="rec">
   <h3>The normalization contract</h3>
@@ -1670,8 +1670,8 @@ Native adapter → shared media helper → existing projection assets → prompt
     <li>Prompts, replies and full messages use one gallery and exact source-span renderer. Frontend transport-marker recovery and occurrence-order link guessing are removed.</li>
     <li>Projection, protocol and normalizer versions are bumped together. Pipeline tests check durable assets and ledger-only reconstruction without native image files. Existing archives need the matching daemon and projection rebuild.</li>
   </ol>
-  <p><strong>Status:</strong> implemented in the production message view. The interactive page remains the design record. <code>test/prompt-images.html</code> mounts the real components with seven synthetic cases, including a full message stored separately from its preview; run it from <code>clients/app</code> with <code>npm run dev:web -- --config test/prompt-images.vite.config.ts</code>.</p>
-  <p><strong>Production checks, 2026-09-09:</strong> whole-image previews, one- and two-column layouts, light/dark themes, long-message attachments and exact links, missing-first-image focus, viewer Fit/1:1, Escape focus restoration, and retry with unchanged frame geometry. The reported Codex image also replays byte-for-byte from the ledger without its temporary file. Synthetic normalization and replay tests supplement native captures; they do not claim complete image-input coverage for every agent.</p>
+  <p><strong>Status:</strong> implemented in the production message view. The interactive page remains the design record. <code>test/prompt-images.html</code> mounts the real components with synthetic authored and activity cases, including a full message stored separately from its preview; run it from <code>clients/app</code> with <code>npm run dev:web -- --config test/prompt-images.vite.config.ts</code>.</p>
+  <p><strong>Production checks, 2026-09-09:</strong> horizontal thumbnail strips and full-image viewing, both activity fold levels, light/dark themes, long-message attachments and exact links, missing-first-image focus, viewer Fit/1:1, Escape focus restoration, and retry with unchanged frame geometry. The reported Codex image also replays byte-for-byte from the ledger without its temporary file. Synthetic normalization and replay tests supplement native captures; they do not claim complete image-input coverage for every agent.</p>
 </section>
 <dialog class="im-viewer" id="im-viewer" aria-labelledby="im-viewer-title" aria-describedby="im-viewer-facts">
   <header><div><h3 id="im-viewer-title">Image</h3><p id="im-viewer-facts"></p></div><button type="button" class="im-close" id="im-close" autofocus>Close <span aria-hidden="true">×</span></button></header>
@@ -1781,7 +1781,8 @@ Native adapter → shared media helper → existing projection assets → prompt
     <div class="tr-sitting">
     <div class="tr-day"><button type="button" class="tr-day__pill" data-day="Tue 1 Sep">Tue 1 Sep · 00:02<span class="after">after 44m</span></button></div>
     <div class="tr-turn">
-      <div class="tr-seg"><span class="tr-anchor" style="top:12px">00:02:15</span><div class="tr-prompt"><p>this is what i see at 2× — the concave corner is wrong on the right bay. fix the fillet first, then the shadow.</p><div class="tr-att"><figure><div class="tr-att__tile"><canvas data-fake="card" width="352" height="220"></canvas></div><figcaption>3000×1816 · PNG · 1.2 MB</figcaption></figure></div></div></div>
+      <div class="tr-seg"><span class="tr-anchor" style="top:12px">00:02:15</span><div class="tr-prompt"><p>this is what i see at 2× — the concave corner is wrong on the right bay. fix the fillet first, then the shadow.</p></div>
+        <div class="tr-att"><figure><div class="tr-att__tile"><canvas data-fake="card" width="352" height="220"></canvas></div><figcaption>3000×1816 · PNG · 1.2 MB</figcaption></figure></div></div>
       <div class="tr-resp">
         <div class="tr-head"><span class="mark"><svg><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · max effort</span><span class="facts">9m 52s · <b>41.2K</b></span></div>
         <div class="tr-seg tr-prose"><span class="tr-anchor">00:02:31</span><p>Several real issues visible. Let me fix them.</p></div>
@@ -2392,11 +2393,11 @@ Native adapter → shared media helper → existing projection assets → prompt
   var viewerContent = document.getElementById('im-viewer-content');
   var viewerTools = document.getElementById('im-viewer-tools');
   var tabs = Array.from(review.querySelectorAll('[data-image-case]'));
-  var current = 'single', expanded = false, recovered = false, returnFocus = null;
+  var current = 'single', recovered = false, returnFocus = null;
   var longParagraphs = [
     'Review these two versions of the message view. The prompt should make it easy to connect a question with the screenshot that accompanied it. Keep the original image available when the reader needs to inspect a small detail.',
     'In the wide view, compare the spacing above the response, the command summaries, and the gap between the last activity row and the answer. In the narrow view, check that the prompt remains readable and that no control covers its text.',
-    'Please consider long screenshots as well as landscape images. Seeing the top and bottom matters: a crop can hide the very issue the person is asking about. A smaller complete preview is useful if opening it takes one press.',
+    'Please consider long screenshots as well as landscape images. Seeing the top and bottom matters: a crop can hide the very issue the person is asking about. The complete image is one press away from its thumbnail.',
     'Some older conversations may have retained only a reference to an image. Keep its place in the prompt and explain what is available. If one of two images is missing, the second image should keep its original identity and label.',
     'Long messages should still show their attached images beside the text preview. Reading the full message is a separate action from inspecting its screenshot. Closing either viewer should return to the same place without moving the conversation.',
     'Check keyboard access as well as mouse use. The reader should be able to reach a thumbnail, open the viewer, inspect the whole image, and press Escape to return. Loading and retry states should preserve the layout throughout.'
@@ -2410,14 +2411,14 @@ Native adapter → shared media helper → existing projection assets → prompt
   var portrait = image('Image 2', 'portrait', 'mobile.png');
   var cases = {
     single: { text: '<p><button type="button" class="im-link" data-image-open="0">[Image #1]</button> can we always fold second level messages even when they are single?</p>', images: [single],
-      note: 'The image bytes were recorded. Only the adapter-owned transport delimiters disappear; the question and its exact image mention remain. The preview shows the whole image.',
+      note: 'The image bytes were recorded. Only the adapter-owned transport delimiters disappear; the question and its exact image mention remain. The compact thumbnail opens the whole image.',
       reply: 'Single tool runs use the same collapsed summary as longer runs.' },
     many: { text: '<p>Compare <button type="button" class="im-link" data-image-open="0">[Image #1]</button> with <button type="button" class="im-link" data-image-open="1">[Image #2]</button>, then check the other variants.</p>',
       images: [single, portrait, image('Image 3', 'screenshot', 'variant-three.png'), image('Image 4', 'portrait', 'variant-four.png'), image('Image 5', 'screenshot', 'variant-five.png'), image('Image 6', 'portrait', 'variant-six.png')],
-      note: 'Four previews initially; Show all reveals the remaining images in order. Portrait images fit without cropping. Reusing the same bytes does not collapse attachment occurrences.',
+      note: 'One horizontal row holds every image in order. Open a thumbnail to inspect the full image. Reusing the same bytes does not collapse attachment occurrences.',
       reply: 'I can inspect each image while keeping its place in the comparison.' },
     only: { text: '', images: [image('Image 1', 'portrait', 'mobile.png')],
-      note: 'An image-only prompt is complete. It gets the usual prompt panel and anchor, with no invented “no text recorded” sentence.',
+      note: 'An image-only prompt is complete. It gets an image row and the usual anchor, with no invented “no text recorded” sentence.',
       reply: 'The screenshot stays attached to this turn.' },
     missing: { text: '<p>Compare <button type="button" class="im-link" data-image-open="0">[Image #1]</button> with <button type="button" class="im-link" data-image-open="1">[Image #2]</button>.</p>',
       images: [image('Image 1', 'screenshot', 'reference.png', 'reference'), portrait],
@@ -2437,7 +2438,7 @@ Native adapter → shared media helper → existing projection assets → prompt
     var gallery = document.getElementById('im-gallery');
     gallery.dataset.single = String(items.length === 1);
     gallery.replaceChildren();
-    items.slice(0, expanded ? items.length : 4).forEach(function (item, index) {
+    items.forEach(function (item, index) {
       var figure = document.createElement('figure');
       var state = statusOf(item);
       if (state === 'asset') {
@@ -2445,6 +2446,7 @@ Native adapter → shared media helper → existing projection assets → prompt
         button.type = 'button'; button.className = 'im-tile'; button.dataset.imageOpen = String(index);
         button.setAttribute('aria-label', 'Open ' + item.label); button.title = item.name;
         button.appendChild(document.getElementById('im-' + item.mock).content.cloneNode(true));
+        button.querySelector("svg").setAttribute("preserveAspectRatio", "xMidYMid slice");
         figure.appendChild(button);
       } else {
         var missing = document.createElement('div'); missing.className = 'im-tile im-unavailable';
@@ -2460,18 +2462,13 @@ Native adapter → shared media helper → existing projection assets → prompt
       var facts = document.createElement('span'); facts.textContent = state === 'reference' ? 'reference.png' : item.facts;
       caption.append(label, facts); figure.appendChild(caption); gallery.appendChild(figure);
     });
-    if (items.length > 4) {
-      var more = document.createElement('button'); more.type = 'button'; more.className = 'im-more'; more.dataset.imageMore = '';
-      more.setAttribute('aria-expanded', String(expanded));
-      more.textContent = expanded ? 'Show fewer images' : 'Show all ' + items.length + ' images';
-      gallery.appendChild(more);
-    }
+
   }
   function renderCase(key) {
-    current = key; expanded = false; recovered = false;
+    current = key; recovered = false;
     tabs.forEach(function (tab) { var on = tab.dataset.imageCase === key; tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1; });
     panel.setAttribute('aria-labelledby', 'im-tab-' + key);
-    panel.innerHTML = '<div class="tr-turn"><div class="tr-prompt">' + cases[key].text + '<div class="im-gallery" id="im-gallery"></div></div><div class="tr-resp"><div class="tr-head">Agent <span class="model">response</span></div><details class="im-quiet"><summary>Ran git log · checked recent changes</summary><p>One activity line. Its command details open separately in the app.</p></details><div class="tr-prose"><p>' + cases[key].reply + '</p></div></div></div>';
+    panel.innerHTML = '<div class="tr-turn">' + (cases[key].text ? '<div class="tr-prompt">' + cases[key].text + '</div>' : '') + '<div class="im-gallery" id="im-gallery"></div><div class="tr-resp"><div class="tr-head">Agent <span class="model">response</span></div><details class="im-quiet"><summary>Ran git log · checked recent changes</summary><p>One activity line. Its command details open separately in the app.</p></details><div class="tr-prose"><p>' + cases[key].reply + '</p></div></div></div>';
     note.textContent = cases[key].note; live.textContent = ''; renderGallery();
   }
   function scale(mode) {
@@ -2493,7 +2490,6 @@ Native adapter → shared media helper → existing projection assets → prompt
   review.addEventListener('click', function (event) {
     var tab = event.target.closest('[data-image-case]'); if (tab) { renderCase(tab.dataset.imageCase); return; }
     var open = event.target.closest('[data-image-open]'); if (open) { openImage(Number(open.dataset.imageOpen), open); return; }
-    if (event.target.closest('[data-image-more]')) { expanded = !expanded; renderGallery(); review.querySelector('[data-image-more]').focus({ preventScroll: true }); return; }
     if (event.target.closest('[data-image-retry]')) { recovered = true; renderGallery(); review.querySelector('.im-tile[data-image-open]').focus({ preventScroll: true }); live.textContent = 'Image 1 loaded.'; return; }
     var full = event.target.closest('[data-full-prompt]');
     if (full) {
