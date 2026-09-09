@@ -131,7 +131,7 @@ export function Line({
     if (pressable) setOpen((value) => !value);
   };
 
-  return (
+  const content = (
     <>
       <div
         className="tr-line"
@@ -139,9 +139,14 @@ export function Line({
         data-timeline-id={line.rows[0]?.timeline_id}
         data-state={state}
         data-hit={hit || undefined}
+        data-web={line.family.startsWith("web_") ? line.family : undefined}
+        data-page-title={fetched?.title ? true : undefined}
         role={pressable ? "button" : undefined}
         tabIndex={pressable ? 0 : undefined}
         aria-expanded={!navigatesToChild && pressable ? isOpen : undefined}
+        aria-controls={
+          !navigatesToChild && hasDetail(line.detail, line.diagnostic) ? `${domId}-detail` : undefined
+        }
         aria-label={navigatesToChild ? `${line.verb}: open original worker subthread` : undefined}
         onClick={toggle}
         onKeyDown={(event) => {
@@ -179,7 +184,7 @@ export function Line({
           {fetched !== null && fetched.title !== null && (
             <>
               <Favicon host={fetched.host} />
-              <span className="ttl">{fetched.title}</span>
+              <span className="ttl" title={fetched.title}>{fetched.title}</span>
             </>
           )}
           {stamp !== null && <span className="t">{line.elided ? `→ ${stamp}` : stamp}</span>}
@@ -205,7 +210,7 @@ export function Line({
             // `LineDetail` answers null when the family has nothing honest to
             // show; a delegate whose child IS the detail is exactly that case.
             return hasDetail(line.detail, line.diagnostic) ? (
-              <div className="tr-detail">{body}</div>
+              <div className="tr-detail" id={`${domId}-detail`}>{body}</div>
             ) : null;
           })()}
           {line.detail.kind === "workflow" ? null : subthreads.map((thread) => thread.node)}
@@ -213,6 +218,7 @@ export function Line({
       )}
     </>
   );
+  return line.family.startsWith("web_") ? <div className="tr-web">{content}</div> : content;
 }
 
 export interface LedgerProps {

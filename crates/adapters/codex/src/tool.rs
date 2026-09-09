@@ -662,7 +662,19 @@ fn project_web(input: &Value) -> Result<ToolAction, ProjectionError> {
             outcome: None,
         }),
         "search" | "search_query" => Ok(ToolAction::WebSearch {
-            query: first_string(action, &["query", "q"]).map(str::to_owned),
+            // The native writer uses `queries` for a batched search. Retain
+            // every recorded query even though no result sources are persisted.
+            query: first_string(action, &["query", "q"])
+                .filter(|query| !query.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    let queries = action.get("queries")?.as_array()?;
+                    let queries = queries
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<Vec<_>>>()?;
+                    (!queries.is_empty()).then(|| queries.join("\n"))
+                }),
             allowed_domains: string_values(action, &["domains", "allowed_domains"], 20),
             blocked_domains: string_values(action, &["blocked_domains"], 20),
             outcome: None,
@@ -979,6 +991,27 @@ mod tests {
             (changes[3].lines_added, changes[3].lines_removed),
             (None, None)
         );
+    }
+
+    #[test]
+    fn web_search_retains_native_batch_queries_without_inventing_sources() {
+        let action = project_web(&json!({
+            "type": "search", "query": null, "queries": ["webgpu vertex pulling", "wgsl instance index"]
+        }))
+        .unwrap();
+        assert!(
+            matches!(action, ToolAction::WebSearch { query: Some(query), outcome: None, .. }
+                if query == "webgpu vertex pulling\nwgsl instance index")
+        );
+        let action = project_web(&json!({"type":"search","queries":[]})).unwrap();
+        assert!(matches!(
+            action,
+            ToolAction::WebSearch {
+                query: None,
+                outcome: None,
+                ..
+            }
+        ));
     }
 
     #[test]

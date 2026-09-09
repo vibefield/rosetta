@@ -13,7 +13,7 @@
 // line are a different object. The PARSER is shared (`file-viewer/diff`), so
 // the two renderers can never disagree about what git said.
 import type { ReactNode } from "react";
-import type { FetchFact, LedgerDetail, PathFact, SourceFact } from "../../lib/transcript";
+import type { LedgerDetail, PathFact } from "../../lib/transcript";
 import { resourceDisplay } from "../../lib/transcript";
 import type { SourceLocation } from "../../lib/transcript/protocol";
 import {
@@ -28,7 +28,7 @@ import {
   Tasks,
   LIST_CAP,
 } from "./detail-parts";
-import { Favicon } from "./Favicon";
+import { SourceList, FetchDetails } from "./WebDetail";
 import { WorkflowDetail } from "./Workflow";
 import type { WorkflowChildThread } from "./Workflow";
 
@@ -51,58 +51,6 @@ function LocationList({
       ))}
       {total > shown.length && <li className="tr-more">… {total - shown.length} more</li>}
     </ul>
-  );
-}
-
-/** The sources as titled links, each with its site's own icon (Q6 A): the icon
- * is CONTENT, so it keeps its colour — and it lives here and in the stack at
- * the line's edge, never in the glyph slot. */
-function SourceList({
-  sources,
-  total,
-}: {
-  readonly sources: readonly SourceFact[];
-  readonly total: number;
-}) {
-  const shown = sources.slice(0, LIST_CAP);
-  return (
-    <ul className="tr-src">
-      {shown.map((source, at) => (
-        <li key={`${source.url}-${at}`}>
-          <Favicon host={source.host} />
-          <a className="title" href={source.url} target="_blank" rel="noreferrer">
-            {source.title ?? source.url}
-          </a>
-          <span className="dom">{source.host}</span>
-        </li>
-      ))}
-      {total > shown.length && <li className="tr-more">… {total - shown.length} more</li>}
-    </ul>
-  );
-}
-
-function FetchFacts({ fetch }: { readonly fetch: FetchFact }) {
-  return (
-    <dl className="tr-kv">
-      {fetch.url !== null && (
-        <>
-          <dt>url</dt>
-          <dd>{fetch.url}</dd>
-        </>
-      )}
-      {fetch.title !== null && (
-        <>
-          <dt>title</dt>
-          <dd data-prose="">{fetch.title}</dd>
-        </>
-      )}
-      {fetch.status !== null && (
-        <>
-          <dt>status</dt>
-          <dd>HTTP {fetch.status}</dd>
-        </>
-      )}
-    </dl>
   );
 }
 
@@ -148,7 +96,9 @@ export function LineDetail({
       case "sources":
         return <SourceList sources={detail.sources} total={detail.total} />;
       case "fetch":
-        return <FetchFacts fetch={detail.fetch} />;
+        return <FetchDetails fetches={[detail.fetch]} />;
+      case "fetches":
+        return <FetchDetails fetches={detail.fetches} />;
       case "diff":
         return <DiffDetail deltas={detail.deltas} diffstat={detail.diffstat} />;
       case "command":

@@ -21,5 +21,6 @@ pub mod spec;
 pub mod time;
 pub mod tool;
 mod workflow;
+mod web;
 
 pub use adapter::ClaudeCodeAdapter;

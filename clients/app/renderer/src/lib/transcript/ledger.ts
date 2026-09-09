@@ -175,6 +175,10 @@ function failureResult(tool: ToolInteraction, action: ToolAction): string | null
   const text = tool.failure?.summary ?? tool.failure?.diagnostic ?? null;
   const line = text === null ? null : firstLine(text, 60);
   const timedOut = tool.status.value === "timed_out" || tool.failure?.kind === "timeout";
+  if ((action.type === "web_fetch" || action.type === "web_navigate") && !timedOut) {
+    const status = action.outcome?.http_status;
+    if (status != null && status >= 400) return `HTTP ${status}`;
+  }
   if (action.type === "shell" || action.type === "code_execute") {
     if (timedOut) {
       // The BUDGET, in the seconds the caller set it in — `timed out · 120s`
@@ -457,9 +461,10 @@ function foldResult(family: ToolFamily, rows: readonly TimelineEntry[]): string 
       return total === null ? null : `${total} ${total === 1 ? "location" : "locations"}`;
     }
     case "web_search": {
-      const total = sum(
-        actions.map((action) => (action.type === "web_search" ? action.outcome?.total_count : null)),
+      const counts = actions.map((action) =>
+        action.type === "web_search" ? action.outcome?.total_count : null,
       );
+      const total = counts.some((count) => count == null) ? null : sum(counts);
       return total === null ? null : `${total} ${total === 1 ? "source" : "sources"}`;
     }
     default:
@@ -484,10 +489,22 @@ function foldDetail(family: ToolFamily, lines: readonly LedgerLine[]): LedgerDet
     line.detail.kind === "paths" ? [...line.detail.paths] : [],
   );
   if (paths.length > 0) return { kind: "paths", paths, total: paths.length };
-  const sources = lines.flatMap((line) =>
-    line.detail.kind === "sources" ? [...line.detail.sources] : [],
+  if (family === "web_search") {
+    const details = lines.flatMap((line) =>
+      line.detail.kind === "sources" ? [line.detail] : [],
+    );
+    return {
+      kind: "sources",
+      sources: details.flatMap((detail) => [...detail.sources]),
+      total: details.some((detail) => detail.total === null)
+        ? null
+        : sum(details.map((detail) => detail.total)),
+    };
+  }
+  const fetches = lines.flatMap((line) =>
+    line.detail.kind === "fetch" ? [line.detail.fetch] : [],
   );
-  if (sources.length > 0) return { kind: "sources", sources, total: sources.length };
+  if (fetches.length > 0) return { kind: "fetches", fetches };
   const locations = lines.flatMap((line) =>
     line.detail.kind === "locations" ? [...line.detail.locations] : [],
   );

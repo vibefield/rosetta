@@ -28,6 +28,7 @@ import type {
   UserQuestion,
 } from "./protocol.ts";
 import { clockShort, duration } from "../format.ts";
+import { webAddress } from "./web-address.ts";
 import type { LedgerContext, LedgerGlyph, ObjectPart, ToolFamily } from "./vocabulary.ts";
 import {
   FAMILY_GLYPH,
@@ -38,7 +39,6 @@ import {
   resourceDisplay,
   resourceLabel,
   splitPath,
-  urlHost,
 } from "./vocabulary.ts";
 
 /* ── detail payloads ─────────────────────────────────────────────────────── */
@@ -67,7 +67,7 @@ export interface PathFact {
 export interface SourceFact {
   readonly url: string;
   readonly title: string | null;
-  readonly host: string;
+  readonly host: string | null;
 }
 
 /** A fetch's honest triple: final url, title, status — never the body. */
@@ -75,7 +75,7 @@ export interface FetchFact {
   readonly url: string | null;
   readonly title: string | null;
   readonly status: number | null;
-  readonly host: string;
+  readonly host: string | null;
 }
 
 /** One command inside a `command` or `code` detail. A fold carries several. */
@@ -237,8 +237,9 @@ export type LedgerDetail =
       readonly locations: readonly SourceLocation[];
       readonly total: number;
     }
-  | { readonly kind: "sources"; readonly sources: readonly SourceFact[]; readonly total: number }
+  | { readonly kind: "sources"; readonly sources: readonly SourceFact[]; readonly total: number | null }
   | { readonly kind: "fetch"; readonly fetch: FetchFact }
+  | { readonly kind: "fetches"; readonly fetches: readonly FetchFact[] }
   | { readonly kind: "diff"; readonly deltas: readonly FileDelta[]; readonly diffstat: Diffstat }
   | { readonly kind: "command"; readonly commands: readonly CommandFact[] }
   | { readonly kind: "code"; readonly commands: readonly CommandFact[] }
@@ -633,8 +634,8 @@ export function projectAction(
       const outcome = action.outcome;
       const sources: SourceFact[] = (outcome?.sources ?? []).map((source) => ({
         url: source.url,
-        title: source.title,
-        host: urlHost(source.url),
+        title: source.title?.trim() || null,
+        host: webAddress(source.url)?.host ?? null,
       }));
       const query = action.query ?? action.allowed_domains.join(", ");
       return {
@@ -642,10 +643,7 @@ export function projectAction(
         verb: "Searched the web",
         object: query ? [part(query, "query")] : [part("no query recorded", "aside")],
         result: outcome === null ? null : plural(outcome.total_count, "source"),
-        detail:
-          sources.length === 0
-            ? NO_DETAIL
-            : { kind: "sources", sources, total: outcome?.total_count ?? sources.length },
+        detail: { kind: "sources", sources, total: outcome?.total_count ?? null },
       };
     }
 
@@ -653,6 +651,7 @@ export function projectAction(
       const label = resourceLabel(action.url);
       const outcome = action.outcome;
       const status = outcome?.http_status ?? null;
+      const finalUrl = outcome?.final_url ?? (action.url.type === "url" ? action.url.url : null);
       return {
         ...base,
         verb: "Fetched",
@@ -661,10 +660,10 @@ export function projectAction(
         detail: {
           kind: "fetch",
           fetch: {
-            url: outcome?.final_url ?? label,
+            url: finalUrl,
             title: outcome?.title ?? null,
             status: outcome?.http_status ?? null,
-            host: urlHost(outcome?.final_url ?? label),
+            host: webAddress(finalUrl)?.host ?? null,
           },
         },
       };
@@ -674,18 +673,24 @@ export function projectAction(
       const label = action.url ? resourceLabel(action.url) : (action.pattern ?? "");
       const outcome = action.outcome;
       const status = outcome?.http_status ?? null;
+      const finalUrl = outcome?.final_url ?? (action.url?.type === "url" ? action.url.url : null);
       return {
         ...base,
         verb: action.operation === "find_in_page" ? "Found in page" : "Opened",
-        object: label ? pathParts(label) : [part("no target recorded", "aside")],
+        object: action.operation === "find_in_page" && action.pattern
+          ? [
+              part(action.pattern, "query"),
+              ...(action.url ? [part(" in ", "aside"), ...pathParts(label)] : []),
+            ]
+          : label ? pathParts(label) : [part("no target recorded", "aside")],
         result: status === null ? null : `HTTP ${status}`,
         detail: {
           kind: "fetch",
           fetch: {
-            url: outcome?.final_url ?? (label || null),
+            url: finalUrl,
             title: outcome?.title ?? null,
             status: outcome?.http_status ?? null,
-            host: urlHost(outcome?.final_url ?? label),
+            host: webAddress(finalUrl)?.host ?? null,
           },
         },
       };

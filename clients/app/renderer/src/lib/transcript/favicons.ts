@@ -18,6 +18,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { desktopHost } from "../desktop-host";
+import { webAddress } from "./web-address";
 
 /** Versioned like `ah.tintSeq.v1`, and stored the same way: a renderer
  * preference that has no home on the daemon side yet. */
@@ -63,6 +64,7 @@ export function siteIconsEnabled(): boolean {
 export function setSiteIconsEnabled(on: boolean): void {
   if (siteIconsEnabled() === on) return;
   enabled = on;
+  generation += 1;
   try {
     localStorage.setItem(STORE_KEY, on ? "on" : "off");
   } catch {
@@ -71,6 +73,7 @@ export function setSiteIconsEnabled(on: boolean): void {
   if (!on) {
     known.clear();
     results.clear();
+    pending.clear();
   }
   announce();
 }
@@ -85,7 +88,8 @@ const known = new Map<string, string | null>();
  * snapshots by identity, so a fresh object per read would render forever. */
 const results = new Map<string, FaviconResult>();
 /** Hosts currently being asked about. */
-const pending = new Set<string>();
+const pending = new Map<string, number>();
+let generation = 0;
 /** Every mounted `useFavicon`, so a settled answer redraws the lines waiting
  * on it and a changed setting redraws all of them. */
 const listeners = new Set<() => void>();
@@ -101,6 +105,10 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+function settingGeneration(): number {
+  return generation;
+}
+
 function ask(host: string): void {
   if (known.has(host) || pending.has(host)) return;
   const shell = desktopHost();
@@ -112,36 +120,31 @@ function ask(host: string): void {
     known.set(host, null);
     return;
   }
-  pending.add(host);
+  const requestGeneration = generation;
+  pending.set(host, requestGeneration);
   shell
     .favicon(host)
     .then((src) => {
+      if (generation !== requestGeneration) return;
       known.set(host, typeof src === "string" && src !== "" ? src : null);
     })
     .catch(() => {
+      if (generation !== requestGeneration) return;
       // The shell refused or went away. Same fact to a reader: the globe.
       known.set(host, null);
     })
     .finally(() => {
-      pending.delete(host);
-      announce();
+      if (pending.get(host) === requestGeneration) {
+        pending.delete(host);
+        announce();
+      }
     });
 }
 
 /** The host a source url belongs to, or null when it names none. Lowercased,
  * because a host is case-insensitive and the cache is not. */
 export function hostOf(url: string): string | null {
-  if (typeof url !== "string" || url === "") return null;
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-    // One trailing dot is legal FQDN syntax naming the same host; `URL`
-    // keeps it, and it would otherwise be a second cache entry.
-    const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
-    return host === "" ? null : host;
-  } catch {
-    return null;
-  }
+  return webAddress(url)?.host ?? null;
 }
 
 // ── the hook ──────────────────────────────────────────────────────────────
@@ -163,19 +166,20 @@ export function useSiteIconsEnabled(): boolean {
  *
  * The ask happens during the subscribe, not in an effect: several lines
  * naming one site share the module-level entry, so the request is made once
- * regardless of how many of them mount. Reading the setting through its own
- * hook is what makes a switch back ON re-ask — the subscription itself is
- * keyed on the setting, so React re-subscribes and the ask runs again.
+ * regardless of how many of them mount. The setting's generation also keys
+ * the subscription: even an off/on pair batched into one render must start
+ * a fresh request, since turning off invalidates the previous one.
  */
 export function useFavicon(host: string | null): FaviconResult {
-  const on = useSiteIconsEnabled();
+  const revision = useSyncExternalStore(subscribe, settingGeneration, settingGeneration);
+  const on = siteIconsEnabled();
 
   const subscribeToHost = useCallback(
     (listener: () => void) => {
       if (host !== null && on) ask(host);
       return subscribe(listener);
     },
-    [host, on],
+    [host, on, revision],
   );
 
   const snapshot = useCallback((): FaviconResult => {

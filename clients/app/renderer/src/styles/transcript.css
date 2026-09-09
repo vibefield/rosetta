@@ -680,18 +680,50 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-command__more:hover { color: var(--vf-text-primary); }
 .tr-command__more:disabled { cursor: wait; opacity: .7; }
 /* the sources — a site's icon is content, so it keeps its colour */
+.tr-web { container: web-entry / inline-size; }
 .tr-src { list-style: none; margin: 0; padding: 4px 6px; }
-.tr-src li {
-  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+.tr-src__row {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) minmax(0, max-content); gap: 10px; align-items: center;
   height: 26px; padding: 0 6px; border-radius: 6px; font-size: 12px;
+  text-decoration: none;
 }
-.tr-src li:hover { background: var(--vf-fill); }
+.tr-src a:hover, .tr-src a:focus-visible { background: var(--vf-fill); }
+.tr-src a:focus-visible { outline: 1.5px solid var(--vf-select); outline-offset: -1.5px; }
 .tr-src .title {
   color: var(--vf-text-primary); text-decoration: none;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.tr-src .title:hover { text-decoration: underline; }
-.tr-src .dom { color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10.5px; }
+.tr-src a:hover .title { text-decoration: underline; }
+.tr-src .dom { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10.5px; }
+.tr-site-icons { display: flex; align-items: center; gap: 6px; width: fit-content; margin: 6px 12px 8px; color: var(--vf-text-tertiary); font-size: 10.5px; cursor: pointer; }
+.tr-site-icons input { width: 12px; height: 12px; margin: 0; accent-color: var(--vf-text-secondary); }
+.tr-web-note { padding: 8px 12px; color: var(--vf-text-tertiary); font-size: 11px; }
+.tr-web-more { display: block; margin: 5px 12px 8px; padding: 0; border: 0; background: none; color: var(--vf-text-secondary); font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
+.tr-fetch + .tr-fetch { border-top: 1px solid var(--vf-hairline); }
+.tr-fetch a { color: var(--vf-text-primary); text-underline-offset: 2px; overflow-wrap: anywhere; }
+.tr-fetch .tr-fav { vertical-align: middle; }
+/* Web facts compete for space inside the reading measure and nested runs.
+   Ask their own width, not the wider message column, before moving them. */
+@container web-entry (max-width: 640px) {
+  .tr-line[data-page-title] { grid-template-columns: 16px max-content minmax(0, 1fr); padding-top: 4px; padding-bottom: 4px; row-gap: 3px; }
+  .tr-line[data-page-title] .tr-line__r { grid-column: 2 / -1; min-width: 0; gap: 8px; }
+  .tr-line[data-web] .ttl { min-width: 0; }
+}
+@container web-entry (max-width: 520px) {
+  .tr-line[data-web] { grid-template-columns: 16px max-content minmax(0, 1fr); padding-top: 4px; padding-bottom: 4px; row-gap: 3px; }
+  .tr-line[data-web] .tr-line__r { grid-column: 2 / -1; min-width: 0; gap: 8px; }
+}
+@container web-entry (max-width: 420px) {
+  .tr-src__row { grid-template-columns: 14px minmax(0, 1fr); height: auto; min-height: 38px; gap: 1px 10px; padding-top: 3px; padding-bottom: 3px; }
+  .tr-src__row > .tr-fav { grid-row: 1 / 3; }
+  .tr-src .dom { grid-column: 2; max-width: 100%; }
+  .tr-fetch { grid-template-columns: 44px minmax(0, 1fr); }
+  .tr-line[data-web] .tr-line__r .t { display: none; }
+}
+@container web-entry (max-width: 360px) {
+  .tr-line[data-web] { grid-template-columns: 16px minmax(0, 1fr); }
+  .tr-line[data-web] .tr-line__o { grid-column: 2; }
+}
 
 /* Q4 C — reasoning is muted, clamped prose in the measure; no box, no rail */
 .tr-think { color: var(--vf-text-tertiary); font-size: 13px; line-height: 1.5; }

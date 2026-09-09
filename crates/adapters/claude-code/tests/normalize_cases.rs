@@ -2193,3 +2193,125 @@ fn replay_is_deterministic() {
     let (second, _) = run(&lines);
     assert_eq!(first, second);
 }
+
+#[test]
+fn web_sources_and_fetch_status_survive_results_and_checkpoint() {
+    let lines = [
+        assistant(
+            json!([
+                {"type":"tool_use", "id":"web-search", "name":"WebSearch", "input":{"query":"webgpu", "allowed_domains":["example.org"]}},
+                {"type":"tool_use", "id":"web-fetch", "name":"WebFetch", "input":{"url":"https://example.org/old", "prompt":"read"}}
+            ]),
+            None,
+        ),
+        user(
+            json!([{"type":"tool_result", "tool_use_id":"web-search", "content":"narrative must not become a source", "is_error":false}]),
+            json!({"toolUseResult":{"query":"webgpu", "durationSeconds":1.0, "results":["summary", {"tool_use_id":"search-inner", "content":(0..12).map(|i|json!({"title":format!("Source {i}"), "url":format!("https://example.org/{i}")})).collect::<Vec<_>>()}]}}),
+        ),
+        user(
+            json!([{"type":"tool_result", "tool_use_id":"web-fetch", "content":"not found", "is_error":true}]),
+            json!({"toolUseResult":{"url":"https://example.org/final", "code":404, "codeText":"Not Found", "result":"not a page title", "bytes":20, "durationMs":12}}),
+        ),
+    ];
+    let (ops, _) = run(&lines);
+    assert_eq!(
+        serde_json::to_value(&ops).unwrap(),
+        serde_json::to_value(run_with_checkpoint(&lines, 1)).unwrap()
+    );
+    let updates = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::ToolUpdate {
+                correlation_key,
+                patch,
+                ..
+            } => Some((correlation_key.as_str(), patch)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let (_, search) = updates.iter().find(|(id, _)| *id == "web-search").unwrap();
+    let ToolAction::WebSearch {
+        query,
+        allowed_domains,
+        outcome: Some(outcome),
+        ..
+    } = &search.outcome.as_ref().unwrap().action
+    else {
+        panic!("missing search outcome")
+    };
+    assert_eq!(query.as_deref(), Some("webgpu"));
+    assert_eq!(allowed_domains, &["example.org"]);
+    assert_eq!(outcome.total_count, 12);
+    assert_eq!(outcome.sources.len(), 10);
+    assert_eq!(outcome.sources[0].title.as_deref(), Some("Source 0"));
+    let (_, fetch) = updates.iter().find(|(id, _)| *id == "web-fetch").unwrap();
+    let ToolAction::WebFetch {
+        outcome: Some(outcome),
+        ..
+    } = &fetch.outcome.as_ref().unwrap().action
+    else {
+        panic!("missing fetch outcome")
+    };
+    assert_eq!(
+        outcome.final_url.as_deref(),
+        Some("https://example.org/final")
+    );
+    assert_eq!(outcome.http_status, Some(404));
+    assert_eq!(outcome.title, None);
+    assert_eq!(fetch.status.as_ref().unwrap().value, ToolStatus::Failed);
+}
+
+#[test]
+fn web_results_distinguish_empty_sources_from_unrecorded_prose_and_wrong_tools() {
+    for (name, input, result, expected) in [
+        (
+            "WebSearch",
+            json!({"query":"x"}),
+            json!({"query":"x","results":[]}),
+            true,
+        ),
+        (
+            "WebSearch",
+            json!({"query":"x"}),
+            json!({"results":["https://example.org is prose"]}),
+            false,
+        ),
+        (
+            "WebSearch",
+            json!({"query":"x"}),
+            json!("https://example.org is prose"),
+            false,
+        ),
+        (
+            "WebFetch",
+            json!({"url":"https://example.org"}),
+            json!({"code":999,"url":"https://example.org"}),
+            false,
+        ),
+        (
+            "Bash",
+            json!({"command":"echo ok"}),
+            json!({"query":"x","results":[]}),
+            false,
+        ),
+    ] {
+        let (ops, _) = run(&[
+            assistant(
+                json!([{"type":"tool_use","id":"call","name":name,"input":input}]),
+                None,
+            ),
+            user(
+                json!([{"type":"tool_result","tool_use_id":"call","content":"body","is_error":false}]),
+                json!({"toolUseResult":result}),
+            ),
+        ]);
+        let update = ops
+            .iter()
+            .find_map(|op| match op {
+                IngestOp::ToolUpdate { patch, .. } => Some(patch),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(update.outcome.is_some(), expected, "{name}");
+    }
+}

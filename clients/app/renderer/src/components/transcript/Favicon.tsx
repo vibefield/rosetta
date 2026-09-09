@@ -9,6 +9,7 @@
 // setting, the shared per-host map, and the ask that the Electron shell
 // answers. This file only decides what a result LOOKS like.
 
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import { useFavicon } from "../../lib/transcript/favicons";
 import "../../styles/favicon.css";
@@ -53,6 +54,7 @@ export interface FaviconProps {
  */
 export function Favicon({ host, size = 14 }: FaviconProps) {
   const { src, state } = useFavicon(host);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   // The host is the label because it is the fact the icon stands for; the
   // title beside it in a source list is the same information twice.
   const label = host ?? "unknown site";
@@ -61,13 +63,20 @@ export function Favicon({ host, size = 14 }: FaviconProps) {
   const style =
     size === 14 ? undefined : ({ "--tr-fav-size": `${size}px` } as CSSProperties);
 
-  if (state === "ready" && src !== null) {
+  if (state === "ready" && src !== null && src !== failedSrc) {
     return (
       <span className="tr-fav" style={style} title={label}>
         {/* `alt` is empty and the span carries the title: the icon adds no
             information a screen reader has not already been given by the
             host beside it. An `alt` of "github.com" would read it twice. */}
-        <img src={src} alt="" loading="lazy" decoding="async" draggable={false} />
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onError={() => setFailedSrc(src)}
+        />
       </span>
     );
   }
@@ -99,6 +108,7 @@ export interface FaviconStackProps {
  * would claim otherwise.
  */
 export function FaviconStack({ hosts, max = 3 }: FaviconStackProps) {
+  if (max <= 0) return null;
   const seen: (string | null)[] = [];
   for (const host of hosts) {
     if (host !== null && seen.includes(host)) continue;

@@ -83,6 +83,9 @@ pub struct ClaudeCodeState {
     /// only in the result record, so retain the exact typed opener by id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     collaboration_calls: BTreeMap<String, ToolAction>,
+    /// Web request/outcome correlation survives a checkpoint between the two records.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    web_calls: BTreeMap<String, ToolAction>,
     /// Transient point-in-time task board. This is checkpointed normalizer
     /// state, never a second durable task store; the raw ledger recreates it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -883,6 +886,17 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     emit.remember_workflow_call(id, &tool.action, ts);
                 } else {
                     emit.remember_notification_call(id, &tool.action, ts);
+                }
+                if matches!(
+                    tool.action,
+                    ToolAction::WebSearch { .. } | ToolAction::WebFetch { .. }
+                ) && let Some(state) = emit
+                    .ctx
+                    .state
+                    .as_mut()
+                    .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+                {
+                    state.web_calls.insert(id.clone(), tool.action.clone());
                 }
                 row.tool = Some(tool);
                 // A native name is not enough to establish canonical
@@ -2058,6 +2072,18 @@ impl<'a> Emit<'a> {
                 completed_at: None,
                 duration_ms: None,
             });
+        }
+        let web_request = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.web_calls.remove(result.tool_use_id));
+        if let Some(request) = web_request
+            && let Some(native) = result.tool_use_result
+            && let Some(action) = crate::web::project_result(&request, native)
+        {
+            patch.outcome = Some(ToolOutcomePatch { action });
         }
         if self.take_delegate_call(result.tool_use_id) {
             let child_session_id = result
