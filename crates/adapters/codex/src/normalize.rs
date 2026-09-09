@@ -46,7 +46,7 @@ struct CanonicalCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PendingCall {
-    Canonical { call: CanonicalCall },
+    Canonical { call: Box<CanonicalCall> },
     CanonicalBatch { calls: Vec<CanonicalCall> },
     PollProcesses { process_ids: Vec<String> },
     WaitCell { cell_id: String },
@@ -55,7 +55,7 @@ enum PendingCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CellRoute {
-    Canonical { call: CanonicalCall },
+    Canonical { call: Box<CanonicalCall> },
     CanonicalBatch { calls: Vec<CanonicalCall> },
     PollProcesses { process_ids: Vec<String> },
 }
@@ -451,11 +451,11 @@ fn response_item(
                 state.pending_calls.insert(
                     tool_id.clone(),
                     PendingCall::Canonical {
-                        call: CanonicalCall {
+                        call: Box::new(CanonicalCall {
                             correlation_key: tool_id,
                             action: tool.action.clone(),
                             started_at: ts,
-                        },
+                        }),
                     },
                 );
             }
@@ -680,7 +680,7 @@ fn reduce_tool_output(
     let execution = execution_results(item.output.as_ref());
     match route {
         CellRoute::Canonical { call } => {
-            reduce_canonical_output(ctx, state, item, call, &execution, ts, ops)
+            reduce_canonical_output(ctx, state, item, *call, &execution, ts, ops)
         }
         CellRoute::CanonicalBatch { calls } => {
             reduce_canonical_batch(ctx, state, item, calls, &execution, ts, ops)

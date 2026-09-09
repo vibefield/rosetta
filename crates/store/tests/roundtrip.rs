@@ -1166,7 +1166,7 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
         model: None,
         effort: None,
         body: TimelineBody::Collaboration {
-            event: event.clone(),
+            event: Box::new(event.clone()),
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),
@@ -3431,7 +3431,7 @@ fn workflow_attempt_hydrates_one_run_journal_and_observed_worker_runtime() {
                 message_op(child_message),
                 IngestOp::WorkflowRun {
                     session_id: "s1".into(),
-                    run: workflow_run(),
+                    run: Box::new(workflow_run()),
                 },
                 IngestOp::WorkflowJournal {
                     session_id: "s1".into(),
@@ -3502,11 +3502,11 @@ fn workflow_run_identity_is_scoped_to_its_session() {
                 IngestOp::SessionMeta(second_session),
                 IngestOp::WorkflowRun {
                     session_id: "s1".into(),
-                    run: first,
+                    run: Box::new(first),
                 },
                 IngestOp::WorkflowRun {
                     session_id: "s2".into(),
-                    run: second,
+                    run: Box::new(second),
                 },
             ],
             ..Batch::default()
@@ -3571,7 +3571,7 @@ fn oversized_workflow_journal_hydrates_a_bounded_window_with_exact_counts() {
         message_op(opener),
         IngestOp::WorkflowRun {
             session_id: "s1".into(),
-            run: workflow_run(),
+            run: Box::new(workflow_run()),
         },
     ];
     ops.extend((0..total).map(|index| IngestOp::WorkflowJournal {
@@ -3622,7 +3622,7 @@ fn workflow_sidecar_generation_replacement_sweeps_the_old_snapshot() {
         .apply(&Batch {
             ops: vec![IngestOp::WorkflowRun {
                 session_id: "s1".into(),
-                run: workflow_run(),
+                run: Box::new(workflow_run()),
             }],
             source: Some(SourceWrite {
                 cursor_id,

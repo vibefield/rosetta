@@ -37,7 +37,7 @@ enum DeferredOp {
         patch: Box<ToolUpdatePatch>,
         at: Option<i64>,
     },
-    Tail(IngestOp),
+    Tail(Box<IngestOp>),
 }
 
 #[derive(Debug)]
@@ -106,7 +106,7 @@ impl BulkReconciliationDelta {
                     at: *at,
                 }),
                 IngestOp::Usage { .. } | IngestOp::FileEdit(_) => {
-                    Some(DeferredOp::Tail(op.clone()))
+                    Some(DeferredOp::Tail(Box::new(op.clone())))
                 }
                 _ => None,
             };
@@ -390,7 +390,7 @@ impl BulkReconciliationBuffer {
                     DeferredOp::Tail(op) => tail.push(BufferedTail {
                         cursor_id: source_key.cursor_id,
                         order,
-                        op: op.clone(),
+                        op: op.as_ref().clone(),
                     }),
                 }
             }

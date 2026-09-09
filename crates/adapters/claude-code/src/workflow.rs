@@ -86,54 +86,58 @@ enum RawProgress {
         #[serde(default)]
         title: Option<String>,
     },
-    WorkflowAgent {
-        #[serde(default)]
-        index: Option<u64>,
-        #[serde(default)]
-        key: Option<String>,
-        #[serde(default)]
-        label: Option<String>,
-        #[serde(default)]
-        phase_index: Option<u64>,
-        #[serde(default)]
-        phase_title: Option<String>,
-        #[serde(default)]
-        state: Option<String>,
-        #[serde(default)]
-        cached: Option<bool>,
-        #[serde(default)]
-        model: Option<String>,
-        #[serde(default)]
-        effort: Option<String>,
-        #[serde(default)]
-        agent_id: Option<String>,
-        #[serde(default)]
-        prompt_preview: Option<String>,
-        #[serde(default)]
-        result_preview: Option<String>,
-        #[serde(default)]
-        last_tool_name: Option<String>,
-        #[serde(default)]
-        last_tool_summary: Option<String>,
-        #[serde(default)]
-        queued_at: Option<i64>,
-        #[serde(default)]
-        started_at: Option<i64>,
-        #[serde(default)]
-        last_progress_at: Option<i64>,
-        #[serde(default)]
-        duration_ms: Option<u64>,
-        #[serde(default)]
-        tokens: Option<u64>,
-        #[serde(default)]
-        tool_calls: Option<u64>,
-        #[serde(default)]
-        error: Option<String>,
-        #[serde(default)]
-        attempt: Option<u64>,
-        #[serde(default)]
-        agent_type: Option<String>,
-    },
+    WorkflowAgent(Box<RawWorkflowAgent>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawWorkflowAgent {
+    #[serde(default)]
+    index: Option<u64>,
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    phase_index: Option<u64>,
+    #[serde(default)]
+    phase_title: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    cached: Option<bool>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    prompt_preview: Option<String>,
+    #[serde(default)]
+    result_preview: Option<String>,
+    #[serde(default)]
+    last_tool_name: Option<String>,
+    #[serde(default)]
+    last_tool_summary: Option<String>,
+    #[serde(default)]
+    queued_at: Option<i64>,
+    #[serde(default)]
+    started_at: Option<i64>,
+    #[serde(default)]
+    last_progress_at: Option<i64>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    tokens: Option<u64>,
+    #[serde(default)]
+    tool_calls: Option<u64>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    attempt: Option<u64>,
+    #[serde(default)]
+    agent_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,7 +308,7 @@ fn normalize_run(ctx: &NormalizeCtx, raw: RawRun) -> Result<WorkflowRun, String>
                         ),
                         detail: None,
                     }),
-                    RawProgress::WorkflowAgent { .. } => None,
+                    RawProgress::WorkflowAgent(_) => None,
                 })
                 .take(WORKFLOW_PHASE_LIMIT),
         );
@@ -315,31 +319,32 @@ fn normalize_run(ctx: &NormalizeCtx, raw: RawRun) -> Result<WorkflowRun, String>
         .into_iter()
         .filter_map(|progress| match progress {
             RawProgress::WorkflowPhase { .. } => None,
-            RawProgress::WorkflowAgent {
-                index,
-                key,
-                label,
-                phase_index,
-                phase_title,
-                state,
-                cached,
-                model,
-                effort,
-                agent_id,
-                prompt_preview,
-                result_preview,
-                last_tool_name,
-                last_tool_summary,
-                queued_at,
-                started_at,
-                last_progress_at,
-                duration_ms,
-                tokens,
-                tool_calls,
-                error,
-                attempt,
-                agent_type,
-            } => {
+            RawProgress::WorkflowAgent(agent) => {
+                let RawWorkflowAgent {
+                    index,
+                    key,
+                    label,
+                    phase_index,
+                    phase_title,
+                    state,
+                    cached,
+                    model,
+                    effort,
+                    agent_id,
+                    prompt_preview,
+                    result_preview,
+                    last_tool_name,
+                    last_tool_summary,
+                    queued_at,
+                    started_at,
+                    last_progress_at,
+                    duration_ms,
+                    tokens,
+                    tool_calls,
+                    error,
+                    attempt,
+                    agent_type,
+                } = *agent;
                 let index = index.unwrap_or(0);
                 let fallback = key
                     .as_deref()

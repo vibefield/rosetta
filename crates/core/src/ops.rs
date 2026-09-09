@@ -66,7 +66,7 @@ pub enum IngestOp {
     /// timeline rows and join this document by `run_id` at read time.
     WorkflowRun {
         session_id: String,
-        run: WorkflowRun,
+        run: Box<WorkflowRun>,
     },
     /// One append-only coordinator observation for a Workflow worker.
     WorkflowJournal {
@@ -129,7 +129,10 @@ impl IngestOp {
                 .into_iter()
                 .map(|asset| Self::ProjectionAsset { asset }),
         );
-        ops.push(Self::WorkflowRun { session_id, run });
+        ops.push(Self::WorkflowRun {
+            session_id,
+            run: Box::new(run),
+        });
     }
 
     /// Close command/code payloads into their bounded SQLite projection.

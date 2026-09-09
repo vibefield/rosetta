@@ -1738,12 +1738,12 @@ pub enum ToolAction {
         /// Structured callback result retained as canonical JSON/text when a
         /// run sidecar is delayed or absent. The hydrated run remains the
         /// authoritative current snapshot when both exist.
-        callback_result: Option<CanonicalText>,
+        callback_result: Option<Box<CanonicalText>>,
         usage: Option<WorkflowUsage>,
         /// Hydrated from the generation-owned workflow sidecar at read time;
         /// the stored tool row keeps this `None`, so every attempt points to
         /// one run document instead of copying it.
-        run: Option<WorkflowRun>,
+        run: Option<Box<WorkflowRun>>,
     },
     Schedule {
         operation: ScheduleOp,
@@ -1983,7 +1983,9 @@ impl ToolAction {
             } => {
                 externalize_optional_text(arguments, &mut assets);
                 externalize_optional_text(objective, &mut assets);
-                externalize_optional_text(callback_result, &mut assets);
+                if let Some(text) = callback_result {
+                    externalize_text(text, &mut assets);
+                }
                 if let Some(run) = run {
                     assets.extend(run.externalize_text_members());
                 }
@@ -2424,7 +2426,7 @@ impl ToolAction {
                     callback_summary.as_deref(),
                     FAILURE_SUMMARY_MAX_BYTES,
                 )?;
-                validate_optional_text(callback_result.as_ref())?;
+                validate_optional_text(callback_result.as_deref())?;
                 if let Some(run) = run {
                     if run_id.as_deref() != Some(&run.run_id) {
                         return Err(CanonicalError::Invalid(
@@ -3999,7 +4001,7 @@ pub enum TimelineBody {
         text: CanonicalText,
     },
     Collaboration {
-        event: CollaborationEvent,
+        event: Box<CollaborationEvent>,
     },
     ToolUse {
         tool: Box<ToolInteraction>,
@@ -4030,7 +4032,7 @@ pub enum MessageDetail {
     Collaboration {
         /// `body` is cleared while encoded because its searchable preview is
         /// stored in `message.content`; `body_member` restores a large body.
-        event: CollaborationEvent,
+        event: Box<CollaborationEvent>,
         body_member: Option<AssetRef>,
     },
     Notice {
@@ -5140,7 +5142,7 @@ mod tests {
     #[test]
     fn collaboration_lifecycle_kind_is_itself_a_visible_fact() {
         let row = base(TimelineBody::Collaboration {
-            event: CollaborationEvent {
+            event: Box::new(CollaborationEvent {
                 kind: CollaborationEventKind::StopApproved,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -5157,7 +5159,7 @@ mod tests {
                 source_response_id: None,
                 work_start_timeline_id: None,
                 work_end_timeline_id: None,
-            },
+            }),
         });
         assert!(row.validate().is_ok());
     }
@@ -5165,7 +5167,7 @@ mod tests {
     #[test]
     fn collaboration_prose_requires_non_whitespace_content() {
         let row = base(TimelineBody::Collaboration {
-            event: CollaborationEvent {
+            event: Box::new(CollaborationEvent {
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -5182,7 +5184,7 @@ mod tests {
                 source_response_id: None,
                 work_start_timeline_id: None,
                 work_end_timeline_id: None,
-            },
+            }),
         });
         assert!(row.validate().is_err());
     }
@@ -5190,7 +5192,7 @@ mod tests {
     #[test]
     fn collaboration_report_work_requires_exact_paired_bounds() {
         let mut row = base(TimelineBody::Collaboration {
-            event: CollaborationEvent {
+            event: Box::new(CollaborationEvent {
                 kind: CollaborationEventKind::Report,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -5207,7 +5209,7 @@ mod tests {
                 source_response_id: Some("response-1".into()),
                 work_start_timeline_id: Some("work-1".into()),
                 work_end_timeline_id: None,
-            },
+            }),
         });
         assert!(row.validate().is_err());
         if let TimelineBody::Collaboration { event } = &mut row.body {
@@ -5558,7 +5560,7 @@ mod tests {
         assert!(lanes.tool.contains("w2-docs"));
 
         let message = base(TimelineBody::Collaboration {
-            event: CollaborationEvent {
+            event: Box::new(CollaborationEvent {
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Peer,
                 sender: Some("w2-docs".into()),
@@ -5575,7 +5577,7 @@ mod tests {
                 source_response_id: None,
                 work_start_timeline_id: None,
                 work_end_timeline_id: None,
-            },
+            }),
         });
         let lanes = message.search_lanes();
         assert!(lanes.prose.contains("docs are ready"));

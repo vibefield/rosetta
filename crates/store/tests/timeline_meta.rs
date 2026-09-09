@@ -516,7 +516,7 @@ fn workflows_are_one_light_row_per_run_and_land_on_the_latest_attempt() {
                 IngestOp::SessionMeta(workflow_child("child-earlier", "native-earlier")),
                 IngestOp::WorkflowRun {
                     session_id: "s1".into(),
-                    run: workflow_run("run-1"),
+                    run: Box::new(workflow_run("run-1")),
                 },
                 IngestOp::WorkflowJournal {
                     session_id: "s1".into(),
@@ -611,7 +611,7 @@ fn relevant_batch_coalesces_to_one_timeline_meta_session_touch() {
                 ))),
                 IngestOp::WorkflowRun {
                     session_id: "s1".into(),
-                    run: workflow_run("run-1"),
+                    run: Box::new(workflow_run("run-1")),
                 },
             ],
             ..Batch::default()

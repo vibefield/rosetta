@@ -1485,7 +1485,7 @@ impl<'a> Emit<'a> {
             model: None,
             effort: None,
             body: TimelineBody::Collaboration {
-                event: CollaborationEvent {
+                event: Box::new(CollaborationEvent {
                     kind: draft.kind,
                     channel: draft.channel,
                     sender: draft.sender,
@@ -1502,7 +1502,7 @@ impl<'a> Emit<'a> {
                     source_response_id: None,
                     work_start_timeline_id: None,
                     work_end_timeline_id: None,
-                },
+                }),
             },
             parent_tool_native_id: None,
             usage: TokenSnapshot::default(),
@@ -1830,7 +1830,8 @@ impl<'a> Emit<'a> {
             .map(|summary| bounded_utf8(summary, FAILURE_SUMMARY_MAX_BYTES));
         *callback_result = notification
             .result
-            .and_then(|result| canonical_text(result).ok());
+            .and_then(|result| canonical_text(result).ok())
+            .map(Box::new);
         let callback_usage = WorkflowUsage {
             duration_ms: notification.duration_ms,
             tokens: notification.tokens,

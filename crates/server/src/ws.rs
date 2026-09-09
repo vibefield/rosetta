@@ -1066,7 +1066,7 @@ mod tests {
         boundary.block_index = None;
         boundary.model = None;
         boundary.body = TimelineBody::Collaboration {
-            event: CollaborationEvent {
+            event: Box::new(CollaborationEvent {
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Team,
                 sender: None,
@@ -1083,7 +1083,7 @@ mod tests {
                 source_response_id: None,
                 work_start_timeline_id: None,
                 work_end_timeline_id: None,
-            },
+            }),
         };
         h.store
             .apply(&Batch {

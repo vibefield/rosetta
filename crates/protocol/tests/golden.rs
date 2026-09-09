@@ -214,7 +214,7 @@ fn collaboration_entry() -> TimelineEntry {
         model: None,
         effort: None,
         body: TimelineBody::Collaboration {
-            event: CollaborationEvent {
+            event: Box::new(CollaborationEvent {
                 kind: CollaborationEventKind::Report,
                 channel: CollaborationChannel::Team,
                 sender: Some("w2-docs".into()),
@@ -231,7 +231,7 @@ fn collaboration_entry() -> TimelineEntry {
                 source_response_id: Some("team-response-2".into()),
                 work_start_timeline_id: Some("team-work-start".into()),
                 work_end_timeline_id: Some("team-work-end".into()),
-            },
+            }),
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),

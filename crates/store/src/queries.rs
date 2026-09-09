@@ -993,7 +993,11 @@ fn hydrate_workflows(
         let ToolAction::Workflow { run_id, run, .. } = &mut tool.action else {
             continue;
         };
-        *run = run_id.as_ref().and_then(|run_id| runs.get(run_id)).cloned();
+        *run = run_id
+            .as_ref()
+            .and_then(|run_id| runs.get(run_id))
+            .cloned()
+            .map(Box::new);
     }
     Ok(())
 }
