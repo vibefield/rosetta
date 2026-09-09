@@ -289,6 +289,13 @@ have different native ownership and messaging evidence.
   nested inside another top-level task/result envelope rather than independent messages.
   A parser must recognize only top-level envelopes for chronology and retain nested copies
   as provenance, not replay them as additional speech.
+- Additional local evidence (2026-09-09, Claude 2.1.266): a cross-session delivery
+  stores `Another Claude session sent a message:` before a batch of four top-level
+  envelopes, followed by Claude's fixed `This came from another Claude session …`
+  permission notice. This record has no `origin` or `teamName`. The exact preface
+  and notice are transport, not human speech; the enclosed messages and idle
+  notifications retain their own authorship and kinds. Normalizer 23 recognizes
+  this framing without treating arbitrary surrounding prose as delivery evidence.
 - `teams/<team>/inboxes/<agent>.json` is a retained mailbox array. Its 190 entries split
   into 165 read and 25 unread; the unread set contains ten plain messages and 15 task
   assignments. Unread inbox-only items are pending delivery state and have no justified

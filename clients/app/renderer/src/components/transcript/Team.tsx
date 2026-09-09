@@ -482,7 +482,7 @@ function TeamReport({
             </span>
             <span>one rendered delivery</span>
           </div>
-          {body !== null && <div className="tm-message__body"><Prose text={body} onReceipt={onReceipt} /></div>}
+          {body !== null && <div className="tm-message__body tr-prose"><Prose text={body} onReceipt={onReceipt} /></div>}
           {work !== null && (
             <div className="tm-message__foot">
               <button
@@ -600,7 +600,7 @@ export function TeamEvent({
       {event.summary !== null && event.body !== null && (
         <p className="tm-message__subject">{event.summary}</p>
       )}
-      {body !== null && <div className="tm-message__body"><Prose text={body} onReceipt={onReceipt} /></div>}
+      {body !== null && <div className="tm-message__body tr-prose"><Prose text={body} onReceipt={onReceipt} /></div>}
     </article>
   );
 }

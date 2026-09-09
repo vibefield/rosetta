@@ -202,6 +202,28 @@ describe("Agent Team view facts", () => {
 });
 
 describe("team boundary chronology", () => {
+  it("keeps relayed team deliveries in the shared turn without a roster or child session", () => {
+    const opening = entry("prompt", "parent", 1, 50, {
+      type: "user", text: inline("Research search palettes"), attachments: [],
+    }, { kind: "human_turn" });
+    const delivered = entry("delivery", "parent", 2, 100,
+      collaboration("message", "team", "# Search palette research digest\n\nFull findings.", {
+        sender: "search-ux-research", color: "blue",
+        summary: "Search palette research digest delivered",
+      }), { kind: "system_cycle" });
+    const idle = entry("idle", "parent", 3, 100,
+      collaboration("idle", "team", null, {
+        sender: "search-ux-research", status: "available",
+      }), { kind: "system_cycle" });
+
+    const turns = documentTurns(teamChronology([opening, delivered, idle], new Map()).rows);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].prompt.text, "Research search palettes");
+    assert.deepEqual(turns[0].segments.map((segment) => segment.kind), ["collaboration", "collaboration"]);
+    assert.equal(turns[0].segments[0].row, delivered);
+    assert.equal(turns[0].segments[1].row, idle);
+  });
+
   it("interleaves by authored time with arrival fallback and excludes private context", () => {
     const parent = [
       entry("p1", "parent", 1, 100, { type: "agent", text: inline("start"), attachments: [], citations: [] }),
