@@ -577,34 +577,20 @@ function buildSegments(
     flushTools();
     if (members.length === 0) return;
     const folds = members.some((member) => member.kind === "line" || member.kind === "thinking");
-    if (members.length === 1 || !folds) {
-      for (const member of members) {
-        if (member.kind === "line") {
-          const line = member.line;
-          segments.push({
-            kind: "ledger",
-            key: line.key,
-            at: line.rows[0]?.at ?? null,
-            rows: line.rows,
-            lines: [line],
-            members: [member],
-            summary: runSummary([line]),
-          });
-        } else {
-          segments.push(member);
-        }
-      }
+    if (!folds || (members.length === 1 && members[0].kind !== "line")) {
+      // R-2: a lone thought stays a thinking segment, and notices or
+      // summaries with nothing to fold around stand as their own markers.
+      for (const member of members) if (member.kind !== "line") segments.push(member);
     } else {
       const lines = members.flatMap((member) => (member.kind === "line" ? [member.line] : []));
       const others = members.flatMap((member) => {
         const other = runOther(member);
         return other === null ? [] : [other];
       });
-      const stamps = runRows.map((row) => row.at).filter((value): value is number => value !== null);
       segments.push({
         kind: "ledger",
         key: runRows[0].timeline_id,
-        at: stamps.length === 0 ? null : Math.min(...stamps),
+        at: firstStamp(runRows),
         rows: runRows,
         lines,
         members,
@@ -619,6 +605,15 @@ function buildSegments(
     if (cutBefore.has(row.timeline_id)) flushRun();
     switch (row.body.type) {
       case "tool_use":
+        if (row.body.tool.action.type === "question") {
+          // A question to the reader, and their answer, is speech (R-1): it
+          // closes the run before it and stands alone, open, as §04 draws it.
+          flushRun();
+          tools.push(row);
+          runRows.push(row);
+          flushRun();
+          continue;
+        }
         tools.push(row);
         runRows.push(row);
         continue;

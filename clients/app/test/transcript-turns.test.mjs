@@ -514,6 +514,30 @@ describe("documentTurns — the run", () => {
     assert.equal(turn.segments[1].rows[0].timeline_id, "b");
   });
 
+  it("a question to the reader is speech: it stands alone, open (R-1)", () => {
+    const question = entry({
+      type: "tool_use",
+      tool: {
+        correlation: { key: "q1", derivation: "native_id" },
+        native: { id: null, namespace: null, name: "AskUserQuestion", provider: null },
+        status: { value: "succeeded", basis: "native_state" },
+        action: {
+          type: "question",
+          questions: [{ prompt: inline("Which theme?"), header: null, options: [], multi_select: false }],
+          answers: [],
+        },
+        failure: null,
+        timing: null,
+      },
+    });
+    const [turn] = documentTurns([prompt("go"), shell("ls"), question, shell("cat"), agent("Done.")]);
+    assert.deepEqual(turn.segments.map((segment) => segment.kind), ["ledger", "ledger", "ledger", "prose"]);
+    assert.equal(turn.segments[1].lines[0].family, "question");
+    assert.equal(turn.segments[1].summary.closedByDefault, false);
+    assert.equal(turn.segments[0].lines[0].family, "shell");
+    assert.equal(turn.segments[2].lines[0].family, "shell");
+  });
+
   it("a thought between two commands is inside the run and breaks the line fold", () => {
     const [turn] = documentTurns([prompt("go"), shell("ls"), thinking("hm"), shell("cat"), agent("Done.")]);
     assert.deepEqual(turn.segments.map((segment) => segment.kind), ["ledger", "prose"]);

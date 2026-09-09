@@ -311,7 +311,8 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-line .chev svg { width: 12px; height: 12px; }
 .tr-line[aria-expanded="true"] .chev { transform: rotate(90deg); }
 /* WRITTEN — a search hit landing on a line borrows the room's own ring. */
-.tr-line[data-hit="true"], .tr-prompt[data-hit="true"], .tr-seg[data-hit="true"] {
+.tr-line[data-hit="true"], .tr-prompt[data-hit="true"], .tr-seg[data-hit="true"],
+.tr-mark[data-hit="true"], .tr-summary[data-hit="true"] {
   animation: ah-land 1400ms ease;
 }
 

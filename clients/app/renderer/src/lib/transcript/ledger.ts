@@ -599,8 +599,9 @@ export function ledgerLines(
 /**
  * One noun of the head's sentence. `names` is non-empty only for `file_change`
  * — the changed files, up to FOLD_NAME_LIMIT, the fold line's own device — and
- * `more` counts the ones past the limit. A run with no tool lines says the one
- * thing it holds: `2 thoughts`.
+ * `more` counts the ones past the limit. Two files that share a name keep
+ * their directory (`a/index.ts, b/index.ts`), so two edits never read as one.
+ * A run with no tool lines says the one thing it holds: `2 thoughts`.
  */
 export interface RunNoun {
   readonly family: ToolFamily | "thinking";
@@ -642,6 +643,18 @@ export interface RunSummary {
   readonly closedByDefault: boolean;
 }
 
+/** The changed files by name. Distinct paths stay distinct: a name shared by
+ * two of them carries its parent directory. */
+function fileNames(paths: readonly string[]): string[] {
+  return paths.map((path, index) => {
+    const name = basename(path);
+    const twin = paths.some((other, at) => at !== index && basename(other) === name);
+    if (!twin) return name;
+    const parts = path.split("/").filter(Boolean);
+    return parts.length >= 2 ? `${parts[parts.length - 2]}/${name}` : name;
+  });
+}
+
 export function runSummary(
   lines: readonly LedgerLine[],
   others: readonly RunOther[] = [],
@@ -649,7 +662,7 @@ export function runSummary(
   const rows = lines.flatMap((line) => [...line.rows]);
   const order: ToolFamily[] = [];
   const counts = new Map<ToolFamily, number>();
-  const names: string[] = [];
+  const paths: string[] = [];
   for (const row of rows) {
     const action = actionOf(row);
     if (action === null) continue;
@@ -657,11 +670,12 @@ export function runSummary(
     counts.set(action.type, (counts.get(action.type) ?? 0) + 1);
     if (action.type === "file_change") {
       for (const change of action.changes) {
-        const name = basename(resourceLabel(change.path));
-        if (name !== "" && !names.includes(name)) names.push(name);
+        const path = resourceLabel(change.path);
+        if (path !== "" && !paths.includes(path)) paths.push(path);
       }
     }
   }
+  const names = fileNames(paths);
   // Acts lead: the work product is what a reader wants first, and what
   // survives when a narrow column ellipsizes the tail. Within a class the
   // larger count comes first; ties keep first occurrence.
@@ -699,6 +713,7 @@ export function runSummary(
     memberCount,
     thoughtCount,
     running: [...lines].reverse().find((line) => line.state === "running") ?? null,
-    closedByDefault: memberCount >= RUN_FOLD_THRESHOLD,
+    // Notices and summaries alone have no sentence to close to (R-2).
+    closedByDefault: memberCount >= RUN_FOLD_THRESHOLD && (lines.length > 0 || thoughtCount > 0),
   };
 }

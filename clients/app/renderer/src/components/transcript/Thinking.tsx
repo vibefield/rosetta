@@ -11,6 +11,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { firstLine, spanText } from "../../lib/transcript";
+import { useFoldPreference } from "./fold-preference";
 import { LineChevron, ThoughtGlyph } from "./glyphs";
 
 export interface ThinkingProps {
@@ -77,13 +78,18 @@ export function ThoughtLine({
 }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
+    if (forceOpen || hit) setOpen(true);
+  }, [forceOpen, hit]);
+  // §05 — the room's activity act opens every run, and a thought alone is one.
+  const everyRunOpen = !useFoldPreference().folded;
+  const isOpen = open || everyRunOpen;
   const span = spanMs === null || spanMs < 1000 ? null : spanText(spanMs);
   // A thought may open with a blank line; the head names the first line
   // that says something.
   const lead = text.trimStart();
-  const toggle = () => setOpen((value) => !value);
+  const toggle = () => {
+    if (!everyRunOpen) setOpen((value) => !value);
+  };
   return (
     <div
       className="tr-seg tr-ledger tr-thought"
@@ -96,7 +102,8 @@ export function ThoughtLine({
         className="tr-line"
         role="button"
         tabIndex={0}
-        aria-expanded={open}
+        aria-expanded={isOpen}
+        aria-disabled={everyRunOpen || undefined}
         data-thought=""
         onClick={toggle}
         onKeyDown={(event) => {
@@ -119,7 +126,7 @@ export function ThoughtLine({
           </span>
         </span>
       </div>
-      {open && (
+      {isOpen && (
         <div className="tr-think" data-open="true">
           <div className="tr-think__text">
             {text.split(/\n{2,}/).map((paragraph, at) =>

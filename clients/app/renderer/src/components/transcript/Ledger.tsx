@@ -24,7 +24,7 @@
 //        `running` row in a finished transcript is a record that stopped, and
 //        it reads muted rather than pretending to be alive.
 import type { ReactNode } from "react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { TimelineEntry } from "@rosetta/protocol";
 import { clock } from "../../lib/format";
 import type {
@@ -222,8 +222,6 @@ export interface LedgerProps {
    * that happened between them (R-1). */
   readonly members: readonly LedgerMember[];
   readonly summary: RunSummary;
-  /** The run's first stamp — the head's time at the right. */
-  readonly at: number | null;
   /** The margin anchor of a closed run, drawn by the caller (T-4). */
   readonly anchor?: ReactNode;
   readonly domIdOf: (timelineId: string) => string;
@@ -265,7 +263,6 @@ function rowsOf(member: LedgerMember): readonly TimelineEntry[] {
 export function Ledger({
   members,
   summary,
-  at,
   anchor,
   domIdOf,
   highlightedTimelineId,
@@ -295,6 +292,25 @@ export function Ledger({
   // §05 — while the room's activity act holds every run open, the head is a
   // title, not a control: it reads as expanded and a press changes nothing.
   const everyRunOpen = !useFoldPreference().folded;
+  // A landing rings a row after scrolling to it, and the column scrolled
+  // before this ladder was shown. Open on the ring, then bring the row in.
+  const highlightInside =
+    highlightedTimelineId !== null &&
+    members.some((member) =>
+      rowsOf(member).some((row) => row.timeline_id === highlightedTimelineId),
+    );
+  const domIdRef = useRef(domIdOf);
+  domIdRef.current = domIdOf;
+  useEffect(() => {
+    if (!highlightInside || highlightedTimelineId === null) return;
+    setOpen(true);
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .getElementById(domIdRef.current(highlightedTimelineId))
+        ?.scrollIntoView({ block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [highlightInside, highlightedTimelineId]);
 
   const drawn: ReactNode[] = [];
   for (let index = 0; index < members.length; index += 1) {
@@ -387,22 +403,20 @@ export function Ledger({
     );
   }
 
-  // R-2: a run of one is the line it already was.
-  if (!summary.closedByDefault) return <div className="tr-ledger">{drawn}</div>;
-
+  // R-2: a run of one is the line it already was — no head, no anchor.
+  const closed = summary.closedByDefault;
   // R-5: the green breath only in a live session below the watermark, and
   // then the head carries the line that is happening.
   const running = summary.running !== null && alive(summary.running) ? summary.running : null;
   const span = summary.spanMs !== null && summary.spanMs >= 1000 ? spanText(summary.spanMs) : null;
-  const stamp = at === null ? null : clock(at);
   const expanded = everyRunOpen || open || focusInside;
   const toggle = () => {
     if (!everyRunOpen) setOpen((value) => !value);
   };
   return (
-    <div className="tr-seg tr-ledger">
-      {anchor}
-      <div
+    <div className={closed ? "tr-seg tr-ledger" : "tr-ledger"}>
+      {closed ? anchor : null}
+      {closed ? <div
         className="tr-line tr-fold"
         role="button"
         tabIndex={0}
@@ -454,12 +468,13 @@ export function Ledger({
               {running === null ? span : `${span} → …`}
             </span>
           )}
-          {stamp !== null && <span className="t">{stamp}</span>}
         </span>
-      </div>
-      {/* Always in the DOM: `[data-fold="off"]` reveals every ladder at once,
-          which is the column head's activity act — one CSS switch, no walk. */}
-      <div className="tr-ladder">{drawn}</div>
+      </div> : null}
+      {/* One wrapper in both states, so a live run that grows into a head
+          keeps its lines' open state (R-5). Always in the DOM: with the class
+          on, `[data-fold="off"]` reveals every ladder at once, which is the
+          column head's activity act — one CSS switch, no walk. */}
+      <div className={closed ? "tr-ladder" : undefined}>{drawn}</div>
     </div>
   );
 }

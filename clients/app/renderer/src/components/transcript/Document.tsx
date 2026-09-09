@@ -584,7 +584,6 @@ export function TranscriptDocument({
             key={segment.key}
             members={segment.members}
             summary={segment.summary}
-            at={segment.at}
             anchor={
               segment.summary.closedByDefault ? (
                 <Anchor

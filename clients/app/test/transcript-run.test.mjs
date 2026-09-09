@@ -98,6 +98,20 @@ describe("the run summary — the head of a closed run", () => {
     assert.deepEqual(text(summary), ["1 edit"]);
   });
 
+  it("two files that share a name keep their directory, and both count", () => {
+    const rows = [change("/w/a/index.ts"), change("/w/b/index.ts"), change("/w/a/index.ts")];
+    const summary = runSummary(ledgerLines(rows, CTX));
+    assert.equal(summary.nouns[0].text, "3 edits");
+    assert.deepEqual(summary.nouns[0].names, ["a/index.ts", "b/index.ts"]);
+    assert.equal(summary.nouns[0].more, 0);
+  });
+
+  it("notices alone have no sentence to close to", () => {
+    const summary = runSummary([], [marker(false), marker(false)]);
+    assert.equal(summary.memberCount, 2);
+    assert.equal(summary.closedByDefault, false);
+  });
+
   it("a run of thoughts alone says the one thing it holds", () => {
     const summary = runSummary([], [thought(), thought()]);
     assert.deepEqual(text(summary), ["2 thoughts"]);
