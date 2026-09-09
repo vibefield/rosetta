@@ -1,0 +1,66 @@
+{
+  "format": 2,
+  "name": "product-diagnostic-v3",
+  "basis": "diagnostic",
+  "cases": [
+    {
+      "label": "broad-1",
+      "class": "broad-ranked",
+      "query": "error"
+    },
+    {
+      "label": "broad-2",
+      "class": "broad-ranked",
+      "query": "file"
+    },
+    {
+      "label": "medium-1",
+      "class": "medium-ranked",
+      "query": "sqlite"
+    },
+    {
+      "label": "medium-2",
+      "class": "medium-ranked",
+      "query": "cargo"
+    },
+    {
+      "label": "phrase-1",
+      "class": "phrase",
+      "query": "\"cargo test\""
+    },
+    {
+      "label": "selective-1",
+      "class": "selective-ranked",
+      "query": "foreign_key_check"
+    },
+    {
+      "label": "selective-2",
+      "class": "selective-ranked",
+      "query": "source_op"
+    },
+    {
+      "label": "prompt-filter-1",
+      "class": "filtered-kind",
+      "query": "error",
+      "filter": {
+        "kind": "user"
+      }
+    },
+    {
+      "label": "reply-filter-1",
+      "class": "filtered-kind",
+      "query": "error",
+      "filter": {
+        "kind": "agent"
+      }
+    },
+    {
+      "label": "agent-codex-1",
+      "class": "filtered-agent",
+      "query": "error",
+      "filter": {
+        "agent": "codex"
+      }
+    }
+  ]
+}

@@ -27,7 +27,7 @@ use crate::stats::summarize;
 use super::index::{Fields, build_index, fingerprint_directory};
 use super::model::{TantivyCaseReport, TantivyClassReport, TantivyLaneReport, TantivyRunReport};
 
-pub const TANTIVY_RUN_FORMAT: u32 = 2;
+pub const TANTIVY_RUN_FORMAT: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct TantivyRunOptions {
@@ -247,7 +247,8 @@ fn search_one(
     let started = Instant::now();
     let searcher = reader.searcher();
     let query = compile_query(parser, fields, case)?;
-    let mut snippets = [fields.content, fields.tool_input, fields.tool_result]
+    let mut snippets = fields
+        .text
         .into_iter()
         .map(|field| {
             let mut generator = SnippetGenerator::create(&searcher, query.as_ref(), field)
@@ -333,10 +334,7 @@ fn execute_queries(
         .reload_policy(ReloadPolicy::Manual)
         .try_into()
         .map_err(|error| format!("opening Tantivy reader: {error}"))?;
-    let mut parser = QueryParser::for_index(
-        index,
-        vec![fields.content, fields.tool_input, fields.tool_result],
-    );
+    let mut parser = QueryParser::for_index(index, fields.text.to_vec());
     parser.set_conjunction_by_default();
     let schedule = schedule(cases);
     let mut expected: Vec<Option<(Vec<RankedHit>, u64)>> = vec![None; cases.len()];
@@ -521,10 +519,10 @@ pub fn run_tantivy_prototype(options: &TantivyRunOptions) -> Result<TantivyRunRe
         options.threads,
         options.memory_bytes,
     )?;
-    if build.documents != baseline.database.counts.messages {
+    if build.documents != baseline.database.counts.fts_rows {
         return Err(format!(
-            "Tantivy indexed {} documents but baseline has {} messages",
-            build.documents, baseline.database.counts.messages
+            "Tantivy indexed {} documents but baseline has {} search documents",
+            build.documents, baseline.database.counts.fts_rows
         ));
     }
     let lane = execute_queries(
@@ -543,6 +541,15 @@ pub fn run_tantivy_prototype(options: &TantivyRunOptions) -> Result<TantivyRunRe
     let database_after = fingerprint_file(&options.database, true)?;
     if database_after != database {
         return Err("database changed during the Tantivy prototype".into());
+    }
+    if search
+        .current_generation_path()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(&generation)
+        || fingerprint_file(&generation, true)? != baseline.search_generation
+    {
+        return Err("detached generation changed during the Tantivy prototype".into());
     }
     let suite_after = verify_campaign(&manifest, &options.ledger, &options.queries)?;
     if suite_after != suite {
@@ -572,11 +579,11 @@ mod tests {
 
     use std::fs;
 
-    use rosetta_core::IngestOp;
     use rosetta_core::rows::{
         MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
         ToolCall,
     };
+    use rosetta_core::{CorrelationDerivation, IngestOp, StatusBasis, ToolStatus, ToolStatusFact};
     use rosetta_store::{Batch, Store};
 
     use super::*;
@@ -597,6 +604,11 @@ mod tests {
             effort: None,
             content: Some(content.into()),
             tool: None,
+            attachments: Vec::new(),
+            citations: Vec::new(),
+            group: None,
+            response: None,
+            block_index: None,
             branch_tool_id: None,
             usage: None,
             agent_version: None,
@@ -605,20 +617,24 @@ mod tests {
         }
     }
 
+    fn message_op(row: MessageRow) -> IngestOp {
+        let mut ops = IngestOp::project_message(row);
+        assert_eq!(ops.len(), 1);
+        ops.pop().unwrap()
+    }
+
     #[test]
     fn prototype_indexes_canonical_rows_and_applies_filters_before_ranking() {
         let temp = tempfile::tempdir().unwrap();
         let db = temp.path().join("projection.sqlite");
         let mut store = Store::open(&db).unwrap();
         let mut error_tool = message("m-tool", 1, MessageKind::ToolUse, "ionosphere", 200);
-        error_tool.tool = Some(ToolCall {
-            tool_id: Some("tool-1".into()),
-            name: "fixture".into(),
-            input: serde_json::json!({}),
-            result: Some("failed".into()),
-            payload: None,
-            is_error: Some(true),
-        });
+        let mut tool = ToolCall::unknown("tool-1", CorrelationDerivation::NativeId, "fixture");
+        tool.status = ToolStatusFact {
+            value: ToolStatus::Failed,
+            basis: StatusBasis::NativeTerminalRecord,
+        };
+        error_tool.tool = Some(tool);
         let mut undated = message("m-undated", 2, MessageKind::Agent, "ionosphere", 300);
         undated.ts = None;
         store
@@ -657,15 +673,9 @@ mod tests {
                         updated_at: 1,
                         stream_state: StreamState::Indexed,
                     }),
-                    IngestOp::Message(Box::new(message(
-                        "m-user",
-                        0,
-                        MessageKind::User,
-                        "ionosphere",
-                        100,
-                    ))),
-                    IngestOp::Message(Box::new(error_tool)),
-                    IngestOp::Message(Box::new(undated)),
+                    message_op(message("m-user", 0, MessageKind::User, "ionosphere", 100)),
+                    message_op(error_tool),
+                    message_op(undated),
                 ],
                 checkpoints: vec![],
                 source: None,
@@ -684,7 +694,8 @@ mod tests {
 
         let index_path = temp.path().join("tantivy");
         let (build, index, fields) = build_index(&db, &index_path, 1, 50 * 1024 * 1024).unwrap();
-        assert_eq!(build.documents, 3);
+        assert_eq!(build.documents, 2);
+        assert!(build.sqlite_fts_bytes > 0);
         assert!(build.index.bytes > 0);
 
         let cases = vec![
@@ -697,35 +708,35 @@ mod tests {
                 filter: QueryFilterSpec::default(),
             },
             QueryCase {
-                label: "tool".into(),
+                label: "user".into(),
                 class: "filtered".into(),
                 query: "ionosphere".into(),
                 weight: 1,
                 limit: 10,
                 filter: QueryFilterSpec {
-                    kind: Some("tool_use".into()),
+                    kind: Some("user".into()),
                     ..QueryFilterSpec::default()
                 },
             },
             QueryCase {
-                label: "error".into(),
+                label: "session".into(),
                 class: "filtered".into(),
                 query: "ionosphere".into(),
                 weight: 1,
                 limit: 10,
                 filter: QueryFilterSpec {
-                    is_error: Some(true),
+                    session: Some("s1".into()),
                     ..QueryFilterSpec::default()
                 },
             },
             QueryCase {
-                label: "non-error".into(),
+                label: "other-project".into(),
                 class: "filtered".into(),
                 query: "ionosphere".into(),
                 weight: 1,
                 limit: 10,
                 filter: QueryFilterSpec {
-                    is_error: Some(false),
+                    project: Some("p2".into()),
                     ..QueryFilterSpec::default()
                 },
             },
@@ -757,36 +768,33 @@ mod tests {
             .map(|case| fts_hits(&search, case).unwrap())
             .collect::<Vec<_>>();
         let reader = index.reader().unwrap();
-        let parser = QueryParser::for_index(
-            &index,
-            vec![fields.content, fields.tool_input, fields.tool_result],
-        );
+        let parser = QueryParser::for_index(&index, fields.text.to_vec());
         let (tied_hits, _, _) = search_one(&reader, &parser, fields, &cases[0]).unwrap();
         assert_eq!(
             tied_hits
                 .iter()
                 .map(|hit| hit.timeline_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["m-tool", "m-undated", "m-user"],
+            vec!["m-undated", "m-user"],
             "equal scores use ascending timeline identity, not document address"
         );
         let report = execute_queries(&index, fields, &cases, &reference, 1, 2).unwrap();
-        assert_eq!(report.cases[0].tantivy_hits, 3);
+        assert_eq!(report.cases[0].tantivy_hits, 2);
         assert_eq!(report.cases[1].tantivy_hits, 1);
         assert_eq!(report.cases[1].filter_violations, 0);
         assert_eq!(report.cases[1].overlap, 1);
-        assert_eq!(report.cases[2].tantivy_hits, 1);
+        assert_eq!(report.cases[2].tantivy_hits, 2);
         assert_eq!(report.cases[2].filter_violations, 0);
-        assert_eq!(report.cases[2].overlap, 1);
+        assert_eq!(report.cases[2].overlap, 2);
         assert_eq!(report.cases[3].tantivy_hits, 0);
         assert_eq!(report.cases[3].filter_violations, 0);
         assert_eq!(report.cases[3].overlap, 0);
         assert_eq!(report.cases[4].tantivy_hits, 1);
         assert_eq!(report.cases[4].filter_violations, 0);
         assert_eq!(report.cases[4].overlap, 1);
-        assert_eq!(report.cases[5].tantivy_hits, 3);
+        assert_eq!(report.cases[5].tantivy_hits, 2);
         assert_eq!(report.cases[5].filter_violations, 0);
-        assert_eq!(report.cases[5].overlap, 3);
+        assert_eq!(report.cases[5].overlap, 2);
 
         drop(index);
         unseal_for_test(&index_path);

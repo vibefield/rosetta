@@ -13,7 +13,7 @@ The tool measures the production detached search sidecar through two paths:
 
 Each case, declared query class, and full declared mix reports p50, p95, and
 p99 using nearest-rank percentiles. At least 100 measured cycles are mandatory.
-The committed `workloads/product-diagnostic-v2.json` is deliberately a diagnostic
+The committed `workloads/product-diagnostic-v3.json` is deliberately a diagnostic
 mix. Its aggregate percentile is not evidence about the product's actual query
 mix. An `observed` suite needs a separately reviewed, privacy-preserving source
 such as a histogram of query classes; per-class tails must remain visible so a
@@ -38,7 +38,7 @@ remain historical evidence and cannot be mixed into a new comparison.
    ```text
    search-bench freeze \
      --ledger CAMPAIGN/projection.ledger \
-     --queries crates/search-bench/workloads/product-diagnostic-v2.json \
+     --queries crates/search-bench/workloads/product-diagnostic-v3.json \
      --out CAMPAIGN/campaign.json
    ```
 
@@ -48,7 +48,7 @@ remain historical evidence and cannot be mixed into a new comparison.
    search-bench run \
      --campaign CAMPAIGN/campaign.json \
      --ledger CAMPAIGN/projection.ledger \
-     --queries crates/search-bench/workloads/product-diagnostic-v2.json \
+     --queries crates/search-bench/workloads/product-diagnostic-v3.json \
      --db CAMPAIGN/before.sqlite \
      --implementation BEFORE_REV \
      --machine STABLE_MACHINE_LABEL \
@@ -81,15 +81,18 @@ distributions. Cold process/startup cost needs a separately declared lane.
 ## Benchmark-only Tantivy prototype
 
 The optional `tantivy-prototype` feature builds a disposable Tantivy 0.26.1
-index from the canonical `message` + `session` rows and runs the same frozen
-query schedule:
+index from the ready production search generation and runs the same frozen
+query schedule. It copies the five materialized semantic lanes, including full
+externalized text, and the exact indexed document set (prompts and replies).
+Tantivy run format 3 distinguishes this input from historical canonical-table
+scans and measures SQLite FTS bytes in the detached generation:
 
 ```text
 cargo run --release -p rosetta-search-bench \
   --features tantivy-prototype --bin tantivy-bench -- run \
   --campaign CAMPAIGN/campaign.json \
   --ledger CAMPAIGN/projection.ledger \
-  --queries CAMPAIGN/product-diagnostic-v2.json \
+  --queries CAMPAIGN/product-diagnostic-v3.json \
   --db CAMPAIGN/projection.sqlite \
   --baseline CAMPAIGN/fts5-run.json \
   --index CAMPAIGN/tantivy-candidate \
@@ -101,7 +104,7 @@ cargo run --release -p rosetta-search-bench \
 This is deliberately not a production backend. It performs no live writes and
 adds no synchronization tables. Before building, it replays the FTS queries and
 requires their counts and ordered-result digests to match the supplied baseline.
-The candidate indexes every filter key and stores all three searchable fields so
+The candidate indexes every filter key and stores all five searchable lanes so
 snippet cost and disk usage are not hidden. It validates filters on returned
 documents and reports FTS/candidate overlap, but overlap is not a relevance
 judgment; adoption still requires reviewed judgments or product evidence.

@@ -98,9 +98,11 @@ fn validate_projection(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|error| format!("checking detached search cardinalities: {error}"))?;
-    if messages != documents || messages != fts {
+    let searchable = rosetta_store::queries::search_document_count(canonical)
+        .map_err(|error| format!("counting canonical search documents: {error}"))?;
+    if nonnegative_count(documents, "search document")? != searchable || documents != fts {
         return Err(format!(
-            "canonical/search cardinality differs: {messages} messages, {documents} documents, {fts} FTS rows"
+            "canonical/search cardinality differs: {searchable} searchable messages, {documents} documents, {fts} FTS rows"
         ));
     }
     let sqlite_version: String = canonical
@@ -483,6 +485,21 @@ mod tests {
                 source: None,
             })
             .unwrap();
+        let mut thinking = rosetta_store::queries::timeline_page(store.conn(), "s", None, 10)
+            .unwrap()
+            .pop()
+            .unwrap();
+        thinking.timeline_id = "thinking".into();
+        thinking.ordinal = 1;
+        thinking.body = rosetta_core::TimelineBody::Thinking {
+            text: rosetta_core::CanonicalText::inline("hidden needle").unwrap(),
+        };
+        store
+            .apply(&Batch {
+                ops: vec![IngestOp::Message(Box::new(thinking))],
+                ..Batch::default()
+            })
+            .unwrap();
         let backend = Fts5SidecarSearch::new(&db);
         let ack = synchronize_fts5_once(&backend, &AtomicBool::new(false))
             .unwrap()
@@ -505,5 +522,10 @@ mod tests {
         let fresh = run_one(Lane::FreshBackend, &db, None, &case).unwrap();
         assert_eq!(shared.0, 1);
         assert_eq!((shared.0, shared.2), (fresh.0, fresh.2));
+        let generation = backend.current_generation_path().unwrap().unwrap();
+        let generation = super::open_read(&generation).unwrap();
+        let (_, _, counts) = super::validate_projection(store.conn(), &generation).unwrap();
+        assert_eq!(counts.messages, 2);
+        assert_eq!(counts.fts_rows, 1);
     }
 }

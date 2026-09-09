@@ -3,6 +3,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use rosetta_search::{Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rusqlite::{Connection, OpenFlags};
 use tantivy::schema::{FAST, Field, INDEXED, STORED, STRING, Schema, TEXT, TantivyDocument};
 use tantivy::{Index, IndexWriter};
@@ -21,9 +22,7 @@ pub(crate) struct Fields {
     pub kind: Field,
     pub is_error: Field,
     pub ts: Field,
-    pub content: Field,
-    pub tool_input: Field,
-    pub tool_result: Field,
+    pub text: [Field; 5],
 }
 
 pub(crate) fn prototype_schema() -> (Schema, Fields) {
@@ -40,11 +39,9 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
     let is_error = builder.add_text_field("is_error", STRING | STORED);
     // Missing timestamps remain absent so any explicit range excludes them.
     let ts = builder.add_i64_field("ts", INDEXED | FAST | STORED);
-    // Store all three text fields because a production-compatible candidate
-    // must be able to generate snippets without reloading SQLite per hit.
-    let content = builder.add_text_field("content", TEXT | STORED);
-    let tool_input = builder.add_text_field("tool_input", TEXT | STORED);
-    let tool_result = builder.add_text_field("tool_result", TEXT | STORED);
+    // Use the same materialized semantic lanes as the production FTS sidecar.
+    let text = ["prose", "target", "intent", "change", "tool"]
+        .map(|name| builder.add_text_field(name, TEXT | STORED));
     let schema = builder.build();
     (
         schema,
@@ -57,9 +54,7 @@ pub(crate) fn prototype_schema() -> (Schema, Fields) {
             kind,
             is_error,
             ts,
-            content,
-            tool_input,
-            tool_result,
+            text,
         },
     )
 }
@@ -95,9 +90,7 @@ fn add_row(
     kind: String,
     is_error: Option<bool>,
     ts: Option<i64>,
-    content: Option<String>,
-    tool_input: Option<String>,
-    tool_result: Option<String>,
+    text: [String; 5],
 ) -> Result<u64, String> {
     let mut doc = TantivyDocument::default();
     doc.add_text(fields.timeline_id, timeline_id);
@@ -114,17 +107,11 @@ fn add_row(
         doc.add_i64(fields.ts, ts);
     }
     let mut text_bytes = 0_u64;
-    for (field, value) in [
-        (fields.content, content),
-        (fields.tool_input, tool_input),
-        (fields.tool_result, tool_result),
-    ] {
-        if let Some(text) = value {
-            text_bytes = text_bytes
-                .checked_add(text.len() as u64)
-                .ok_or("source text byte count overflow")?;
-            doc.add_text(field, text);
-        }
+    for (field, value) in fields.text.into_iter().zip(text) {
+        text_bytes = text_bytes
+            .checked_add(value.len() as u64)
+            .ok_or("source text byte count overflow")?;
+        doc.add_text(field, value);
     }
     writer
         .add_document(doc)
@@ -150,7 +137,17 @@ pub(crate) fn build_index(
     fs::create_dir(destination)
         .map_err(|error| format!("creating {}: {error}", destination.display()))?;
 
-    let conn = open_read(db)?;
+    let search = Fts5SidecarSearch::new(db);
+    if search.state().readiness != SearchReadiness::Ready {
+        return Err("Tantivy build requires a ready production search generation".into());
+    }
+    let generation = search
+        .current_generation_path()
+        .map_err(|error| error.to_string())?
+        .ok_or("Tantivy build requires a published search generation")?;
+    let conn = open_read(&generation)?;
+    conn.execute_batch("BEGIN")
+        .map_err(|error| error.to_string())?;
     let fts_bytes = sqlite_fts_bytes(&conn)?;
     let (schema, fields) = prototype_schema();
     let started = Instant::now();
@@ -161,12 +158,11 @@ pub(crate) fn build_index(
         .map_err(|error| format!("opening Tantivy writer: {error}"))?;
     let mut stmt = conn
         .prepare(
-            "SELECT m.timeline_id, m.session_id, s.runtime_id, r.kind, s.project_id,
-                    m.type, m.tool_is_error, m.ts, m.content, m.tool_input, m.tool_result
-             FROM message m
-             JOIN session s ON s.id = m.session_id
-             JOIN agent_runtime r ON r.id = s.runtime_id
-             ORDER BY m.id",
+            "SELECT d.timeline_id, d.session_id, d.runtime_id, d.agent, d.project_id,
+                    d.kind, d.is_error, d.ts, f.prose, f.target, f.intent, f.change, f.tool
+             FROM search_document d
+             JOIN message_fts f ON f.rowid = d.id
+             ORDER BY d.id",
         )
         .map_err(|error| format!("preparing canonical document scan: {error}"))?;
     let mut rows = stmt
@@ -190,9 +186,13 @@ pub(crate) fn build_index(
                 row.get(5).map_err(|error| error.to_string())?,
                 row.get(6).map_err(|error| error.to_string())?,
                 row.get(7).map_err(|error| error.to_string())?,
-                row.get(8).map_err(|error| error.to_string())?,
-                row.get(9).map_err(|error| error.to_string())?,
-                row.get(10).map_err(|error| error.to_string())?,
+                [
+                    row.get(8).map_err(|error| error.to_string())?,
+                    row.get(9).map_err(|error| error.to_string())?,
+                    row.get(10).map_err(|error| error.to_string())?,
+                    row.get(11).map_err(|error| error.to_string())?,
+                    row.get(12).map_err(|error| error.to_string())?,
+                ],
             )?)
             .ok_or("source text byte count overflow")?;
         documents += 1;

@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn current_product_suite_is_valid_and_legacy_engine_suite_fails_closed() {
         let suite: QuerySuite =
-            serde_json::from_str(include_str!("../workloads/product-diagnostic-v2.json")).unwrap();
+            serde_json::from_str(include_str!("../workloads/product-diagnostic-v3.json")).unwrap();
         suite.validate().unwrap();
         assert_eq!(suite.basis, "diagnostic");
 
