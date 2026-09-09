@@ -62,7 +62,9 @@ export function createDaemonService({
     let proc;
     try {
       mkdirSync(path.dirname(dbPath), { recursive: true });
-      proc = spawnProcess(bin, ["serve", "--db", dbPath, "--addr", "127.0.0.1:0", "--json"], {
+      // `--announce` publishes the ephemeral origin for sibling apps (Godview);
+      // the stdout ready line stays the app's own channel.
+      proc = spawnProcess(bin, ["serve", "--db", dbPath, "--addr", "127.0.0.1:0", "--json", "--announce"], {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {

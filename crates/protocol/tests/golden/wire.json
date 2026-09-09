@@ -120,7 +120,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 17,
+      "protocol_version": 18,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -886,7 +886,7 @@
       }
     ]
   },
-  "protocol_version": 17,
+  "protocol_version": 18,
   "runtimes": {
     "runtimes": [
       {
@@ -924,10 +924,12 @@
     "is_error": false,
     "kind": "tool_use",
     "limit": 50,
+    "prefix": true,
     "project": "p1",
     "q": "needle",
     "runtime": "rt1",
-    "session": "s1"
+    "session": "s1",
+    "sessions": "s1,s1c"
   },
   "search_response": {
     "hits": [
@@ -1043,7 +1045,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 17,
+    "protocol_version": 18,
     "schema_version": 16,
     "search": {
       "progress": null,

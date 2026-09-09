@@ -26,6 +26,16 @@ pub const MAX_SEARCH_TEXT_BYTES: usize = 4_096;
 pub const MAX_SEARCH_CLAUSES: usize = 64;
 pub const MAX_SEARCH_FILTER_BYTES: usize = 1_024;
 pub const MAX_SEARCH_RESULTS: i64 = 1_000;
+/// Upper bound on the session ids one request may name. A monitor of live
+/// agents names each session it can jump to; anything larger is a project or
+/// runtime filter in disguise.
+pub const MAX_SEARCH_SESSIONS: usize = 256;
+/// Upper bound on the scope after the server expands each named root to its
+/// subagent tree. Well under SQLite's bound-parameter limit.
+pub const MAX_SEARCH_SESSION_SCOPE: usize = 4_096;
+/// Shortest term that prefix mode widens. One or two characters would match
+/// most of the vocabulary and turn a keystroke into a scan of the index.
+pub const MIN_PREFIX_TERM_CHARS: usize = 3;
 
 /// One backend-neutral text clause. Every clause is required; adjacent terms
 /// are an implicit AND and quoted phrases require adjacency.
@@ -152,12 +162,27 @@ impl TextQuery {
     /// method lives at the backend boundary so engine syntax never crosses
     /// the transport contract.
     pub fn fts5_expression(&self) -> String {
+        self.fts5_expression_with(false)
+    }
+
+    /// The same compilation with prefix widening: a term of at least
+    /// [`MIN_PREFIX_TERM_CHARS`] characters matches every token it begins, so
+    /// `puppet` finds `puppeteer`. Phrases and shorter terms stay exact. The
+    /// `*` sits outside the quoted token, the one place FTS5 reads it as an
+    /// operator, so user text still never reaches the engine unquoted.
+    pub fn fts5_expression_with(&self, prefix: bool) -> String {
         self.clauses
             .iter()
             .map(|clause| match clause {
-                TextClause::Term(text) | TextClause::Phrase(text) => {
-                    format!("\"{}\"", text.replace('"', "\"\""))
+                TextClause::Term(text) => {
+                    let quoted = format!("\"{}\"", text.replace('"', "\"\""));
+                    if prefix && text.chars().count() >= MIN_PREFIX_TERM_CHARS {
+                        format!("{quoted}*")
+                    } else {
+                        quoted
+                    }
                 }
+                TextClause::Phrase(text) => format!("\"{}\"", text.replace('"', "\"\"")),
             })
             .collect::<Vec<_>>()
             .join(" AND ")
@@ -230,8 +255,15 @@ impl SearchState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchQuery {
     pub text: TextQuery,
+    /// Widen each term to the tokens it begins; see
+    /// [`TextQuery::fts5_expression_with`].
+    pub prefix: bool,
     pub limit: i64,
     pub session: Option<String>,
+    /// An explicit set of canonical session ids matched as one query. The
+    /// server expands each named root to its subagent tree before the backend
+    /// sees the scope; the backend matches exactly what it is given.
+    pub sessions: Vec<String>,
     pub runtime: Option<String>,
     pub agent: Option<String>,
     pub project: Option<String>,
@@ -265,6 +297,28 @@ impl SearchQuery {
                         "{name} exceeds {MAX_SEARCH_FILTER_BYTES} bytes"
                     )));
                 }
+            }
+        }
+        if self.sessions.len() > MAX_SEARCH_SESSION_SCOPE {
+            return Err(SearchError::InvalidQuery(format!(
+                "sessions exceeds {MAX_SEARCH_SESSION_SCOPE} ids"
+            )));
+        }
+        if self.session.is_some() && !self.sessions.is_empty() {
+            return Err(SearchError::InvalidQuery(
+                "session and sessions are alternatives; send one of them".into(),
+            ));
+        }
+        for value in &self.sessions {
+            if value.is_empty() || value.trim() != value || value.contains(',') {
+                return Err(SearchError::InvalidQuery(
+                    "sessions must be non-blank canonical values".into(),
+                ));
+            }
+            if value.len() > MAX_SEARCH_FILTER_BYTES {
+                return Err(SearchError::InvalidQuery(format!(
+                    "a sessions entry exceeds {MAX_SEARCH_FILTER_BYTES} bytes"
+                )));
             }
         }
         if let Some(kind) = &self.kind
@@ -367,6 +421,7 @@ impl SearchBackend for Fts5Search {
             .map_err(|error| SearchError::Backend(format!("opening projection: {error}")))?;
         let filter = SearchFilter {
             session: query.session,
+            sessions: query.sessions,
             runtime: query.runtime,
             agent: query.agent,
             project: query.project,
@@ -375,7 +430,7 @@ impl SearchBackend for Fts5Search {
             after_ts: query.after_ts,
             before_ts: query.before_ts,
         };
-        let expression = query.text.fts5_expression();
+        let expression = query.text.fts5_expression_with(query.prefix);
         let hits = queries::search_filtered(&conn, &expression, query.limit, &filter)
             .map_err(|error| SearchError::Backend(error.to_string()))?;
         Ok(SearchOutput {
@@ -408,8 +463,10 @@ mod tests {
         let error = backend
             .search(SearchQuery {
                 text: TextQuery::parse("hello").unwrap(),
+                prefix: false,
                 limit: 10,
                 session: None,
+                sessions: Vec::new(),
                 runtime: None,
                 agent: None,
                 project: None,
@@ -432,6 +489,38 @@ mod tests {
         });
         assert_eq!(output.state.readiness, SearchReadiness::Building);
         assert!(output.hits.is_empty());
+    }
+
+    #[test]
+    fn prefix_mode_widens_terms_but_never_phrases_or_short_words() {
+        let query = TextQuery::parse(r#"puppet "cargo test" ab"#).unwrap();
+        assert_eq!(
+            query.fts5_expression_with(true),
+            r#""puppet"* AND "cargo test" AND "ab""#
+        );
+        assert_eq!(query.fts5_expression_with(false), query.fts5_expression());
+    }
+
+    #[test]
+    fn session_scope_validation_bounds_the_set_and_refuses_ambiguity() {
+        let mut both = query();
+        both.session = Some("s1".into());
+        both.sessions = vec!["s2".into()];
+        assert!(both.validate().is_err());
+
+        let mut blank = query();
+        blank.sessions = vec![" s1".into()];
+        assert!(blank.validate().is_err());
+
+        let mut too_many = query();
+        too_many.sessions = (0..=MAX_SEARCH_SESSION_SCOPE)
+            .map(|i| format!("s{i}"))
+            .collect();
+        assert!(too_many.validate().is_err());
+
+        let mut valid = query();
+        valid.sessions = vec!["s1".into(), "s2".into()];
+        assert!(valid.validate().is_ok());
     }
 
     #[test]
@@ -475,8 +564,10 @@ mod tests {
     fn query() -> SearchQuery {
         SearchQuery {
             text: TextQuery::parse("hello").unwrap(),
+            prefix: false,
             limit: 10,
             session: None,
+            sessions: Vec::new(),
             runtime: None,
             agent: None,
             project: None,

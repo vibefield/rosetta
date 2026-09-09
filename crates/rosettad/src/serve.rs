@@ -295,14 +295,39 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .await
         }
     });
+    // Announce before the ready line, so a parent that relays the origin can
+    // also point siblings at the file. The guard lives to the end of serve:
+    // every return and unwind below removes the file.
+    let _announcement = if flags.announce {
+        let dir = flags
+            .announce_dir
+            .clone()
+            .or_else(crate::announce::default_dir)
+            .ok_or("--announce needs --announce-dir DIR: no home directory to derive one")?;
+        let db = std::path::absolute(&db).map_err(|error| format!("resolving --db: {error}"))?;
+        Some(crate::announce::announce(
+            &dir,
+            &crate::announce::Announcement {
+                schema: crate::announce::ANNOUNCEMENT_SCHEMA.into(),
+                origin: format!("http://{local}"),
+                pid: std::process::id(),
+                protocol_version: rosetta_server::PROTOCOL_VERSION,
+                db,
+                started_at: now_ms(),
+            },
+        )?)
+    } else {
+        None
+    };
     if flags.json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "event": "ready", "origin": format!("http://{local}"),
-                "protocol_version": rosetta_server::PROTOCOL_VERSION,
-            })
-        );
+        let mut ready = serde_json::json!({
+            "event": "ready", "origin": format!("http://{local}"),
+            "protocol_version": rosetta_server::PROTOCOL_VERSION,
+        });
+        if let Some(guard) = &_announcement {
+            ready["announce"] = serde_json::Value::from(guard.path().display().to_string());
+        }
+        println!("{ready}");
     } else {
         println!("serving http://{local} — {warmed} mirror rows warm (ctrl-c to stop)");
     }

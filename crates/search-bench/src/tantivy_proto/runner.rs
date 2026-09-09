@@ -56,8 +56,10 @@ fn fts_hits(search: &Fts5SidecarSearch, case: &QueryCase) -> Result<Vec<RankedHi
         .search(SearchQuery {
             text: TextQuery::parse(&case.query)
                 .map_err(|error| format!("FTS reference case `{}` failed: {error}", case.label))?,
+            prefix: false,
             limit: case.limit,
             session: case.filter.session.clone(),
+            sessions: Vec::new(),
             runtime: case.filter.runtime.clone(),
             agent: case.filter.agent.clone(),
             project: case.filter.project.clone(),

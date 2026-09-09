@@ -86,8 +86,10 @@ impl QuerySuite {
             }
             SearchQuery {
                 text,
+                prefix: false,
                 limit: case.limit,
                 session: case.filter.session.clone(),
+                sessions: Vec::new(),
                 runtime: case.filter.runtime.clone(),
                 agent: case.filter.agent.clone(),
                 project: case.filter.project.clone(),

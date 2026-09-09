@@ -39,6 +39,7 @@ use rosetta_search::{
 };
 use rosetta_store::Store;
 
+mod announce;
 mod bench;
 mod brutal;
 mod cold_progress;
@@ -91,7 +92,7 @@ fn main() -> ExitCode {
             );
             eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--announce [--announce-dir DIR]]"
             );
             eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
             eprintln!(
@@ -121,6 +122,10 @@ struct Flags {
     audit_boundaries: bool,
     /// Emit newline-delimited JSON events for repository tools.
     json: bool,
+    /// `serve`: publish this daemon's origin in a per-user directory so
+    /// sibling apps can find an ephemeral port (see `announce.rs`).
+    announce: bool,
+    announce_dir: Option<PathBuf>,
     ticks: Option<u64>,
     ledger: Option<PathBuf>,
     /// serve only: the localhost listen address.
@@ -215,6 +220,8 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         profile: false,
         audit_boundaries: false,
         json: false,
+        announce: false,
+        announce_dir: None,
         ticks: None,
         ledger: None,
         addr: None,
@@ -371,6 +378,13 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--json" => {
                 flags.json = true;
                 at += 1;
+            }
+            "--announce" => {
+                flags.announce = true;
+                at += 1;
+            }
+            "--announce-dir" => {
+                flags.announce_dir = Some(PathBuf::from(take_value(args, &mut at)?));
             }
             "--ledger" => {
                 flags.ledger = Some(PathBuf::from(take_value(args, &mut at)?));

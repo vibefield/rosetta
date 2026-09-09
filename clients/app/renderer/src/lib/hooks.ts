@@ -577,6 +577,8 @@ export function useSearch(query: string, facets: SearchFacets = {}): SearchFeed 
             q,
             limit: SEARCH_LIMIT,
             session: null,
+            sessions: null,
+            prefix: null,
             runtime: null,
             agent,
             project,

@@ -120,8 +120,10 @@ fn tool_message() -> MessageRow {
 fn query(text: &str) -> SearchQuery {
     SearchQuery {
         text: TextQuery::parse(text).unwrap(),
+        prefix: false,
         limit: 100,
         session: None,
+        sessions: Vec::new(),
         runtime: None,
         agent: None,
         project: None,
@@ -443,6 +445,12 @@ fn commit_before_ack_replays_and_live_repair_catches_up() {
         })
         .unwrap();
     assert_eq!(search.state().readiness, SearchReadiness::CatchingUp);
+    // Behind the watermark, the generation still answers from what it has:
+    // the old `gamma` row, labelled catching-up rather than hidden behind an
+    // empty page. Readers hold that answer until the repair lands.
+    let held = search.search(query("gamma")).unwrap();
+    assert_eq!(held.state.readiness, SearchReadiness::CatchingUp);
+    assert_eq!(held.hits.len(), 1);
     let repaired = synchronize_fts5_once(&search, &stop).unwrap().unwrap();
     assert!(search.search(query("gamma")).unwrap().hits.is_empty());
     assert_eq!(search.search(query("epsilon")).unwrap().hits.len(), 1);

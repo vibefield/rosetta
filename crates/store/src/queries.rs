@@ -91,6 +91,9 @@ pub struct ResponseRuntime {
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
     pub session: Option<String>,
+    /// Exact canonical session ids matched as one `IN` set. Empty means no
+    /// session scope; the server owns any root-to-subagent expansion.
+    pub sessions: Vec<String>,
     pub runtime: Option<String>,
     /// Runtime family (`claude-code`, `codex`, …), distinct from one concrete
     /// runtime id.
@@ -1422,6 +1425,17 @@ pub fn search_filtered(
             &mut binds,
         );
     }
+    if !filter.sessions.is_empty() {
+        let mut placeholders = Vec::with_capacity(filter.sessions.len());
+        for session in &filter.sessions {
+            binds.push(Value::from(session.clone()));
+            placeholders.push(format!("?{}", binds.len()));
+        }
+        sql.push_str(&format!(
+            " AND m.session_id IN ({})",
+            placeholders.join(", ")
+        ));
+    }
     if let Some(runtime) = &filter.runtime {
         clause(
             &mut sql,
@@ -1496,7 +1510,9 @@ fn search_canonical_compat(
     filter: &SearchFilter,
 ) -> Result<Vec<SearchHit>, StoreError> {
     fn clean_term(term: &str) -> String {
-        let term = term.trim().trim_matches('"');
+        // A prefix clause arrives as `"term"*`; the substring match below is
+        // already at least as wide as a prefix, so the operator simply drops.
+        let term = term.trim().trim_end_matches('*').trim_matches('"');
         term.replace("\"\"", "\"").to_lowercase()
     }
 
@@ -1522,6 +1538,11 @@ fn search_canonical_compat(
             .session
             .as_ref()
             .is_some_and(|value| value != &document.session_id)
+            || (!filter.sessions.is_empty()
+                && !filter
+                    .sessions
+                    .iter()
+                    .any(|value| value == &document.session_id))
             || filter
                 .runtime
                 .as_ref()

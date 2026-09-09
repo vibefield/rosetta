@@ -251,10 +251,16 @@ export class RosettaClient {
   }
 
   sessions(
-    options: { project?: string; limit?: number } = {},
+    options: { project?: string; limit?: number; native_session_id?: string } = {},
     signal?: AbortSignal,
   ): Promise<SessionsResponse> {
     return this.request(`/api/sessions${queryString(options)}`, { signal });
+  }
+
+  /** Resolve canonical rows for provider-native session ids; children come
+   * back too, and `root_session_id` names the navigable thread. */
+  sessionsByNativeId(nativeSessionIds: readonly string[], signal?: AbortSignal): Promise<SessionsResponse> {
+    return this.sessions({ native_session_id: nativeSessionIds.join(","), limit: 1000 }, signal);
   }
 
   session(id: string, signal?: AbortSignal): Promise<SessionResponse> {
@@ -382,6 +388,8 @@ export class RosettaClient {
         q: request.q,
         limit: request.limit,
         session: request.session,
+        sessions: request.sessions,
+        prefix: request.prefix,
         runtime: request.runtime,
         agent: request.agent,
         project: request.project,

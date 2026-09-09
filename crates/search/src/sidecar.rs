@@ -350,6 +350,7 @@ fn query_generation(
 ) -> Result<Vec<queries::SearchHit>, SearchError> {
     let filter = SearchFilter {
         session: query.session.clone(),
+        sessions: query.sessions.clone(),
         runtime: query.runtime.clone(),
         agent: query.agent.clone(),
         project: query.project.clone(),
@@ -365,7 +366,7 @@ fn query_generation(
          JOIN search_document d ON d.id = message_fts.rowid
          WHERE message_fts MATCH ?1",
     );
-    let mut binds: Vec<Value> = vec![Value::from(query.text.fts5_expression())];
+    let mut binds: Vec<Value> = vec![Value::from(query.text.fts5_expression_with(query.prefix))];
     let clause = |sql: &mut String, predicate: &str, value: Value, binds: &mut Vec<Value>| {
         binds.push(value);
         sql.push_str(&format!(" AND {predicate} ?{}", binds.len()));
@@ -377,6 +378,17 @@ fn query_generation(
             Value::from(session.clone()),
             &mut binds,
         );
+    }
+    if !filter.sessions.is_empty() {
+        let mut placeholders = Vec::with_capacity(filter.sessions.len());
+        for session in &filter.sessions {
+            binds.push(Value::from(session.clone()));
+            placeholders.push(format!("?{}", binds.len()));
+        }
+        sql.push_str(&format!(
+            " AND d.session_id IN ({})",
+            placeholders.join(", ")
+        ));
     }
     if let Some(runtime) = &filter.runtime {
         clause(
@@ -474,20 +486,37 @@ impl SearchBackend for Fts5SidecarSearch {
             .map_err(|error| SearchError::Backend(format!("opening search snapshot: {error}")))?;
         let generation = generation_state(&conn)?;
         let state = compare_state(&before, Some(&generation));
-        if state.readiness != SearchReadiness::Ready {
+        // A generation behind the canonical watermark still answers from a
+        // consistent snapshot of what it has indexed: the reader is told
+        // `catching-up` beside real hits instead of a blank page every time
+        // a live session appends a line. Only another projection epoch, an
+        // unpublished canonical, or a failed or absent generation has nothing
+        // honest to show.
+        if !serves_hits(state.readiness) {
             return Ok(SearchOutput::unavailable(state));
         }
         let hits = query_generation(&conn, &query)?;
         let after = canonical_state(&self.canonical)?;
-        if after.projection_epoch != before.projection_epoch
-            || after.search_revision != before.search_revision
-            || !after.canonical_ready
-        {
+        if after.projection_epoch != before.projection_epoch || !after.canonical_ready {
             return Ok(SearchOutput::unavailable(compare_state(
                 &after,
                 Some(&generation),
             )));
         }
+        let state = compare_state(&after, Some(&generation));
+        if !serves_hits(state.readiness) {
+            return Ok(SearchOutput::unavailable(state));
+        }
         Ok(SearchOutput { state, hits })
     }
+}
+
+/// The readiness states under which the selected generation may answer with
+/// hits. Both share one projection epoch with canonical; every other state
+/// describes an index that must not be believed.
+fn serves_hits(readiness: SearchReadiness) -> bool {
+    matches!(
+        readiness,
+        SearchReadiness::Ready | SearchReadiness::CatchingUp
+    )
 }

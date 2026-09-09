@@ -188,6 +188,42 @@ impl Harness {
             .unwrap();
     }
 
+    /// Rows for any session, outside a source scope, then indexed and acked.
+    fn append_unscoped(&mut self, rows: Vec<MessageRow>) {
+        self.store
+            .apply(&Batch {
+                ops: rows
+                    .into_iter()
+                    .flat_map(IngestOp::project_message)
+                    .collect(),
+                checkpoints: vec![],
+                source: None,
+            })
+            .unwrap();
+        let ack = synchronize_fts5_once(&self.search, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        self.store
+            .acknowledge_search(&ack.projection_epoch, ack.revision)
+            .unwrap();
+    }
+
+    /// A delegated child of `s1`, known to the store and the hub mirror.
+    fn add_child_of_s1(&mut self, id: &str) {
+        let mut child = session(id);
+        child.parent_session_id = Some("s1".into());
+        child.root_session_id = "s1".into();
+        child.role = SessionRole::Subagent;
+        self.store
+            .apply(&Batch {
+                ops: vec![IngestOp::SessionMeta(child)],
+                checkpoints: vec![],
+                source: None,
+            })
+            .unwrap();
+        self.hub.warm(self.store.conn()).unwrap();
+    }
+
     async fn get(&self, uri: &str) -> (StatusCode, serde_json::Value) {
         let response = self
             .app
@@ -1268,6 +1304,119 @@ async fn timeline_pages_bind_a_watermark_that_expires_on_rewrite() {
     let (status, body) = h.get(&uri).await;
     assert_eq!(status, StatusCode::GONE);
     assert_eq!(body["error"]["code"], "cursor_expired");
+}
+
+#[tokio::test]
+async fn search_session_scope_widens_roots_and_prefix_widens_terms() {
+    let mut h = harness();
+    h.add_child_of_s1("s1c");
+    let mut in_child = message(
+        "m-child",
+        MessageKind::Agent,
+        "ionosphere from a delegated child",
+    );
+    in_child.session_id = "s1c".into();
+    let mut in_sibling = message("m-s2", MessageKind::Agent, "ionosphere in another root");
+    in_sibling.session_id = "s2".into();
+    h.append_unscoped(vec![
+        message("m-root", MessageKind::User, "ionosphere at the root"),
+        in_child,
+        in_sibling,
+    ]);
+
+    // One named root reaches its delegated child and never the sibling root.
+    let (status, body) = h.get("/api/search?q=ionosphere&sessions=s1&limit=10").await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    let mut ids: Vec<&str> = parsed
+        .hits
+        .iter()
+        .map(|hit| hit.timeline_id.as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["m-child", "m-root"]);
+
+    // Two roots are one scope; an unknown id is kept and simply matches nothing.
+    let (_, body) = h
+        .get("/api/search?q=ionosphere&sessions=s1,s2,not-yet-absorbed&limit=10")
+        .await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 3);
+
+    // The two selectors are alternatives; blank or oversized sets are refused.
+    let too_many = (0..=rosetta_search::MAX_SEARCH_SESSIONS)
+        .map(|i| format!("x{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for selector in [
+        "sessions=s1&session=s1".to_string(),
+        "sessions=".to_string(),
+        "sessions=s1,,s2".to_string(),
+        format!("sessions={too_many}"),
+    ] {
+        let (status, body) = h.get(&format!("/api/search?q=ionosphere&{selector}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{selector}");
+        assert_eq!(body["error"]["code"], "bad_request", "{selector}");
+    }
+
+    // Prefix mode widens a term of three or more characters; phrases and
+    // shorter terms stay exact, and the default stays whole-token.
+    let (_, body) = h.get("/api/search?q=ionosph&limit=10").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert!(parsed.hits.is_empty(), "prefix is opt-in");
+    let (_, body) = h.get("/api/search?q=ionosph&prefix=true&limit=10").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 3);
+    let (_, body) = h
+        .get("/api/search?q=%22ionosph%20from%22&prefix=true&limit=10")
+        .await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert!(parsed.hits.is_empty(), "a phrase stays exact");
+    let (_, body) = h.get("/api/search?q=io&prefix=true&limit=10").await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert!(parsed.hits.is_empty(), "a short term stays exact");
+    let (_, body) = h
+        .get("/api/search?q=ionosph&prefix=true&sessions=s2&limit=10")
+        .await;
+    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
+    assert_eq!(parsed.hits.len(), 1);
+    assert_eq!(parsed.hits[0].timeline_id, "m-s2");
+}
+
+#[tokio::test]
+async fn sessions_resolve_by_native_id_including_children() {
+    let mut h = harness();
+    h.add_child_of_s1("s1c");
+
+    let (status, body) = h
+        .get("/api/sessions?native_session_id=native-s1,native-s1c,native-missing")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: SessionsResponse = serde_json::from_value(body).unwrap();
+    let mut ids: Vec<&str> = parsed
+        .sessions
+        .iter()
+        .map(|session| session.id.as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["s1", "s1c"]);
+    let child = parsed
+        .sessions
+        .iter()
+        .find(|session| session.id == "s1c")
+        .unwrap();
+    assert_eq!(child.root_session_id, "s1");
+
+    for selector in ["native_session_id=", "native_session_id=native-s1,%20"] {
+        let (status, body) = h.get(&format!("/api/sessions?{selector}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{selector}");
+        assert_eq!(body["error"]["code"], "bad_request", "{selector}");
+    }
+
+    // Without the selector the list stays root-only.
+    let (_, body) = h.get("/api/sessions").await;
+    let parsed: SessionsResponse = serde_json::from_value(body).unwrap();
+    assert!(parsed.sessions.iter().all(|session| session.id != "s1c"));
 }
 
 #[tokio::test]

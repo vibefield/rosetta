@@ -8,5 +8,22 @@
  * rejected while tool activity is not indexed.
  * `agent` selects a runtime family (`claude-code`, `codex`, …), while
  * `runtime` selects one concrete runtime id.
+ *
+ * Protocol 18 (2026-09-09) adds the live-monitor shape of a search: `sessions`
+ * names the sessions a reader can jump to and `prefix` lets a remembered
+ * fragment of a word match, so a monitor of running agents can ask one
+ * question per keystroke instead of one per agent.
  */
-export type SearchRequest = { q: string, limit: number | null, session: string | null, runtime: string | null, agent: string | null, project: string | null, kind: string | null, is_error: boolean | null, after_ts: number | null, before_ts: number | null, };
+export type SearchRequest = { q: string, limit: number | null, session: string | null, 
+/**
+ * Comma-separated canonical session ids searched as one scope, at most
+ * 256. Each id is widened to its subagent tree, so a hit inside a
+ * delegated child still answers for the root the reader navigates to.
+ * An alternative to `session`, never combined with it.
+ */
+sessions: string | null, 
+/**
+ * Widen every term of three or more characters to the tokens it begins;
+ * phrases stay exact. Absent means off.
+ */
+prefix: boolean | null, runtime: string | null, agent: string | null, project: string | null, kind: string | null, is_error: boolean | null, after_ts: number | null, before_ts: number | null, };

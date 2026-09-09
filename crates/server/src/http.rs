@@ -775,19 +775,49 @@ async fn projects(State(state): State<AppState>) -> Json<ProjectsResponse> {
 struct SessionListQuery {
     project: Option<String>,
     limit: Option<i64>,
+    /// Comma-separated provider-native session ids. A consumer that knows a
+    /// running agent only by the id its provider minted resolves the canonical
+    /// row here without listing history (protocol 18).
+    native_session_id: Option<String>,
+}
+
+/// Comma-separated selector values, trimmed, deduplicated, with blank entries
+/// refused rather than silently matching nothing.
+fn selector_list(raw: &str, name: &str) -> Result<Vec<String>, Failure> {
+    let mut values: Vec<String> = Vec::new();
+    for part in raw.split(',') {
+        let value = part.trim();
+        if value.is_empty() {
+            return Err(Failure::bad_request(format!(
+                "{name} must be a comma-separated list of non-blank values"
+            )));
+        }
+        if !values.iter().any(|known| known == value) {
+            values.push(value.to_owned());
+        }
+    }
+    Ok(values)
 }
 
 async fn sessions(
     State(state): State<AppState>,
     Query(query): Query<SessionListQuery>,
-) -> Json<SessionsResponse> {
+) -> Result<Json<SessionsResponse>, Failure> {
     let limit = clamp_limit(query.limit, DEFAULT_LIST_LIMIT) as usize;
     let mut sessions = state.hub.sessions();
-    // Child sessions are transcript structure, not browseable top-level
-    // history. Parent absence is the authoritative navigation fact; some
-    // native formats reveal an immediate parent before the denormalized root
-    // can be transitively refined. Children remain addressable by id.
-    sessions.retain(|session| session.parent_session_id.is_none());
+    if let Some(raw) = query.native_session_id.as_deref() {
+        // A native-id lookup answers children as well: the caller resolves the
+        // navigable root through `root_session_id`, and a provider may have
+        // minted the id the caller holds for a delegated child.
+        let natives = selector_list(raw, "native_session_id")?;
+        sessions.retain(|session| natives.contains(&session.native_session_id));
+    } else {
+        // Child sessions are transcript structure, not browseable top-level
+        // history. Parent absence is the authoritative navigation fact; some
+        // native formats reveal an immediate parent before the denormalized root
+        // can be transitively refined. Children remain addressable by id.
+        sessions.retain(|session| session.parent_session_id.is_none());
+    }
     if let Some(project) = &query.project {
         sessions.retain(|session| session.project_id.as_deref() == Some(project));
     }
@@ -797,7 +827,38 @@ async fn sessions(
             .then_with(|| a.id.cmp(&b.id))
     });
     sessions.truncate(limit);
-    Json(SessionsResponse { sessions })
+    Ok(Json(SessionsResponse { sessions }))
+}
+
+/// `sessions=` names roots a reader can navigate to, while search documents
+/// carry only their own session id. Each named session is therefore widened
+/// to every session that rolls up to it before the backend sees the scope. An
+/// id the mirror does not know is kept as given: it may be a session the hub
+/// has not absorbed yet, and an honest empty answer beats a refusal.
+fn expand_session_scope(state: &AppState, raw: Option<&str>) -> Result<Vec<String>, Failure> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let requested = selector_list(raw, "sessions")?;
+    if requested.len() > rosetta_search::MAX_SEARCH_SESSIONS {
+        return Err(Failure::bad_request(format!(
+            "sessions exceeds {} ids",
+            rosetta_search::MAX_SEARCH_SESSIONS
+        )));
+    }
+    let mut scope = requested.clone();
+    for session in state.hub.sessions() {
+        let Some(parent) = session.parent_session_id.as_deref() else {
+            continue;
+        };
+        let rolls_up = requested
+            .iter()
+            .any(|id| *id == session.root_session_id || id == parent);
+        if rolls_up && !scope.contains(&session.id) {
+            scope.push(session.id);
+        }
+    }
+    Ok(scope)
 }
 
 async fn session(
@@ -981,10 +1042,13 @@ async fn search(
     let limit = clamp_limit(request.limit, DEFAULT_SEARCH_LIMIT);
     let text =
         TextQuery::parse(&request.q).map_err(|error| Failure::bad_request(error.to_string()))?;
+    let sessions = expand_session_scope(&state, request.sessions.as_deref())?;
     let query = SearchQuery {
         text,
+        prefix: request.prefix.unwrap_or(false),
         limit,
         session: request.session,
+        sessions,
         runtime: request.runtime,
         agent: request.agent,
         project: request.project,

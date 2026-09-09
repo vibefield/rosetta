@@ -31,7 +31,7 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -355,6 +355,11 @@ impl TimelineCursor {
 /// rejected while tool activity is not indexed.
 /// `agent` selects a runtime family (`claude-code`, `codex`, …), while
 /// `runtime` selects one concrete runtime id.
+///
+/// Protocol 18 (2026-09-09) adds the live-monitor shape of a search: `sessions`
+/// names the sessions a reader can jump to and `prefix` lets a remembered
+/// fragment of a word match, so a monitor of running agents can ask one
+/// question per keystroke instead of one per agent.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SearchRequest {
@@ -362,6 +367,14 @@ pub struct SearchRequest {
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub limit: Option<i64>,
     pub session: Option<String>,
+    /// Comma-separated canonical session ids searched as one scope, at most
+    /// 256. Each id is widened to its subagent tree, so a hit inside a
+    /// delegated child still answers for the root the reader navigates to.
+    /// An alternative to `session`, never combined with it.
+    pub sessions: Option<String>,
+    /// Widen every term of three or more characters to the tokens it begins;
+    /// phrases stay exact. Absent means off.
+    pub prefix: Option<bool>,
     pub runtime: Option<String>,
     pub agent: Option<String>,
     pub project: Option<String>,

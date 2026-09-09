@@ -494,6 +494,8 @@ fn exemplars() -> serde_json::Value {
             q: "needle".into(),
             limit: Some(50),
             session: Some("s1".into()),
+            sessions: Some("s1,s1c".into()),
+            prefix: Some(true),
             runtime: Some("rt1".into()),
             agent: Some("claude-code".into()),
             project: Some("p1".into()),

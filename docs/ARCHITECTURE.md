@@ -721,6 +721,21 @@ Each hit carries its row's canonical `kind` and reported timestamp beside the sn
 (protocol v17, 2026-09-09), read from the detached sidecar's own document table — so the
 app's search sheet can say who said it and when without a second read per hit.
 
+Protocol v18 (2026-09-09) adds the live-monitor shape of a search, driven by Godview's
+"find the agent by what was said" sheet, which names the sessions it can jump to and
+asks one question per keystroke: `sessions=` is a comma-separated set of at most 256
+canonical ids matched as one `IN` scope (the server widens each id to every session that
+rolls up to it, so a hit inside a delegated child answers for its root; an alternative to
+`session`, never combined); `prefix=true` widens each term of three or more characters to
+the tokens it begins while phrases stay exact (`puppet` finds `puppeteer`; the `*` is
+appended outside the quoted token, so user text still never reaches FTS5 unquoted); and
+`GET /api/sessions?native_session_id=a,b` resolves provider-native ids to canonical rows,
+children included, without listing history. A sidecar generation that is merely behind the
+canonical watermark now answers with its consistent snapshot labelled `catching-up`
+instead of an empty page; only another projection epoch, an unpublished canonical, or a
+failed/absent generation is `unavailable` with no hits. Blank selectors and oversized
+sets remain HTTP 400.
+
 **Observe (job 2)** — the flagship contract, successor to `observeSession`:
 
 ```
@@ -772,7 +787,14 @@ resolves the source session, response, and inclusive bounds from that canonical
 report and returns only the proven range. Pending or missing evidence fails closed.
 
 Electron owns one managed daemon generation at a time. `serve --json` emits a
-versioned readiness event with its bound loopback origin. Startup failure and
+versioned readiness event with its bound loopback origin. `serve --announce` additionally
+publishes `{schema: "rosetta-daemon/1", origin, pid, protocol_version, db, started_at}` as
+`<pid>.json` under `~/Library/Application Support/rosetta/daemons` (macOS) or
+`$XDG_STATE_HOME/rosetta/daemons` (`--announce-dir` or `ROSETTA_ANNOUNCE_DIR` override),
+owner-readable, removed on orderly shutdown, and named in the ready event as `announce`.
+It exists for sibling apps that did not spawn the daemon and therefore never saw its
+stdout; a reader treats the file as a hint and probes `/api/status` before believing it,
+because a killed daemon leaves its file behind. The app passes `--announce` (2026-09-09). Startup failure and
 shutdown send SIGINT, escalating to SIGKILL after a grace period; replacement
 waits for actual child exit and retries with capped backoff. Main sends revised
 daemon state through the preload so the renderer reconnects when a new child
