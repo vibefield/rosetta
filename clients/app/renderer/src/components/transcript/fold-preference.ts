@@ -6,10 +6,12 @@
 // property of this machine's reader, so it does not travel until the store
 // does.
 //
-// The switch itself is CSS. `data-fold="off"` on the column hides every fold
-// line and reveals every ladder, so flipping the room never walks React state
-// and a run the reader opened by hand keeps its own `aria-expanded`.
-import { useCallback, useState } from "react";
+// The switch itself is CSS. `data-fold="off"` on the column reveals every
+// ladder and keeps every head as its ladder's title (R-4), so flipping the
+// room never walks React state and a run the reader opened by hand keeps its
+// own `aria-expanded`. It is ONE store, not one state per caller, so a head
+// can read it too: while every run is open the head is not a control.
+import { useCallback, useSyncExternalStore } from "react";
 
 const STORE_KEY = "ah.transcript.fold.v1";
 
@@ -22,18 +24,30 @@ function load(): boolean {
   }
 }
 
+let folded = load();
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function snapshot(): boolean {
+  return folded;
+}
+
 export function useFoldPreference(): { folded: boolean; toggle: () => void } {
-  const [folded, setFolded] = useState(load);
+  const value = useSyncExternalStore(subscribe, snapshot, () => true);
   const toggle = useCallback(() => {
-    setFolded((value) => {
-      const next = !value;
-      try {
-        localStorage.setItem(STORE_KEY, next ? "on" : "off");
-      } catch {
-        // storage refused; the preference holds for this run
-      }
-      return next;
-    });
+    folded = !folded;
+    try {
+      localStorage.setItem(STORE_KEY, folded ? "on" : "off");
+    } catch {
+      // storage refused; the preference holds for this run
+    }
+    for (const listener of listeners) listener();
   }, []);
-  return { folded, toggle };
+  return { folded: value, toggle };
 }

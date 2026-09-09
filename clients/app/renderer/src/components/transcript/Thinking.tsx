@@ -9,7 +9,7 @@
 // The segment owns `data-open` because the clamp is a CSS rule keyed on it,
 // so the disclosure and the element the stylesheet reads are one component.
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { firstLine, spanText } from "../../lib/transcript";
 import { LineChevron, ThoughtGlyph } from "./glyphs";
 
@@ -62,9 +62,27 @@ export function Thinking({ text, spanMs, domId, timelineId, hit, anchor }: Think
  * place to the same muted prose the clamp holds. Inside a ladder `Thinking`
  * keeps the clamp; this is the line form only. Q4 C moved one level down.
  */
-export function ThoughtLine({ text, spanMs, domId, timelineId, hit, anchor }: ThinkingProps) {
+export function ThoughtLine({
+  text,
+  spanMs,
+  domId,
+  timelineId,
+  hit,
+  anchor,
+  forceOpen = false,
+}: ThinkingProps & {
+  /** A landing inside this thought opens it, as a landing inside a line does:
+   * the matched words must be on the page, not one press away. */
+  readonly forceOpen?: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   const span = spanMs === null || spanMs < 1000 ? null : spanText(spanMs);
+  // A thought may open with a blank line; the head names the first line
+  // that says something.
+  const lead = text.trimStart();
   const toggle = () => setOpen((value) => !value);
   return (
     <div
@@ -91,8 +109,8 @@ export function ThoughtLine({ text, spanMs, domId, timelineId, hit, anchor }: Th
           <ThoughtGlyph />
         </span>
         <span className="tr-line__v">Thought</span>
-        <span className="tr-line__o" title={firstLine(text, 400)}>
-          {firstLine(text)}
+        <span className="tr-line__o" title={firstLine(lead, 400)}>
+          {firstLine(lead)}
         </span>
         <span className="tr-line__r">
           {span !== null && <span>{span}</span>}

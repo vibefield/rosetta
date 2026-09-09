@@ -39,6 +39,7 @@ import type {
 import { objectText, spanText } from "../../lib/transcript";
 import { FaviconStack, Favicon } from "./Favicon";
 import { FailGlyph, FamilyGlyph, LineChevron } from "./glyphs";
+import { useFoldPreference } from "./fold-preference";
 import { hasDetail, LineDetail } from "./LineDetail";
 import { Marker, SummaryNote } from "./Marker";
 import { TeamInvocation } from "./Team";
@@ -284,10 +285,16 @@ export function Ledger({
     (focusTimelineId !== null &&
       rowsOf(member).some((row) => row.timeline_id === focusTimelineId));
   const focusInside = members.some(inside);
-  const [open, setOpen] = useState(false);
+  // A run that was one line when it mounted is drawn open, and a live run
+  // that grows under the reader's eye keeps that state: nothing closes on its
+  // own any more than it opens (R-5). A run that arrives complete is closed.
+  const [open, setOpen] = useState(() => !summary.closedByDefault);
   useEffect(() => {
     if (focusInside) setOpen(true);
   }, [focusInside]);
+  // §05 — while the room's activity act holds every run open, the head is a
+  // title, not a control: it reads as expanded and a press changes nothing.
+  const everyRunOpen = !useFoldPreference().folded;
 
   const drawn: ReactNode[] = [];
   for (let index = 0; index < members.length; index += 1) {
@@ -388,8 +395,10 @@ export function Ledger({
   const running = summary.running !== null && alive(summary.running) ? summary.running : null;
   const span = summary.spanMs !== null && summary.spanMs >= 1000 ? spanText(summary.spanMs) : null;
   const stamp = at === null ? null : clock(at);
-  const expanded = open || focusInside;
-  const toggle = () => setOpen((value) => !value);
+  const expanded = everyRunOpen || open || focusInside;
+  const toggle = () => {
+    if (!everyRunOpen) setOpen((value) => !value);
+  };
   return (
     <div className="tr-seg tr-ledger">
       {anchor}
@@ -398,6 +407,7 @@ export function Ledger({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
+        aria-disabled={everyRunOpen || undefined}
         data-state={running === null ? undefined : "running"}
         onClick={toggle}
         onKeyDown={(event) => {

@@ -644,6 +644,7 @@ export function TranscriptDocument({
             domId={domIdOf(rowId)}
             timelineId={rowId}
             hit={hit}
+            forceOpen={focusTimelineId === rowId}
             anchor={
               <Anchor
                 at={segment.at}
