@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SearchBackend, SearchError, SearchOutput, SearchQuery, SearchReadiness, SearchState};
 
-pub(crate) const SEARCH_SCHEMA_VERSION: i64 = 3;
+/// 4 (2026-09-09): coverage narrowed to prompts and replies
+/// ([`queries::SEARCH_KINDS`]); an index built under 3 answers with rows
+/// that no longer belong to search, so it is rebuilt.
+pub(crate) const SEARCH_SCHEMA_VERSION: i64 = 4;
 
 pub(crate) const SEARCH_DDL: &str = r#"
 CREATE TABLE search_state (
@@ -141,13 +144,46 @@ pub(crate) fn read_manifest(layout: &SidecarLayout) -> Result<Option<Manifest>, 
     };
     let manifest: Manifest = serde_json::from_slice(&bytes)
         .map_err(|error| SearchError::Backend(format!("parsing search CURRENT: {error}")))?;
+    // A well-formed manifest for a generation this daemon cannot use — an
+    // older or newer search schema, a foreign format — is, to every caller,
+    // the same as no generation: the worker rebuilds it, status reports
+    // Building with the rebuild's progress, and a query answers unavailable.
+    // Reporting it as a failure made a routine schema bump look like a broken
+    // install for the whole rebuild (seen 2026-09-09, schema 3 → 4). Only a
+    // manifest we cannot read at all is an error.
     if manifest.format != 1 || manifest.search_schema != SEARCH_SCHEMA_VERSION {
-        return Err(SearchError::Backend(format!(
-            "unsupported search manifest format/schema {}/{}",
-            manifest.format, manifest.search_schema
-        )));
+        return Ok(None);
     }
     Ok(Some(manifest))
+}
+
+/// After a generation is published, every other regular file in the
+/// generations directory is a superseded generation, its WAL/SHM sidecars,
+/// or the temp file of a build that died before publishing. The sidecar is
+/// disposable, so they are removed; a reader still holding an open handle on
+/// a superseded file keeps its inode until it closes. Removal failures are
+/// not errors: the new generation is already live.
+pub(crate) fn prune_generations(layout: &SidecarLayout, keep: &str) -> usize {
+    let Ok(entries) = std::fs::read_dir(&layout.generations) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name == keep || name == format!("{keep}-wal") || name == format!("{keep}-shm") {
+            continue;
+        }
+        if entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -323,7 +359,7 @@ fn query_generation(
         before_ts: query.before_ts,
     };
     let mut sql = String::from(
-        "SELECT d.timeline_id, d.session_id,
+        "SELECT d.timeline_id, d.session_id, d.kind, d.ts,
                 snippet(message_fts, -1, '[', ']', '…', 12), rank
          FROM message_fts
          JOIN search_document d ON d.id = message_fts.rowid
@@ -396,8 +432,10 @@ fn query_generation(
             Ok(queries::SearchHit {
                 timeline_id: row.get(0)?,
                 session_id: row.get(1)?,
-                snippet: row.get(2)?,
-                score: row.get(3)?,
+                kind: row.get(2)?,
+                at: row.get(3)?,
+                snippet: row.get(4)?,
+                score: row.get(5)?,
             })
         })
         .map_err(|error| SearchError::Backend(format!("querying sidecar search: {error}")))?;

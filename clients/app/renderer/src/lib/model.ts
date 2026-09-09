@@ -7,7 +7,7 @@ import type {
   SessionRow,
 } from "@rosetta/protocol";
 import type { AgentShare } from "./agents";
-import { projectTint } from "./tint";
+import { projectTint } from "./tint.ts";
 
 export interface ProjectStats {
   /** Daily token totals over the heatmap's window (53 Sunday-aligned weeks

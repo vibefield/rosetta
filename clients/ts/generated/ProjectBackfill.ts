@@ -6,17 +6,17 @@
  * `sessions_done` counts sessions whose last queued cold task finished.
  * Nothing here is durable — a restart rebuilds it from the plan.
  */
-export type ProjectBackfill = {
+export type ProjectBackfill = { 
 /**
  * Canonical project id; `None` is the unassigned bucket (sessions
  * whose ownership bounded meta could not prove).
  */
-project_id: string | null, sessions_total: number, sessions_done: number,
+project_id: string | null, sessions_total: number, sessions_done: number, 
 /**
  * Source-size estimate; zero when the payload total is unknown, including
  * database/document snapshots and recovery from a partially captured run.
  */
-bytes_total: number,
+bytes_total: number, 
 /**
  * Framed payload bytes processed for this project's sessions — never
  * physical read amplification, so the meter tracks `bytes_total`

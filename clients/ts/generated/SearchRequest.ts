@@ -2,10 +2,11 @@
 
 /**
  * Search request: structured text plus filters. No backend query syntax.
- * `is_error` omitted includes true, false, and unreported; explicit false
- * never matches unreported tool state.
+ * Search covers prompts and replies only (2026-09-09): `kind` accepts `user`
+ * or `agent`, and any other kind is HTTP 400 rather than an empty answer.
+ * `is_error` is retained on the wire for tool-status filtering but is
+ * rejected while tool activity is not indexed.
  * `agent` selects a runtime family (`claude-code`, `codex`, …), while
  * `runtime` selects one concrete runtime id.
- * `kind` uses the canonical wire vocabulary (`user`, `agent`, `tool_use`, …).
  */
 export type SearchRequest = { q: string, limit: number | null, session: string | null, runtime: string | null, agent: string | null, project: string | null, kind: string | null, is_error: boolean | null, after_ts: number | null, before_ts: number | null, };

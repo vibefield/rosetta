@@ -9,8 +9,6 @@ export interface ProjectListProps {
   readonly projects: readonly ProjectViewModel[];
   readonly selectedProjectId: string | null;
   readonly maximumLifetimeTokens: number;
-  /** `null` denotes browse mode; a map denotes search mode. */
-  readonly searchHitCounts: ReadonlyMap<string, number> | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
   /** A backfill is running: unfinished projects cook rather than lie. */
@@ -28,7 +26,6 @@ export function ProjectList({
   projects,
   selectedProjectId,
   maximumLifetimeTokens,
-  searchHitCounts,
   homeDirectory,
   currentTimestamp,
   ingestActive,
@@ -37,7 +34,6 @@ export function ProjectList({
   pending,
   onProjectSelect,
 }: ProjectListProps) {
-  const isSearching = searchHitCounts !== null;
   const motionRef = useListMotion(JSON.stringify(projects.map((project) => project.row.id)), "projects");
 
   return (
@@ -48,7 +44,6 @@ export function ProjectList({
           project={project}
           maximumLifetimeTokens={maximumLifetimeTokens}
           isSelected={project.row.id === selectedProjectId}
-          searchHitCount={isSearching ? (searchHitCounts.get(project.row.id) ?? 0) : null}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
@@ -59,12 +54,8 @@ export function ProjectList({
       ))}
       {projects.length === 0 && !pending && (
         <EmptyState
-          title={isSearching ? "No project matched" : "No projects yet"}
-          description={
-            isSearching
-              ? "No indexed message contains that."
-              : "rosettad has not indexed any project yet — leave it serving and this fills in."
-          }
+          title="No projects yet"
+          description="rosettad has not indexed any project yet — leave it serving and this fills in."
         />
       )}
     </div>

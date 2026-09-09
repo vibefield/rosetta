@@ -64,6 +64,12 @@ pub struct ContributionRow {
 pub struct SearchHit {
     pub timeline_id: String,
     pub session_id: String,
+    /// Canonical wire kind of the matched row (`user`, `agent`, `tool_use`,
+    /// …): the search sheet labels who said it without a second read.
+    pub kind: String,
+    /// The matched row's timestamp in milliseconds, when the source reported
+    /// one. Never coerced to epoch zero.
+    pub at: Option<Ms>,
     pub snippet: String,
     /// Raw FTS5 bm25 rank (lower is better). Diagnostic only — scores have
     /// no cross-backend meaning and must never be compared across engines.
@@ -365,6 +371,38 @@ pub fn search_repairs(
     Ok(repairs)
 }
 
+/// Search coverage policy (product decision, 2026-09-09): only prompts and
+/// replies become search documents. Tool activity, thinking, summaries, team
+/// traffic, and notices stay in the canonical projection and the transcript
+/// but are never indexed — the extractor still knows how to lane them, so the
+/// decision is one predicate, and reversing it is one edit here.
+pub const SEARCH_KINDS: [&str; 2] = ["user", "agent"];
+
+/// `column IN ('user', 'agent')`, for every query that must agree with
+/// [`SEARCH_KINDS`]: the document visitor, the build denominator, and the
+/// legacy in-projection FTS path.
+pub fn search_kind_predicate(column: &str) -> String {
+    let list = SEARCH_KINDS
+        .iter()
+        .map(|kind| format!("'{kind}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{column} IN ({list})")
+}
+
+/// How many rows the detached search worker will index for this projection.
+pub fn search_document_count(conn: &Connection) -> Result<u64, StoreError> {
+    let count: i64 = conn.query_row(
+        &format!(
+            "SELECT count(*) FROM message WHERE {}",
+            search_kind_predicate("type")
+        ),
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(u64::try_from(count).unwrap_or(0))
+}
+
 fn visit_search_documents_where(
     conn: &Connection,
     predicate: &str,
@@ -377,8 +415,9 @@ fn visit_search_documents_where(
          FROM message m
          JOIN session s ON s.id = m.session_id
          JOIN agent_runtime r ON r.id = s.runtime_id
-         {predicate}
-         ORDER BY m.id"
+         WHERE {kinds} {predicate}
+         ORDER BY m.id",
+        kinds = search_kind_predicate("m.type"),
     );
     let mut statement = conn.prepare(&sql)?;
     let decoder = message_codec::Decoder::new(&statement)?;
@@ -436,7 +475,7 @@ pub fn visit_session_search_documents(
     session_id: &str,
     visit: impl FnMut(SearchDocument) -> Result<(), StoreError>,
 ) -> Result<(), StoreError> {
-    visit_search_documents_where(conn, "WHERE m.session_id = ?1", Some(session_id), visit)
+    visit_search_documents_where(conn, "AND m.session_id = ?1", Some(session_id), visit)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1353,7 +1392,7 @@ pub fn search_filtered(
     }
 
     let mut sql = String::from(
-        "SELECT m.timeline_id, m.session_id,
+        "SELECT m.timeline_id, m.session_id, m.type, m.ts,
                 snippet(message_fts, -1, '[', ']', '…', 12), rank
          FROM message_fts
          JOIN message m ON m.id = message_fts.rowid
@@ -1363,6 +1402,9 @@ pub fn search_filtered(
         sql.push_str(" JOIN agent_runtime r ON r.id = s.runtime_id");
     }
     sql.push_str(" WHERE message_fts MATCH ?1");
+    // The legacy in-projection index holds every row; the coverage policy
+    // still applies to what it may answer with.
+    sql.push_str(&format!(" AND {}", search_kind_predicate("m.type")));
     let mut binds: Vec<Value> = vec![Value::from(query.to_string())];
     let clause = |sql: &mut String, predicate: &str, value: Value, binds: &mut Vec<Value>| {
         binds.push(value);
@@ -1426,8 +1468,10 @@ pub fn search_filtered(
         Ok(SearchHit {
             timeline_id: row.get(0)?,
             session_id: row.get(1)?,
-            snippet: row.get(2)?,
-            score: row.get(3)?,
+            kind: row.get(2)?,
+            at: row.get(3)?,
+            snippet: row.get(4)?,
+            score: row.get(5)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1526,6 +1570,8 @@ fn search_canonical_compat(
             hits.push(SearchHit {
                 timeline_id: document.timeline_id,
                 session_id: document.session_id,
+                kind: document.kind,
+                at: document.ts,
                 snippet,
                 score: 0.0,
             });

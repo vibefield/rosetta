@@ -10,8 +10,6 @@ export interface SessionListItemProps {
   readonly facts: SessionFacts | null;
   readonly runtimeKind: string;
   readonly isSelected: boolean;
-  /** `null` hides the search hit count. */
-  readonly searchHitCount: number | null;
   readonly currentTimestamp: number;
   /** A backfill is running — an unindexed session's dot says "indexing". */
   readonly duringBackfill: boolean;
@@ -23,7 +21,6 @@ export function SessionListItem({
   facts,
   runtimeKind,
   isSelected,
-  searchHitCount,
   currentTimestamp,
   duringBackfill,
   onSessionSelect,
@@ -41,9 +38,6 @@ export function SessionListItem({
   const roleLabel = session.role === "main" ? null : session.role;
   const accessibleMetadata = [
     roleLabel === null ? null : `${roleLabel} session`,
-    searchHitCount === null
-      ? null
-      : `${searchHitCount} ${searchHitCount === 1 ? "search hit" : "search hits"}`,
     landedFacts === null ? null : `${landedFacts.messages} messages`,
     landedFacts !== null && landedFacts.tokens > 0
       ? `${tokenText(landedFacts.tokens)} tokens`
@@ -81,14 +75,6 @@ export function SessionListItem({
         {roleLabel !== null && (
           <>
             <span>{roleLabel}</span>
-            <span>·</span>
-          </>
-        )}
-        {searchHitCount !== null && (
-          <>
-            <span>
-              {searchHitCount} {searchHitCount === 1 ? "hit" : "hits"}
-            </span>
             <span>·</span>
           </>
         )}

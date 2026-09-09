@@ -1398,11 +1398,17 @@ fn typed_tool_update_merges_and_search_excludes_native_output() {
     let tool = entry_tool(&page[0]).unwrap();
     assert_eq!(tool.status.value, ToolStatus::Succeeded);
 
-    // Native result text never crossed the typed op boundary. The reviewed
-    // command remains searchable through the intent lane.
+    // Native result text never crossed the typed op boundary, and since the
+    // 2026-09-09 coverage decision (`queries::SEARCH_KINDS`) the reviewed
+    // command is not a search document either: tool rows stay canonical and
+    // rendered, never indexed.
     let hits = queries::search(store.conn(), "quetzalcoatl", 5).unwrap();
     assert!(hits.is_empty());
-    assert_eq!(queries::search(store.conn(), "cargo", 5).unwrap().len(), 1);
+    assert!(
+        queries::search(store.conn(), "cargo", 5)
+            .unwrap()
+            .is_empty()
+    );
 
     // A result with no matching call waits only in process RAM until the call
     // arrives. The raw ledger is the restart path; SQLite stays user-facing.

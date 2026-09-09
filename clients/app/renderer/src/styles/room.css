@@ -86,30 +86,6 @@
    halfway through a sort. Scrolling itself never starts an animation. */
 .ah-motion-list { overflow-anchor: none; }
 
-/* ── the search line: a line at the head of the Ledger, never a modal ────── */
-.ah-searchline { padding: 8px 8px 0; }
-.ah-search {
-  display: flex; align-items: center; gap: 8px;
-  height: 32px; padding: 0 11px; border-radius: 999px;
-  background: var(--vf-fill);
-  transition: box-shadow 160ms ease;
-}
-.ah-search:focus-within { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
-.ah-search svg { width: 13px; height: 13px; flex: none; color: var(--vf-text-tertiary); }
-.ah-search input {
-  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
-  color: var(--vf-text-primary); font-size: 12px;
-}
-.ah-search input::placeholder { color: var(--vf-text-tertiary); }
-.ah-search button {
-  display: grid; place-items: center; width: 18px; height: 18px; flex: none;
-  border: 0; border-radius: 999px; background: transparent; color: var(--vf-text-tertiary);
-  font-size: 13px; line-height: 1;
-}
-.ah-search button:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
-.ah-search button[hidden] { display: none; }
-/* PP6 at the surface: the product reads the vendors' own stores and says so. */
-.ah-scope { padding: 7px 8px 9px 14px; color: var(--vf-text-faint); font-size: 10px; line-height: 1.5; }
 
 /* ── Projects ─────────────────────────────────────────────────────────────
    The tint wash is scaled to the busiest project in the complete collection,
@@ -189,27 +165,12 @@
 }
 .ah-more { color: var(--vf-text-faint); font-size: 8.5px; font-variant-numeric: tabular-nums; }
 
-.ah-project-list-item__search-hits {
-  padding: 1px 6px; border-radius: 5px; background: var(--vf-fill-hover);
-  color: var(--vf-text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums;
-}
-.ah-project-list-item.is-selected .ah-project-list-item__search-hits {
-  color: var(--project-color);
-  background: color-mix(in srgb, var(--project-color) 14%, transparent);
-}
 
-/* ── search: a room-level strip, never a property of one column ──────────
-   Searching spans every project, so it cannot live inside the list of them.
-   It gets a line of its own across the head of the room — still not a modal,
-   which was always the parent's point. */
-.ah-searchbar {
-  display: flex; align-items: center; gap: 12px; flex: none;
-  padding: 9px 14px; border-bottom: 1px solid var(--vf-hairline);
-}
-.ah-searchbar .ah-search { flex: 1 1 auto; min-width: 0; max-width: 460px; }
-.ah-searchbar .ah-scope { padding: 0; flex: none; }
+/* ── search lives in styles/search.css: a launcher in the strip, a sheet
+   over the room (search record, 2026-09-09). The key cap stays here because
+   every surface that names a shortcut wears it. */
 .ah-kbd {
-  flex: none; margin-left: auto; padding: 2px 6px;
+  flex: none; padding: 2px 6px;
   border: 1px solid var(--vf-hairline-strong); border-radius: 6px;
   color: var(--vf-text-faint); font-family: var(--vf-font-sans); font-size: 10px; line-height: 1.4;
 }
@@ -521,7 +482,7 @@
 }
 @keyframes ah-pop { from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.92); } to { opacity: 1; transform: translateX(-50%); } }
 
-/* ── search results — cols 2–3 change CONTENT, never geometry ───────────── */
+/* ── result groups — the rail's change groups head themselves this way ──── */
 .ah-group {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 10px 6px; margin-top: 2px;
@@ -531,32 +492,7 @@
 .ah-group i { width: 3px; height: 11px; border-radius: 999px; background: var(--tint); flex: none; }
 .ah-hitcount { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 
-.ah-hitlist { max-width: 68ch; margin: 0 auto; padding: 12px 20px 20px; font-size: 14px; }
-.ah-hit {
-  display: block; width: 100%; padding: 11px 12px; margin-bottom: 2px;
-  border: 0; border-radius: 11px; background: transparent; text-align: left;
-  transition: background-color 160ms ease;
-}
-.ah-hit:hover { background: var(--vf-fill); }
-.ah-hit__head {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
-  color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.07em;
-}
-.ah-hit__head time { font-variant-numeric: tabular-nums; letter-spacing: 0; text-transform: none; }
-.ah-hit p { margin: 0; color: var(--vf-text-tertiary); font-size: 12.5px; line-height: 1.5; }
-/* The match is hierarchy, not a highlighter. §2.5 keeps hue for honest state
-   and a search match is not a state; §2.4 already has the tool — the matched
-   run takes full ink on the fill, its surroundings stay on the ramp. */
-.ah-hit mark {
-  padding: 1px 2px; margin: 0 -1px; border-radius: 3px;
-  background: var(--vf-fill-hover); color: var(--vf-text-primary);
-  font-weight: 500;
-}
-.ah-hit:hover mark { background: color-mix(in srgb, var(--vf-select) 20%, transparent); }
 
-/* the count sentence — "results" with the numbers it is actually making */
-.ah-count { color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
 
 /* ── honest states ──────────────────────────────────────────────────────── */
 .ah-empty {
@@ -589,7 +525,7 @@
 .ah-room button:focus-visible,
 .ah-fileview button:focus-visible,
 .ah-fileview a:focus-visible,
-.ah-search input:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+.ah-sheet button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
 
 /* M6 — non-negotiable quality floor */
 @media (prefers-reduced-motion: reduce) {
@@ -650,12 +586,9 @@ code, .mono { font-family: var(--vf-font-mono); }
 .ah-worktree code[data-dirty] { color: var(--vf-cyan); }
 
 /* macOS: the traffic lights sit over the search strip, and the strip is the
-   window's drag region (hiddenInset title bar; inert elsewhere) */
-.ah-searchbar { min-height: 50px; padding-left: 84px; -webkit-app-region: drag; }
-.ah-searchbar .ah-search,
-.ah-searchbar button,
-.ah-searchbar input { -webkit-app-region: no-drag; }
-/* A modal occupies the native title-bar strip when it goes edge-to-edge.
+   window's drag region (hiddenInset title bar; inert elsewhere) — drawn in
+   styles/search.css beside the launcher it seats.
+   A modal occupies the native title-bar strip when it goes edge-to-edge.
    Remove the room's drag region for the whole modal lifetime: Electron drops
    every pointer event over a drag region before the restore button can see
    it, even though the modal paints above the room. */

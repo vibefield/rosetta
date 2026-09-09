@@ -1130,7 +1130,7 @@ async fn detached_backend_never_masquerades_as_ready_empty_search() {
     assert_eq!(status.search, state);
 
     let (status, body) = h
-        .get("/api/search?q=ionosphere&kind=tool_use&session=s1&limit=7")
+        .get("/api/search?q=ionosphere&kind=user&session=s1&limit=7")
         .await;
     assert_eq!(status, StatusCode::OK);
     let response: SearchResponse = serde_json::from_value(body).unwrap();
@@ -1143,7 +1143,7 @@ async fn detached_backend_never_masquerades_as_ready_empty_search() {
         queries[0].text,
         rosetta_search::TextQuery::parse("ionosphere").unwrap()
     );
-    assert_eq!(queries[0].kind.as_deref(), Some("tool_use"));
+    assert_eq!(queries[0].kind.as_deref(), Some("user"));
     assert_eq!(queries[0].session.as_deref(), Some("s1"));
     assert_eq!(queries[0].limit, 7);
 }
@@ -1307,32 +1307,38 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
         tool_row,
     ]);
 
+    // Coverage is prompts and replies (2026-09-09): the tool row that also says
+    // "ionosphere" is canonical and rendered, never a hit.
     let (status, body) = h.get("/api/search?q=ionosphere").await;
     assert_eq!(status, StatusCode::OK);
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
-    assert_eq!(parsed.hits.len(), 2);
+    assert_eq!(parsed.hits.len(), 1);
+    assert_eq!(parsed.hits[0].timeline_id, "m-user");
+    assert_eq!(parsed.hits[0].kind, "user");
 
     let (_, body) = h.get("/api/search?q=ionosphere&agent=claude-code").await;
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
-    assert_eq!(parsed.hits.len(), 2);
+    assert_eq!(parsed.hits.len(), 1);
 
     let (_, body) = h.get("/api/search?q=ionosphere&agent=codex").await;
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
     assert!(parsed.hits.is_empty());
 
-    let (_, body) = h.get("/api/search?q=ionosphere&kind=tool_use").await;
+    // A selector that can never match is refused, never an empty success.
+    for selector in [
+        "kind=tool_use",
+        "kind=thinking",
+        "is_error=true",
+        "is_error=false",
+    ] {
+        let (status, body) = h.get(&format!("/api/search?q=ionosphere&{selector}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{selector}");
+        assert_eq!(body["error"]["code"], "bad_request", "{selector}");
+    }
+    let (_, body) = h.get("/api/search?q=ionosphere&kind=user").await;
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
     assert_eq!(parsed.hits.len(), 1);
-    assert_eq!(parsed.hits[0].timeline_id, "m-tool");
-
-    let (_, body) = h.get("/api/search?q=ionosphere&is_error=true").await;
-    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
-    assert_eq!(parsed.hits.len(), 1);
-    assert_eq!(parsed.hits[0].timeline_id, "m-tool");
-
-    let (_, body) = h.get("/api/search?q=ionosphere&is_error=false").await;
-    let parsed: SearchResponse = serde_json::from_value(body).unwrap();
-    assert!(parsed.hits.is_empty(), "unknown is not coerced to false");
+    assert_eq!(parsed.hits[0].timeline_id, "m-user");
 
     let (_, body) = h
         .get("/api/search?q=ionosphere&before_ts=3700000&session=s1")

@@ -1,7 +1,6 @@
 import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
 import { isCensusRunning, isIngestActive } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
-import type { ProjectSearchResultGroup } from "../../lib/search-results";
 import { ProjectSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar } from "../ui";
 import { SessionList } from "./SessionList";
@@ -23,8 +22,6 @@ export interface SessionsColumnProps {
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
   readonly onSessionSelect: (session: SessionRow) => void;
-  /** Non-null selects search mode and replaces the browse-mode sessions. */
-  readonly searchGroups: readonly ProjectSearchResultGroup[] | null;
 }
 
 export function SessionsColumn({
@@ -40,23 +37,15 @@ export function SessionsColumn({
   isWorktreeVisible,
   onToggleWorktree,
   onSessionSelect,
-  searchGroups,
 }: SessionsColumnProps) {
-  const isSearching = searchGroups !== null;
   const ingestActive = isIngestActive(ingest);
   const censusRunning = isCensusRunning(ingest);
-  const visibleSessionCount = isSearching
-    ? searchGroups.reduce((total, group) => total + group.sessions.length, 0)
-    : sessions.length;
+  const visibleSessionCount = sessions.length;
 
   return (
     <div className="ah-col">
-      {isSearching || project === null ? (
-        <ListSummaryHeader
-          label={isSearching ? "Sessions with hits" : "Sessions"}
-          count={visibleSessionCount}
-          singularNoun="session"
-        />
+      {project === null ? (
+        <ListSummaryHeader label="Sessions" count={visibleSessionCount} singularNoun="session" />
       ) : (
         <ProjectSummaryPanel
           project={project}
@@ -70,42 +59,27 @@ export function SessionsColumn({
           onToggleWorktree={onToggleWorktree}
         />
       )}
-      <ListToolbar label={isSearching ? "ranked by hits" : "session threads"} />
-      {censusRunning && !isSearching && <p className="ah-ingest-note">More conversations will appear as discovery finishes.</p>}
+      <ListToolbar label="session threads" />
+      {censusRunning && <p className="ah-ingest-note">More conversations will appear as discovery finishes.</p>}
       <div className="ah-veilhost">
-        {searchGroups === null ? (
-          <SessionList
-            mode="browse"
-            sessions={sessions}
-            factsBySessionId={factsBySessionId}
-            getRuntimeKind={getRuntimeKind}
-            selectedSessionId={selectedSessionId}
-            currentTimestamp={currentTimestamp}
-            duringBackfill={ingestActive}
-            pending={censusRunning}
-            emptyState={
-              project === null
-                ? {
-                    title: "No project selected",
-                    description: "Pick a project to browse its sessions.",
-                  }
-                : undefined
-            }
-            onSessionSelect={onSessionSelect}
-          />
-        ) : (
-          <SessionList
-            mode="search"
-            groups={searchGroups}
-            factsBySessionId={factsBySessionId}
-            getRuntimeKind={getRuntimeKind}
-            selectedSessionId={selectedSessionId}
-            currentTimestamp={currentTimestamp}
-            duringBackfill={ingestActive}
-            pending={censusRunning}
-            onSessionSelect={onSessionSelect}
-          />
-        )}
+        <SessionList
+          sessions={sessions}
+          factsBySessionId={factsBySessionId}
+          getRuntimeKind={getRuntimeKind}
+          selectedSessionId={selectedSessionId}
+          currentTimestamp={currentTimestamp}
+          duringBackfill={ingestActive}
+          pending={censusRunning}
+          emptyState={
+            project === null
+              ? {
+                  title: "No project selected",
+                  description: "Pick a project to browse its sessions.",
+                }
+              : undefined
+          }
+          onSessionSelect={onSessionSelect}
+        />
       </div>
     </div>
   );

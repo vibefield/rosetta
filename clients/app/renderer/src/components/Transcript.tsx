@@ -4,8 +4,8 @@
 // What lives here is what belongs to the COLUMN rather than to the reading:
 // the head band and its two acts, the scroller and the four things pinned to
 // it (the top fade, the day pill's menu, the earlier receipt, the live tail's
-// notice), the search-results view that replaces the document, and the focus
-// landing that brings a search hit home.
+// notice), the match stepper the search sheet leaves in the head, and the
+// focus landing that brings a search hit home.
 //
 // Its props are App.tsx's contract and have not moved, except for the two
 // facts the record's own drawing needs: the session's runtime (the reply's
@@ -14,7 +14,6 @@
 // characters that are the same on every line).
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
-  SearchHit,
   SessionRow,
   TimelineMetaArtifact,
   TimelineMetaPlan,
@@ -29,9 +28,8 @@ import { useTranscriptTail } from "../lib/transcript/use-transcript-tail";
 import { prefersReducedMotion } from "../lib/motion";
 import type { AttachmentFact, PathFact } from "../lib/transcript";
 import type { ProjectViewModel } from "../lib/model";
-import { parseSnippet } from "../lib/model";
-import type { SearchResultsViewModel } from "../lib/search-results";
 import type { DayEntry } from "../lib/transcript";
+import { MatchStepper } from "./search";
 import { getSessionTitle } from "./sessions/session-display";
 import { DayMenu, markStuckPills } from "./transcript/DayPill";
 import { TranscriptDocument } from "./transcript/Document";
@@ -43,7 +41,7 @@ import { ReceiptPill } from "./transcript/ReceiptPill";
 import { TimelineMeta } from "./transcript/TimelineMeta";
 import { buildThreadIndex, messageDomId } from "./transcript/thread-index";
 import type { ThreadFocus } from "./transcript/thread-index";
-import { ColumnHeading, EmptyState, ResultGroupHeader } from "./ui";
+import { ColumnHeading, EmptyState } from "./ui";
 import { FileViewerDialog } from "./file-viewer";
 import type { FileHandle, FileSource } from "./file-viewer";
 import {
@@ -62,6 +60,25 @@ import {
 
 export type { ThreadFocus } from "./transcript/thread-index";
 
+/** Scroll `scroller` so `element` sits at `block`, touching no ancestor. */
+export function scrollRowTo(
+  scroller: HTMLElement,
+  element: HTMLElement,
+  block: "center" | "nearest",
+): void {
+  const frame = scroller.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  const top = rect.top - frame.top + scroller.scrollTop;
+  if (block === "center") {
+    scroller.scrollTop = top - Math.max(0, (scroller.clientHeight - rect.height) / 2);
+    return;
+  }
+  if (rect.top < frame.top) scroller.scrollTop = top;
+  else if (rect.bottom > frame.bottom) {
+    scroller.scrollTop = top - (scroller.clientHeight - rect.height);
+  }
+}
+
 /** The receipt lands beneath a pinned day pill, never over it (§08).
  * Measured rather than guessed: the scroller starts 46px down (the head band),
  * a pinned pill occupies 58–80, and the first pill still in the flow starts at
@@ -79,6 +96,13 @@ interface TimelineMetaFocus {
   readonly kind: "task" | "workflow";
 }
 
+/** The stepper's face: the query, where the reader is, how many there are. */
+export interface MatchStepperState {
+  readonly query: string;
+  readonly at: number;
+  readonly total: number;
+}
+
 export interface TranscriptColumnProps {
   readonly session: SessionRow | null;
   /** The cold backfill is running — threaded to every watermark. */
@@ -91,8 +115,10 @@ export interface TranscriptColumnProps {
   readonly focus: ThreadFocus | null;
   readonly onFocusConsumed: () => void;
   readonly onReceipt: (text: string) => void;
-  readonly searchResults: SearchResultsViewModel | null;
-  readonly onOpenHit: (session: SessionRow, hit: SearchHit) => void;
+  /** The search sheet's tail: this session's matches, walked from the head. */
+  readonly stepper: MatchStepperState | null;
+  readonly onStepMatch: (delta: 1 | -1) => void;
+  readonly onDismissStepper: () => void;
   /** The session's runtime, for the reply's mark and name (T-4). */
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly homeDirectory: string | null;
@@ -107,8 +133,9 @@ export function TranscriptColumn({
   focus,
   onFocusConsumed,
   onReceipt,
-  searchResults,
-  onOpenHit,
+  stepper,
+  onStepMatch,
+  onDismissStepper,
   getRuntimeKind,
   homeDirectory,
 }: TranscriptColumnProps) {
@@ -120,10 +147,11 @@ export function TranscriptColumn({
   const viewerRequest = useRef(0);
   const anchorRequest = useRef(0);
   const focusTries = useRef(0);
+  // One exact read per landing target, before any blind walk.
+  const anchorTried = useRef<string | null>(null);
   const index = useMemo(() => buildThreadIndex(sessions), [sessions]);
   const fold = useFoldPreference();
 
-  const searching = searchResults !== null;
   const live = session?.stream_state === "streaming";
   const requestedTimelineId =
     focus !== null && focus.sessionId === session?.id ? focus.timelineId : null;
@@ -135,13 +163,13 @@ export function TranscriptColumn({
   // §08 — the head of the document: approach fetches and holds, the pull
   // reveals, and the landing keeps the reader exactly where they were.
   const headOfDocument = useHeadOfDocument(scrollRef, feed, {
-    enabled: !searching && session !== null,
+    enabled: session !== null,
   });
 
   const tail = useTranscriptTail(
     scrollRef,
     session?.id ?? null,
-    !searching && session !== null,
+    session !== null,
     focus !== null || metaFocus !== null,
   );
 
@@ -153,6 +181,7 @@ export function TranscriptColumn({
     setViewerTarget(null);
     setMetaFocus(null);
     focusTries.current = 0;
+    anchorTried.current = null;
   }, [session?.id]);
 
   const openAttachment = (fact: AttachmentFact) => {
@@ -253,6 +282,7 @@ export function TranscriptColumn({
 
   useEffect(() => {
     focusTries.current = 0;
+    anchorTried.current = null;
     // Only a NEW target clears the ring. Consuming the focus sets the target
     // to null, and clearing on that would wipe the ring in the same frame it
     // was drawn — the landing would scroll and then show nothing.
@@ -266,7 +296,6 @@ export function TranscriptColumn({
     // one frame before the history exists.
     if (
       targetTimelineId === null ||
-      searching ||
       session === null ||
       (feed.status !== "live" && feed.status !== "resyncing")
     ) {
@@ -277,9 +306,13 @@ export function TranscriptColumn({
     const drawnBy = model.representatives.get(targetTimelineId) ?? null;
     if (drawnBy !== null) {
       const element = document.getElementById(messageDomId(session.id, drawnBy));
-      if (element) {
+      const scroller = scrollRef.current;
+      if (element && scroller) {
         tail.pause();
-        element.scrollIntoView({ block: "center" });
+        // Scroll the transcript's own scroller, never `scrollIntoView`: that
+        // walks every ancestor, and the room's overflow-hidden frame would
+        // quietly scroll the search strip out of the window (seen 2026-09-09).
+        scrollRowTo(scroller, element, "center");
         setHighlightedTimelineId(drawnBy);
         if (targetIsMeta) {
           onReceipt(`Landed on the ${metaFocus.kind} message · ${metaFocus.label}`);
@@ -291,12 +324,30 @@ export function TranscriptColumn({
       }
       return;
     }
-    // timeline_meta resolves exact anchors before setting focus. The bounded
-    // blind walk remains only for external search landings.
+    // timeline_meta resolves exact anchors before setting focus.
     if (targetIsMeta) {
       const kind = metaFocus.kind;
       setMetaFocus(null);
       onReceipt(`That ${kind} message is no longer available`);
+      return;
+    }
+    // A search landing asks for its row exactly, once — the same read the
+    // work index uses — and only walks blindly if that row lands but no line
+    // draws it yet.
+    if (anchorTried.current !== targetTimelineId) {
+      anchorTried.current = targetTimelineId;
+      const request = (anchorRequest.current += 1);
+      void feed.loadAnchor(targetTimelineId)
+        .then((loaded) => {
+          if (request !== anchorRequest.current || loaded) return;
+          onFocusConsumed();
+          onReceipt("That message is no longer available");
+        })
+        .catch((error: unknown) => {
+          if (request !== anchorRequest.current) return;
+          onFocusConsumed();
+          onReceipt(error instanceof Error ? error.message : "Could not load that message");
+        });
       return;
     }
     if (feed.earlier.kind !== "none" && focusTries.current < 8) {
@@ -307,7 +358,7 @@ export function TranscriptColumn({
       else onFocusConsumed();
       onReceipt("That message is older than the loaded history");
     }
-  }, [targetTimelineId, targetIsMeta, metaFocus, session, feed, model, searching, onFocusConsumed, onReceipt]);
+  }, [targetTimelineId, targetIsMeta, metaFocus, session, feed, model, onFocusConsumed, onReceipt]);
 
   // The pill pins while the reader is inside its day, and returns to its
   // hairline the moment that day scrolls back into view.
@@ -348,9 +399,9 @@ export function TranscriptColumn({
       data-fold={fold.folded ? "on" : "off"}
     >
       <header>
-        {searching || session === null ? (
+        {session === null ? (
           <div className="ah-colhead">
-            <span className="ah-eyebrow">{searching ? "Matches" : "Transcript"}</span>
+            <span className="ah-eyebrow">Transcript</span>
           </div>
         ) : (
           <ColumnHeading
@@ -361,12 +412,18 @@ export function TranscriptColumn({
           />
         )}
         <span className="ah-headacts">
-          <span className="ah-caption tnum">
-            {searchResults
-              ? `${searchResults.counts.matches} ${searchResults.counts.matches === 1 ? "match" : "matches"} · ${searchResults.counts.sessions} ${searchResults.counts.sessions === 1 ? "session" : "sessions"} · ${searchResults.counts.projects} ${searchResults.counts.projects === 1 ? "project" : "projects"}`
-              : range}
-          </span>
-          {!searching && session !== null && (
+          {stepper !== null && session !== null ? (
+            <MatchStepper
+              query={stepper.query}
+              at={stepper.at}
+              total={stepper.total}
+              onStep={onStepMatch}
+              onDismiss={onDismissStepper}
+            />
+          ) : (
+            <span className="ah-caption tnum">{range}</span>
+          )}
+          {session !== null && (
             // §05 — the activity act, beside the range. Folded is the default;
             // the reader who wants the build log gets it in one press, and the
             // preference is per room, not per run.
@@ -386,7 +443,7 @@ export function TranscriptColumn({
           )}
         </span>
       </header>
-      {!searching && session !== null && feed.timelineMeta !== null && (
+      {session !== null && feed.timelineMeta !== null && (
         <TimelineMeta
           meta={feed.timelineMeta}
           onOpenTask={openMetaTask}
@@ -401,48 +458,16 @@ export function TranscriptColumn({
         ref={scrollRef}
         tabIndex={0}
         role="region"
-        aria-label={searching ? "Search results" : "Session messages"}
+        aria-label="Session messages"
         onScroll={() => markStuckPills(scrollRef.current)}
       >
         {/* The top fade is the pinned pill's ground, and it must be the first
             child of the scroller: `useHeadOfDocument` writes `--frost` here. */}
         <TopFade />
-        {searching ? (
-          <div className="ah-hitlist">
-            {searchResults.groups.flatMap((group) =>
-              group.sessions.map((result) => (
-                <div key={result.session.id}>
-                  <ResultGroupHeader
-                    label={`${group.project.row.name} · ${getSessionTitle(result.session)}`}
-                    count={result.hits.length}
-                    countLabel={`${result.hits.length} ${result.hits.length === 1 ? "hit" : "hits"}`}
-                    tint={group.project.tint}
-                  />
-                  {result.hits.map((hit) => (
-                    <button
-                      type="button"
-                      className="ah-hit"
-                      key={`${hit.session_id}:${hit.timeline_id}`}
-                      onClick={() => onOpenHit(result.session, hit)}
-                    >
-                      <p>
-                        {parseSnippet(hit.snippet).map((part, at) =>
-                          part.mark ? <mark key={at}>{part.text}</mark> : <span key={at}>{part.text}</span>,
-                        )}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              )),
-            )}
-            {searchResults.counts.matches === 0 && (
-              <EmptyState title="Nothing matched" description="No indexed message contains that." />
-            )}
-          </div>
-        ) : session === null ? (
+        {session === null ? (
           <EmptyState
             title="No session open"
-            description="Pick a session — or search, which is the front door."
+            description="Pick a session — or press ⌘K to search, which is the front door."
           />
         ) : (
           <div className="tr-col">
@@ -482,7 +507,7 @@ export function TranscriptColumn({
           </div>
         )}
       </div>
-      {menu !== null && !searching && (
+      {menu !== null && (
         <DayMenu
           days={model.days}
           currentDayKey={menu.dayKey}
@@ -492,7 +517,7 @@ export function TranscriptColumn({
         />
       )}
       <ReceiptPill receipt={headOfDocument.receipt} top={RECEIPT_TOP} />
-      {!searching && session !== null && (
+      {session !== null && (
         <button
           type="button"
           className="ah-newpill"

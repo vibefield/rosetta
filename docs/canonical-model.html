@@ -1526,10 +1526,15 @@ CREATE VIRTUAL TABLE <b>message_fts</b> USING fts5(
   unavailable child references, native wrapper labels, and dropped payloads contribute nothing.</p>
 
   <div class="decision">
-    <div><b>SEARCHED</b><span>User/assistant prose, summary text, paths, URLs, commands, queries, task
-    subjects, delegation objectives, collaboration bodies, structured answers, and canonical diffs.</span></div>
-    <div><b>NOT SEARCHED</b><span>Read bodies, shell output, fetched pages, success acknowledgements,
-    injected prompts/environment, transport metadata, raw external arguments/results, and empty thinking.</span></div>
+    <div><b>SEARCHED</b><span>Prompts and replies only (decided 2026-09-09): user and assistant prose,
+    plus their attachment names and citation titles/sources. The extractor still lanes summary text,
+    paths, URLs, commands, queries, task subjects, delegation objectives, collaboration bodies, structured
+    answers, and canonical diffs, but only <span class="mono">user</span> and <span class="mono">agent</span>
+    rows become search documents (<span class="mono">queries::SEARCH_KINDS</span>).</span></div>
+    <div><b>NOT SEARCHED</b><span>Tool activity, thinking, summaries, collaboration traffic, and notices
+    (canonical, rendered, never indexed); and, never stored at all: read bodies, shell output, fetched pages,
+    success acknowledgements, injected prompts/environment, transport metadata, raw external
+    arguments/results, and empty thinking.</span></div>
     <div><b>CLIENT CONTRACT</b><span>Render by <span class="mono">body.type</span> and
     <span class="mono">tool.action.type</span>. No “first string field,” JSON parse attempts, or native
     tool-name switches in the presentation layer.</span></div>

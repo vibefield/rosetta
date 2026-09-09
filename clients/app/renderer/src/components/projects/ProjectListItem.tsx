@@ -36,8 +36,6 @@ export interface ProjectListItemProps {
   /** Maximum across the complete project collection, not a filtered subset. */
   readonly maximumLifetimeTokens: number;
   readonly isSelected: boolean;
-  /** `null` hides the search hit badge. */
-  readonly searchHitCount: number | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
   /** Canonical publication is still pending, so aggregate figures wait. */
@@ -53,7 +51,6 @@ export function ProjectListItem({
   project,
   maximumLifetimeTokens,
   isSelected,
-  searchHitCount,
   homeDirectory,
   currentTimestamp,
   ingestActive,
@@ -90,10 +87,6 @@ export function ProjectListItem({
   const workspacePath = project.row.root_paths[0]
     ? tildePath(project.row.root_paths[0], homeDirectory)
     : "No workspace recorded";
-  const searchHitLabel = searchHitCount === null
-    ? ""
-    : ` · ${searchHitCount} ${searchHitCount === 1 ? "search hit" : "search hits"}`;
-
   return (
     <button
       type="button"
@@ -110,7 +103,7 @@ export function ProjectListItem({
       } as ProjectListItemStyle}
       aria-current={isSelected ? "true" : undefined}
       aria-label={`${project.row.name} · ${isCooking && project.lifetimeTokens === 0
-        ? "activity summaries pending" : `${tokenText(project.lifetimeTokens)} lifetime tokens`}${searchHitLabel}${
+        ? "activity summaries pending" : `${tokenText(project.lifetimeTokens)} lifetime tokens`}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
       }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
       onClick={() => onProjectSelect(project.row.id)}
@@ -118,11 +111,6 @@ export function ProjectListItem({
       <i className="ah-project-list-item__accent" />
       <span className="ah-project-list-item__header">
         <strong title={project.row.name}>{project.row.name}</strong>
-        {searchHitCount !== null && (
-          <span className="ah-project-list-item__search-hits tnum">
-            {searchHitCount}
-          </span>
-        )}
         <AgentBadges shares={project.agents} />
       </span>
       <span className="ah-project-list-item__path">

@@ -4,6 +4,7 @@ import "./styles/tokens.css";
 import "./styles/room.css";
 import "./styles/ingest.css";
 import "./styles/transcript.css";
+import "./styles/search.css";
 // Column ③'s tree: mille's token surface plus the shipped VibeField theme,
 // which reads this app's --vf-* tokens live (its published fallbacks only
 // carry a host that has none).

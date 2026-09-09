@@ -214,7 +214,6 @@ function Fixture() {
             projects={projectRows}
             selectedProjectId="p0"
             maximumLifetimeTokens={345000}
-            searchHitCounts={null}
             homeDirectory="/Users/demo"
             currentTimestamp={now}
             ingestActive={false}
@@ -228,7 +227,6 @@ function Fixture() {
             <span className="ah-eyebrow">Sessions</span>
           </header>
           <SessionList
-            mode="browse"
             sessions={sessionRows}
             factsBySessionId={new Map()}
             getRuntimeKind={() => "claude-code"}
@@ -248,8 +246,9 @@ function Fixture() {
           focus={focus}
           onFocusConsumed={() => setFocus(null)}
           onReceipt={nothing}
-          searchResults={null}
-          onOpenHit={nothing}
+          stepper={null}
+          onStepMatch={nothing}
+          onDismissStepper={nothing}
           getRuntimeKind={() => "claude-code"}
           homeDirectory="/Users/demo"
         />

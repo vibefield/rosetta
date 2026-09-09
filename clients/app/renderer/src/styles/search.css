@@ -1,0 +1,253 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   SEARCH — the launcher in the strip, the sheet over the room.
+   Design record (protos/agent-history-proto/search, 2026-09-09): search is a
+   tool held over the room, not a mode that replaces it. The strip keeps a
+   launcher where DESIGN.md §10 seats the file pill — centred in the drag
+   strip, clear of the traffic lights — and pressing it (or ⌘K) morphs it into
+   a top-attached sheet (DESIGN.md §8's docs explorer, one level wider),
+   sheet material, the §5 sheet shadow sign-flipped, backdrop dim, the stage
+   receding (M5). Nothing in the four columns changes content or geometry.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── the strip: traffic lights, then the launcher, centred ─────────────── */
+.ah-searchbar {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  min-height: 50px; padding: 9px 84px;
+  border-bottom: 1px solid var(--vf-hairline);
+  -webkit-app-region: drag;
+}
+.ah-launcher {
+  position: relative; display: flex; align-items: center;
+  width: min(460px, 100%); height: 32px; border-radius: 999px;
+  background: var(--vf-fill); -webkit-app-region: no-drag;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+.ah-launcher:hover { background: var(--vf-fill-hover); }
+.ah-launcher:focus-within { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.ah-launcher__open {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  height: 100%; padding: 0 10px 0 11px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--vf-text-tertiary); font-size: 12px;
+  text-align: left; cursor: default;
+}
+.ah-launcher__open svg { width: 13px; height: 13px; flex: none; }
+.ah-launcher__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* an active query is a fact about the room, so it takes primary ink */
+.ah-launcher[data-active] .ah-launcher__text { color: var(--vf-text-primary); font-weight: 500; }
+.ah-launcher .ah-kbd { flex: none; margin-left: auto; }
+.ah-launcher__clear {
+  display: grid; place-items: center; width: 18px; height: 18px; flex: none;
+  margin-right: 7px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--vf-text-tertiary); font-size: 13px; line-height: 1;
+}
+.ah-launcher__clear:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
+/* the room's focus ring, on the one control that is a div */
+.ah-launcher__open:focus-visible { outline: none; }
+
+/* ── the sheet ─────────────────────────────────────────────────────────── */
+.ah-sheet__backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: var(--vf-backdrop-dim);
+  backdrop-filter: blur(2px);
+  -webkit-app-region: no-drag;
+  animation: ah-fade-in 200ms ease;
+}
+.ah-sheet {
+  position: fixed; z-index: 61; top: 0; left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column;
+  width: min(760px, calc(100vw - 168px));
+  max-height: min(68vh, 640px);
+  /* a top-attached sheet: square where it meets the window, the card radius
+     where it meets the room */
+  border-radius: 0 0 var(--vf-radius-card) var(--vf-radius-card);
+  background: var(--vf-sheet-surface);
+  backdrop-filter: blur(40px);
+  /* DESIGN.md §5's sheet shadow, sign-flipped — a top sheet throws its
+     shadow down — plus the hairline ring every floating surface wears */
+  box-shadow: 0 20px 40px rgb(0 0 0 / 8%), 0 0 0 1px var(--vf-hairline-strong);
+  color: var(--vf-text-primary);
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+  transform-origin: top center;
+  animation: ah-sheet-in 240ms var(--vf-ease-island);
+}
+.dark .ah-sheet { box-shadow: 0 20px 40px rgb(0 0 0 / 40%), 0 0 0 1px var(--vf-hairline-strong); }
+.ah-sheet:focus, .ah-sheet:focus-visible { outline: none; }
+@keyframes ah-sheet-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(0.985); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+/* M5 — the stage recedes behind the sheet, the way it does behind a file */
+.ah-room { transition: transform 240ms var(--vf-ease-island); }
+body:has([data-ah-sheet]) .ah-room { transform: scale(0.98); }
+/* the sheet covers the native title strip, so the strip stops dragging */
+body:has([data-ah-sheet]) .ah-searchbar { -webkit-app-region: no-drag; }
+
+/* the field — the launcher, grown: same pill, one size up */
+.ah-sheet__field {
+  display: flex; align-items: center; gap: 10px; flex: none;
+  min-height: 50px; padding: 9px 12px 9px 16px;
+  border-bottom: 1px solid var(--vf-hairline);
+}
+.ah-sheet__field > svg { width: 14px; height: 14px; flex: none; color: var(--vf-text-tertiary); }
+.ah-sheet__field input {
+  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  color: var(--vf-text-primary); font: inherit; font-size: 14px;
+}
+.ah-sheet__field input::placeholder { color: var(--vf-text-tertiary); }
+.ah-sheet__field input::-webkit-search-cancel-button { display: none; }
+.ah-sheet__clear {
+  display: grid; place-items: center; width: 20px; height: 20px; flex: none;
+  border: 0; border-radius: 999px; background: transparent;
+  color: var(--vf-text-tertiary); font-size: 14px; line-height: 1;
+}
+.ah-sheet__clear:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
+.ah-sheet__field .ah-kbd { flex: none; margin-left: 0; }
+
+/* the scope row — what is being searched, said rather than guessed */
+.ah-sheet__scope {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; flex: none;
+  padding: 7px 14px; border-bottom: 1px solid var(--vf-hairline);
+}
+.ah-sheet__scope .ah-seg button { height: 20px; padding: 0 8px; font-size: 10px; }
+.ah-sheet__scope .ah-seg button i {
+  display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 999px;
+  background: var(--tint); vertical-align: 0;
+}
+.ah-chipselect {
+  appearance: none; height: 24px; padding: 0 22px 0 10px; border: 0; border-radius: 999px;
+  background: var(--vf-fill) no-repeat right 8px center / 8px 8px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 3l2.5 2.5L6.5 3' fill='none' stroke='%23888' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  color: var(--vf-text-tertiary); font: inherit; font-size: 10.5px;
+}
+.ah-chipselect:hover { background-color: var(--vf-fill-hover); color: var(--vf-text-primary); }
+.ah-chipselect[data-set] { color: var(--vf-text-primary); font-weight: 500; }
+.ah-chipselect:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+
+/* the list — heads pin, rows walk */
+.ah-sheet__list {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 8px;
+  scrollbar-width: thin; scrollbar-color: var(--vf-hairline-strong) transparent;
+  transition: opacity 160ms ease 140ms;
+}
+.ah-sheet__list[data-stale] { opacity: 0.55; }
+.ah-sheet__head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 8px 5px; margin-top: 2px;
+  background: linear-gradient(var(--vf-sheet-surface) 80%, transparent);
+}
+.ah-sheet__head > i { flex: none; width: 3px; height: 12px; border-radius: 999px; background: var(--tint); }
+.ah-sheet__crumb {
+  display: flex; align-items: baseline; gap: 5px; min-width: 0;
+  color: var(--vf-text-tertiary); font-size: 11px; white-space: nowrap;
+}
+.ah-sheet__crumb > b { flex: none; font-weight: 500; color: var(--vf-text-primary); }
+.ah-sheet__crumb > i { flex: none; font-style: normal; color: var(--vf-text-faint); }
+.ah-sheet__crumb > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--vf-text-secondary); }
+.ah-sheet__crumb > span[data-mono] { font-family: var(--vf-font-mono); font-size: 10.5px; }
+.ah-sheet__head .ah-agent { width: 11px; height: 11px; opacity: 0.55; }
+.ah-sheet__headmeta {
+  margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px;
+  color: var(--vf-text-faint); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ah-sheet__row {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 0 10px;
+  align-items: start; width: 100%; padding: 7px 10px; margin-bottom: 1px;
+  border: 0; border-radius: 9px; background: transparent; text-align: left; cursor: default;
+  scroll-margin-top: 30px; scroll-margin-bottom: 4px;
+}
+.ah-sheet__row:hover { background: var(--vf-fill); }
+/* the keyboard's cursor wears the room's selection ring (DESIGN.md §7) */
+.ah-sheet__row[aria-selected="true"] { background: var(--vf-fill); box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.ah-sheet__who {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 18px; color: var(--vf-text-faint);
+}
+.ah-sheet__who svg { width: 12px; height: 12px; display: block; }
+.ah-sheet__who .ah-agent { width: 12px; height: 12px; color: var(--vf-text-tertiary); }
+/* the prompt is the only filled panel in the transcript; so it is here */
+.ah-sheet__you { width: 9px; height: 9px; border-radius: 3px; background: var(--vf-text-tertiary); }
+.ah-sheet__dot { width: 5px; height: 5px; border-radius: 999px; background: var(--vf-text-faint); }
+.ah-sheet__snippet {
+  margin: 0; color: var(--vf-text-secondary); font-size: 12.5px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  overflow-wrap: anywhere;
+}
+/* the match is hierarchy, not a highlighter (design record §06) */
+.ah-sheet__snippet mark {
+  padding: 1px 2px; margin: 0 -1px; border-radius: 3px;
+  background: var(--vf-fill-hover); color: var(--vf-text-primary); font-weight: 500;
+}
+.ah-sheet__row:hover mark,
+.ah-sheet__row[aria-selected="true"] mark { background: color-mix(in srgb, var(--vf-select) 20%, transparent); }
+.ah-sheet__when {
+  padding-top: 2px; color: var(--vf-text-faint); font-size: 10px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* what the sheet says when it has nothing to list */
+.ah-sheet__quiet { padding: 18px 16px 8px; }
+.ah-sheet__quiet strong { display: block; font-size: 12.5px; font-weight: 500; color: var(--vf-text-secondary); }
+.ah-sheet__quiet p { margin: 5px 0 0; color: var(--vf-text-faint); font-size: 11px; line-height: 1.6; }
+.ah-sheet__quiet code { font-family: var(--vf-font-mono); font-size: 10.5px; color: var(--vf-text-tertiary); }
+.ah-sheet__recent-head {
+  padding: 12px 10px 4px; color: var(--vf-text-faint);
+  font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;
+}
+.ah-sheet__recent {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px;
+  border: 0; border-radius: 9px; background: transparent; color: var(--vf-text-secondary);
+  font-size: 12.5px; text-align: left; cursor: default;
+}
+.ah-sheet__recent:hover, .ah-sheet__recent[aria-selected="true"] { background: var(--vf-fill); }
+.ah-sheet__recent[aria-selected="true"] { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.ah-sheet__recent > svg { width: 12px; height: 12px; flex: none; color: var(--vf-text-faint); }
+.ah-sheet__recent > span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-sheet__forget {
+  display: grid; place-items: center; width: 18px; height: 18px; flex: none;
+  border: 0; border-radius: 999px; background: transparent; color: var(--vf-text-faint); font-size: 13px; line-height: 1;
+  opacity: 0; transition: opacity 120ms ease;
+}
+.ah-sheet__recent:hover .ah-sheet__forget, .ah-sheet__forget:focus-visible { opacity: 1; }
+.ah-sheet__forget:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
+
+/* the foot — the count, the scope, the keys */
+.ah-sheet__foot {
+  display: flex; align-items: center; gap: 12px; flex: none;
+  min-height: 30px; padding: 6px 14px;
+  border-top: 1px solid var(--vf-hairline);
+  color: var(--vf-text-faint); font-size: 10px; line-height: 1.4;
+}
+.ah-sheet__count { flex: none; font-variant-numeric: tabular-nums; color: var(--vf-text-tertiary); }
+.ah-sheet__count[data-tone="warn"] { color: var(--vf-orange); }
+.ah-sheet__scopeline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ah-sheet__keys { margin-left: auto; display: flex; gap: 10px; flex: none; }
+.ah-sheet__keys span { display: inline-flex; align-items: center; gap: 4px; }
+.ah-sheet .ah-meter { width: 96px; flex: none; }
+
+/* ── the match stepper — the sheet's tail in the transcript head ───────── */
+.ah-stepper {
+  display: inline-flex; align-items: center; gap: 2px;
+  height: 24px; padding: 0 3px 0 10px; border-radius: 999px;
+  background: var(--vf-fill); color: var(--vf-text-secondary); font-size: 10.5px;
+}
+.ah-stepper > b {
+  max-width: 180px; margin-right: 6px; font-weight: 500; color: var(--vf-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-stepper > .tnum { margin-right: 4px; color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ah-stepper > button {
+  display: grid; place-items: center; width: 20px; height: 20px;
+  border: 0; border-radius: 999px; background: transparent; color: var(--vf-text-tertiary);
+}
+.ah-stepper > button:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+.ah-stepper > button svg { width: 11px; height: 11px; display: block; }
+
+/* ── M6 — the quality floor ────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .ah-sheet, .ah-sheet__backdrop { animation-duration: 1ms; }
+  .ah-sheet__list { transition: none; }
+  body:has([data-ah-sheet]) .ah-room { transform: none; }
+}

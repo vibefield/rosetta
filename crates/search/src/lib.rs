@@ -268,14 +268,17 @@ impl SearchQuery {
             }
         }
         if let Some(kind) = &self.kind
-            && !matches!(
-                kind.as_str(),
-                "user" | "agent" | "thinking" | "tool_use" | "system" | "summary"
-            )
+            && !queries::SEARCH_KINDS.contains(&kind.as_str())
         {
             return Err(SearchError::InvalidQuery(format!(
-                "unsupported message kind `{kind}`"
+                "unsupported message kind `{kind}`: search indexes only prompts and replies ({})",
+                queries::SEARCH_KINDS.join(", ")
             )));
+        }
+        if self.is_error.is_some() {
+            return Err(SearchError::InvalidQuery(
+                "is_error selects tool activity, which search does not index".into(),
+            ));
         }
         if let (Some(after), Some(before)) = (self.after_ts, self.before_ts)
             && after > before
@@ -492,6 +495,22 @@ mod tests {
             invalid.validate(),
             Err(SearchError::InvalidQuery(_))
         ));
+
+        // Coverage is prompts and replies: a kind that is never indexed and a
+        // tool-status selector are errors, never successful empty searches.
+        for kind in ["tool_use", "thinking", "summary", "collaboration", "notice"] {
+            let mut invalid = query();
+            invalid.kind = Some(kind.into());
+            assert!(invalid.validate().is_err(), "{kind} must be rejected");
+        }
+        for kind in queries::SEARCH_KINDS {
+            let mut valid = query();
+            valid.kind = Some(kind.into());
+            assert!(valid.validate().is_ok(), "{kind} must be accepted");
+        }
+        let mut invalid = query();
+        invalid.is_error = Some(false);
+        assert!(invalid.validate().is_err());
 
         let mut invalid = query();
         invalid.after_ts = Some(2);

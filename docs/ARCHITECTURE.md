@@ -633,8 +633,21 @@ URL, recipient, resource), `intent` (command, query, objective, subject), `chang
 actions). A typed exhaustive extractor produces these lanes; the worker never traverses stored
 JSON. Read bodies, successful shell output, fetched pages, success
 acknowledgements, injected prompts/environment, opaque external values, and empty thinking
-are neither stored nor indexed. Protocol clients receive generated discriminated unions and
-render by their tags; key sniffing and best-effort JSON parsing are forbidden.
+are neither stored nor indexed.
+
+**Coverage is prompts and replies (product decision, 2026-09-09).** Only `user` and `agent`
+rows become search documents — their prose plus attachment names and citation titles/sources.
+Tool activity, thinking, summaries, collaboration traffic, and notices remain canonical and
+render in the transcript but are not indexed; the extractor keeps its lanes for them so the
+policy is one predicate (`rosetta_store::queries::SEARCH_KINDS`) shared by the document
+visitor, the build denominator, and the legacy in-projection path, and the sidecar schema
+(4) forces an index built under the broader coverage to rebuild. Measured 2026-09-09 on a
+clonefile copy of the organic nine-runtime projection: 584,002 message rows become 151,705 search
+documents, the published generation shrinks from 1,043,517,440 to 340,185,088 bytes, and the
+forced rebuild reports `building` with live document progress from the first second and reaches
+`ready` 35 s after daemon start (indexing ≈13 s, then optimize/validate/publish). Protocol clients receive
+generated discriminated unions and render by their tags; key sniffing and best-effort JSON
+parsing are forbidden.
 
 The exact per-family keep/drop/search rules, nine-adapter native-name mapping, shared bounds,
 target DDL, and activation tests live in
@@ -700,14 +713,19 @@ with snippets and rank, with structured filters applied inside the ranked query.
 backend-neutral product grammar: whitespace-separated required terms plus double-quoted required
 phrases (4,096 bytes and 64 clauses maximum). Engine operators and field selectors are ordinary
 text and never cross the wire. Any explicit time bound excludes rows whose timestamp was never
-reported; unknown is not coerced to epoch zero. Unsupported kinds, blank selectors, oversized
-selectors, and inverted ranges are HTTP 400 errors rather than successful empty searches.
+reported; unknown is not coerced to epoch zero. Unsupported kinds (anything but `user` and
+`agent`, the indexed kinds), a set `is_error` (tool status is not indexed), blank selectors,
+oversized selectors, and inverted ranges are HTTP 400 errors rather than successful empty
+searches.
+Each hit carries its row's canonical `kind` and reported timestamp beside the snippet
+(protocol v17, 2026-09-09), read from the detached sidecar's own document table — so the
+app's search sheet can say who said it and when without a second read per hit.
 
 **Observe (job 2)** — the flagship contract, successor to `observeSession`:
 
 ```
 WS /ws/sessions/<id>?epoch=<epoch>&seq=<seq>
-  server → { frame: "hello", protocol_version: 16, stamp }
+  server → { frame: "hello", protocol_version: 17, stamp }
   server → { frame: "timeline_snapshot", stamp, entries, timeline_meta, cursor, watermark }
   server → { frame: "mutation", stamp, mutation } …
   server → { frame: "timeline_meta_snapshot", stamp, timeline_meta }
@@ -800,6 +818,13 @@ ingestion.
   file durable before committing its `/api/assets/<blake3>.<ext>` URL. Private builds sync all new
   members before database publication; monotonic content-addressed additions let the final
   SQLite file remain the only atomic swap. The raw ledger keeps the original inline form.
+- **A generation this daemon cannot use is no generation.** A well-formed `CURRENT` manifest
+  whose search schema or format differs reads as absent (2026-09-09): the worker rebuilds, status
+  reports `building` with the rebuild's progress, and a query answers unavailable — a schema
+  bump is a routine rebuild, never a `failed` install. After a generation publishes, every other
+  regular file in `generations/` (superseded generations, their WAL/SHM, the temp file of a
+  build that died) is pruned; the sidecar is disposable and a reader still holding a superseded
+  file keeps its inode until it closes.
 - **Detached SQLite FTS5 sidecar today**, behind the backend-neutral search/readiness
   seam. A worker builds private immutable generations, atomically selects one with
   `CURRENT`, repairs complete sessions by epoch/revision, and acknowledges only after the

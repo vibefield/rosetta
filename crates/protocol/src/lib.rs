@@ -31,7 +31,7 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -349,11 +349,12 @@ impl TimelineCursor {
 }
 
 /// Search request: structured text plus filters. No backend query syntax.
-/// `is_error` omitted includes true, false, and unreported; explicit false
-/// never matches unreported tool state.
+/// Search covers prompts and replies only (2026-09-09): `kind` accepts `user`
+/// or `agent`, and any other kind is HTTP 400 rather than an empty answer.
+/// `is_error` is retained on the wire for tool-status filtering but is
+/// rejected while tool activity is not indexed.
 /// `agent` selects a runtime family (`claude-code`, `codex`, …), while
 /// `runtime` selects one concrete runtime id.
-/// `kind` uses the canonical wire vocabulary (`user`, `agent`, `tool_use`, …).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SearchRequest {

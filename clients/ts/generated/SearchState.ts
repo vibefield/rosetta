@@ -5,17 +5,17 @@ import type { SearchReadiness } from "./SearchReadiness";
 /**
  * Identity and readiness of the search projection that answered a request.
  */
-export type SearchState = { readiness: SearchReadiness,
+export type SearchState = { readiness: SearchReadiness, 
 /**
  * Live work in an unpublished generation; absent for ready, failed, or
  * synchronous search. It is never persisted in the canonical projection.
  */
-progress: SearchBuildProgress | null,
+progress: SearchBuildProgress | null, 
 /**
  * Owning canonical projection identifier for a detached search index.
  * Synchronous FTS5 has no independent projection identity.
  */
-projection_epoch: string | null,
+projection_epoch: string | null, 
 /**
  * Canonical search revision committed by a detached index. Synchronous
  * FTS5 commits with the canonical rows and therefore has no revision.

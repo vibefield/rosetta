@@ -1,6 +1,6 @@
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
-import type { ProjectViewModel } from "./model";
-import { projectKey } from "./model";
+import type { ProjectViewModel } from "./model.ts";
+import { projectKey } from "./model.ts";
 
 export interface SessionSearchResult {
   readonly session: SessionRow;

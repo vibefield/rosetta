@@ -227,7 +227,7 @@ fn sidecar_preserves_legacy_fts_ranking_and_snippets() {
 }
 
 #[test]
-fn sidecar_indexes_only_explicit_typed_tool_lanes() {
+fn sidecar_indexes_no_tool_lane_under_prompt_and_reply_coverage() {
     let dir = tempfile::TempDir::new().unwrap();
     let (path, mut store) = canonical(&dir);
     store
@@ -266,28 +266,45 @@ fn sidecar_indexes_only_explicit_typed_tool_lanes() {
         .unwrap()
         .unwrap();
 
+    // Coverage is prompts and replies (`queries::SEARCH_KINDS`, 2026-09-09):
+    // the typed command, the canonical kind, the native name and the failure
+    // diagnostic of a tool row all stay out of the index, and the build's
+    // denominator counts only the rows it will visit.
+    for term in [
+        "semanticcommandsentinel",
+        "shell",
+        "nativenamesentinel",
+        "discardeddiagnosticsentinel",
+    ] {
+        assert!(
+            search.search(query(term)).unwrap().hits.is_empty(),
+            "{term} must not be indexed"
+        );
+    }
+    let canonical =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let indexed: i64 = canonical
+        .query_row(
+            "SELECT count(*) FROM message WHERE type IN ('user', 'agent')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!(
-        search
-            .search(query("semanticcommandsentinel"))
-            .unwrap()
-            .hits
-            .len(),
-        1
+        queries::search_document_count(&canonical).unwrap(),
+        u64::try_from(indexed).unwrap()
     );
-    assert_eq!(search.search(query("shell")).unwrap().hits.len(), 1);
+    let mut kinds = Vec::new();
+    queries::visit_session_search_documents(&canonical, "s1", |document| {
+        kinds.push(document.kind);
+        Ok(())
+    })
+    .unwrap();
     assert!(
-        search
-            .search(query("nativenamesentinel"))
-            .unwrap()
-            .hits
-            .is_empty()
-    );
-    assert!(
-        search
-            .search(query("discardeddiagnosticsentinel"))
-            .unwrap()
-            .hits
-            .is_empty()
+        kinds
+            .iter()
+            .all(|kind| queries::SEARCH_KINDS.contains(&kind.as_str()))
     );
 }
 
@@ -341,7 +358,7 @@ fn sidecar_resolves_full_committed_prose_members_not_only_the_preview() {
 }
 
 #[test]
-fn sidecar_indexes_only_the_bounded_tool_preview() {
+fn sidecar_never_makes_a_tool_row_a_document() {
     let dir = tempfile::TempDir::new().unwrap();
     let (path, mut store) = canonical(&dir);
     let command = format!(
@@ -378,19 +395,17 @@ fn sidecar_indexes_only_the_bounded_tool_preview() {
         })
         .unwrap();
 
+    // Coverage is prompts and replies (`queries::SEARCH_KINDS`): the tool row
+    // is not visited at all, so neither its bounded preview nor its member
+    // can reach the index.
+    let mut visited = Vec::new();
     queries::visit_session_search_documents(store.conn(), "s1", |document| {
-        if document.timeline_id == "tool-member" {
-            assert!(
-                !document
-                    .members
-                    .iter()
-                    .any(|member| member.lane == SearchLane::Intent)
-            );
-            assert!(!document.intent.contains("deeptoolintentsentinel"));
-        }
+        assert!(queries::SEARCH_KINDS.contains(&document.kind.as_str()));
+        visited.push(document.timeline_id);
         Ok(())
     })
     .unwrap();
+    assert!(!visited.iter().any(|id| id == "tool-member"));
 
     let search = Fts5SidecarSearch::new(&path);
     synchronize_fts5_once(&search, &AtomicBool::new(false))

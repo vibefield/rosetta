@@ -537,10 +537,28 @@ export interface SearchFeed {
   searching: boolean;
 }
 
-export function useSearch(query: string): SearchFeed {
+/** The structured side of a search: each maps onto one API selector. */
+export interface SearchFacets {
+  readonly project?: string | null;
+  readonly kind?: string | null;
+  readonly agent?: string | null;
+}
+
+export const SEARCH_LIMIT = 200;
+
+/**
+ * One ranked search per settled query. The previous response stays on screen
+ * while its successor is in flight — a list that blanks on every keystroke
+ * reads as a search that keeps failing — and only the newest request may
+ * land: a superseded one is aborted and its late result ignored.
+ */
+export function useSearch(query: string, facets: SearchFacets = {}): SearchFeed {
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const project = facets.project ?? null;
+  const kind = facets.kind ?? null;
+  const agent = facets.agent ?? null;
   useEffect(() => {
     const q = query.trim();
     if (q === "") {
@@ -551,20 +569,18 @@ export function useSearch(query: string): SearchFeed {
     }
     const controller = new AbortController();
     let cancelled = false;
-    setResponse(null);
-    setError(null);
     setSearching(true);
     const timer = setTimeout(() => {
       client
         .search(
           {
             q,
-            limit: 200,
+            limit: SEARCH_LIMIT,
             session: null,
             runtime: null,
-            agent: null,
-            project: null,
-            kind: null,
+            agent,
+            project,
+            kind,
             is_error: null,
             after_ts: null,
             before_ts: null,
@@ -584,12 +600,12 @@ export function useSearch(query: string): SearchFeed {
         .finally(() => {
           if (!cancelled) setSearching(false);
         });
-    }, 220);
+    }, 180);
     return () => {
       cancelled = true;
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query]);
+  }, [query, project, kind, agent]);
   return { query: query.trim(), response, error, searching };
 }

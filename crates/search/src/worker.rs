@@ -21,7 +21,7 @@ use rusqlite::{Connection, OpenFlags, params};
 use crate::SearchError;
 use crate::sidecar::{
     Fts5SidecarSearch, GenerationState, Manifest, SEARCH_DDL, SEARCH_INDEXES,
-    SEARCH_SCHEMA_VERSION, generation_state, open_generation, read_manifest,
+    SEARCH_SCHEMA_VERSION, generation_state, open_generation, prune_generations, read_manifest,
 };
 
 const WORKER_POLL: Duration = Duration::from_millis(200);
@@ -263,8 +263,7 @@ fn full_build(
     let temporary = temporary.into_temp_path();
     let mut conn = Connection::open(&temporary)
         .map_err(|error| backend(format!("opening private search generation: {error}")))?;
-    let documents: u64 = canonical
-        .query_row("SELECT count(*) FROM message", [], |row| row.get(0))
+    let documents = queries::search_document_count(canonical)
         .map_err(|error| backend(format!("counting search work: {error}")))?;
     search.progress.start(&state.projection_epoch, documents);
     finish_private_generation(
@@ -293,11 +292,12 @@ fn full_build(
         search,
         &Manifest {
             format: 1,
-            generation,
+            generation: generation.clone(),
             projection_epoch: state.projection_epoch.clone(),
             search_schema: SEARCH_SCHEMA_VERSION,
         },
     )?;
+    prune_generations(&search.layout, &generation);
     search.progress.clear();
     Ok(SearchAck {
         projection_epoch: state.projection_epoch.clone(),

@@ -507,6 +507,8 @@ fn exemplars() -> serde_json::Value {
             hits: vec![SearchHit {
                 timeline_id: "t1".into(),
                 session_id: "s1".into(),
+                kind: "user".into(),
+                at: Some(1),
                 snippet: "[needle] in a haystack".into(),
                 score: -1.5,
             }],

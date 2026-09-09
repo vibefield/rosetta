@@ -20,8 +20,6 @@ export interface ProjectsColumnProps {
   readonly selectedProjectId: string | null;
   readonly sort: ProjectSort;
   readonly onSortChange: (sort: ProjectSort) => void;
-  /** Non-null in search mode; projects with zero hits are filtered out. */
-  readonly searchHitCounts: ReadonlyMap<string, number> | null;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
   /** The daemon's cold-start block; null on a daemon too old to carry it. */
@@ -35,14 +33,12 @@ export function ProjectsColumn({
   selectedProjectId,
   sort,
   onSortChange,
-  searchHitCounts,
   homeDirectory,
   currentTimestamp,
   ingest,
   activity,
   onProjectSelect,
 }: ProjectsColumnProps) {
-  const isSearching = searchHitCounts !== null;
   const ingestActive = isIngestActive(ingest);
   // Metadata can arrive progressively; the status panel explains this
   // without covering projects that are already available.
@@ -57,29 +53,19 @@ export function ProjectsColumn({
     ),
     [projects],
   );
-  const visibleProjects = useMemo(() => {
-    const sortedProjects = [...projects].sort((left, right) =>
-      sort === "recent"
-        ? (right.lastActiveMs ?? 0) - (left.lastActiveMs ?? 0)
-        : right.lifetimeTokens - left.lifetimeTokens,
-    );
-
-    return searchHitCounts === null
-      ? sortedProjects
-      : sortedProjects.filter(
-          (project) => (searchHitCounts.get(project.row.id) ?? 0) > 0,
-        );
-  }, [projects, searchHitCounts, sort]);
+  const visibleProjects = useMemo(
+    () =>
+      [...projects].sort((left, right) =>
+        sort === "recent"
+          ? (right.lastActiveMs ?? 0) - (left.lastActiveMs ?? 0)
+          : right.lifetimeTokens - left.lifetimeTokens,
+      ),
+    [projects, sort],
+  );
 
   return (
     <div className="ah-col">
-      {isSearching ? (
-        <ListSummaryHeader
-          label="Projects with hits"
-          count={visibleProjects.length}
-          singularNoun="project"
-        />
-      ) : activity !== null ? (
+      {activity !== null ? (
         <ListSummaryHeader label="Projects" count={projects.length} singularNoun="project" />
       ) : (
         <PortfolioSummaryPanel
@@ -105,7 +91,6 @@ export function ProjectsColumn({
           projects={visibleProjects}
           selectedProjectId={selectedProjectId}
           maximumLifetimeTokens={maximumLifetimeTokens}
-          searchHitCounts={searchHitCounts}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}

@@ -1,19 +1,22 @@
-// The History room. Columns change content, never geometry (H-2); search is
-// the front door and transforms columns 2–3; the ledger's scale is global
-// and stable whatever the filter says. The worktree column is a guest and
-// the measure is not (H-3) — see `components/worktree/use-worktree-guest`,
-// which owns that rule and the engine lifecycle behind it.
-import { useEffect, useMemo, useState } from "react";
+// The History room. Columns change content, never geometry (H-2); the
+// ledger's scale is global and stable whatever the filter says. Search is a
+// tool held over the room, not a mode that replaces it (search record,
+// 2026-09-09): the launcher in the strip opens a sheet, a hit lands in the
+// transcript, and the four columns never change what they hold for it. The
+// worktree column is a guest and the measure is not (H-3) — see
+// `components/worktree/use-worktree-guest`, which owns that rule and the
+// engine lifecycle behind it.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import { ColdStartPanel } from "./components/ColdStart";
 import { RollCallPanel } from "./components/RollCall";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
-import { SearchStrip } from "./components/SearchStrip";
+import { SearchLauncher, SearchSheet, hasPrimaryModifier } from "./components/search";
 import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
-import type { ThreadFocus } from "./components/Transcript";
+import type { MatchStepperState, ThreadFocus } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
 import { sessionFilePaths } from "./components/git";
 import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
@@ -38,6 +41,13 @@ import type { ProjectViewModel } from "./lib/model";
 import { desktopHost } from "./lib/desktop-host";
 import { client } from "./lib/rosetta";
 import { createSearchResultsViewModel } from "./lib/search-results";
+import {
+  DEFAULT_SEARCH_FILTERS,
+  hitsInReadingOrder,
+  rememberQuery,
+  sessionResultOf,
+} from "./lib/search-sheet";
+import type { SearchFilters } from "./lib/search-sheet";
 
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -48,24 +58,64 @@ function useNow(): number {
   return now;
 }
 
+/** The stepper's memory: which session's matches, in reading order, and
+ * where the reader is among them. */
+interface StepperMemory {
+  readonly sessionId: string;
+  readonly hits: readonly SearchHit[];
+  readonly at: number;
+}
+
+function safeStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
 export default function App() {
   const nowMs = useNow();
   const { meta, status: metaStatus } = useMeta();
   const daemonStatus = useDaemonStatus();
-  const { connectionError, canonicalReady, searchReadiness: readiness, ingest } = daemonStatus;
+  const {
+    connectionError,
+    canonicalReady,
+    searchReadiness: readiness,
+    searchProgress,
+    ingest,
+  } = daemonStatus;
   const activity = useIngestActivity(daemonStatus);
   const ingestActive = isIngestActive(ingest);
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
   );
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [filters, setFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
+  const [stepper, setStepper] = useState<StepperMemory | null>(null);
   const [sort, setSort] = useState<ProjectSort>("recent");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [focus, setFocus] = useState<ThreadFocus | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
-  const search = useSearch(query);
-  const searching = search.query !== "";
+  // "This project" is only a scope while there is one; the unassigned
+  // pseudo-project names no project the index could select by.
+  const scopedProjectId =
+    filters.scope === "project" && projectId !== null && projectId !== UNASSIGNED_PROJECT_ID
+      ? projectId
+      : null;
+  const search = useSearch(query, {
+    project: scopedProjectId,
+    kind: filters.kind === "any" ? null : filters.kind,
+    agent: filters.agent,
+  });
 
   const projectIds = useMemo(() => {
     const ids = (meta?.projects ?? []).map((p) => p.id);
@@ -199,38 +249,104 @@ export default function App() {
      1360px frame it closes rather than squeeze the transcript. */
   const worktree = useWorktreeGuest(projectRoot);
 
-  /* ── one search view model shared by all three result columns ───────── */
+  /* ── search: one view model, held over the room ─────────────────────── */
   const searchResults = useMemo(() => {
-    if (!searching || search.response === null || meta === null) return null;
-    return createSearchResultsViewModel(
-      search.response.hits,
-      meta.sessions,
-      projectById,
-    );
-  }, [searching, search.response, meta, projectById]);
+    if (search.query === "" || search.response === null || meta === null) return null;
+    return createSearchResultsViewModel(search.response.hits, meta.sessions, projectById);
+  }, [search.query, search.response, meta, projectById]);
 
+  // Opening a hit is a continuation, not a navigation: the sheet leaves, the
+  // room opens the thread, the transcript lands on the message, and the
+  // stepper remembers the session's other matches.
   const openHit = (rootSession: SessionRow, hit: SearchHit) => {
-    setQuery("");
+    rememberQuery(safeStorage(), query);
+    setSheetOpen(false);
     setProjectId(projectKey(rootSession));
     setSessionId(rootSession.id);
     setFocus({ sessionId: hit.session_id, timelineId: hit.timeline_id });
+    const result = searchResults === null ? null : sessionResultOf(searchResults, rootSession.id);
+    const hits = result === null ? [hit] : hitsInReadingOrder(result.hits);
+    const at = hits.findIndex(
+      (h) => h.timeline_id === hit.timeline_id && h.session_id === hit.session_id,
+    );
+    setStepper({ sessionId: rootSession.id, hits, at: Math.max(0, at) });
   };
+
+  const stepMatch = useCallback(
+    (delta: 1 | -1) => {
+      setStepper((current) => {
+        if (current === null || current.hits.length === 0) return current;
+        const at = (current.at + delta + current.hits.length) % current.hits.length;
+        const hit = current.hits[at];
+        setFocus({ sessionId: hit.session_id, timelineId: hit.timeline_id });
+        return { ...current, at };
+      });
+    },
+    [],
+  );
+
+  // The stepper belongs to the session it was born in.
+  useEffect(() => {
+    if (stepper !== null && stepper.sessionId !== sessionId) setStepper(null);
+  }, [sessionId, stepper]);
+
+  const clearSearch = () => {
+    setQuery("");
+    setStepper(null);
+  };
+
+  // ⌘K summons the sheet from anywhere; `/` does the same when nothing is
+  // being typed; ⌘G / ⇧⌘G walk the landed session's matches.
+  const stepping = stepper !== null;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.altKey) return;
+      const primary = hasPrimaryModifier(event);
+      if (primary && (event.key === "k" || event.key === "K")) {
+        event.preventDefault();
+        setSheetOpen((open) => !open);
+        return;
+      }
+      if (primary && stepping && !sheetOpen && (event.key === "g" || event.key === "G")) {
+        event.preventDefault();
+        stepMatch(event.shiftKey ? -1 : 1);
+        return;
+      }
+      if (
+        event.key === "/" &&
+        !primary &&
+        !sheetOpen &&
+        !isTypingTarget(event.target) &&
+        !document.body.querySelector("[data-ah-fileview]")
+      ) {
+        event.preventDefault();
+        setSheetOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sheetOpen, stepping, stepMatch]);
 
   const showReceipt = (text: string) => {
     setReceipt(text);
     window.setTimeout(() => setReceipt(null), 2600);
   };
 
-  const kinds = (meta?.runtimes ?? []).map((r) => r.kind);
-  const scope = search.error
-    ? `search: ${search.error}`
-    : [
-        "your whole agentic past",
-        ...kinds,
-        ...(ingest?.phase === "metadata_ready" ? ["transcript import paused"]
-          : readiness && readiness !== "ready"
-            ? [readiness === "failed" && canonicalReady ? "search unavailable" : canonicalReady ? "search is being prepared" : "history is being imported"] : []),
-      ].join(" · ");
+  const kinds = useMemo(() => (meta?.runtimes ?? []).map((r) => r.kind), [meta]);
+  const threadCount = useMemo(
+    () => (meta?.sessions ?? []).filter((s) => s.parent_session_id === null).length,
+    [meta],
+  );
+  // The launcher states the scope in a breath; the sheet's foot states it in
+  // full — the strip is always honest and never furniture (Q5, answered).
+  const launcherPlaceholder =
+    meta === null || threadCount === 0
+      ? "Search your whole agentic past"
+      : `Search ${threadCount.toLocaleString("en-US")} sessions across ${kinds.length} ${kinds.length === 1 ? "agent" : "agents"}`;
+  const stepperState: MatchStepperState | null =
+    stepper === null || stepper.sessionId !== sessionId
+      ? null
+      : { query: search.query, at: stepper.at, total: stepper.hits.length };
 
   const disconnected = meta === null;
   // The roll call: discovery is on the board and nothing has been read.
@@ -244,7 +360,14 @@ export default function App() {
   return (
     <div className="ah-frame is-tall">
       <div className="ah-room">
-        <SearchStrip query={query} onQuery={setQuery} scope={scope} />
+        <div className="ah-searchbar">
+          <SearchLauncher
+            query={search.query}
+            placeholder={launcherPlaceholder}
+            onOpen={() => setSheetOpen(true)}
+            onClear={clearSearch}
+          />
+        </div>
         {disconnected && !coldStarting ? (
           <EmptyState
             style={{ flex: 1 }}
@@ -270,17 +393,12 @@ export default function App() {
         ) : coldStarting ? (
           <ColdStartPanel activity={activity} />
         ) : (
-          <div
-            className="ah-cols"
-            data-mode={searching ? "search" : "browse"}
-            data-rail={worktree.visible ? "on" : "off"}
-          >
+          <div className="ah-cols" data-rail={worktree.visible ? "on" : "off"}>
             <ProjectsColumn
               projects={projectViewModels}
               selectedProjectId={projectId}
               sort={sort}
               onSortChange={setSort}
-              searchHitCounts={searchResults?.hitCountByProject ?? null}
               homeDirectory={home}
               currentTimestamp={nowMs}
               ingest={ingest}
@@ -304,14 +422,7 @@ export default function App() {
                 worktree.available && projectRoot !== null ? worktree.visible : null
               }
               onToggleWorktree={worktree.toggle}
-              onSessionSelect={(selectedSession) => {
-                if (searching) {
-                  setQuery("");
-                  setProjectId(projectKey(selectedSession));
-                }
-                setSessionId(selectedSession.id);
-              }}
-              searchGroups={searchResults?.groups ?? null}
+              onSessionSelect={(selectedSession) => setSessionId(selectedSession.id)}
             />
             {/* Always in the grid — a closed guest is a 0px track, and the
                 measure takes back whatever it gives up. */}
@@ -334,14 +445,39 @@ export default function App() {
               focus={focus}
               onFocusConsumed={() => setFocus(null)}
               onReceipt={showReceipt}
-              searchResults={searchResults}
-              onOpenHit={openHit}
+              stepper={stepperState}
+              onStepMatch={stepMatch}
+              onDismissStepper={() => setStepper(null)}
               getRuntimeKind={kindOf}
               homeDirectory={home}
             />
           </div>
         )}
       </div>
+      <SearchSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        query={query}
+        onQuery={setQuery}
+        filters={filters}
+        onFilters={setFilters}
+        feed={search}
+        results={searchResults}
+        readiness={readiness}
+        progress={searchProgress}
+        canonicalReady={canonicalReady}
+        ingestPaused={ingest?.phase === "metadata_ready"}
+        agentKinds={kinds}
+        currentProject={
+          projectId !== null && projectId !== UNASSIGNED_PROJECT_ID
+            ? (projectById.get(projectId) ?? null)
+            : null
+        }
+        homeDirectory={home}
+        nowMs={nowMs}
+        getRuntimeKind={kindOf}
+        onOpenHit={openHit}
+      />
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
     </div>
   );
