@@ -25,8 +25,8 @@
 //     (the component draws the `→` prefix; `elided` says so).
 //  5. A run — everything the agent did between two things it said; `turns.ts`
 //     cuts it — closes by default once it has RUN_FOLD_THRESHOLD members
-//     (lines, and the thoughts, notices and summaries between them). One
-//     member is the line it already was. Closed, the run is one sentence of
+//     (lines, and the thoughts, notices and summaries between them), including
+//     a single tool line. Closed, the run is one sentence of
 //     NOUNS — never of verbs — acts first, the changed files named, the
 //     failure count at the right (transcript-fold, locked 2026-09-08). See
 //     `runSummary`.
@@ -61,9 +61,8 @@ import {
   urlHost,
 } from "./vocabulary.ts";
 
-/** A run of this many MEMBERS closes to its head (transcript-fold Q8 A): two.
- * A run of one is the line, the thought or the marker it already was. */
-export const RUN_FOLD_THRESHOLD = 2;
+/** Even a single activity line closes to its head (2026-09-09 amendment). */
+export const RUN_FOLD_THRESHOLD = 1;
 
 /** How many members a fold names before it degrades to `… N more`. */
 export const FOLD_NAME_LIMIT = 4;
@@ -714,6 +713,10 @@ export function runSummary(
     thoughtCount,
     running: [...lines].reverse().find((line) => line.state === "running") ?? null,
     // Notices and summaries alone have no sentence to close to (R-2).
-    closedByDefault: memberCount >= RUN_FOLD_THRESHOLD && (lines.length > 0 || thoughtCount > 0),
+    // Questions addressed to the reader are speech and stay visible (R-1).
+    closedByDefault:
+      memberCount >= RUN_FOLD_THRESHOLD &&
+      (lines.length > 0 || thoughtCount > 0) &&
+      !lines.some((line) => line.family === "question"),
   };
 }

@@ -549,10 +549,10 @@ function runOther(member: LedgerMember): RunOther | null {
 /**
  * The reply's segments. R-1: speech is the boundary — a prose row or a team
  * message closes the run, and everything between two of them (tool rows,
- * thoughts, notices, summaries) is ONE run, in order. R-2: a run of one is the
- * segment it already was — a lone line stays a one-line ledger, a lone thought
- * a `thinking` segment, a lone notice a `marker`. A run that holds only
- * notices and summaries has no sentence to close to, so its members stand as
+ * thoughts, notices, summaries) is ONE run, in order. Even a lone tool line
+ * gets the run's summary fold. A lone thought stays a `thinking` segment,
+ * a lone notice a `marker`. A run that holds only notices and summaries has
+ * no sentence to close to, so its members stand as
  * their own segments. A sitting boundary (`cutBefore`) closes a run as speech
  * does, so no run straddles a pill.
  */

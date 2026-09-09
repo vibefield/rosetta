@@ -1,5 +1,5 @@
-// The run's closing sentence — the head every run of two or more members
-// closes to (transcript-fold R-3, 2026-09-08). Fixtures are hand-built
+// The run's closing sentence — the head every activity run closes to,
+// including a single line (amended 2026-09-09). Fixtures are hand-built
 // TimelineEntry objects: never a live home directory, never a transcript.
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
@@ -81,13 +81,25 @@ describe("the run summary — the head of a closed run", () => {
     assert.deepEqual(text(summary), ["3 commands"]);
   });
 
-  it(`closes at ${RUN_FOLD_THRESHOLD} members and leaves a run of one as the line (R-2)`, () => {
+  it("closes even a single activity line behind its summary", () => {
+    assert.equal(RUN_FOLD_THRESHOLD, 1);
     const one = runSummary(ledgerLines([change()], CTX));
     assert.equal(one.memberCount, 1);
-    assert.equal(one.closedByDefault, false);
+    assert.equal(one.closedByDefault, true);
     const two = runSummary(ledgerLines([change("/w/a.ts"), change("/w/b.ts")], CTX));
     assert.equal(two.memberCount, 2);
     assert.equal(two.closedByDefault, true);
+  });
+
+  it("closes one command and commands grouped into one line", () => {
+    for (const count of [1, 2]) {
+      const rows = Array.from({ length: count }, (_, index) => shell(`echo ${index}`));
+      const summary = runSummary(ledgerLines(rows, CTX));
+      assert.equal(summary.lineCount, 1);
+      assert.equal(summary.rowCount, count);
+      assert.deepEqual(text(summary), [`${count} ${count === 1 ? "command" : "commands"}`]);
+      assert.equal(summary.closedByDefault, true);
+    }
   });
 
   it("a thought is a member of the run and silent in its sentence", () => {
@@ -173,4 +185,3 @@ describe("the run summary — the head of a closed run", () => {
     assert.equal(summary.closedByDefault, false);
   });
 });
-

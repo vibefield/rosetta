@@ -235,6 +235,10 @@ blockquote.claim p { margin: 0; color: inherit; font-size: inherit; }
 /* the fold — a run past the threshold closes to one sentence of nouns */
 .tr-fold { grid-template-columns: 16px minmax(0, 1fr) auto; }
 .tr-fold .tr-line__v { color: var(--vf-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-fold[aria-expanded="false"] .tr-line__v,
+.tr-fold[aria-expanded="false"] .names { color: var(--vf-text-tertiary); }
+.tr-fold[aria-expanded="false"]:is(:hover, :focus-visible) .tr-line__v,
+.tr-fold[aria-expanded="false"]:is(:hover, :focus-visible) .names { color: var(--vf-text-secondary); }
 .tr-fold .tr-line__v b { font-weight: 500; color: var(--vf-red); }
 .tr-fold .chev { color: var(--vf-text-tertiary); }
 .tr-fold[aria-expanded="false"] + .tr-ladder { display: none; }
@@ -1882,6 +1886,8 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
   <h2>Decided — seven choices, locked</h2>
   <p><strong>A · B · A · C · A · A · B.</strong> The prompt is the panel; consecutive commands fold; anchors live in the margin; reasoning is muted, clamped prose; the diff opens in place, capped; site icons keep their colour; the page above is fetched on approach and revealed on the pull. The page is drawn to those answers. The cards stay as the record of what else was on the table and no longer take a press; the ring is the decision.</p>
   <p><strong>Q8–Q12 · A · B · A · A · A</strong> (2026-09-08, drawn in <code>protos/agent-history-proto/transcript-fold/index.html</code>). A run closes at two lines; its head names the changed files, acts first; reasoning joins the run and alone is a <em>Thought</em> line that opens to Q4 C's clamp; a live run stays closed and carries its running line; task checklists fold with everything else. Q4 C is not reversed — it moves one level down.</p>
+  <p><strong>Quieter closed runs</strong> (2026-09-09). The top-level collapsed summary and its filenames use tertiary gray; hover or keyboard focus restores secondary ink. Expanded activity keeps its existing contrast, and live activity and failures keep their status colors.</p>
+  <p><strong>Fold single activity lines too</strong> (2026-09-09). Every tool run uses the same quiet summary, even when it contains one line or several commands grouped into one line. Opening the summary reveals the activity row; its detail opens separately. Questions addressed to the reader remain visible.</p>
 </section>
 <div class="qs" id="qs">
 

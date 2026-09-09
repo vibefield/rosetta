@@ -474,11 +474,12 @@ describe("§07 — only adjacent human setting commands group", () => {
 /* ── runs — R-1 and R-2 (transcript-fold, 2026-09-08) ───────────────────── */
 
 describe("documentTurns — the run", () => {
-  it("a run of one line is the line it already was, open", () => {
+  it("a run of one line closes to its summary between prose", () => {
     const [turn] = documentTurns([prompt("go"), agent("Let me look."), shell("ls"), agent("Done.")]);
     assert.deepEqual(turn.segments.map((segment) => segment.kind), ["prose", "ledger", "prose"]);
     assert.equal(turn.segments[1].members.length, 1);
-    assert.equal(turn.segments[1].summary.closedByDefault, false);
+    assert.equal(turn.segments[1].summary.closedByDefault, true);
+    assert.deepEqual(turn.segments[1].summary.nouns.map((noun) => noun.text), ["1 command"]);
   });
 
   it("a thought alone stays a thinking segment; two thoughts make a run", () => {
@@ -536,6 +537,8 @@ describe("documentTurns — the run", () => {
     assert.equal(turn.segments[1].summary.closedByDefault, false);
     assert.equal(turn.segments[0].lines[0].family, "shell");
     assert.equal(turn.segments[2].lines[0].family, "shell");
+    assert.equal(turn.segments[0].summary.closedByDefault, true);
+    assert.equal(turn.segments[2].summary.closedByDefault, true);
   });
 
   it("a thought between two commands is inside the run and breaks the line fold", () => {

@@ -10,13 +10,11 @@
 // Three rules live here and nowhere else:
 //   T-3  looking folds, acts stay, a failure breaks the fold. `ledger.ts` did
 //        the folding; this draws the result.
-//   R-3  every run of two or more members closes to its head — ONE sentence
-//        of nouns, acts first, the changed files named, the failure count in
-//        red at the right beside the span (transcript-fold, 2026-09-08). A run
-//        of one is the line it already was. The ladder stays in the DOM: the
-//        column head's activity act reveals every run at once through CSS
-//        alone (`[data-fold="off"]`) and keeps the head as its title, so a
-//        room-wide preference never has to walk React state.
+//   R-3  every activity run, including a single line, closes to its head — one
+//        sentence of nouns, acts first, the changed files named, the failure count in
+//        red at the right beside the span (amended 2026-09-09). The ladder
+//        stays in the DOM, and the column head's activity act reveals every
+//        run at once while keeping each head as its title.
 //   R-5  a live run's head takes the breathing dot and carries the line that
 //        is happening, in green; nothing opens under the reader's eye.
 //   T-5  hue only for what did not complete or is still happening. The green
@@ -286,10 +284,9 @@ export function Ledger({
   // or open while the act holds every run open. A press on the head is an
   // override (`true`/`false`); the next press of the act clears it.
   const everyRunOpen = !useFoldPreference().folded;
-  // A run that was one line when it mounted is drawn open, and a live run
-  // that grows under the reader's eye keeps that state: nothing closes on its
-  // own any more than it opens (R-5). A run that arrives complete follows
-  // the room.
+  // Activity follows the room from its first line. A live run that grows
+  // keeps any explicit override, so it never closes on its own (R-5).
+  // Speech, such as a question, has no summary head and stays open.
   const [override, setOverride] = useState<boolean | null>(() =>
     summary.closedByDefault ? null : true,
   );
@@ -413,7 +410,7 @@ export function Ledger({
     );
   }
 
-  // R-2: a run of one is the line it already was — no head, no anchor.
+  // Activity gets a summary even for one line; speech has no outer fold.
   const closed = summary.closedByDefault;
   // R-5: the green breath only in a live session below the watermark, and
   // then the head carries the line that is happening.
@@ -477,9 +474,8 @@ export function Ledger({
           )}
         </span>
       </div> : null}
-      {/* One wrapper in both states, so a live run that grows into a head
-          keeps its lines' open state (R-5). Always in the DOM, shown by the
-          head's own `aria-expanded`. */}
+      {/* One wrapper in both states keeps each line's open state (R-5).
+          Always in the DOM, shown by the head's own `aria-expanded`. */}
       <div className={closed ? "tr-ladder" : undefined}>{drawn}</div>
     </div>
   );
