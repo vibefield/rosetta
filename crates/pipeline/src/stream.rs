@@ -367,7 +367,7 @@ pub(crate) fn cursor_row(
                 runtime_id: runtime.id.clone(),
                 stream: file.stream_id.clone(),
                 path: file.relative_path.clone(),
-                session_id: file.session_id.clone(),
+                session_id: file.projected_session_id(),
                 expected: None,
                 next: initial,
                 updated_at: Some(file.modified_ms),
@@ -434,9 +434,9 @@ fn ingest_file(
 ) -> Result<FilePass, PipelineError> {
     let path = root.join(&file.relative_path);
     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
-    if cursor.session_id != file.session_id {
+    if cursor.session_id != file.projected_session_id() {
         return Err(PipelineError::Config(format!(
-            "source {} moved from session {} to {}",
+            "source {} moved from projected session {:?} to {}",
             file.relative_path, cursor.session_id, file.session_id
         )));
     }
@@ -568,7 +568,7 @@ fn ingest_file(
                                 runtime_id: runtime.id.clone(),
                                 stream: file.stream_id.clone(),
                                 path: file.relative_path.clone(),
-                                session_id: file.session_id.clone(),
+                                session_id: file.projected_session_id(),
                                 expected: Some(prev_blob.clone()),
                                 next: next_blob.clone(),
                                 updated_at: Some(file.modified_ms),
@@ -803,6 +803,7 @@ fn ingest_file(
                 .collect();
             instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
                 let source = rosetta_capture::SourceDef {
+                    ledger_only: file.ledger_only,
                     relative_path: file.relative_path.clone(),
                     stream_id: file.stream_id.clone(),
                     session_id: file.session_id.clone(),
@@ -840,7 +841,7 @@ fn ingest_file(
                 runtime_id: runtime.id.clone(),
                 stream: file.stream_id.clone(),
                 path: file.relative_path.clone(),
-                session_id: file.session_id.clone(),
+                session_id: file.projected_session_id(),
                 expected: Some(prev_blob.clone()),
                 next: next_blob.clone(),
                 updated_at: Some(file.modified_ms),

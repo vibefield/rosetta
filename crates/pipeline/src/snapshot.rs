@@ -258,7 +258,7 @@ pub(crate) fn apply_snapshot_records(
                         runtime_id: runtime.id.clone(),
                         stream: file.stream_id.clone(),
                         path: file.relative_path.clone(),
-                        session_id: file.session_id.clone(),
+                        session_id: file.projected_session_id(),
                         expected: Some(cursor.checkpoint.clone()),
                         next: next.encode(),
                         updated_at: Some(file.modified_ms),
@@ -293,6 +293,7 @@ pub(crate) fn apply_snapshot_records(
     if let Some(raw_ledger) = ledger.as_deref_mut() {
         instrument.ledger_write(raw_ledger, |raw_ledger| -> Result<(), PipelineError> {
             let source = rosetta_capture::SourceDef {
+                ledger_only: file.ledger_only,
                 relative_path: file.relative_path.clone(),
                 stream_id: file.stream_id.clone(),
                 session_id: file.session_id.clone(),
@@ -449,6 +450,7 @@ pub(crate) fn seal_generation(
     instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
         ledger.complete_generation(
             &rosetta_capture::SourceDef {
+                ledger_only: file.ledger_only,
                 relative_path: file.relative_path.clone(),
                 stream_id: file.stream_id.clone(),
                 session_id: file.session_id.clone(),
@@ -519,7 +521,7 @@ pub(crate) fn flush_chunk(
             runtime_id: runtime.id.clone(),
             stream: file.stream_id.clone(),
             path: file.relative_path.clone(),
-            session_id: file.session_id.clone(),
+            session_id: file.projected_session_id(),
             expected: Some(prev_blob.clone()),
             next: next.clone(),
             updated_at: Some(file.modified_ms),

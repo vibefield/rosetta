@@ -87,6 +87,7 @@ impl AgentAdapter for GrokAdapter {
             let parent_session_id = summary.parent_session_id.filter(|value| !value.is_empty());
             let title = summary.generated_title.filter(|value| !value.is_empty());
             return SkimResult {
+                ledger_only: false,
                 ops: Vec::new(),
                 session_id: Some(summary.info.id),
                 root_session_id: None,
@@ -117,6 +118,7 @@ impl AgentAdapter for GrokAdapter {
             });
 
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id: from_record.or_else(|| session_from_path(&stat.relative_path)),
             parent_session_id: None,
@@ -232,6 +234,7 @@ fn skim_subagent(stat: &FileStat, document: &[u8]) -> SkimResult {
         .and_then(rosetta_adapter_support::rfc3339_ms)
         .or(started_at);
     SkimResult {
+        ledger_only: false,
         ops: Vec::new(),
         session_id: Some(child),
         parent_session_id: Some(parent.clone()),

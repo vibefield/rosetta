@@ -85,6 +85,7 @@ impl AgentAdapter for KimiCodeAdapter {
         }
 
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id: Some(identity.native_session_id),
             parent_session_id: identity.parent_session_id,
@@ -125,6 +126,7 @@ impl AgentAdapter for KimiCodeAdapter {
         let started_at = epoch_ms(state.created_at);
         let title = state.title.filter(|title| !title.is_empty());
         let mut sessions = vec![SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id: Some(root.clone()),
             parent_session_id: None,
@@ -149,6 +151,7 @@ impl AgentAdapter for KimiCodeAdapter {
                 Some(parent) => format!("{root}/agents/{parent}"),
             };
             sessions.push(SkimResult {
+                ledger_only: false,
                 ops: Vec::new(),
                 session_id: Some(format!("{root}/agents/{agent_id}")),
                 parent_session_id: Some(parent_session_id),

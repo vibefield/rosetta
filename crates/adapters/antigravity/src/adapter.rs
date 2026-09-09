@@ -87,6 +87,7 @@ impl AgentAdapter for AntigravityAdapter {
             .max_by_key(|(step, _)| *step)
             .map(|(_, title)| title);
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id: conversation_id(&stat.relative_path).map(str::to_owned),
             parent_session_id: None,

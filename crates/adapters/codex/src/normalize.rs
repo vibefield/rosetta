@@ -67,6 +67,10 @@ enum CellRoute {
 /// `response_total` are the machinery for the cumulative token counters.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CodexState {
+    /// Internal approval review is retained only in the raw ledger. This bit
+    /// survives live-tail checkpoints so resumed suffixes stay unprojected.
+    #[serde(default)]
+    ledger_only: bool,
     /// Current execution cwd used only to resolve relative tool arguments.
     /// The canonical session cwd is selected independently during meta ingest.
     tool_cwd: Option<String>,
@@ -99,6 +103,9 @@ pub fn ingest_line(
     stream_id: &str,
     line: &[u8],
 ) -> LineOutcome {
+    if state.ledger_only {
+        return LineOutcome::parsed(Vec::new());
+    }
     let Ok(text) = std::str::from_utf8(line) else {
         return hard(ctx, stream_id, "<binary>", "invalid_utf8", &[], None);
     };
@@ -123,6 +130,13 @@ pub fn ingest_line(
             };
         }
     };
+
+    if let RolloutPayload::SessionMeta(meta) = &record.payload
+        && crate::session_policy::ledger_only(&meta.source, meta.thread_source.as_deref())
+    {
+        state.ledger_only = true;
+        return LineOutcome::parsed(Vec::new());
+    }
 
     let ts = rfc3339_ms(&record.timestamp);
     let mut ops = Vec::new();

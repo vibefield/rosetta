@@ -35,7 +35,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        13
+        14
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
@@ -73,6 +73,10 @@ impl AgentAdapter for CodexAdapter {
             }
         });
         SkimResult {
+            ledger_only: crate::session_policy::ledger_only(
+                row.get("source").unwrap_or(&Value::Null),
+                thread_source,
+            ),
             ops: Vec::new(),
             session_id: nonempty(row.get("id").and_then(Value::as_str)),
             parent_session_id: parent_session_id.clone(),
@@ -157,6 +161,10 @@ impl AgentAdapter for CodexAdapter {
             None => (None, None, Some(rosetta_core::rows::SessionRole::Main)),
         };
         SkimResult {
+            ledger_only: crate::session_policy::ledger_only(
+                &meta.source,
+                meta.thread_source.as_deref(),
+            ),
             ops: Vec::new(),
             session_id: Some(meta.id.clone()),
             parent_session_id,

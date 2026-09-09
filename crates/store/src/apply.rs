@@ -26,7 +26,8 @@ pub struct CheckpointUpdate {
     pub runtime_id: String,
     pub stream: String,
     pub path: String,
-    pub session_id: String,
+    /// None for a ledger-only source: progress has no canonical session owner.
+    pub session_id: Option<String>,
     /// `None` means "this file has no cursor yet" — the insert fails if one
     /// appeared concurrently.
     pub expected: Option<String>,
@@ -558,7 +559,10 @@ fn apply_drift(
     result
 }
 
-fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64, u64), StoreError> {
+fn source_state(
+    tx: &Transaction,
+    cursor_id: i64,
+) -> Result<(Option<String>, u64, u64), StoreError> {
     let Some((session_id, generation, highest)) = tx
         .prepare_cached(
             "SELECT session_id, active_generation, highest_generation
@@ -566,7 +570,7 @@ fn source_state(tx: &Transaction, cursor_id: i64) -> Result<(String, u64, u64), 
         )?
         .query_row(params![cursor_id], |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
             ))
@@ -1386,7 +1390,9 @@ pub(crate) fn apply_batch(
             let (cursor_session, active_generation, highest_generation) =
                 source_state(tx, source.cursor_id)?;
             let starts_new_generation = source.generation > highest_generation;
-            if cursor_session != source.session_id {
+            if let Some(cursor_session) = &cursor_session
+                && cursor_session != &source.session_id
+            {
                 return Err(StoreError::SourceState {
                     cursor_id: source.cursor_id,
                     message: format!(
@@ -1437,6 +1443,25 @@ pub(crate) fn apply_batch(
                     source.cursor_id,
                     sqlite_u64(source.cursor_id, "generation", source.generation)?,
                 ])?;
+            }
+
+            // An internal source has a durable capture cursor but no canonical
+            // session. Advance only that cursor; reject accidental payloads
+            // before they can create rows, rollups, or search repair work.
+            if cursor_session.is_none() {
+                if !batch.ops.is_empty() {
+                    return Err(StoreError::SourceState {
+                        cursor_id: source.cursor_id,
+                        message: "ledger-only source cannot project operations".to_string(),
+                    });
+                }
+                if source.mode == SourceMode::Activate {
+                    set_active_generation(tx, source, active_generation)?;
+                }
+                for checkpoint in &batch.checkpoints {
+                    apply_checkpoint(tx, checkpoint)?;
+                }
+                return Ok(stats);
             }
 
             // No installed reader can observe a private cold database, and a

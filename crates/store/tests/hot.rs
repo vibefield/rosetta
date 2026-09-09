@@ -153,7 +153,7 @@ fn cursor_id(store: &mut Store) -> i64 {
                 runtime_id: "rt1".into(),
                 stream: "transcript".into(),
                 path: "p/x.jsonl".into(),
-                session_id: "s1".into(),
+                session_id: Some("s1".into()),
                 expected: None,
                 next: "blob-v0".into(),
                 updated_at: Some(1),

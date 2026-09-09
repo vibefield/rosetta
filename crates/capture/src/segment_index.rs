@@ -198,6 +198,7 @@ mod tests {
 
     fn source(session: &str, path: &str) -> SourceDef {
         SourceDef {
+            ledger_only: false,
             relative_path: path.to_string(),
             stream_id: "transcript".to_string(),
             session_id: session.to_string(),

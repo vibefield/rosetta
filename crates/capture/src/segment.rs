@@ -435,6 +435,7 @@ mod tests {
 
     fn source(path: &str) -> SourceDef {
         SourceDef {
+            ledger_only: false,
             relative_path: path.to_string(),
             stream_id: format!("stream:{path}"),
             session_id: format!("session:{path}"),

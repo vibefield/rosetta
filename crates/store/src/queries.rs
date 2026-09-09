@@ -490,7 +490,8 @@ pub struct CursorState {
     /// generation when an epoch emitted no ops). New recovery epochs allocate
     /// strictly above this value instead of reusing abandoned staged rows.
     pub highest_generation: u64,
-    pub session_id: String,
+    /// Absent when only the source's raw ledger and checkpoint are retained.
+    pub session_id: Option<String>,
 }
 
 fn parse_role(text: &str) -> SessionRole {
@@ -633,7 +634,7 @@ pub fn cursor_state(
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })
         .optional()?;
@@ -674,6 +675,7 @@ pub fn cursor_sources_with_prefix(
         "SELECT path, stream, session_id
          FROM ingest_cursor
          WHERE runtime_id = ?1 AND path LIKE ?2 ESCAPE '\\'
+           AND session_id IS NOT NULL
          ORDER BY path",
     )?;
     let rows = statement.query_map(params![runtime_id, pattern], |row| {

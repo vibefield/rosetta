@@ -482,6 +482,18 @@ rolling alphas; track `latest` only.
   must include compaction; optional state columns and crate reorgs require the schema and
   `watch.toml` evidence to be refreshed together.
 
+**Product admission policy (2026-09-09).** Internal approval reviewers are excluded
+from the canonical session/timeline/search projection during fresh ingest. Match
+native `source.subagent.other == "guardian"` or `thread_source == "guardian_review"`
+in both rollout headers and state metadata; the generic `subagent` label, a review
+title, or prose mentioning guardian is insufficient. A local structure/count audit
+found 193 such threads (143 with the older generic thread-source label), but does not
+serve as CI input or expand the native schema. Synthetic policy tests exercise the
+existing permissive source field, checkpoint restoration, and negative cases for
+ordinary review/delegated work. Hermetic pipeline tests prove source bytes remain in
+the ledger while metadata, timeline rows, text assets, usage and search stay absent,
+including fresh parallel preparation and replay of the newly captured ledger.
+
 ### 5.8 Grok Build (xAI) — **Tier A**
 
 xAI's terminal agent (binary `grok`, Rust TUI + headless + ACP). Announced May 2026;

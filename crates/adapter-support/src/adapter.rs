@@ -92,6 +92,9 @@ pub enum ProjectHint {
 
 #[derive(Debug, Default)]
 pub struct SkimResult {
+    /// An identified internal session whose source must still be captured,
+    /// but which contributes no canonical session, messages, assets or search.
+    pub ledger_only: bool,
     pub ops: Vec<IngestOp>,
     /// The session this file belongs to, when the adapter can tell — lets the
     /// pipeline key its cursors and ctx before the stream phase.
@@ -272,6 +275,7 @@ pub trait AgentAdapter: Send + Sync {
                 })
             });
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id: text("native_session_id"),
             parent_session_id: text("parent_native_session_id"),

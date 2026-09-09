@@ -102,7 +102,7 @@ fn install_cursor(store: &mut Store, path: &str, session_id: &str) -> i64 {
                 runtime_id: "rt1".into(),
                 stream: "transcript".into(),
                 path: path.into(),
-                session_id: session_id.into(),
+                session_id: Some(session_id.into()),
                 expected: None,
                 next: format!("ck-{path}"),
                 updated_at: Some(1),

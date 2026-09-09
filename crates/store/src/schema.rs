@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -145,7 +145,8 @@ CREATE TABLE IF NOT EXISTS ingest_cursor (
   runtime_id  TEXT NOT NULL REFERENCES agent_runtime(id),
   stream      TEXT NOT NULL,
   path        TEXT NOT NULL,
-  session_id  TEXT NOT NULL REFERENCES session(id),
+  -- Ledger-only sources retain bounded progress without a canonical session.
+  session_id  TEXT REFERENCES session(id),
   active_generation INTEGER NOT NULL DEFAULT 0,
   -- Monotonic even when an unclean staged generation is abandoned. Ledger
   -- generation ids therefore never alias after a retry or process restart.

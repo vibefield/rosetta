@@ -63,6 +63,7 @@ fn resume_replay_ignores_a_never_sealed_source_but_ordinary_rebuild_fails_closed
     let temp = TempDir::new().unwrap();
     let ledger_dir = temp.path().join("ledger");
     let source = SourceDef {
+        ledger_only: false,
         relative_path: "projects/interrupted.jsonl".into(),
         stream_id: "transcript".into(),
         session_id: "session-interrupted".into(),
@@ -160,6 +161,7 @@ fn interrupted_generation_is_reserved_before_source_retry() {
     .unwrap();
     let file = files.first().unwrap().clone();
     let source = SourceDef {
+        ledger_only: false,
         relative_path: file.relative_path.clone(),
         stream_id: file.stream_id.clone(),
         session_id: file.session_id.clone(),

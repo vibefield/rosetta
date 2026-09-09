@@ -92,6 +92,7 @@ impl AgentAdapter for CopilotAdapter {
             .map_or(SessionRole::Main, |_| SessionRole::Subagent);
 
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id,
             parent_session_id: skim.parent_session_id.clone(),
@@ -168,6 +169,7 @@ fn workspace_skim(stat: &FileStat, document: &[u8]) -> SkimResult {
     };
     let title = workspace.name.and_then(nonempty);
     SkimResult {
+        ledger_only: false,
         ops: Vec::new(),
         session_id,
         parent_session_id: None,

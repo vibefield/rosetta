@@ -151,6 +151,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             (None, None) => (None, None),
         };
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id,
             parent_session_id,
@@ -394,6 +395,7 @@ fn skim_subagent_metadata(stat: &FileStat, document: &[u8]) -> SkimResult {
         configured_model: meta.model.filter(|value| !value.trim().is_empty()),
     };
     SkimResult {
+        ledger_only: false,
         ops: Vec::new(),
         session_id: Some(child),
         parent_session_id: Some(parent),

@@ -784,7 +784,7 @@ mod tests {
                 runtime_id: "runtime-1".to_string(),
                 stream: "transcript".to_string(),
                 path: "session.jsonl".to_string(),
-                session_id: "session-1".to_string(),
+                session_id: Some("session-1".to_string()),
                 expected: Some("old".to_string()),
                 next: "new".to_string(),
                 updated_at: Some(42),

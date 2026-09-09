@@ -1278,6 +1278,7 @@ pub fn prepare_captured_runtime(
             cursor.id,
             CapturedSource {
                 source: SourceDef {
+                    ledger_only: file.ledger_only,
                     relative_path: file.relative_path.clone(),
                     stream_id: file.stream_id.clone(),
                     session_id: file.session_id.clone(),
@@ -1461,7 +1462,7 @@ pub fn apply_prepared_runtime(
     }
 
     for file in &prepared.files {
-        if !sessions_seen.contains(&file.source.session_id) {
+        if !file.source.ledger_only && !sessions_seen.contains(&file.source.session_id) {
             sessions_seen.insert(file.source.session_id.clone());
             prepared.report.sessions_stubbed += 1;
             setup_ops.push(IngestOp::SessionMeta(SessionRow {
@@ -1497,7 +1498,7 @@ pub fn apply_prepared_runtime(
             runtime_id: runtime.id.clone(),
             stream: file.source.stream_id.clone(),
             path: file.source.relative_path.clone(),
-            session_id: file.source.session_id.clone(),
+            session_id: file.source.projected_session_id(),
             expected: None,
             next: initial,
             updated_at: None,
@@ -1530,9 +1531,9 @@ pub fn apply_prepared_runtime(
             ops: file.ops,
             checkpoints: vec![CheckpointUpdate {
                 runtime_id: runtime.id.clone(),
+                session_id: file.source.projected_session_id(),
                 stream: file.source.stream_id,
                 path: file.source.relative_path,
-                session_id: file.source.session_id.clone(),
                 expected: Some(initial),
                 next: file.checkpoint,
                 updated_at: None,
@@ -1598,7 +1599,7 @@ fn open_file(
     // A session no journaled meta batch named (ledger enabled mid-history)
     // still needs its row for FKs — stub it honestly; a later meta batch or
     // re-skim refines the same deterministic id.
-    if !sessions_seen.contains(&source.session_id) {
+    if !source.ledger_only && !sessions_seen.contains(&source.session_id) {
         report.sessions_stubbed += 1;
         sessions_seen.insert(source.session_id.clone());
         let stats = instrument.apply(
@@ -1644,7 +1645,7 @@ fn open_file(
                         runtime_id: runtime.id.clone(),
                         stream: source.stream_id.clone(),
                         path: source.relative_path.clone(),
-                        session_id: source.session_id.clone(),
+                        session_id: source.projected_session_id(),
                         expected: None,
                         next: blob.clone(),
                         updated_at: None,
@@ -1725,7 +1726,7 @@ fn flush_chunk(
             runtime_id: runtime.id.clone(),
             stream: file.source.stream_id.clone(),
             path: file.source.relative_path.clone(),
-            session_id: file.source.session_id.clone(),
+            session_id: file.source.projected_session_id(),
             expected: Some(file.cursor_blob.clone()),
             next: next.clone(),
             updated_at: None,

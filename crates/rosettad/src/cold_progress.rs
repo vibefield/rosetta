@@ -31,7 +31,7 @@ impl ColdProgress {
             }
         }
         let mut known = fresh;
-        for file in files {
+        for file in files.iter().filter(|file| !file.ledger_only) {
             if file.driver != rosetta_adapter_support::StreamDriver::JsonLines {
                 known = false;
                 board.mark_bytes_unknown(plan.source_project_of(0, file));
@@ -62,8 +62,10 @@ impl std::fmt::Debug for ColdProgress {
 
 impl ColdProgressObserver for ColdProgress {
     fn source_bytes(&self, file: &SessionFile, bytes: u64) {
-        self.board
-            .advance(self.plan.source_project_of(0, file), bytes);
+        if !file.ledger_only {
+            self.board
+                .advance(self.plan.source_project_of(0, file), bytes);
+        }
     }
 
     fn reading_finished(&self) {

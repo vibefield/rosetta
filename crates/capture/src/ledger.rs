@@ -54,11 +54,21 @@ const META_HEAD: &str = ".meta-head";
 /// file. Written into each segment the first time the source appears there.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceDef {
+    /// This source is lossless ledger evidence only, not a canonical session.
+    /// Old ledgers predate session admission policy and default to projection.
+    #[serde(default)]
+    pub ledger_only: bool,
     pub relative_path: String,
     pub stream_id: String,
     pub session_id: String,
     pub native_session_id: String,
     pub agent_version: Option<String>,
+}
+
+impl SourceDef {
+    pub fn projected_session_id(&self) -> Option<String> {
+        (!self.ledger_only).then(|| self.session_id.clone())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -673,6 +683,10 @@ impl Ledger {
         let id = self.defined.len() as u32;
         let started = Instant::now();
         let body = serde_encode(&[
+            (
+                "ledger_only",
+                if source.ledger_only { "true" } else { "false" },
+            ),
             ("file_id", &id.to_string()),
             ("relative_path", &source.relative_path),
             ("stream_id", &source.stream_id),
@@ -1291,6 +1305,11 @@ fn decode_define(body: &[u8]) -> Option<(u32, SourceDef)> {
     Some((
         file_id,
         SourceDef {
+            ledger_only: match get("ledger_only").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                _ => return None,
+            },
             relative_path: get("relative_path")?,
             stream_id: get("stream_id")?,
             session_id: get("session_id")?,
@@ -1308,12 +1327,35 @@ mod tests {
 
     fn source(path: &str) -> SourceDef {
         SourceDef {
+            ledger_only: false,
             relative_path: path.to_string(),
             stream_id: "transcript".to_string(),
             session_id: "s-canonical".to_string(),
             native_session_id: "s-native".to_string(),
             agent_version: Some("1.2.3".to_string()),
         }
+    }
+
+    #[test]
+    fn source_admission_is_backward_compatible_and_round_trips() {
+        let legacy = br#"{"file_id":"0","relative_path":"a.jsonl","stream_id":"rollout","session_id":"s","native_session_id":"n","agent_version":"1"}"#;
+        assert!(!decode_define(legacy).unwrap().1.ledger_only);
+
+        let dir = TempDir::new().unwrap();
+        let mut ledger = Ledger::open(dir.path()).unwrap();
+        let mut internal = source("internal.jsonl");
+        internal.ledger_only = true;
+        ledger
+            .append_raw(&internal, 1, [(0, b"private".as_slice())])
+            .unwrap();
+        ledger.flush().unwrap();
+        drop(ledger);
+        let scanned = scan(dir.path()).unwrap();
+        assert_eq!(scanned.torn_segments, 0);
+        assert!(
+            matches!(&scanned.entries[0], LedgerEntry::Raw { source, .. } if source == &internal)
+        );
+        assert_eq!(internal.projected_session_id(), None);
     }
 
     #[test]
@@ -1657,6 +1699,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
         let hostile = SourceDef {
+            ledger_only: false,
             relative_path: "we\"ird\\path\n.jsonl".to_string(),
             stream_id: "transcript".to_string(),
             session_id: "s".to_string(),

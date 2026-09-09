@@ -17,6 +17,7 @@ pub mod adapter;
 mod exec_program;
 pub mod normalize;
 pub mod raw;
+mod session_policy;
 pub mod spec;
 pub mod time;
 pub mod tool;

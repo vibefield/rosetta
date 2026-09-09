@@ -69,6 +69,7 @@ impl AgentAdapter for FakeDocumentAgent {
             .flatten()
             .filter_map(|session| {
                 Some(SkimResult {
+                    ledger_only: false,
                     session_id: Some(session["id"].as_str()?.to_owned()),
                     cwd: session["cwd"].as_str().map(str::to_owned),
                     title: session["title"].as_str().map(str::to_owned),

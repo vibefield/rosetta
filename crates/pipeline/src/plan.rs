@@ -97,6 +97,9 @@ impl IngestPlan {
         file: &SessionFile,
         project_id: Option<String>,
     ) -> PlanAdmission {
+        if file.ledger_only {
+            return PlanAdmission::default();
+        }
         let Some(entry) = self.runtimes.get_mut(runtime) else {
             return PlanAdmission::default();
         };
@@ -159,6 +162,7 @@ mod tests {
 
     fn file(path: &str, session_id: &str, size: u64) -> SessionFile {
         SessionFile {
+            ledger_only: false,
             relative_path: path.into(),
             stream_id: "transcript".into(),
             file_format: FileFormat::Jsonl,

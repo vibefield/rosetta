@@ -21,6 +21,8 @@ use crate::{IngestOptions, PipelineError};
 /// One source file the stream phase will tail, with the ids minted here.
 #[derive(Debug, Clone)]
 pub struct SessionFile {
+    /// Capture and checkpoint this source without admitting a public session.
+    pub ledger_only: bool,
     pub relative_path: String,
     pub stream_id: String,
     pub file_format: FileFormat,
@@ -35,6 +37,12 @@ pub struct SessionFile {
     /// Only these virtual tombstones may turn a Missing read into an empty
     /// authoritative generation; a racing ordinary read remains incomplete.
     pub source_missing: bool,
+}
+
+impl SessionFile {
+    pub(crate) fn projected_session_id(&self) -> Option<String> {
+        (!self.ledger_only).then(|| self.session_id.clone())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -293,7 +301,9 @@ pub fn meta_ingest_inventory_into(
                 }
             }
         }
-        output.ops.extend(std::mem::take(&mut skim.ops));
+        if !skim.ledger_only {
+            output.ops.extend(std::mem::take(&mut skim.ops));
+        }
         let Some(native_session_id) = skim.session_id.clone() else {
             report.files_unidentified += 1;
             continue;
@@ -355,6 +365,7 @@ pub fn meta_ingest_inventory_into(
             continue;
         }
         output.files.push(SessionFile {
+            ledger_only: false,
             relative_path: virtual_path,
             stream_id: cursor_stream,
             file_format: stream.file_format,
@@ -705,6 +716,24 @@ fn admit_identified(
     let sessions_before = output.sessions.len();
     let session_id = ids::session_id(&runtime.id, &native_session_id);
 
+    if skim.ledger_only {
+        output.files.push(SessionFile {
+            ledger_only: true,
+            relative_path: source.relative_path,
+            stream_id: source.stream_id,
+            file_format: source.file_format,
+            discipline: source.discipline,
+            driver: source.driver,
+            session_id,
+            native_session_id,
+            size: source.size,
+            modified_ms: source.modified_ms,
+            agent_version: skim.agent_version,
+            source_missing: false,
+        });
+        return;
+    }
+
     if let Some(project) = skim
         .project
         .take()
@@ -826,6 +855,7 @@ fn admit_identified(
     merge_session(&mut output.sessions, row);
 
     output.files.push(SessionFile {
+        ledger_only: false,
         relative_path: source.relative_path,
         stream_id: source.stream_id,
         file_format: source.file_format,
@@ -913,7 +943,9 @@ fn admit_document(
         modified_ms,
     };
     for mut skim in adapter.document_sessions(&stream.id, &stat, snapshot.bytes()) {
-        output.ops.extend(std::mem::take(&mut skim.ops));
+        if !skim.ledger_only {
+            output.ops.extend(std::mem::take(&mut skim.ops));
+        }
         let Some(native) = skim.session_id.clone() else {
             report.files_unidentified += 1;
             continue;
@@ -953,6 +985,7 @@ fn admit_document(
             continue;
         };
         output.files.push(SessionFile {
+            ledger_only: false,
             relative_path: virtual_path,
             stream_id: cursor_stream,
             file_format: stream.file_format,
@@ -1057,6 +1090,7 @@ fn admit_database(
         output.files.push(SessionFile {
             relative_path,
             stream_id: cursor_stream,
+            ledger_only: false,
             file_format: stream.file_format,
             discipline: stream.discipline,
             driver,

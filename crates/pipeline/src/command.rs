@@ -214,6 +214,7 @@ mod tests {
 
         let directory = TempDir::new().unwrap();
         let source = SourceDef {
+            ledger_only: false,
             relative_path: "projects/session.jsonl".into(),
             stream_id: "transcript".into(),
             session_id: "s1".into(),
@@ -298,6 +299,7 @@ mod tests {
 
         let directory = TempDir::new().unwrap();
         let other = SourceDef {
+            ledger_only: false,
             relative_path: "projects/other.jsonl".into(),
             stream_id: "transcript".into(),
             session_id: "s2".into(),
@@ -305,6 +307,7 @@ mod tests {
             agent_version: Some("2.1.241".into()),
         };
         let source = SourceDef {
+            ledger_only: false,
             relative_path: "projects/session.jsonl".into(),
             stream_id: "transcript".into(),
             session_id: "s1".into(),

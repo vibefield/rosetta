@@ -90,6 +90,7 @@ impl AgentAdapter for PiAdapter {
         let path_id = native_id_from_session_path(&stat.relative_path).map(str::to_owned);
         let Some(header) = header else {
             return SkimResult {
+                ledger_only: false,
                 session_id: path_id,
                 role: Some(SessionRole::Main),
                 title_kind: title.as_ref().map(|_| TitleKind::Explicit),
@@ -104,6 +105,7 @@ impl AgentAdapter for PiAdapter {
             .and_then(native_id_from_session_path)
             .map(str::to_owned);
         SkimResult {
+            ledger_only: false,
             ops: Vec::new(),
             session_id: Some(header.id),
             parent_session_id: parent.clone(),

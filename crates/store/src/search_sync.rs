@@ -82,7 +82,10 @@ fn affected_sessions(
         .source
         .as_ref()
         .is_some_and(|source| matches!(source.mode, SourceMode::Append | SourceMode::Activate));
-    if source_applied && let Some(source) = &batch.source {
+    if source_applied
+        && let Some(source) = &batch.source
+        && session_metadata(tx, &source.session_id)?.is_some()
+    {
         sessions.insert(source.session_id.clone());
     }
 

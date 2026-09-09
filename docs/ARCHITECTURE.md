@@ -540,6 +540,18 @@ enum CanonicalFact {
 
 ### 4.1.1 Strict public message boundary
 
+**Internal session exclusion (2026-09-09, schema 18).** An adapter may mark an
+identified source `ledger_only` during bounded metadata normalization. Capture
+still records its complete native bytes, but metadata admits no session, project,
+or title for it and stream normalization emits no canonical operations. Its nullable
+`ingest_cursor.session_id` retains only resumable capture progress; no dummy session,
+message, asset, usage rollup, or search repair key is created. The admission bit lives
+in the raw ledger's source definition so a fresh-ledger replay cannot recreate a
+placeholder. Existing source definitions default to ordinary projection. Codex's
+internal guardian approval reviews use this policy; ordinary delegated work and
+code-review subagents remain visible. This is a fresh-ingest boundary, not a cleanup
+or migration of an existing archive.
+
 > **Activation status (2026-08-30): shipped in projection schema 12.** Core types, every captured
 > adapter, canonical store/search, protocol, and the client share one closed user-facing timeline
 > and fixed tool vocabulary. Native input/result/payload objects remain ledger-only. Correlation,

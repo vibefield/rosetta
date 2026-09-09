@@ -206,7 +206,7 @@ impl ColdEngine {
             board.seed_session(row.project_id.as_deref(), session_id, row.bytes);
         }
         for (runtime, roster) in rosters.iter().enumerate() {
-            for file in roster {
+            for file in roster.iter().filter(|file| !file.ledger_only) {
                 if file.driver != rosetta_adapter_support::StreamDriver::JsonLines {
                     board.mark_bytes_unknown(plan.source_project_of(runtime, file));
                 }
@@ -325,8 +325,10 @@ impl ColdEngine {
             // in the unassigned bucket) — physical reads amplify past any
             // census figure, payload never does — and completion when the
             // pass that just ran left nothing queued for the session.
-            let project = self.plan.source_project_of(index, file).map(str::to_owned);
-            self.board.advance(project.as_deref(), report.payload_bytes);
+            if let Some(projected) = files.iter().find(|file| !file.ledger_only) {
+                let project = self.plan.source_project_of(index, projected);
+                self.board.advance(project, report.payload_bytes);
+            }
             entry.stream.merge_from(&report);
             // A sibling's pass may have badged this session Indexed while
             // other tasks for it are still queued (its own paused remainder
@@ -334,7 +336,7 @@ impl ColdEngine {
             // hold Streaming until the session's last queued task is gone;
             // the audit pass below re-derives the final verdict either way.
             let mut sessions = BTreeMap::new();
-            for member in &files {
+            for member in files.iter().filter(|file| !file.ledger_only) {
                 sessions
                     .entry(member.session_id.clone())
                     .or_insert_with(|| {
