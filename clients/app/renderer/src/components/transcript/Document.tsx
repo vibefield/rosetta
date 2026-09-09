@@ -48,7 +48,8 @@ import { Ledger } from "./Ledger";
 import { GapMarker, Marker, SummaryNote, Watermark } from "./Marker";
 import { Compaction } from "./Compaction";
 import { Attachments, Prompt } from "./Prompt";
-import { Prose, SegmentActs } from "./Prose";
+import { SegmentActs } from "./Prose";
+import { MessagePreview } from "./MessagePreview";
 import { ResponseHead } from "./ResponseHead";
 import { Subthread } from "./Subthread";
 import type { ThreadFocus, ThreadIndex } from "./thread-index";
@@ -705,7 +706,9 @@ export function TranscriptDocument({
               onReceipt={onReceipt}
             />
             {segment.text !== null && (
-              <Prose
+              <MessagePreview
+                messageKey={`${segment.row.session_id}:${rowId}`}
+                role="agent"
                 text={segment.text}
                 onReceipt={onReceipt}
                 imageAttachments={segment.attachments.filter(canOpenAttachment)}

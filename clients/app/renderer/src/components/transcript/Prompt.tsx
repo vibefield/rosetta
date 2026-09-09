@@ -19,6 +19,7 @@ import { clock, fmtBytes } from "../../lib/format";
 import { Anchor } from "./Anchor";
 import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
 import { Prose, SegmentActs } from "./Prose";
+import { MessagePreview } from "./MessagePreview";
 
 function captionOf(fact: AttachmentFact): string {
   const size = fact.byteLen === null ? null : fmtBytes(fact.byteLen);
@@ -103,7 +104,9 @@ export function PromptPanel({
           <p className="tr-quiet">no text recorded</p>
         )
       ) : (
-        <Prose
+        <MessagePreview
+          messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`}
+          role="user"
           text={prompt.text}
           onReceipt={onReceipt}
           imageAttachments={openableImages}

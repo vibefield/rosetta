@@ -12,7 +12,7 @@
 // mark and name, T-4) and the viewer's home directory (a path is drawn
 // relative to the session's cwd, then home-relative — never the eleven leading
 // characters that are the same on every line).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SessionRow,
   TimelineMetaArtifact,
@@ -35,6 +35,9 @@ import { DayMenu, markStuckPills } from "./transcript/DayPill";
 import { TranscriptDocument } from "./transcript/Document";
 import { useTranscriptModel } from "./transcript/document-model";
 import { useFoldPreference } from "./transcript/fold-preference";
+import { MessageViewerContext } from "./transcript/MessagePreview";
+import { handleForMessage, messageFileSource } from "./transcript/message-file-source";
+import type { FullMessage } from "./transcript/message-file-source";
 import { ActivityGlyph } from "./transcript/glyphs";
 import { HeadOfDocument, TopFade } from "./transcript/HeadOfDocument";
 import { ReceiptPill } from "./transcript/ReceiptPill";
@@ -193,6 +196,11 @@ export function TranscriptColumn({
     }
     setViewerTarget({ handle, source: attachmentFileSource });
   };
+
+  const openMessage = useCallback((message: FullMessage) => {
+    viewerRequest.current += 1;
+    setViewerTarget({ handle: handleForMessage(message), source: messageFileSource });
+  }, []);
 
   const openReadPath = (path: PathFact) => {
     const request = (viewerRequest.current += 1);
@@ -393,6 +401,7 @@ export function TranscriptColumn({
   };
 
   return (
+    <MessageViewerContext.Provider value={openMessage}>
     <div
       className="ah-col ah-col--measure"
       style={{ position: "relative" }}
@@ -560,5 +569,6 @@ export function TranscriptColumn({
         openInBrowser={desktopHost()?.openInBrowser ?? null}
       />
     </div>
+    </MessageViewerContext.Provider>
   );
 }

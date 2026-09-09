@@ -124,6 +124,21 @@ test("initial landing is immediate; appends and growing text follow smoothly", (
   assert.deepEqual(s.state, { away: false, unseen: 0 });
 });
 
+test("live-follow settles when the browser rounds scroll positions to device pixels", (t) => {
+  const s = surface(t);
+  let top = 0;
+  Object.defineProperty(s.element, "scrollTop", {
+    get: () => top,
+    set: value => { top = Math.round(value * 2) / 2; },
+  });
+  s.controller.update(true, 0);
+  s.element.scrollHeight += 203;
+  s.controller.update(true, 1);
+  for (let i = 0; i < 150 && s.pending.size > 0; i += 1) s.frame(8);
+  assert.equal(s.element.scrollTop, 1003);
+  assert.equal(s.pending.size, 0, "rounding must not leave an endless near-bottom animation");
+});
+
 test("scrolling up shows Latest without new rows, and incoming rows do not move the reader", (t) => {
   const s = surface(t);
   s.controller.update(true, 0);

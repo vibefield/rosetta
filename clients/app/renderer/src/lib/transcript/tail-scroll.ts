@@ -136,9 +136,16 @@ export class TailScroll {
     this.frame = null;
     if (!this.following || !this.ready) return;
     const target = this.bottom();
+    const before = this.element.scrollTop;
     this.write(
-      this.reduced() ? target : tailStep(this.element.scrollTop, target, time - this.previousTime),
+      this.reduced() ? target : tailStep(before, target, time - this.previousTime),
     );
+    // Browsers quantize scrollTop to device pixels. At high refresh rates a
+    // subpixel step can round back to the same position forever. Make one
+    // pixel of progress when that happens, bounded by the remaining distance.
+    if (this.element.scrollTop === before && target !== before) {
+      this.write(before + Math.sign(target - before) * Math.min(1, Math.abs(target - before)));
+    }
     this.previousTime = time;
     if (Math.abs(target - this.element.scrollTop) <= 1) {
       this.write(target);

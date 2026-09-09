@@ -230,10 +230,15 @@ async function run() {
       () => matchMedia("(prefers-reduced-motion: reduce)").matches,
       "media emulation failed",
     );
-    const reducedState = await check(() => {
+    const reducedState = await check(async () => {
       const followingBefore = document.querySelector(".tr-scroll").hasAttribute("data-following");
       window.motionFixture.flush(window.motionFixture.reorder);
       window.motionFixture.flush(() => window.motionFixture.append(2));
+      // Message previews can finish measuring after the first React commit.
+      // Allow ResizeObserver's layout pass; reduced motion must still reach
+      // the exact foot without starting any movement animation.
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
       const s = document.querySelector(".tr-scroll");
       return {
         followingBefore,

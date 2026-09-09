@@ -1,0 +1,40 @@
+/* Long conversational messages are excerpts, with a separate reading action.
+   Their prompt/reply materials stay intact; no activity rail or disclosure. */
+.tr-message { min-width: 0; }
+.tr-message__viewport { max-height: 21.7em; overflow: clip; }
+.tr-message__content { display: flow-root; }
+.tr-message__content > :first-child { margin-top: 0; }
+.tr-message__content > :last-child { margin-bottom: 0; }
+.tr-message[data-omitted] .tr-message__viewport {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), #0003);
+}
+.tr-message[data-omitted] .tr-message__viewport:focus-within { mask-image: none; }
+.tr-message__footer {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--vf-hairline-strong);
+  font-size: 11.5px; line-height: 1.5;
+}
+.tr-message__extent {
+  color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums;
+}
+.tr-message__extent > span { margin: 0 3px; }
+.tr-message__open {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  flex: none; margin: -4px 0; padding: 5px 6px;
+  border: 0; border-radius: 5px; background: none;
+  color: var(--vf-text-secondary); font: inherit; font-weight: 500;
+  cursor: pointer; transition: color 120ms ease, background-color 120ms ease;
+}
+.tr-message__open:hover {
+  color: var(--vf-text-primary); background: var(--vf-fill-hover);
+}
+.tr-message__open:focus-visible {
+  outline: 2px solid var(--vf-select); outline-offset: 2px;
+  color: var(--vf-text-primary);
+}
+.tr-message__open svg { flex: none; color: var(--vf-text-tertiary); }
+.tr-message__open:is(:hover, :focus-visible) svg { color: inherit; }
+@media (prefers-reduced-motion: reduce) {
+  .tr-message__open { transition: none; }
+}

@@ -9,6 +9,7 @@
 // Escape, scroll lock, `aria-modal`, the portal.
 
 import * as Dialog from "@radix-ui/react-dialog";
+import { useRef } from "react";
 import type { ReactNode } from "react";
 
 export interface DialogShellProps {
@@ -35,6 +36,9 @@ export function DialogShell({
   onExitFullscreen,
   children,
 }: DialogShellProps) {
+  // These controlled dialogs have no Radix Trigger. Remember the actual
+  // opener so closing a message returns to its preview without scrolling.
+  const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
@@ -53,6 +57,10 @@ export function DialogShell({
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             (event.currentTarget as HTMLElement | null)?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
           }}
           onEscapeKeyDown={(event) => {
             if (!fullscreen) return;

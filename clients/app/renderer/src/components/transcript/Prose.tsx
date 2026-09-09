@@ -52,10 +52,12 @@ function CodeBar({
   language,
   text,
   onReceipt,
+  excerpt = false,
 }: {
   readonly language: string | null;
   readonly text: string;
   readonly onReceipt: (message: string) => void;
+  readonly excerpt?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const lines = useMemo(() => {
@@ -66,7 +68,7 @@ function CodeBar({
     <div className="tr-code">
       <div className="tr-code__bar">
         <span>{language ?? "text"}</span>
-        <button
+        {!excerpt && <button
           type="button"
           onClick={() => {
             navigator.clipboard
@@ -80,7 +82,7 @@ function CodeBar({
           }}
         >
           {copied ? "copied" : "copy"}
-        </button>
+        </button>}
       </div>
       <pre>
         <code>
@@ -128,7 +130,11 @@ export interface ProseProps {
   readonly text: string;
   readonly onReceipt: (message: string) => void;
   readonly imageAttachments?: readonly AttachmentFact[];
+  /** Preserve global image numbering when only an excerpt is rendered. */
+  readonly imageMarkerSource?: string;
   readonly onOpenAttachment?: (fact: AttachmentFact) => void;
+  /** An excerpt may end inside a fence; do not offer to copy partial code. */
+  readonly excerpt?: boolean;
 }
 
 const IMAGE_LINK = /\[Image\s*#\d+\]/g;
@@ -174,12 +180,14 @@ export function Prose({
   text,
   onReceipt,
   imageAttachments,
+  imageMarkerSource = text,
   onOpenAttachment,
+  excerpt = false,
 }: ProseProps) {
   const parts = useMemo(() => partition(parseMarkdown(text)), [text]);
   const imageTargets = useMemo(
-    () => imageMarkerTargets(text, imageAttachments ?? []),
-    [text, imageAttachments],
+    () => imageMarkerTargets(imageMarkerSource, imageAttachments ?? []),
+    [imageMarkerSource, imageAttachments],
   );
   const renderText =
     imageTargets.size > 0 && onOpenAttachment !== undefined
@@ -196,6 +204,7 @@ export function Prose({
             language={(part as Extract<Block, { type: "code" }>).language}
             text={(part as Extract<Block, { type: "code" }>).text}
             onReceipt={onReceipt}
+            excerpt={excerpt}
           />
         ),
       )}
