@@ -2,12 +2,11 @@
 //
 // Everything here is answered by the Electron main process: the home
 // directory, the act of pointing the worktree engine at a project, read-only
-// git facts for the root it is showing, and handing one viewed document to the
-// browser. A browser tab has no bridge at all, which is a state the room
+// git facts for the root it is showing, document previews, and worktree path
+// actions. A browser tab has no bridge at all, which is a state the room
 // states rather than papers over.
 //
-// Nothing here chooses a destination or writes directly, and the one act that
-// leaves the app is validated on the far side — see `openInBrowser`.
+// Actions that leave the app are validated in the main process.
 
 /** One checkout of the repository a root belongs to. */
 export interface GitWorktree {
@@ -37,17 +36,32 @@ export interface DesktopDaemonState {
   readonly revision: number;
 }
 
+export interface WorktreeFileActionRequest {
+  readonly root: string;
+  readonly generation: number;
+  readonly action: "copyPath" | "revealInFileManager";
+  /** POSIX paths below the displayed root; empty string names the root. */
+  readonly paths: readonly string[];
+}
+
+export type WorktreeFileActionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: string };
+
 export interface DesktopHost {
   daemonState?(): Promise<DesktopDaemonState>;
   onDaemonState?(listener: (state: DesktopDaemonState) => void): () => void;
   /** The user's home directory, for writing paths as `~/…`. */
   readonly homeDir?: string;
+  readonly platform?: string;
   /** Point the worktree engine at a project root. Each accepted request gets
    * a fresh generation, including an explicit retry of the same root. */
   openWorktree(root: string): Promise<WorktreeOpenResult>;
   /** Branch · dirty count · worktrees for the open root, or null when the
    * folder is not a repository. */
   gitFacts(root: string, generation: number): Promise<GitFacts | null>;
+  /** Copy absolute path text or reveal one entry in the native file manager. */
+  worktreeFileAction(request: WorktreeFileActionRequest): Promise<WorktreeFileActionResult>;
   /**
    * Hand the exact HTML/SVG bytes shown by the viewer to the OS browser.
    *

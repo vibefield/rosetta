@@ -1,17 +1,13 @@
-// mille's shipped tree, mounted for real (design record §8) and read-only in
-// every direction: an empty command registry, no context menu, no drag. This
-// room reads history; it does not edit worktrees.
-//
-// Opening a file to READ it is not an exception to that — it is the same act
-// the room is for, one level down. So the tree gets one outward call, `onOpen`,
-// and the column above decides what to do with it.
+// Mille's shipped tree, with Rosetta's read-only commands: inspect a file,
+// copy its path, or reveal it in the desktop file manager.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { KeyboardEvent, RefObject } from "react";
 import type { Entry, FileExplorer } from "@vibecook/mille";
 import { FileTree, FileTreeProvider } from "@vibecook/mille-ui";
-import { createCommandRegistry } from "@vibecook/mille-ui/commands";
 import { vibefieldIconTheme } from "@vibecook/mille-ui/icons/vibefield";
+import { desktopHost } from "../../lib/desktop-host";
+import { createWorktreeFileCommands } from "./worktree-file-commands";
 import type { WorktreeEngine } from "./types";
 
 export interface WorktreeFileTreeProps {
@@ -28,6 +24,27 @@ export interface WorktreeFileTreeProps {
    * fill. The design record left this binding open (§10 delta 4) because a
    * reader with no open FILE had nothing to bind it to; now there is one. */
   readonly openEntryId: number | null;
+  readonly onReceipt: (message: string) => void;
+}
+
+/** Mille's create/rename shortcuts also have direct engine fallbacks. Keep
+ * those out of this read-only tree, while letting its own copy binding and
+ * navigation run normally. Portaled menus and text inputs own their keys. */
+function guardTreeKeys(event: KeyboardEvent<HTMLDivElement>): void {
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || !target.closest('[role="tree"]')) return;
+  if (target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) {
+    event.stopPropagation();
+    return;
+  }
+  const key = event.key.toLowerCase();
+  if (
+    key === "f2" || key === "delete" || key === "backspace" ||
+    ((event.ctrlKey || event.metaKey) && !event.altKey && ["x", "v", "n"].includes(key))
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
 }
 
 /**
@@ -103,9 +120,14 @@ export function WorktreeFileTree({
   stale,
   onOpen,
   openEntryId,
+  onReceipt,
 }: WorktreeFileTreeProps) {
-  // Read-only: the registry is empty, so no command can reach a file.
-  const commands = useMemo(() => createCommandRegistry([]), []);
+  const environment = useRef({ host: desktopHost(), stale, onReceipt });
+  environment.current = { host: desktopHost(), stale, onReceipt };
+  const { commands, onSelectionChange, onFocusedIdChange } = useMemo(
+    () => createWorktreeFileCommands(engine, () => environment.current),
+    [engine],
+  );
   const content = useContentHeight(`${engine.generation}:${engine.root}`);
 
   return (
@@ -119,6 +141,19 @@ export function WorktreeFileTree({
       // 22px is the density for a long editor rail.
       data-mille-theme="vibefield"
       data-stale={stale ? "" : undefined}
+      onKeyDownCapture={guardTreeKeys}
+      // macOS's native Edit > Copy can arrive as a copy event instead of a
+      // keydown. Route it through the very same selection-aware command.
+      onCopy={(event) => {
+        const target = event.target;
+        if (
+          !(target instanceof HTMLElement) || !target.closest('[role="tree"]') ||
+          target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')
+        ) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void commands.dispatch("file.copyAbsolutePath");
+      }}
       style={content.height !== null ? { height: content.height } : undefined}
     >
       <FileTreeProvider
@@ -129,8 +164,9 @@ export function WorktreeFileTree({
         <FileTree
           ariaLabel="Project worktree"
           iconTheme={vibefieldIconTheme}
-          disableContextMenu
           disableDragDrop
+          onSelectionChange={onSelectionChange}
+          onFocusedIdChange={onFocusedIdChange}
           onOpen={(entry) => onOpen(entry)}
           // Marks the row without revealing it: `autoRevealActiveEntry`
           // defaults to false, and the reader who just clicked a row does not

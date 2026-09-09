@@ -14,8 +14,8 @@
 // read-only git facts (branch, dirty count, worktrees) answer over IPC — the
 // renderer itself never touches node:fs or a shell.
 //
-// The file viewer adds exactly one act that leaves the app, and it is gated
-// here rather than there: see `ah-file-open-browser-preview`.
+// File previews and worktree path actions cross into the OS through validated
+// IPC handlers here; the renderer never receives unrestricted shell access.
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import path from "node:path";
@@ -24,6 +24,7 @@ import {
   BrowserWindow,
   MessageChannelMain,
   app,
+  clipboard,
   ipcMain,
   net,
   protocol,
@@ -34,6 +35,7 @@ import { createDaemonService } from "./daemon-service.mjs";
 import { APP_SCHEME, APP_ORIGIN, APP_PRIVILEGES, rendererFileUrl } from "./app-protocol.mjs";
 import { createBrowserPreviewService } from "./browser-preview.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
+import { createWorktreeFileActionHandler } from "./worktree-file-actions.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: APP_PRIVILEGES }]);
@@ -419,6 +421,12 @@ app.whenReady().then(async () => {
     }
     return gitFacts(raw);
   });
+
+  ipcMain.handle("ah-worktree-file-action", createWorktreeFileActionHandler({
+    getSession: () => fxSession,
+    writeClipboard: (text) => clipboard.writeText(text),
+    revealInFileManager: (target) => shell.showItemInFolder(target),
+  }));
 
   // The file viewer's one outward act. Main writes the exact HTML or SVG
   // bytes already shown into a private, app-owned temporary directory, then

@@ -1,8 +1,7 @@
 // The room's one bridge out of the web world: git facts for the open worktree
 // root, the act of pointing the worktree column at a project, the engine
-// MessagePort relay, and handing one viewed document to the browser. Nothing
-// here chooses a destination or writes directly, and nothing here decides
-// anything — every argument is re-validated by the main process.
+// MessagePort relay, document previews, and copying/revealing worktree paths.
+// Every action is validated by the main process.
 const { contextBridge, ipcRenderer } = require("electron");
 const os = require("node:os");
 
@@ -36,11 +35,13 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
    * record writes them. The daemon cannot answer this: it reports agent data
    * roots already shortened to `~/.claude`, which names no home. */
   homeDir: os.homedir(),
+  platform: process.platform,
   /** Point the worktree column's engine at a project root. */
   openWorktree: (root) => ipcRenderer.invoke("ah-worktree-open", root),
   /** Branch · dirty count · worktrees for the open worktree root, or null. */
   gitFacts: (root, generation) =>
     ipcRenderer.invoke("ah-worktree-git-facts", root, generation),
+  worktreeFileAction: (request) => ipcRenderer.invoke("ah-worktree-file-action", request),
   /** Open the exact HTML/SVG bytes shown by the viewer in the default
    * browser. Main validates and materializes its own private snapshot. */
   openInBrowser: (name, bytes) =>

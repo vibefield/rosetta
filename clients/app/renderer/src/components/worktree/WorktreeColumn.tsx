@@ -261,6 +261,7 @@ export function WorktreeColumn({
             <WorktreeFileTree
               engine={engine}
               stale={stale}
+              onReceipt={onReceipt}
               openEntryId={
                 open?.diff === false && typeof open.handle.ref === "number" ? open.handle.ref : null
               }
