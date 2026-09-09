@@ -323,19 +323,15 @@ export function PortfolioSummaryPanel({
       });
     }
 
+    // Match the project list's lifetime ranking, including its stable tie order.
     const treemapProjects = [...projects]
-      .sort(
-        (left, right) =>
-          right.tokensLast30Days - left.tokensLast30Days ||
-          left.row.name.localeCompare(right.row.name) ||
-          left.row.id.localeCompare(right.row.id),
-      )
+      .sort((left, right) => right.lifetimeTokens - left.lifetimeTokens)
       .slice(0, MAX_TREEMAP_PROJECT_COUNT);
     const treemapData: TreemapData = {
       items: treemapProjects.map((project) => ({
         id: project.row.id,
         label: project.row.name,
-        value: project.tokensLast30Days,
+        value: project.lifetimeTokens,
         color: project.tint,
       })),
     };
@@ -350,7 +346,7 @@ export function PortfolioSummaryPanel({
         0,
       ),
       tokenCount: projects.reduce(
-        (total, project) => total + project.tokensLast53Weeks,
+        (total, project) => total + project.lifetimeTokens,
         0,
       ),
       activeDayCount: activeDayIndices.size,
@@ -418,19 +414,18 @@ export function PortfolioSummaryPanel({
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}
-              ariaLabel="Top projects by 30-day spend, where area represents share among displayed projects"
-              emptyMessage="No project spend in this window"
+              ariaLabel="Top projects by lifetime total tokens, where area represents share among displayed projects"
+              emptyMessage="No recorded project tokens"
               showFooter={false}
               height={SUMMARY_CHART_CONTENT_HEIGHT}
+              minimumVisibleShare={0}
               selectedItemId={selectedProjectId}
               onItemSelect={(item) => onProjectSelect(item.id)}
               formatValue={tokenText}
               getItemAccessibleLabel={(item, context) =>
-                `${item.label} · ${tokenText(item.value)} over 30 days · ${(
+                `${item.label} · ${tokenText(item.value)} lifetime tokens · ${(
                   context.share * 100
-                ).toFixed(1)}% of displayed spend${
-                  context.isMinimumSized ? " · shown at the minimum visible size" : ""
-                }`
+                ).toFixed(1)}% of displayed lifetime tokens`
               }
             />
           </div>
