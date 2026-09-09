@@ -39,6 +39,7 @@ Long messages should keep a readable introduction in the timeline. The full docu
 ` + Array.from({ length: 30 }, (_, i) => `### Review item ${i + 1}\n\nCheck prompts and replies with headings, lists, and fenced code. The preview should stay compact, and the complete message must be available in the separate reading view.`).join("\n\n") + "\n\nREPLY END — 完整消息 😀.";
 const code = "Review this configuration:\n\n```ts\n" + Array.from({ length: 100 }, (_, i) => `const setting${i} = { enabled: true, label: "Option ${i}" };`).join("\n") + "\n```\n\nCODE END";
 const table = "## Verification\n\n| Case | Result |\n| --- | --- |\n" + Array.from({ length: 80 }, (_, i) => `| Case ${i} | Complete |`).join("\n") + "\n\nTABLE END";
+const recap = "# Session context\n\nThe release handoff is ready. Preserve these decisions when continuing the work.\n\n" + reply + "\n\nSUMMARY END — preserve all context.";
 let ordinal = 0;
 function message(role, text, id) {
   ordinal += 1;
@@ -57,6 +58,12 @@ const initial = [
   message("agent", table, "table-reply"),
   message("user", "Please check the result once more.", "last-prompt"),
   message("agent", "I’m checking it now.", "stream-reply"),
+  entry({ type: "summary", purpose: "compaction", text: inline(recap) }, {
+    timeline_id: "long-summary", ordinal: ++ordinal, at: now + ordinal * 1000,
+  }),
+  entry({ type: "summary", purpose: "compaction", text: inline("The handoff is ready. Continue with verification.") }, {
+    timeline_id: "short-summary", ordinal: ++ordinal, at: now + ordinal * 1000,
+  }),
 ];
 
 function Fixture() {
@@ -64,7 +71,7 @@ function Fixture() {
   const [focus, setFocus] = useState(null);
   const [currentSession, setSession] = useState(session);
   window.messageFixture = {
-    prompt, reply, code, table,
+    prompt, reply, code, table, recap,
     grow: () => setRows(old => old.map(row => row.timeline_id === "stream-reply"
       ? { ...row, body: { ...row.body, text: inline(reply + "\n\nSTREAM END") } } : row)),
     shorten: () => setRows(old => old.map(row => row.timeline_id === "stream-reply"

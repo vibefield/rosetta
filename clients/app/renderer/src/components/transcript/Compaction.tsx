@@ -2,16 +2,18 @@
 import { useEffect, useState } from "react";
 import type { CanonicalText } from "@rosetta/protocol";
 import { client } from "../../lib/rosetta";
-import { Prose } from "./Prose";
+import { MessagePreview } from "./MessagePreview";
 import { LineChevron } from "./glyphs";
 
 /** Loaded only on disclosure. Oversized summaries are content-addressed;
  * their preview must never be presented or copied as the complete recap. */
 function SummaryBody({
   canonical,
+  messageKey,
   onReceipt,
 }: {
   readonly canonical: CanonicalText;
+  readonly messageKey: string;
   readonly onReceipt: (message: string) => void;
 }) {
   const [loaded, setLoaded] = useState<{ text: string | null; error: string | null } | null>(null);
@@ -51,7 +53,10 @@ function SummaryBody({
         )}
       </div>
       {text !== null ? (
-        <div className="tr-prose ah-syntax"><Prose text={text} onReceipt={onReceipt} /></div>
+        <div className="tr-prose ah-syntax">
+          <MessagePreview messageKey={messageKey} role="agent" title="Compaction summary"
+            text={text} onReceipt={onReceipt} />
+        </div>
       ) : loaded?.error ? (
         <p className="tr-compaction__status" role="status">
           Could not load the full summary. {loaded.error}{" "}
@@ -103,6 +108,7 @@ export function Compaction({
         <SummaryBody
           key={text.type === "member" ? text.asset.digest : "inline"}
           canonical={text}
+          messageKey={domId}
           onReceipt={onReceipt}
         />
       )}

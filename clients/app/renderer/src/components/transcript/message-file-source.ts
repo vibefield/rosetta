@@ -5,6 +5,8 @@ import type { FileHandle, FileSource } from "../file-viewer/types.ts";
 export interface FullMessage {
   readonly key: string;
   readonly role: "user" | "agent";
+  /** Generated context can name its reading view without changing authorship. */
+  readonly title?: string;
   readonly text: string;
   readonly recordedText?: CanonicalText | null;
   readonly attachments?: readonly AttachmentFact[];
@@ -17,10 +19,11 @@ interface MessagePayload {
 
 /** A full canonical member, or a snapshot of complete inline text. */
 export function handleForMessage(message: FullMessage): FileHandle {
+  const name = `${message.title ?? (message.role === "user" ? "User prompt" : "Agent reply")}.md`;
   const member = message.recordedText?.type === "member" ? message.recordedText : null;
   if (member !== null) return {
     key: `message:${message.key}:${member.asset.digest}`,
-    name: message.role === "user" ? "User prompt.md" : "Agent reply.md",
+    name,
     path: null,
     size: member.byte_len,
     ref: member.asset,
@@ -28,7 +31,7 @@ export function handleForMessage(message: FullMessage): FileHandle {
   const bytes = new TextEncoder().encode(message.text);
   return {
     key: `message:${message.key}`,
-    name: message.role === "user" ? "User prompt.md" : "Agent reply.md",
+    name,
     path: null,
     size: bytes.byteLength,
     ref: { type: "transcript-message", bytes } satisfies MessagePayload,

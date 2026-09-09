@@ -1,7 +1,6 @@
-import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FullMessage } from "./message-file-source";
-import { fmtBytes } from "../../lib/format";
-import { MESSAGE_PREVIEW_CHARACTERS, messageCharacterCount, messageExcerpt } from "./message-preview";
+import { MESSAGE_PREVIEW_CHARACTERS, messageExcerpt } from "./message-preview";
 import { Prose } from "./Prose";
 import type { ProseProps } from "./Prose";
 import "../../styles/message-preview.css";
@@ -12,20 +11,19 @@ export const MessageViewerContext = createContext<((message: FullMessage) => voi
 export function MessagePreview({
   messageKey,
   role,
+  title,
   recordedText,
   ...prose
-}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly recordedText?: FullMessage["recordedText"] }) {
+}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly title?: string; readonly recordedText?: FullMessage["recordedText"] }) {
   const openMessage = useContext(MessageViewerContext);
   const { text } = prose;
   const member = recordedText?.type === "member" ? recordedText : null;
-  const descriptionId = useId();
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const widthRef = useRef(0);
   const [fit, setFit] = useState({ text, budget: MESSAGE_PREVIEW_CHARACTERS });
   const budget = fit.text === text ? fit.budget : MESSAGE_PREVIEW_CHARACTERS;
   const excerpt = useMemo(() => messageExcerpt(text, budget), [text, budget]);
-  const count = useMemo(() => messageCharacterCount(text).toLocaleString(), [text]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -70,19 +68,12 @@ export function MessagePreview({
       </div>
       {(excerpt.omitted || member !== null) && (
         <div className="tr-message__footer">
-          <span className="tr-message__extent" id={descriptionId}>
-            Preview <span aria-hidden="true">·</span> {member === null ? `${count} characters total` : `${fmtBytes(member.byte_len)} stored`}
-          </span>
           <button
             type="button"
             className="tr-message__open"
             aria-haspopup="dialog"
-            aria-describedby={descriptionId}
-            onClick={() => openMessage({ key: messageKey, role, text, recordedText, attachments: prose.imageAttachments })}
+            onClick={() => openMessage({ key: messageKey, role, title, text, recordedText, attachments: prose.imageAttachments })}
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M9.5 2.5h4v4m0-4-6 6M6.5 3.5h-3v9h9v-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
             View full message
           </button>
         </div>

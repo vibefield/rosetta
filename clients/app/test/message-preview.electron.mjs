@@ -109,10 +109,51 @@ async function run() {
       return copied === window.messageFixture.reply;
     }), true);
 
+    // Disclosed compaction context uses the same bounded preview and reader.
+    await check(() => {
+      document.querySelector('[data-timeline-id="long-summary"] > summary').click();
+      document.querySelector('[data-timeline-id="short-summary"] > summary').click();
+    });
+    await until(() => Boolean(document.querySelector('[data-timeline-id="long-summary"] .tr-message__open')), 'long summary did not become a preview');
+    await until(fitted, 'summary preview exceeded its height limit');
+    assert.equal(await check(() => Boolean(document.querySelector('[data-timeline-id="short-summary"] .tr-message__open'))), false);
+    assert.equal(await check(() => document.querySelector('[data-timeline-id="long-summary"]').textContent.includes('SUMMARY END')), false);
+    const summaryPosition = await open('long-summary');
+    assert.equal(await check(() => document.querySelector('.ah-fileview__title').textContent.includes('Compaction summary.md')), true);
+    assert.equal(await check(() => document.querySelector('.ah-md__measure').textContent.includes('SUMMARY END — preserve all context.')), true);
+    await close();
+    await until(() => document.activeElement?.classList.contains('tr-message__open'), 'summary reader did not restore focus');
+    assert.equal(await check(() => document.querySelector('.tr-scroll').scrollTop), summaryPosition);
+    assert.equal(await check(async () => {
+      let copied = null;
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { copied = text; } } });
+      document.querySelector('[data-timeline-id="long-summary"] .tr-compaction__byline button').click();
+      await Promise.resolve();
+      return copied === window.messageFixture.recap;
+    }), true, 'copy summary must include the full context');
+    await check(() => {
+      document.activeElement.blur();
+      document.querySelector('[data-timeline-id="long-summary"]').scrollIntoView({ block: 'center' });
+    });
+    await pause(150);
+    await fs.writeFile(path.join(temporary, 'summary-dark.png'), (await win.webContents.capturePage()).toPNG());
+    await check(() => document.documentElement.classList.remove('dark'));
+    await pause(150);
+    await fs.writeFile(path.join(temporary, 'summary-light.png'), (await win.webContents.capturePage()).toPNG());
+    await check(() => document.documentElement.classList.add('dark'));
+
     win.setSize(430, 860);
     await until(fitted, 'narrow previews did not fit');
     await pause(150);
     assert.equal(await check(() => [...document.querySelectorAll('.tr-message__footer')].every(footer => footer.scrollWidth <= footer.clientWidth + 1)), true);
+    await check(() => document.querySelector('[data-timeline-id="long-summary"]').scrollIntoView({ block: 'center' }));
+    await pause(150);
+    await fs.writeFile(path.join(temporary, 'summary-narrow.png'), (await win.webContents.capturePage()).toPNG());
+    await check(() => {
+      document.querySelector('[data-timeline-id="long-summary"] > summary').click();
+      document.querySelector('[data-timeline-id="short-summary"] > summary').click();
+    });
+    await until(() => !document.querySelector('[data-timeline-id="long-summary"] .tr-message'), 'summary did not close');
     await check(() => document.querySelector('[data-timeline-id="long-prompt"]').scrollIntoView({ block: 'start' }));
     await fs.writeFile(path.join(temporary, "narrow.png"), (await win.webContents.capturePage()).toPNG());
     await open('long-prompt');
@@ -135,7 +176,7 @@ async function run() {
     await check(() => window.messageFixture.clearSession());
     await until(() => !document.querySelector('[role=dialog]'), 'switching sessions left the old message open');
     assert.deepEqual(errors, []);
-    console.log(`PASS: prompt/reply previews, height limits, both themes, narrow layout, complete Markdown/source, keyboard focus and scroll return, full copy, stream growth, search landing, session cleanup. Screenshots: ${temporary}`);
+    console.log(`PASS: prompt/reply/compaction previews, height limits, both themes, narrow layout, complete Markdown/source, keyboard focus and scroll return, full copy, stream growth, search landing, session cleanup. Screenshots: ${temporary}`);
   } catch (error) {
     failed = true;
     console.error(error);
