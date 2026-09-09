@@ -23,10 +23,13 @@
 //     FOLD_NAME_LIMIT of them. Past that the object degrades to the record's
 //     own `… 12 more commands` and the time slot carries the fold's LAST stamp
 //     (the component draws the `→` prefix; `elided` says so).
-//  5. Past RUN_FOLD_THRESHOLD lines the whole run closes by default to one
-//     sentence of NOUNS — never of verbs. A run containing task state stays
-//     open: its checklist is an always-visible status board, not activity
-//     exhaust. See `runSummary`.
+//  5. A run — everything the agent did between two things it said; `turns.ts`
+//     cuts it — closes by default once it has RUN_FOLD_THRESHOLD members
+//     (lines, and the thoughts, notices and summaries between them). One
+//     member is the line it already was. Closed, the run is one sentence of
+//     NOUNS — never of verbs — acts first, the changed files named, the
+//     failure count at the right (transcript-fold, locked 2026-09-08). See
+//     `runSummary`.
 import type {
   StatusBasis,
   TimelineEntry,
@@ -58,9 +61,9 @@ import {
   urlHost,
 } from "./vocabulary.ts";
 
-/** A run past eight lines closes to its sentence of nouns: eight keeps a
- * six-call turn open and a forty-call turn closed (§06's answered question). */
-export const RUN_FOLD_THRESHOLD = 8;
+/** A run of this many MEMBERS closes to its head (transcript-fold Q8 A): two.
+ * A run of one is the line, the thought or the marker it already was. */
+export const RUN_FOLD_THRESHOLD = 2;
 
 /** How many members a fold names before it degrades to `… N more`. */
 export const FOLD_NAME_LIMIT = 4;
@@ -593,40 +596,109 @@ export function ledgerLines(
 
 /* ── the run's closing sentence ──────────────────────────────────────────── */
 
+/**
+ * One noun of the head's sentence. `names` is non-empty only for `file_change`
+ * — the changed files, up to FOLD_NAME_LIMIT, the fold line's own device — and
+ * `more` counts the ones past the limit. A run with no tool lines says the one
+ * thing it holds: `2 thoughts`.
+ */
+export interface RunNoun {
+  readonly family: ToolFamily | "thinking";
+  readonly text: string;
+  readonly names: readonly string[];
+  readonly more: number;
+}
+
+/** A member of the run that is not a tool line, as the sentence needs it. */
+export type RunOther =
+  | { readonly kind: "thinking"; readonly row: TimelineEntry }
+  | { readonly kind: "marker"; readonly row: TimelineEntry; readonly failed: boolean }
+  | { readonly kind: "summary"; readonly row: TimelineEntry };
+
 export interface RunSummary {
-  /** `17 commands`, `3 edits`, `4 reads` — NOUNS, in the order the families
-   * first occurred, counted over ROWS so a fold does not shrink the figure. */
-  readonly nouns: readonly string[];
-  /** Drawn in red beside the nouns; the component appends `N failed`. */
+  /** Acts first, then looks, each class by count — `3 edits`, `17 commands`,
+   * `4 reads` — counted over ROWS so a fold does not shrink the figure. */
+  readonly nouns: readonly RunNoun[];
+  /** Lines that did not complete: failed, denied, timed out. Drawn in red at
+   * the right beside the span, where a narrow column cannot hide it. */
   readonly failed: number;
+  /** Notices inside the run that state a failure: a runtime error, a failed
+   * async task. Drawn beside `failed`, in the same red. */
+  readonly errors: number;
   /** The whole run's span, from its first known stamp to its last. Raw
    * milliseconds: the record draws a span only once it is at least a second,
    * which is a presentation threshold and stays with the component. */
   readonly spanMs: number | null;
-  /** Lines the ladder will draw. Past RUN_FOLD_THRESHOLD the run closes. */
+  /** Tool lines the ladder draws. */
   readonly lineCount: number;
   readonly rowCount: number;
+  /** Lines plus thoughts, markers and summaries — what decides the fold. */
+  readonly memberCount: number;
+  /** Reasoning is silent in the sentence unless it is all the run has. */
+  readonly thoughtCount: number;
+  /** The last line still running — a live head carries it (Q11 A). */
+  readonly running: LedgerLine | null;
   /** The run opens closed. The component may still force it open for focus. */
   readonly closedByDefault: boolean;
 }
 
-export function runSummary(lines: readonly LedgerLine[]): RunSummary {
+export function runSummary(
+  lines: readonly LedgerLine[],
+  others: readonly RunOther[] = [],
+): RunSummary {
   const rows = lines.flatMap((line) => [...line.rows]);
-  const containsTaskState = rows.some((row) => actionOf(row)?.type === "task");
   const order: ToolFamily[] = [];
   const counts = new Map<ToolFamily, number>();
+  const names: string[] = [];
   for (const row of rows) {
     const action = actionOf(row);
     if (action === null) continue;
     if (!counts.has(action.type)) order.push(action.type);
     counts.set(action.type, (counts.get(action.type) ?? 0) + 1);
+    if (action.type === "file_change") {
+      for (const change of action.changes) {
+        const name = basename(resourceLabel(change.path));
+        if (name !== "" && !names.includes(name)) names.push(name);
+      }
+    }
   }
+  // Acts lead: the work product is what a reader wants first, and what
+  // survives when a narrow column ellipsizes the tail. Within a class the
+  // larger count comes first; ties keep first occurrence.
+  const byClass = (cls: LedgerClass): ToolFamily[] =>
+    order
+      .filter((family) => FAMILY_CLASS[family] === cls)
+      .sort(
+        (a, b) =>
+          (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || order.indexOf(a) - order.indexOf(b),
+      );
+  const nouns: RunNoun[] = [...byClass("act"), ...byClass("look")].map((family) => ({
+    family,
+    text: familyNoun(family, counts.get(family) ?? 0),
+    names: family === "file_change" ? names.slice(0, FOLD_NAME_LIMIT) : [],
+    more: family === "file_change" ? Math.max(0, names.length - FOLD_NAME_LIMIT) : 0,
+  }));
+  const thoughtCount = others.filter((other) => other.kind === "thinking").length;
+  if (nouns.length === 0 && thoughtCount > 0) {
+    nouns.push({
+      family: "thinking",
+      text: `${thoughtCount} ${thoughtCount === 1 ? "thought" : "thoughts"}`,
+      names: [],
+      more: 0,
+    });
+  }
+  const allRows = [...rows, ...others.map((other) => other.row)];
+  const memberCount = lines.length + others.length;
   return {
-    nouns: order.map((family) => familyNoun(family, counts.get(family) ?? 0)),
+    nouns,
     failed: lines.filter((line) => line.state === "failed").length,
-    spanMs: stampSpan(rows),
+    errors: others.filter((other) => other.kind === "marker" && other.failed).length,
+    spanMs: stampSpan(allRows),
     lineCount: lines.length,
-    rowCount: rows.length,
-    closedByDefault: lines.length > RUN_FOLD_THRESHOLD && !containsTaskState,
+    rowCount: allRows.length,
+    memberCount,
+    thoughtCount,
+    running: [...lines].reverse().find((line) => line.state === "running") ?? null,
+    closedByDefault: memberCount >= RUN_FOLD_THRESHOLD,
   };
 }

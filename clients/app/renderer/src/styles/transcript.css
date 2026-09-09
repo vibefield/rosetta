@@ -315,19 +315,31 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
   animation: ah-land 1400ms ease;
 }
 
-/* the fold — a run past the threshold closes to one sentence of nouns */
+/* the fold — every run of two or more members closes to its head: one
+   sentence of nouns, acts first, the changed files named in mono, the failure
+   count in red at the right beside the span where a narrow column cannot hide
+   it (transcript-fold R-3, 2026-09-08). A run of one is the line. */
 .tr-fold { grid-template-columns: 16px minmax(0, 1fr) auto; }
 .tr-fold .tr-line__v {
   color: var(--vf-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.tr-fold .tr-line__v b { font-weight: 500; color: var(--vf-red); }
+.tr-fold .names { font-family: var(--vf-font-mono); font-size: 11.5px; color: var(--vf-text-primary); }
+.tr-fold .tr-line__r b { font-weight: 500; color: var(--vf-red); }
 .tr-fold .chev { color: var(--vf-text-tertiary); }
+/* R-5 — a live run's head carries the line that is happening, in green */
+.tr-fold .cur { color: var(--vf-green); }
+.tr-fold .cur .tr-line__o { display: inline; font-family: var(--vf-font-mono); font-size: 11.5px; color: inherit; }
 .tr-fold[aria-expanded="false"] + .tr-ladder { display: none; }
 .tr-ladder { margin-left: 2px; padding-left: 12px; border-left: 1px solid var(--vf-hairline); }
+/* inside the ladder every member keeps the form it had as a segment */
+.tr-ladder > .tr-seg { margin: 6px 0 6px 26px; }
+.tr-ladder > .tr-mark { margin: 8px 0; }
+.tr-ladder > .tr-summary { margin: 8px 0 8px 26px; }
 /* §05 — the room's activity act, in one switch: no React state walks the
-   document, and a run the reader opened by hand keeps its own state. */
-[data-fold="off"] .tr-fold { display: none; }
+   document, and a run the reader opened by hand keeps its own state. With a
+   head on every run the act keeps the head as the ladder's title (R-4). */
 [data-fold="off"] .tr-fold[aria-expanded="false"] + .tr-ladder { display: block; }
+[data-fold="off"] .tr-fold .chev { transform: rotate(90deg); }
 
 /* the detail — opens in place, inset under its line */
 .tr-detail {
@@ -691,6 +703,10 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
   font-variant-numeric: tabular-nums; cursor: pointer;
 }
 .tr-think__more:hover { color: var(--vf-text-primary); }
+/* Q10 A — reasoning alone is a run of one, drawn as its line: Thought · its
+   first words · the span, opening to the same muted prose */
+.tr-line[data-thought] .tr-line__o { font-family: var(--vf-font-sans); font-size: 12.5px; color: var(--vf-text-tertiary); }
+.tr-thought > .tr-think { margin: 4px 0 8px 26px; }
 
 /* ── §03 F — the child run: part of the calling document ──────────────────── */
 .tr-sub { margin: 2px 0 10px 26px; padding-left: 12px; border-left: 1px solid var(--vf-hairline-strong); }

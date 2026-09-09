@@ -45,14 +45,14 @@ import { transcriptModel } from "./document-model";
 import type { TranscriptModel } from "./document-model";
 import type { TurnPart } from "./document-plan";
 import { Ledger } from "./Ledger";
-import { GapMarker, Marker, Watermark } from "./Marker";
+import { GapMarker, Marker, SummaryNote, Watermark } from "./Marker";
 import { Attachments, Prompt } from "./Prompt";
 import { Prose, SegmentActs } from "./Prose";
 import { ResponseHead } from "./ResponseHead";
 import { Subthread } from "./Subthread";
 import type { ThreadFocus, ThreadIndex } from "./thread-index";
 import { messageDomId, sessionContains } from "./thread-index";
-import { Thinking } from "./Thinking";
+import { ThoughtLine } from "./Thinking";
 import { canOpenAttachment } from "./attachment-file-source";
 import type { TeamReportWorkPresentation } from "./Team";
 import { KnownTeamRoster, TeamEvent, TeamWorkthread } from "./Team";
@@ -582,8 +582,19 @@ export function TranscriptDocument({
         return (
           <Ledger
             key={segment.key}
-            lines={segment.lines}
+            members={segment.members}
             summary={segment.summary}
+            at={segment.at}
+            anchor={
+              segment.summary.closedByDefault ? (
+                <Anchor
+                  at={segment.at}
+                  sessionId={segment.rows[0].session_id}
+                  timelineId={rowId}
+                  onReceipt={onReceipt}
+                />
+              ) : null
+            }
             domIdOf={domIdOf}
             highlightedTimelineId={highlightedTimelineId}
             focusTimelineId={focusTimelineId}
@@ -624,8 +635,9 @@ export function TranscriptDocument({
           />
         );
       case "thinking":
+        // A thought alone is a run of one, drawn as its line (Q10 A).
         return (
-          <Thinking
+          <ThoughtLine
             key={segment.key}
             text={segment.text}
             spanMs={segment.spanMs}
@@ -655,16 +667,14 @@ export function TranscriptDocument({
         );
       case "summary":
         return (
-          <div
-            className="tr-summary"
+          <SummaryNote
             key={segment.key}
-            id={domIdOf(rowId)}
-            data-timeline-id={rowId}
-            data-hit={hit || undefined}
-          >
-            <span className="eyebrow">{segment.purpose} summary</span>
-            {segment.text}
-          </div>
+            purpose={segment.purpose}
+            text={segment.text}
+            domId={domIdOf(rowId)}
+            timelineId={rowId}
+            hit={hit}
+          />
         );
       case "prose":
         return (

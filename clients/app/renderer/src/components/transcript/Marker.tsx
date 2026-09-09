@@ -11,6 +11,8 @@
 // ledger line — which needs no special case here, because the notice row
 // already follows the tool row it decided about.
 
+import type { SummaryPurpose } from "@rosetta/protocol";
+
 export interface MarkerProps {
   readonly text: string;
   /** A runtime error is the one marker that takes hue (T-5). */
@@ -58,5 +60,28 @@ export function GapMarker({
     <button type="button" className="tr-mark tr-mark--gap" onClick={onPress}>
       gap · {count} {count === 1 ? "message" : "messages"} not indexed
     </button>
+  );
+}
+
+/** The session summary — a footnote at the end, not a state; and, inside a
+ * run, one member of its ladder. The same drawing in both places. */
+export function SummaryNote({
+  purpose,
+  text,
+  domId,
+  timelineId,
+  hit,
+}: {
+  readonly purpose: SummaryPurpose;
+  readonly text: string;
+  readonly domId: string;
+  readonly timelineId: string;
+  readonly hit: boolean;
+}) {
+  return (
+    <div className="tr-summary" id={domId} data-timeline-id={timelineId} data-hit={hit || undefined}>
+      <span className="eyebrow">{purpose} summary</span>
+      {text}
+    </div>
   );
 }

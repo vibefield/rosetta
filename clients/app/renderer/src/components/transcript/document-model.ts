@@ -40,9 +40,13 @@ function buildRepresentatives(turns: readonly Turn[]): Map<string, string> {
     if (turn.prompt !== null) claim(turn.prompt.rows, turn.prompt.row.timeline_id);
     for (const segment of turn.segments) {
       if (segment.kind === "ledger") {
-        for (const line of segment.lines) {
-          const key = line.rows[0]?.timeline_id;
-          if (key !== undefined) claim(line.rows, key);
+        for (const member of segment.members) {
+          if (member.kind !== "line") {
+            map.set(member.row.timeline_id, member.row.timeline_id);
+            continue;
+          }
+          const key = member.line.rows[0]?.timeline_id;
+          if (key !== undefined) claim(member.line.rows, key);
         }
         continue;
       }
@@ -71,11 +75,20 @@ export function transcriptModel(
   now: number,
   options: DocumentOptions = {},
 ): TranscriptModel {
+  // Sittings first: a run never straddles a pill, so the turns are cut at
+  // every sitting's first row (`cutBefore`) before they are folded.
+  const list = sittings(rows, now);
+  const cutBefore = new Set(
+    list
+      .slice(1)
+      .map((sitting) => sitting.rows[0]?.timeline_id)
+      .filter((id): id is string => id !== undefined),
+  );
   const turns = documentTurns(rows, {
     ...options,
+    cutBefore,
     context: { cwd: session?.cwd ?? null, home: homeDirectory },
   });
-  const list = sittings(rows, now);
   return {
     turns,
     sittings: list,

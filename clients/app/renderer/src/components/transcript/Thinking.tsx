@@ -10,7 +10,8 @@
 // so the disclosure and the element the stylesheet reads are one component.
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { spanText } from "../../lib/transcript";
+import { firstLine, spanText } from "../../lib/transcript";
+import { LineChevron, ThoughtGlyph } from "./glyphs";
 
 export interface ThinkingProps {
   readonly text: string;
@@ -50,6 +51,65 @@ export function Thinking({ text, spanMs, domId, timelineId, hit, anchor }: Think
       >
         {open ? "less" : label}
       </button>
+    </div>
+  );
+}
+
+/**
+ * Q10 A (transcript-fold, 2026-09-08) — reasoning that stands alone between
+ * two paragraphs is a run of one, and a run of one is the line it already was:
+ * `Thought · its first words · the span`, on the ledger's rail, opening in
+ * place to the same muted prose the clamp holds. Inside a ladder `Thinking`
+ * keeps the clamp; this is the line form only. Q4 C moved one level down.
+ */
+export function ThoughtLine({ text, spanMs, domId, timelineId, hit, anchor }: ThinkingProps) {
+  const [open, setOpen] = useState(false);
+  const span = spanMs === null || spanMs < 1000 ? null : spanText(spanMs);
+  const toggle = () => setOpen((value) => !value);
+  return (
+    <div
+      className="tr-seg tr-ledger tr-thought"
+      id={domId}
+      data-timeline-id={timelineId}
+      data-hit={hit || undefined}
+    >
+      {anchor}
+      <div
+        className="tr-line"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        data-thought=""
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          toggle();
+        }}
+      >
+        <span className="tr-line__g">
+          <ThoughtGlyph />
+        </span>
+        <span className="tr-line__v">Thought</span>
+        <span className="tr-line__o" title={firstLine(text, 400)}>
+          {firstLine(text)}
+        </span>
+        <span className="tr-line__r">
+          {span !== null && <span>{span}</span>}
+          <span className="chev">
+            <LineChevron />
+          </span>
+        </span>
+      </div>
+      {open && (
+        <div className="tr-think" data-open="true">
+          <div className="tr-think__text">
+            {text.split(/\n{2,}/).map((paragraph, at) =>
+              paragraph.trim() === "" ? null : <p key={at}>{paragraph}</p>,
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

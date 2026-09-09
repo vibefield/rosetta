@@ -10,20 +10,26 @@
 // Three rules live here and nowhere else:
 //   T-3  looking folds, acts stay, a failure breaks the fold. `ledger.ts` did
 //        the folding; this draws the result.
-//   T-3  past eight lines the whole run closes to ONE sentence of nouns with
-//        the failure count in red and the span at the right. The ladder stays
-//        in the DOM: the column head's activity act reveals every run at once
-//        through CSS alone (`[data-fold="off"]`), so a room-wide preference
-//        never has to walk React state.
+//   R-3  every run of two or more members closes to its head — ONE sentence
+//        of nouns, acts first, the changed files named, the failure count in
+//        red at the right beside the span (transcript-fold, 2026-09-08). A run
+//        of one is the line it already was. The ladder stays in the DOM: the
+//        column head's activity act reveals every run at once through CSS
+//        alone (`[data-fold="off"]`) and keeps the head as its title, so a
+//        room-wide preference never has to walk React state.
+//   R-5  a live run's head takes the breathing dot and carries the line that
+//        is happening, in green; nothing opens under the reader's eye.
 //   T-5  hue only for what did not complete or is still happening. The green
 //        breath is drawn ONLY in a live session below the watermark — a
 //        `running` row in a finished transcript is a record that stopped, and
 //        it reads muted rather than pretending to be alive.
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import type { TimelineEntry } from "@rosetta/protocol";
 import { clock } from "../../lib/format";
 import type {
   LedgerLine,
+  LedgerMember,
   ObjectPart,
   PathFact,
   RunSummary,
@@ -34,7 +40,9 @@ import { objectText, spanText } from "../../lib/transcript";
 import { FaviconStack, Favicon } from "./Favicon";
 import { FailGlyph, FamilyGlyph, LineChevron } from "./glyphs";
 import { hasDetail, LineDetail } from "./LineDetail";
+import { Marker, SummaryNote } from "./Marker";
 import { TeamInvocation } from "./Team";
+import { Thinking } from "./Thinking";
 import type { WorkflowChildThread } from "./Workflow";
 
 const TONE_CLASS: Readonly<Record<ObjectPart["tone"], string | undefined>> = {
@@ -209,8 +217,14 @@ export function Line({
 }
 
 export interface LedgerProps {
-  readonly lines: readonly LedgerLine[];
+  /** The ladder in order: lines, and the thoughts, markers and summaries
+   * that happened between them (R-1). */
+  readonly members: readonly LedgerMember[];
   readonly summary: RunSummary;
+  /** The run's first stamp — the head's time at the right. */
+  readonly at: number | null;
+  /** The margin anchor of a closed run, drawn by the caller (T-4). */
+  readonly anchor?: ReactNode;
   readonly domIdOf: (timelineId: string) => string;
   readonly highlightedTimelineId: string | null;
   /** The reader is being sent to a row inside this run. */
@@ -243,9 +257,15 @@ function sameStartBurst(
   return candidate.row.at >= first.row.at && candidate.row.at - first.row.at <= TEAM_START_BURST_MS;
 }
 
+function rowsOf(member: LedgerMember): readonly TimelineEntry[] {
+  return member.kind === "line" ? member.line.rows : [member.row];
+}
+
 export function Ledger({
-  lines,
+  members,
   summary,
+  at,
+  anchor,
   domIdOf,
   highlightedTimelineId,
   focusTimelineId,
@@ -259,35 +279,78 @@ export function Ledger({
   teamMemberFor,
   onOpenPath,
 }: LedgerProps) {
-  const focusInside = lines.some(
-    (line) =>
-      childFocused(line) ||
-      (focusTimelineId !== null &&
-        line.rows.some((row) => row.timeline_id === focusTimelineId)),
-  );
+  const inside = (member: LedgerMember) =>
+    (member.kind === "line" && childFocused(member.line)) ||
+    (focusTimelineId !== null &&
+      rowsOf(member).some((row) => row.timeline_id === focusTimelineId));
+  const focusInside = members.some(inside);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (focusInside) setOpen(true);
   }, [focusInside]);
 
   const drawn: ReactNode[] = [];
-  for (let at = 0; at < lines.length; at += 1) {
-    const line = lines[at];
+  for (let index = 0; index < members.length; index += 1) {
+    const member = members[index];
+    if (member.kind !== "line") {
+      // Inside the ladder every member keeps the form it had as a segment.
+      const rowId = member.row.timeline_id;
+      const hit = highlightedTimelineId === rowId;
+      if (member.kind === "thinking") {
+        drawn.push(
+          <Thinking
+            key={member.key}
+            text={member.text}
+            spanMs={member.spanMs}
+            domId={domIdOf(rowId)}
+            timelineId={rowId}
+            hit={hit}
+            anchor={null}
+          />,
+        );
+      } else if (member.kind === "marker") {
+        drawn.push(
+          <Marker
+            key={member.key}
+            text={member.text}
+            tone={member.tone}
+            domId={domIdOf(rowId)}
+            timelineId={rowId}
+            hit={hit}
+          />,
+        );
+      } else {
+        drawn.push(
+          <SummaryNote
+            key={member.key}
+            purpose={member.purpose}
+            text={member.text}
+            domId={domIdOf(rowId)}
+            timelineId={rowId}
+            hit={hit}
+          />,
+        );
+      }
+      continue;
+    }
+    const line = member.line;
     const teamMember = teamMemberFor(line);
     if (teamMember !== null) {
-      const members = [teamMember];
+      const burst = [teamMember];
       if (teamMember.operation === "start" || teamMember.operation === "known") {
-        while (at + 1 < lines.length) {
-          const candidate = teamMemberFor(lines[at + 1]);
+        while (index + 1 < members.length) {
+          const next = members[index + 1];
+          if (next.kind !== "line") break;
+          const candidate = teamMemberFor(next.line);
           if (candidate === null || !sameStartBurst(teamMember, candidate)) break;
-          members.push(candidate);
-          at += 1;
+          burst.push(candidate);
+          index += 1;
         }
       }
       drawn.push(
         <TeamInvocation
           key={teamMember.row.timeline_id}
-          members={members}
+          members={burst}
           domIdOf={domIdOf}
           highlightedTimelineId={highlightedTimelineId}
           focusTimelineId={focusTimelineId}
@@ -296,10 +359,6 @@ export function Ledger({
       continue;
     }
     const key = line.rows[0]?.timeline_id ?? line.key;
-    const inside =
-      childFocused(line) ||
-      (focusTimelineId !== null &&
-        line.rows.some((row) => row.timeline_id === focusTimelineId));
     const linkedChild = linkedChildId(line);
     drawn.push(
       <Line
@@ -311,7 +370,7 @@ export function Ledger({
           line.rows.some((row) => row.timeline_id === highlightedTimelineId)
         }
         alive={alive(line)}
-        forceOpen={inside}
+        forceOpen={inside(member)}
         subthreads={subthreadsFor(line)}
         workflowAttempts={workflowAttemptsFor(line)}
         hasChildren={hasChildren(line)}
@@ -321,37 +380,72 @@ export function Ledger({
     );
   }
 
+  // R-2: a run of one is the line it already was.
   if (!summary.closedByDefault) return <div className="tr-ledger">{drawn}</div>;
 
+  // R-5: the green breath only in a live session below the watermark, and
+  // then the head carries the line that is happening.
+  const running = summary.running !== null && alive(summary.running) ? summary.running : null;
   const span = summary.spanMs !== null && summary.spanMs >= 1000 ? spanText(summary.spanMs) : null;
+  const stamp = at === null ? null : clock(at);
   const expanded = open || focusInside;
+  const toggle = () => setOpen((value) => !value);
   return (
-    <div className="tr-ledger">
+    <div className="tr-seg tr-ledger">
+      {anchor}
       <div
         className="tr-line tr-fold"
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        onClick={() => setOpen((value) => !value)}
+        data-state={running === null ? undefined : "running"}
+        onClick={toggle}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
-          setOpen((value) => !value);
+          toggle();
         }}
       >
         <span className="tr-line__g chev">
-          <LineChevron />
+          {running === null ? <LineChevron /> : <i className="tr-dot" />}
         </span>
         <span className="tr-line__v">
-          {summary.nouns.join(" · ")}
-          {summary.failed > 0 && (
-            <>
-              {" · "}
-              <b>{summary.failed} failed</b>
-            </>
+          {summary.nouns.map((noun, index) => (
+            <Fragment key={noun.family}>
+              {index > 0 && " · "}
+              {noun.text}
+              {noun.names.length > 0 && (
+                <>
+                  {" "}
+                  <span className="names">
+                    {noun.names.join(", ")}
+                    {noun.more > 0 ? ` … ${noun.more} more` : ""}
+                  </span>
+                </>
+              )}
+            </Fragment>
+          ))}
+          {running !== null && (
+            <span className="cur">
+              {summary.nouns.length > 0 && " · "}
+              {running.verb} <span className="tr-line__o">{objectText(running.object)}</span>
+            </span>
           )}
         </span>
-        <span className="tr-line__r">{span !== null && <span>{span}</span>}</span>
+        <span className="tr-line__r">
+          {summary.failed > 0 && <b>{summary.failed} failed</b>}
+          {summary.errors > 0 && (
+            <b>
+              {summary.errors} {summary.errors === 1 ? "error" : "errors"}
+            </b>
+          )}
+          {span !== null && (
+            <span className={running === null ? undefined : "why"}>
+              {running === null ? span : `${span} → …`}
+            </span>
+          )}
+          {stamp !== null && <span className="t">{stamp}</span>}
+        </span>
       </div>
       {/* Always in the DOM: `[data-fold="off"]` reveals every ladder at once,
           which is the column head's activity act — one CSS switch, no walk. */}

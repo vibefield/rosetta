@@ -158,3 +158,15 @@ export function ActivityGlyph() {
     </svg>
   );
 }
+
+/** Reasoning's line form (Q10 A, transcript-fold): three points — the one
+ * glyph the record did not draw, for the one verb it did not have. */
+export function ThoughtGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true">
+      <circle cx="8" cy="4.2" r="1.1" />
+      <circle cx="4.4" cy="10.6" r="1.1" />
+      <circle cx="11.6" cy="10.6" r="1.1" />
+    </svg>
+  );
+}

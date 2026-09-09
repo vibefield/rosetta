@@ -146,17 +146,19 @@ describe("documentTurns — the anatomy of a turn", () => {
     assert.equal(head.spanMs, 6_000);
   });
 
-  it("orders the segments and folds the tool run into ONE ledger", () => {
+  it("cuts the reply into runs at speech (R-1) and folds each run into ONE ledger", () => {
     assert.deepEqual(
       turns[0].segments.map((segment) => segment.kind),
-      ["prose", "thinking", "ledger", "prose", "marker", "ledger"],
+      ["prose", "ledger", "prose", "ledger"],
     );
-    const ledger = turns[0].segments[2];
-    assert.equal(ledger.rows.length, 2);
+    const ledger = turns[0].segments[1];
+    assert.equal(ledger.rows.length, 3); // the thought and the two commands
     assert.equal(ledger.lines.length, 1); // two commands fold to one line
+    assert.deepEqual(ledger.members.map((member) => member.kind), ["thinking", "line"]);
     assert.equal(objectText(ledger.lines[0].object), "2 commands · pnpm typecheck, pnpm test");
-    assert.deepEqual(ledger.summary.nouns, ["2 commands"]);
-    assert.equal(ledger.at, 4_000);
+    assert.deepEqual(ledger.summary.nouns.map((noun) => noun.text), ["2 commands"]);
+    assert.equal(ledger.summary.closedByDefault, true);
+    assert.equal(ledger.at, 3_000);
   });
 
   it("keeps every row reachable for anchors, focus landing and the watermark", () => {
@@ -165,18 +167,18 @@ describe("documentTurns — the anatomy of a turn", () => {
       turns[0].rows.map((row) => row.ordinal),
       [1, 2, 3, 4, 5, 6, 7, 8],
     );
-    const ledger = turns[0].segments[2];
+    const ledger = turns[0].segments[1];
     assert.ok(ledger.lines[0].rows.every((row) => typeof row.timeline_id === "string"));
   });
 
-  it("takes a reasoning segment's span from the adjacent stamps", () => {
-    const reasoning = turns[0].segments[1];
+  it("takes a reasoning member's span from the adjacent stamps", () => {
+    const reasoning = turns[0].segments[1].members[0];
     assert.equal(reasoning.kind, "thinking");
     assert.equal(reasoning.spanMs, 1_000);
   });
 
   it("draws a Notice as a hairline marker, red only for a runtime error", () => {
-    const marker = turns[0].segments[4];
+    const marker = turns[0].segments[3].members[0];
     assert.equal(marker.kind, "marker");
     assert.equal(marker.text, "context compacted");
     assert.equal(marker.tone, "plain");
@@ -191,7 +193,7 @@ describe("documentTurns — the anatomy of a turn", () => {
   });
 
   it("surfaces a delegate's proven child for the component to resolve", () => {
-    const ledger = turns[0].segments[5];
+    const ledger = turns[0].segments[3];
     assert.deepEqual(ledger.lines[0].childSessionIds, ["child-1"]);
     assert.equal(ledger.lines[0].detail.kind, "delegate");
   });
@@ -220,9 +222,15 @@ describe("group kinds decide what opens a turn", () => {
       summary("what happened", { kind: "synthetic" }),
     ]);
     assert.equal(turns.length, 1);
+    // The notice, the command and the summary are one run between two things
+    // said — the prose before them and the end of the reply.
     assert.deepEqual(
       turns[0].segments.map((segment) => segment.kind),
-      ["prose", "marker", "ledger", "summary"],
+      ["prose", "ledger"],
+    );
+    assert.deepEqual(
+      turns[0].segments[1].members.map((member) => member.kind),
+      ["marker", "line", "summary"],
     );
   });
 
@@ -460,6 +468,60 @@ describe("§07 — only adjacent human setting commands group", () => {
       notice({ type: "command_output", output: inline("max") }, { at: 1_000 }),
     ]);
     assert.equal(turns[1].clusteredWithPrevious, false);
+  });
+});
+
+/* ── runs — R-1 and R-2 (transcript-fold, 2026-09-08) ───────────────────── */
+
+describe("documentTurns — the run", () => {
+  it("a run of one line is the line it already was, open", () => {
+    const [turn] = documentTurns([prompt("go"), agent("Let me look."), shell("ls"), agent("Done.")]);
+    assert.deepEqual(turn.segments.map((segment) => segment.kind), ["prose", "ledger", "prose"]);
+    assert.equal(turn.segments[1].members.length, 1);
+    assert.equal(turn.segments[1].summary.closedByDefault, false);
+  });
+
+  it("a thought alone stays a thinking segment; two thoughts make a run", () => {
+    const [alone] = documentTurns([prompt("go"), agent("A."), thinking("hm"), agent("B.")]);
+    assert.deepEqual(alone.segments.map((segment) => segment.kind), ["prose", "thinking", "prose"]);
+    const [pair] = documentTurns([prompt("go"), agent("A."), thinking("hm"), thinking("hmm"), agent("B.")]);
+    assert.deepEqual(pair.segments.map((segment) => segment.kind), ["prose", "ledger", "prose"]);
+    assert.deepEqual(pair.segments[1].summary.nouns.map((noun) => noun.text), ["2 thoughts"]);
+  });
+
+  it("notices alone never fold: they stand as their own markers", () => {
+    const [turn] = documentTurns([
+      prompt("go"),
+      agent("A."),
+      notice({ type: "compaction", reason: null }),
+      notice({ type: "model_changed", from: null, to: "claude-opus-5" }),
+      agent("B."),
+    ]);
+    assert.deepEqual(turn.segments.map((segment) => segment.kind), ["prose", "marker", "marker", "prose"]);
+  });
+
+  it("a blank agent row said nothing, so it closes nothing", () => {
+    const [turn] = documentTurns([prompt("go"), shell("ls"), agent("   "), shell("cat"), agent("Done.")]);
+    assert.deepEqual(turn.segments.map((segment) => segment.kind), ["ledger", "prose"]);
+    assert.equal(turn.segments[0].lines.length, 1); // the two commands fold across it
+  });
+
+  it("a sitting boundary closes a run as speech does", () => {
+    const rows = [prompt("go"), shell("ls", { timeline_id: "a" }), shell("cat", { timeline_id: "b" }), agent("Done.")];
+    const [turn] = documentTurns(rows, { cutBefore: new Set(["b"]) });
+    assert.deepEqual(turn.segments.map((segment) => segment.kind), ["ledger", "ledger", "prose"]);
+    assert.equal(turn.segments[0].rows[0].timeline_id, "a");
+    assert.equal(turn.segments[1].rows[0].timeline_id, "b");
+  });
+
+  it("a thought between two commands is inside the run and breaks the line fold", () => {
+    const [turn] = documentTurns([prompt("go"), shell("ls"), thinking("hm"), shell("cat"), agent("Done.")]);
+    assert.deepEqual(turn.segments.map((segment) => segment.kind), ["ledger", "prose"]);
+    const ledger = turn.segments[0];
+    assert.deepEqual(ledger.members.map((member) => member.kind), ["line", "thinking", "line"]);
+    assert.equal(ledger.lines.length, 2);
+    assert.equal(ledger.summary.memberCount, 3);
+    assert.deepEqual(ledger.summary.nouns.map((noun) => noun.text), ["2 commands"]);
   });
 });
 

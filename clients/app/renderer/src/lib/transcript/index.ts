@@ -65,7 +65,14 @@ export {
   taskDisplayRows,
 } from "./families.ts";
 
-export type { LedgerLine, LedgerState, ResultTone, RunSummary } from "./ledger.ts";
+export type {
+  LedgerLine,
+  LedgerState,
+  ResultTone,
+  RunNoun,
+  RunOther,
+  RunSummary,
+} from "./ledger.ts";
 export {
   FOLD_NAME_LIMIT,
   RUN_FOLD_THRESHOLD,
@@ -79,6 +86,7 @@ export {
 export type {
   AttachmentFact,
   DocumentOptions,
+  LedgerMember,
   LocalSetting,
   Prompt,
   ResponseHead,

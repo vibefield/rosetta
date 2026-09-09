@@ -35,7 +35,7 @@ import type {
   SummaryPurpose,
   TimelineEntry,
 } from "@rosetta/protocol";
-import type { LedgerLine, RunSummary } from "./ledger.ts";
+import type { LedgerLine, RunOther, RunSummary } from "./ledger.ts";
 import { ledgerLines, runSummary } from "./ledger.ts";
 import { withinPromptCluster } from "./sittings.ts";
 import type { LedgerContext } from "./vocabulary.ts";
@@ -296,8 +296,14 @@ export type Segment =
       readonly kind: "ledger";
       readonly key: string;
       readonly at: number | null;
+      /** Every row in the run, in order: the tool rows and the thoughts,
+       * notices and summaries between them (R-1). */
       readonly rows: readonly TimelineEntry[];
+      /** The tool lines, folded (T-3) — what the sentence counts and what the
+       * worker subthreads hang from. */
       readonly lines: readonly LedgerLine[];
+      /** The ladder, in order. */
+      readonly members: readonly LedgerMember[];
       readonly summary: RunSummary;
     }
   | {
@@ -325,6 +331,15 @@ export type Segment =
       readonly at: number | null;
       readonly event: CollaborationEvent;
     };
+
+/**
+ * One drawn member of a run's ladder: a tool line, or the thought, notice or
+ * summary that happened between two lines. Inside the ladder each keeps the
+ * form it had as a segment; only the run's head is new (transcript-fold).
+ */
+export type LedgerMember =
+  | { readonly kind: "line"; readonly key: string; readonly line: LedgerLine }
+  | Extract<Segment, { kind: "thinking" | "marker" | "summary" }>;
 
 /* ── the head ────────────────────────────────────────────────────────────── */
 
@@ -366,6 +381,9 @@ export interface DocumentOptions {
   /** Team child rows interleaved into their parent's shared chronology. Their
    * native parent-invocation group must not masquerade as a human turn here. */
   readonly sharedCollaborationSessionIds?: ReadonlySet<string>;
+  /** Rows that begin a new sitting (§07). A run never straddles a pill, so it
+   * is cut before each of these; `document-model.ts` supplies them. */
+  readonly cutBefore?: ReadonlySet<string>;
 }
 
 function opensTurn(row: TimelineEntry, options: DocumentOptions): boolean {
@@ -465,39 +483,175 @@ function buildPrompt(
   };
 }
 
+function thinkingSegment(
+  row: TimelineEntry,
+  nextAtOf: (row: TimelineEntry) => number | null,
+): Extract<Segment, { kind: "thinking" }> | null {
+  if (row.body.type !== "thinking") return null;
+  const text = canonicalText(row.body.text);
+  if (text.trim() === "") return null;
+  const next = nextAtOf(row);
+  return {
+    kind: "thinking",
+    key: row.timeline_id,
+    row,
+    at: row.at,
+    text,
+    spanMs: row.at !== null && next !== null && next > row.at ? next - row.at : null,
+  };
+}
+
+function markerSegment(row: TimelineEntry): Extract<Segment, { kind: "marker" }> | null {
+  if (row.body.type !== "notice") return null;
+  const notice = row.body.notice;
+  return {
+    kind: "marker",
+    key: row.timeline_id,
+    row,
+    at: row.at,
+    notice,
+    text: noticeText(notice),
+    tone:
+      notice.type === "runtime_error" ||
+      (notice.type === "async_task" && ["failed", "denied", "timed_out"].includes(notice.status))
+        ? "failed"
+        : "plain",
+  };
+}
+
+function summarySegment(row: TimelineEntry): Extract<Segment, { kind: "summary" }> | null {
+  if (row.body.type !== "summary") return null;
+  const text = canonicalText(row.body.text);
+  if (text.trim() === "") return null;
+  return {
+    kind: "summary",
+    key: row.timeline_id,
+    row,
+    at: row.at,
+    purpose: row.body.purpose,
+    text,
+  };
+}
+
+function runOther(member: LedgerMember): RunOther | null {
+  switch (member.kind) {
+    case "line":
+      return null;
+    case "thinking":
+      return { kind: "thinking", row: member.row };
+    case "marker":
+      return { kind: "marker", row: member.row, failed: member.tone === "failed" };
+    case "summary":
+      return { kind: "summary", row: member.row };
+  }
+}
+
+/**
+ * The reply's segments. R-1: speech is the boundary — a prose row or a team
+ * message closes the run, and everything between two of them (tool rows,
+ * thoughts, notices, summaries) is ONE run, in order. R-2: a run of one is the
+ * segment it already was — a lone line stays a one-line ledger, a lone thought
+ * a `thinking` segment, a lone notice a `marker`. A run that holds only
+ * notices and summaries has no sentence to close to, so its members stand as
+ * their own segments. A sitting boundary (`cutBefore`) closes a run as speech
+ * does, so no run straddles a pill.
+ */
 function buildSegments(
   rows: readonly TimelineEntry[],
   nextAtOf: (row: TimelineEntry) => number | null,
   context: LedgerContext,
+  cutBefore: ReadonlySet<string>,
 ): Segment[] {
   const segments: Segment[] = [];
-  let run: TimelineEntry[] = [];
-  const flush = () => {
-    if (run.length === 0) return;
-    const lines = ledgerLines(run, context);
-    const stamps = run.map((row) => row.at).filter((value): value is number => value !== null);
-    segments.push({
-      kind: "ledger",
-      key: run[0].timeline_id,
-      at: stamps.length === 0 ? null : Math.min(...stamps),
-      rows: run,
-      lines,
-      summary: runSummary(lines),
-    });
-    run = [];
+  let members: LedgerMember[] = [];
+  let runRows: TimelineEntry[] = [];
+  let tools: TimelineEntry[] = [];
+  const flushTools = () => {
+    if (tools.length === 0) return;
+    for (const line of ledgerLines(tools, context)) {
+      members.push({ kind: "line", key: line.key, line });
+    }
+    tools = [];
+  };
+  const flushRun = () => {
+    flushTools();
+    if (members.length === 0) return;
+    const folds = members.some((member) => member.kind === "line" || member.kind === "thinking");
+    if (members.length === 1 || !folds) {
+      for (const member of members) {
+        if (member.kind === "line") {
+          const line = member.line;
+          segments.push({
+            kind: "ledger",
+            key: line.key,
+            at: line.rows[0]?.at ?? null,
+            rows: line.rows,
+            lines: [line],
+            members: [member],
+            summary: runSummary([line]),
+          });
+        } else {
+          segments.push(member);
+        }
+      }
+    } else {
+      const lines = members.flatMap((member) => (member.kind === "line" ? [member.line] : []));
+      const others = members.flatMap((member) => {
+        const other = runOther(member);
+        return other === null ? [] : [other];
+      });
+      const stamps = runRows.map((row) => row.at).filter((value): value is number => value !== null);
+      segments.push({
+        kind: "ledger",
+        key: runRows[0].timeline_id,
+        at: stamps.length === 0 ? null : Math.min(...stamps),
+        rows: runRows,
+        lines,
+        members,
+        summary: runSummary(lines, others),
+      });
+    }
+    members = [];
+    runRows = [];
   };
 
   for (const row of rows) {
-    if (row.body.type === "tool_use") {
-      run.push(row);
-      continue;
-    }
-    flush();
+    if (cutBefore.has(row.timeline_id)) flushRun();
     switch (row.body.type) {
+      case "tool_use":
+        tools.push(row);
+        runRows.push(row);
+        continue;
+      case "thinking": {
+        const segment = thinkingSegment(row, nextAtOf);
+        if (segment === null) continue;
+        flushTools();
+        members.push(segment);
+        runRows.push(row);
+        continue;
+      }
+      case "notice": {
+        const segment = markerSegment(row);
+        if (segment === null) continue;
+        flushTools();
+        members.push(segment);
+        runRows.push(row);
+        continue;
+      }
+      case "summary": {
+        const segment = summarySegment(row);
+        if (segment === null) continue;
+        flushTools();
+        members.push(segment);
+        runRows.push(row);
+        continue;
+      }
       case "agent": {
         const text = row.body.text === null ? null : canonicalText(row.body.text);
         const { text: prose, attachments } = readAttachments(text, row.body.attachments);
-        if (prose === null && attachments.length === 0 && row.body.citations.length === 0) break;
+        // A blank agent row said nothing, so it closes nothing (R-1).
+        if (prose === null && attachments.length === 0 && row.body.citations.length === 0) continue;
+        flushRun();
         segments.push({
           kind: "prose",
           key: row.timeline_id,
@@ -508,53 +662,10 @@ function buildSegments(
           citations: row.body.citations,
           citationLabels: row.body.citations.map(citationLabel),
         });
-        break;
-      }
-      case "thinking": {
-        const text = canonicalText(row.body.text);
-        if (text.trim() === "") break;
-        const next = nextAtOf(row);
-        segments.push({
-          kind: "thinking",
-          key: row.timeline_id,
-          row,
-          at: row.at,
-          text,
-          spanMs: row.at !== null && next !== null && next > row.at ? next - row.at : null,
-        });
-        break;
-      }
-      case "notice": {
-        const notice = row.body.notice;
-        segments.push({
-          kind: "marker",
-          key: row.timeline_id,
-          row,
-          at: row.at,
-          notice,
-          text: noticeText(notice),
-          tone: notice.type === "runtime_error"
-            || (notice.type === "async_task"
-              && ["failed", "denied", "timed_out"].includes(notice.status))
-              ? "failed"
-              : "plain",
-        });
-        break;
-      }
-      case "summary": {
-        const text = canonicalText(row.body.text);
-        if (text.trim() === "") break;
-        segments.push({
-          kind: "summary",
-          key: row.timeline_id,
-          row,
-          at: row.at,
-          purpose: row.body.purpose,
-          text,
-        });
-        break;
+        continue;
       }
       case "collaboration":
+        flushRun();
         segments.push({
           kind: "collaboration",
           key: row.timeline_id,
@@ -562,13 +673,13 @@ function buildSegments(
           at: row.at,
           event: row.body.event,
         });
-        break;
+        continue;
       case "user":
         // Unreachable: a user row always opens its own turn.
-        break;
+        continue;
     }
   }
-  flush();
+  flushRun();
   return segments;
 }
 
@@ -645,7 +756,7 @@ export function documentTurns(
     const outputRow = group.output;
     const body = group.body;
     const prompt = promptRow === null ? null : buildPrompt(promptRow, outputRow);
-    const segments = buildSegments(body, nextAtOf, context);
+    const segments = buildSegments(body, nextAtOf, context, options.cutBefore ?? new Set());
     const agentRows = body.filter(isAgentAuthored);
     const head: ResponseHead | null =
       agentRows.length === 0
