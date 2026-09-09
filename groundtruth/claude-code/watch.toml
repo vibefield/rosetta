@@ -3,6 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
+  "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "Closed writer: pinned fixtures cover basic chat, tools, and resume; compaction, teams, subagents, workflows, and rare system records rely on organic evidence.",
 ]
 

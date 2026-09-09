@@ -1,5 +1,6 @@
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FullMessage } from "./message-file-source";
+import { fmtBytes } from "../../lib/format";
 import { MESSAGE_PREVIEW_CHARACTERS, messageCharacterCount, messageExcerpt } from "./message-preview";
 import { Prose } from "./Prose";
 import type { ProseProps } from "./Prose";
@@ -11,10 +12,12 @@ export const MessageViewerContext = createContext<((message: FullMessage) => voi
 export function MessagePreview({
   messageKey,
   role,
+  recordedText,
   ...prose
-}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"] }) {
+}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly recordedText?: FullMessage["recordedText"] }) {
   const openMessage = useContext(MessageViewerContext);
   const { text } = prose;
+  const member = recordedText?.type === "member" ? recordedText : null;
   const descriptionId = useId();
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -59,23 +62,23 @@ export function MessagePreview({
   if (openMessage === null) return <Prose {...prose} />;
 
   return (
-    <div className="tr-message" data-omitted={excerpt.omitted || undefined}>
+    <div className="tr-message" data-omitted={excerpt.omitted || member !== null || undefined}>
       <div className="tr-message__viewport" ref={viewportRef}>
         <div className="tr-message__content" ref={contentRef}>
-          <Prose {...prose} text={excerpt.text} imageMarkerSource={text} excerpt={excerpt.omitted} />
+          <Prose {...prose} text={excerpt.text} imageMarkerSource={text} excerpt={excerpt.omitted || member !== null} />
         </div>
       </div>
-      {excerpt.omitted && (
+      {(excerpt.omitted || member !== null) && (
         <div className="tr-message__footer">
           <span className="tr-message__extent" id={descriptionId}>
-            Preview <span aria-hidden="true">·</span> {count} characters total
+            Preview <span aria-hidden="true">·</span> {member === null ? `${count} characters total` : `${fmtBytes(member.byte_len)} stored`}
           </span>
           <button
             type="button"
             className="tr-message__open"
             aria-haspopup="dialog"
             aria-describedby={descriptionId}
-            onClick={() => openMessage({ key: messageKey, role, text })}
+            onClick={() => openMessage({ key: messageKey, role, text, recordedText, attachments: prose.imageAttachments })}
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M9.5 2.5h4v4m0-4-6 6M6.5 3.5h-3v9h9v-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />

@@ -10,3 +10,5 @@ pub mod spec;
 pub mod tool;
 
 pub use adapter::OpenCodeAdapter;
+
+mod images;

@@ -38,6 +38,8 @@ import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
 import { handleForMessage, messageFileSource } from "./transcript/message-file-source";
 import type { FullMessage } from "./transcript/message-file-source";
+import { attachmentStatus } from "./transcript/Attachments";
+import { AuthoredMessage } from "./transcript/AuthoredMessage";
 import { ActivityGlyph } from "./transcript/glyphs";
 import { HeadOfDocument, TopFade } from "./transcript/HeadOfDocument";
 import { ReceiptPill } from "./transcript/ReceiptPill";
@@ -89,6 +91,7 @@ export function scrollRowTo(
 const RECEIPT_TOP = 88;
 
 interface TranscriptViewerTarget {
+  readonly message?: FullMessage;
   readonly handle: FileHandle;
   readonly source: FileSource;
 }
@@ -146,6 +149,7 @@ export function TranscriptColumn({
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
   const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
+  const [nestedImage, setNestedImage] = useState<FileHandle | null>(null);
   const [metaFocus, setMetaFocus] = useState<TimelineMetaFocus | null>(null);
   const viewerRequest = useRef(0);
   const anchorRequest = useRef(0);
@@ -181,6 +185,7 @@ export function TranscriptColumn({
     viewerRequest.current += 1;
     anchorRequest.current += 1;
     setViewerTarget(null);
+    setNestedImage(null);
     setMetaFocus(null);
     focusTries.current = 0;
     anchorTried.current = null;
@@ -190,15 +195,17 @@ export function TranscriptColumn({
     viewerRequest.current += 1;
     const handle = handleForAttachment(fact);
     if (handle === null) {
-      onReceipt("That image was not stored");
+      onReceipt(attachmentStatus(fact));
       return;
     }
-    setViewerTarget({ handle, source: attachmentFileSource });
+    if (viewerTarget?.message !== undefined) setNestedImage(handle);
+    else setViewerTarget({ handle, source: attachmentFileSource });
   };
 
   const openMessage = useCallback((message: FullMessage) => {
     viewerRequest.current += 1;
-    setViewerTarget({ handle: handleForMessage(message), source: messageFileSource });
+    setViewerTarget({ handle: handleForMessage(message),
+      source: message.recordedText?.type === "member" ? attachmentFileSource : messageFileSource, message });
   }, []);
 
   const openReadPath = (path: PathFact) => {
@@ -556,6 +563,9 @@ export function TranscriptColumn({
           : ""}
       </span>
       <FileViewerDialog
+        renderMarkdown={viewerTarget?.message === undefined ? undefined : (text) => <AuthoredMessage text={text}
+          messageKey={viewerTarget.message!.key} role={viewerTarget.message!.role} preview={false}
+          attachments={viewerTarget.message!.attachments ?? []} onOpenAttachment={openAttachment} onReceipt={onReceipt} />}
         handle={viewerTarget?.handle ?? null}
         source={viewerTarget?.source ?? attachmentFileSource}
         tint={project?.tint ?? null}
@@ -567,6 +577,10 @@ export function TranscriptColumn({
         onReceipt={onReceipt}
         openInBrowser={desktopHost()?.openInBrowser ?? null}
       />
+      <FileViewerDialog handle={nestedImage} source={attachmentFileSource}
+        tint={project?.tint ?? null} homeDirectory={homeDirectory}
+        onClose={() => setNestedImage(null)} onReceipt={onReceipt}
+        openInBrowser={desktopHost()?.openInBrowser ?? null} />
     </div>
     </MessageViewerContext.Provider>
   );

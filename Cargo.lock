@@ -1229,6 +1229,7 @@ dependencies = [
 name = "rosetta-adapter-support"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "rosetta-core",
  "serde",
  "serde_json",

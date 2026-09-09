@@ -3,6 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
+  "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "The current SQLite store is fixture-backed; legacy JSON generations and external tool-output bodies remain research-only.",
 ]
 

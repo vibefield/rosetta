@@ -32,7 +32,7 @@ function safeHref(href: string): string | null {
   return /^https?:\/\//i.test(trimmed) ? trimmed : null;
 }
 
-export type InlineTextRenderer = (value: string) => ReactNode;
+export type InlineTextRenderer = (value: string, source?: readonly number[]) => ReactNode;
 
 function InlineNodes({
   nodes,
@@ -46,7 +46,7 @@ function InlineNodes({
       {nodes.map((node, at) => (
         <Fragment key={at}>
           {node.type === "text" ? (
-            renderText === undefined ? node.value : renderText(node.value)
+            renderText === undefined ? node.value : renderText(node.value, node.source)
           ) : node.type === "code" ? (
             <code>{node.value}</code>
           ) : node.type === "strong" ? (

@@ -1038,3 +1038,106 @@ fn only_assistant_rows_carry_a_model() {
         other => panic!("expected one message row, got {other:?}"),
     }
 }
+
+// Writer-derived ContentItem cases (0.150.1), not native capture fixtures.
+const IMAGE_PNG: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+
+#[test]
+fn image_triplets_preserve_occurrences_strip_only_paired_wrappers_and_bind_exact_spans() {
+    let mut ctx = context();
+    let outcome = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({"type":"message","role":"user","content":[
+            {"type":"input_text","text":"<image name=[Image #1] path=\"/tmp/first.png\">"},
+            {"type":"input_image","image_url":"data:image/png;base64,invalid"},
+            {"type":"input_text","text":"</image>"},
+            {"type":"input_text","text":"<image name=[Image #4] path=\"/tmp/a \" <quoted>.png\">"},
+            {"type":"input_image","image_url":format!("data:image/png;base64,{IMAGE_PNG}")},
+            {"type":"input_text","text":"</image>"},
+            {"type":"input_image","image_url":format!("data:image/png;base64,{IMAGE_PNG}")},
+            {"type":"input_text","text":"😀 compare [Image #1] and [Image #4]. [Image #4] again. [Image #99] stays plain."}
+        ]}),
+    );
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    let rows: Vec<_> = outcome
+        .ops
+        .iter()
+        .filter_map(|op| {
+            if let IngestOp::Message(row) = op {
+                Some(row)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(rows.len(), 1);
+    rows[0].validate().unwrap();
+    let TimelineBody::User { text, attachments } = &rows[0].body else {
+        panic!("user message")
+    };
+    let text = text.as_ref().unwrap().as_preview();
+    assert!(text.starts_with("😀 compare"));
+    assert!(!text.contains("<image"));
+    assert_eq!(attachments.len(), 3);
+    assert!(matches!(
+        attachments[0].source,
+        rosetta_core::timeline::AttachmentSource::Unavailable { .. }
+    ));
+    assert_eq!(attachments[0].message_ranges[0].start, 10);
+    assert_eq!(attachments[1].name.as_deref(), Some("a \" <quoted>.png"));
+    assert_eq!(attachments[1].message_ranges.len(), 2);
+    assert!(attachments[2].message_ranges.is_empty());
+    assert_ne!(attachments[1].id, attachments[2].id);
+    assert_eq!(attachments[1].source, attachments[2].source);
+    let canonical = serde_json::to_string(rows[0]).unwrap();
+    assert!(!canonical.contains(IMAGE_PNG));
+    assert!(!canonical.contains("/tmp/"));
+}
+
+#[test]
+fn bare_missing_and_reference_images_stay_in_the_prompt_and_literal_wrappers_stay_text() {
+    let mut ctx = context();
+    let outcome = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({"type":"message","role":"user","content":[
+            {"type":"input_text","text":"<image>this is an example</image>"},
+            {"type":"input_image","image_url":null},
+            {"type":"input_image","image_url":"https://example.test/image.png"}
+        ]}),
+    );
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    let row = outcome
+        .ops
+        .iter()
+        .find_map(|op| {
+            if let IngestOp::Message(row) = op {
+                Some(row)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let TimelineBody::User { text, attachments } = &row.body else {
+        panic!("user")
+    };
+    assert_eq!(
+        text.as_ref().unwrap().as_preview(),
+        "<image>this is an example</image>"
+    );
+    assert_eq!(attachments.len(), 2);
+    assert!(matches!(
+        attachments[1].source,
+        rosetta_core::timeline::AttachmentSource::Reference { .. }
+    ));
+    assert!(
+        !outcome
+            .ops
+            .iter()
+            .any(|op| matches!(op, IngestOp::ProjectionAsset { .. }))
+    );
+}

@@ -71,3 +71,15 @@ test("message snapshots remain separate, abortable, and reject other file source
   await assert.rejects(messageFileSource.read({ ...first, ref: null }, new AbortController().signal));
   assert.equal(new TextDecoder().decode(await messageFileSource.read(second, new AbortController().signal)), "second");
 });
+
+test("externalized messages open the immutable full-text member, not preview bytes", () => {
+  const asset = { url: "/assets/message.txt", digest: "a".repeat(64), media_type: "text/plain; charset=utf-8", byte_len: 90000 };
+  const recordedText = { type: "member", asset, byte_len: 90000, preview: "Only the beginning" };
+  for (const role of ["user", "agent"]) {
+    const handle = handleForMessage({ key: "s1:member", role, text: recordedText.preview, recordedText });
+    assert.equal(handle.size, 90000);
+    assert.deepEqual(handle.ref, asset);
+    assert.equal(handle.path, null);
+    assert.notEqual(handle.key, handleForMessage({ key: "s1:member", role, text: recordedText.preview }).key);
+  }
+});

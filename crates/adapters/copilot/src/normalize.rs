@@ -37,6 +37,8 @@ const INVALID_JSON: &str = "<invalid-json>";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CopilotState {
+    #[serde(default)]
+    images: crate::images::Images,
     /// Current execution cwd for resolving relative tool inputs only.
     /// The canonical session cwd and project are fixed during meta ingest.
     tool_cwd: Option<String>,
@@ -138,6 +140,7 @@ fn project(
     ops: &mut Vec<IngestOp>,
 ) {
     match &record.payload {
+        EventPayload::SessionBinaryAsset(asset) => state.images.binary(ctx, asset, ops),
         EventPayload::Abort(abort) => {
             system_row(ctx, record, "abort", abort.reason.clone(), ts, ops)
         }
@@ -235,7 +238,9 @@ fn project(
                 ts,
             );
             row.content = Some(message.content.clone());
-            IngestOp::push_message(ops, row);
+            state
+                .images
+                .user(row, message.attachments.as_deref().unwrap_or_default(), ops);
         }
         EventPayload::AssistantMessage(message) => {
             assistant_message(ctx, state, stream_id, record, message, ts, ops);
@@ -1053,6 +1058,7 @@ fn record_kind(payload: &EventPayload) -> &'static str {
         EventPayload::ExternalToolCompleted(_) => "external_tool.completed",
         EventPayload::ExternalToolRequested(_) => "external_tool.requested",
         EventPayload::SessionStart(_) => "session.start",
+        EventPayload::SessionBinaryAsset(_) => "session.binary_asset",
         EventPayload::SessionPermissionsChanged(_) => "session.permissions_changed",
         EventPayload::SessionModelChange(_) => "session.model_change",
         EventPayload::SessionResume(_) => "session.resume",

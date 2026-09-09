@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::assets::{IMAGE_ASSET_URL_PREFIX, ProjectionAsset};
 use crate::rows::{Ms, TaskStatus, TokenSnapshot};
 
+mod attachment;
+pub use attachment::{AttachmentRef, AttachmentSource, AttachmentUnavailableReason, Dimensions};
+
 pub const INLINE_TEXT_MAX_BYTES: usize = 32 * 1024;
 pub const TEXT_PREVIEW_MAX_BYTES: usize = 2 * 1024;
 pub const CORE_SCALAR_MAX_BYTES: usize = 16 * 1024;
@@ -504,74 +507,6 @@ impl ResourceRef {
             }
             Self::Asset { asset } => asset.validate(),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct Dimensions {
-    pub width: u32,
-    pub height: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct AttachmentRef {
-    pub kind: AttachmentKind,
-    pub name: Option<String>,
-    pub media_type: Option<String>,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub byte_len: Option<u64>,
-    pub source: ResourceRef,
-    pub dimensions: Option<Dimensions>,
-}
-
-impl AttachmentRef {
-    pub fn validate(&self) -> Result<(), CanonicalError> {
-        bounded_option(
-            "attachment name",
-            self.name.as_deref(),
-            CORE_SCALAR_MAX_BYTES,
-        )?;
-        bounded_option(
-            "attachment media type",
-            self.media_type.as_deref(),
-            ID_MAX_BYTES,
-        )?;
-        if self.byte_len == Some(0) {
-            return Err(CanonicalError::Invalid(
-                "attachment has zero declared bytes".into(),
-            ));
-        }
-        if self
-            .dimensions
-            .is_some_and(|dimensions| dimensions.width == 0 || dimensions.height == 0)
-        {
-            return Err(CanonicalError::Invalid(
-                "attachment dimensions must be positive".into(),
-            ));
-        }
-        self.source.validate()?;
-        if let ResourceRef::Asset { asset } = &self.source {
-            if self
-                .byte_len
-                .is_some_and(|byte_len| byte_len != asset.byte_len)
-            {
-                return Err(CanonicalError::Invalid(
-                    "attachment and asset byte lengths disagree".into(),
-                ));
-            }
-            if self
-                .media_type
-                .as_deref()
-                .is_some_and(|media_type| media_type != asset.media_type)
-            {
-                return Err(CanonicalError::Invalid(
-                    "attachment and asset media types disagree".into(),
-                ));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -4155,22 +4090,16 @@ impl TimelineEntry {
             _ => {}
         }
         match &self.body {
-            TimelineBody::User { attachments, .. } => {
-                bounded_collection("user attachments", attachments.len(), CANONICAL_LIST_LIMIT)?;
-                for attachment in attachments {
-                    attachment.validate()?;
-                }
+            TimelineBody::User { text, attachments } => {
+                attachment::validate_attachments(attachments, text.as_ref())?;
             }
             TimelineBody::Agent {
+                text,
                 attachments,
                 citations,
-                ..
             } => {
-                bounded_collection("agent attachments", attachments.len(), CANONICAL_LIST_LIMIT)?;
+                attachment::validate_attachments(attachments, text.as_ref())?;
                 bounded_collection("agent citations", citations.len(), CANONICAL_LIST_LIMIT)?;
-                for attachment in attachments {
-                    attachment.validate()?;
-                }
                 for citation in citations {
                     citation.validate()?;
                 }
@@ -4381,7 +4310,9 @@ impl TimelineEntry {
                     lanes.push_text(SearchLane::Prose, text);
                 }
                 for attachment in attachments {
-                    SearchLanes::push(&mut lanes.target, attachment.source.display_value());
+                    if let Some(name) = &attachment.name {
+                        SearchLanes::push(&mut lanes.target, name);
+                    }
                 }
             }
             TimelineBody::Agent {
@@ -4393,7 +4324,9 @@ impl TimelineEntry {
                     lanes.push_text(SearchLane::Prose, text);
                 }
                 for attachment in attachments {
-                    SearchLanes::push(&mut lanes.target, attachment.source.display_value());
+                    if let Some(name) = &attachment.name {
+                        SearchLanes::push(&mut lanes.target, name);
+                    }
                 }
                 for citation in citations {
                     if let Some(title) = &citation.title {
@@ -5070,11 +5003,14 @@ mod tests {
         let mut row = base(TimelineBody::User {
             text: None,
             attachments: vec![AttachmentRef {
+                id: "image-0".into(),
+                label: None,
+                message_ranges: Vec::new(),
                 kind: AttachmentKind::Image,
                 name: None,
                 media_type: Some("image/png".into()),
                 byte_len: Some(reference.byte_len),
-                source: ResourceRef::Asset { asset: reference },
+                source: AttachmentSource::Asset { asset: reference },
                 dimensions: None,
             }],
         });

@@ -391,6 +391,7 @@ pub enum KnownContentBlock {
     #[serde(rename = "image")]
     Image {
         data: String,
+        #[serde(rename = "mimeType")]
         mime_type: String,
         #[serde(flatten)]
         unknown: Unknown,

@@ -28,6 +28,7 @@ pub enum ParsedLine {
 }
 
 const KNOWN_TYPES: &[&str] = &[
+    "session.binary_asset",
     "abort",
     "assistant.reasoning",
     "external_tool.completed",
@@ -120,6 +121,8 @@ impl Drift for EventLine {
 #[serde(tag = "type", content = "data")]
 #[allow(clippy::large_enum_variant)]
 pub enum EventPayload {
+    #[serde(rename = "session.binary_asset")]
+    SessionBinaryAsset(BinaryAsset),
     #[serde(rename = "abort")]
     Abort(Abort),
     #[serde(rename = "assistant.reasoning")]
@@ -197,6 +200,7 @@ pub enum EventPayload {
 impl Drift for EventPayload {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         match self {
+            EventPayload::SessionBinaryAsset(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::Abort(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::AssistantReasoning(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::ExternalToolCompleted(p) => note_unknown(&p.unknown, prefix, out),
@@ -966,6 +970,24 @@ pub struct ToolExecutionComplete {
     pub tool_telemetry: Option<Value>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub turn_id: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// Persisted writer-schema 1.0.80: bytes may precede or follow user.message.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryAsset {
+    pub asset_id: String,
+    pub byte_length: u64,
+    pub data: String,
+    pub mime_type: String,
+    #[serde(rename = "type")]
+    pub asset_type: String,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub metadata: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

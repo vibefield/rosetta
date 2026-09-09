@@ -1043,12 +1043,17 @@ fn closed_message_codec_round_trips_members_attachments_and_citations() {
     let mut row = message("typed-agent", 0, MessageKind::Agent);
     row.content = Some(prose.clone());
     row.attachments.push(AttachmentRef {
+        id: "document-1".into(),
+        label: None,
+        message_ranges: Vec::new(),
         kind: AttachmentKind::Document,
         name: Some("design.pdf".into()),
         media_type: Some("application/pdf".into()),
         byte_len: None,
-        source: ResourceRef::Url {
-            url: "https://example.test/design.pdf".into(),
+        source: rosetta_core::timeline::AttachmentSource::Reference {
+            reference: ResourceRef::Url {
+                url: "https://example.test/design.pdf".into(),
+            },
         },
         dimensions: None,
     });

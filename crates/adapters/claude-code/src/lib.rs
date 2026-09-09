@@ -24,3 +24,4 @@ mod workflow;
 mod web;
 
 pub use adapter::ClaudeCodeAdapter;
+mod media;

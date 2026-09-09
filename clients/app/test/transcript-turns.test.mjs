@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   documentTurns,
-  imageMarkerTargets,
+  attachmentMentions,
   objectText,
   readAttachments,
 } from "../renderer/src/lib/transcript/index.ts";
@@ -331,77 +331,53 @@ describe("§03 H — the command pill and its output are one object", () => {
 
 /* ── §06, the missing image ──────────────────────────────────────────────── */
 
-describe("§06 — a missing image is a placeholder fact, never a sentence", () => {
-  it("turns a lone `[Image: source: …]` into a placeholder with its name", () => {
-    const [turn] = documentTurns([
-      prompt("[Image: source: /Users/x/.claude/image-cache/abc/3.png]"),
-    ]);
-    assert.equal(turn.prompt.text, null);
-    assert.equal(turn.prompt.attachments.length, 1);
-    const [fact] = turn.prompt.attachments;
-    assert.equal(fact.missing, true);
-    assert.equal(fact.kind, "image");
-    assert.equal(fact.name, "3.png");
-    assert.equal(fact.caption, "PNG");
+describe("§06A — canonical image occurrences", () => {
+  const ref = (id, source = { type: "unavailable", reason: "not_recorded" }, ranges = []) => ({
+    id, kind: "image", label: null, name: `${id}.png`, media_type: "image/png",
+    byte_len: null, dimensions: { width: 2048, height: 1536 }, source, message_ranges: ranges,
   });
 
-  it("reads the dimensions the marker states", () => {
-    const [turn] = documentTurns([
-      prompt(
-        "[Image: original 2400x1600, displayed at 2000x1333. Multiply coordinates by 1.20 to map to original image.]",
-      ),
-    ]);
-    const [fact] = turn.prompt.attachments;
-    assert.equal(fact.width, 2400);
-    assert.equal(fact.height, 1600);
-    assert.equal(fact.caption, "2400×1600");
+  it("does not infer images or remove words from prose that looks like native markup", () => {
+    for (const text of ["[Image: source: /tmp/3.png]", "[Image #4]", "<image>example</image>"]) {
+      assert.deepEqual(readAttachments(text, []), { text, attachments: [] });
+    }
   });
 
-  it("keeps a numbered marker beside its stored attachment", () => {
-    const [turn] = documentTurns([
-      prompt("[Image #4] now look at this, they are stacking", {
-        attachments: [
-          {
-            kind: "image",
-            name: "shot.png",
-            media_type: "image/png",
-            byte_len: 1024,
-            source: { type: "file", path: "/w/shot.png", resolved: true },
-            dimensions: { width: 2048, height: 1536 },
-          },
-        ],
-      }),
-    ]);
-    assert.equal(turn.prompt.text, "[Image #4] now look at this, they are stacking");
-    assert.equal(turn.prompt.attachments.length, 1);
-    assert.equal(turn.prompt.attachments[0].missing, false);
-    assert.equal(turn.prompt.attachments[0].caption, "2048×1536 · PNG");
-    assert.equal(
-      imageMarkerTargets(turn.prompt.text, turn.prompt.attachments).get("[Image #4]"),
-      turn.prompt.attachments[0],
-    );
-  });
-
-  it("pairs globally numbered markers with multiple images by occurrence", () => {
-    const refs = ["one.png", "two.png"].map((name) => ({
-      kind: "image",
-      name,
-      media_type: "image/png",
-      byte_len: 1024,
-      source: { type: "file", path: `/w/${name}`, resolved: true },
-      dimensions: null,
-    }));
-    const text = "compare [Image #4] with [Image #5]";
+  it("preserves unavailable slots, identity, dimensions and Unicode-scalar ranges", () => {
+    const text = "😀 [Image #4] compare [Image #5]";
+    const refs = [ref("missing", undefined, [{ start: 2, end: 12 }]), ref("recorded", {
+      type: "asset", asset: { url: "/assets/a.png", digest: "a", media_type: "image/png", byte_len: 1024 },
+    }, [{ start: 21, end: 31 }])];
     const { attachments } = readAttachments(text, refs);
-    const targets = imageMarkerTargets(text, attachments);
-    assert.equal(targets.get("[Image #4]"), attachments[0]);
-    assert.equal(targets.get("[Image #5]"), attachments[1]);
+    assert.equal(attachments[0].missing, true);
+    assert.equal(attachments[1].missing, false);
+    assert.equal(attachments[0].key, "missing");
+    assert.equal(attachments[0].caption, "2048×1536 · PNG");
+    const mentions = attachmentMentions(text, attachments);
+    assert.equal(mentions[0].target, attachments[0]);
+    assert.equal(mentions[0].start, 3);
+    assert.equal(text.slice(mentions[0].start, mentions[0].end), "[Image #4]");
+    assert.equal(mentions[1].target, attachments[1]);
   });
 
-  it("leaves prose that mentions no marker exactly as it was", () => {
-    const { text, attachments } = readAttachments("look at the [Image] in the docs", []);
-    assert.equal(text, "look at the [Image] in the docs");
-    assert.deepEqual(attachments, []);
+  it("does not guess local or global numbering or let overlapping spans select an image", () => {
+    const text = "[Image #4] and [Image #5]";
+    assert.deepEqual(attachmentMentions(text, readAttachments(text, [ref("one"), ref("two")]).attachments), []);
+    const conflicting = [ref("one", undefined, [{ start: 0, end: 10 }]), ref("two", undefined, [{ start: 2, end: 9 }])];
+    assert.deepEqual(attachmentMentions(text, readAttachments(text, conflicting).attachments), []);
+    const invalid = [ref("bad", undefined, [{ start: -1, end: 10 }, { start: 0, end: 999 }])];
+    assert.deepEqual(attachmentMentions(text, readAttachments(text, invalid).attachments), []);
+  });
+
+  it("a file reference is not a claim that historical image bytes were stored", () => {
+    const { attachments } = readAttachments(null, [ref("local", { type: "reference", reference: { type: "file", path: "/w/shot.png", resolved: true } })]);
+    assert.equal(attachments[0].missing, true);
+  });
+
+  it("a short slash prompt with an image keeps its attachment panel", () => {
+    const [turn] = documentTurns([prompt("/review", { attachments: [ref("input")] })]);
+    assert.equal(turn.prompt.isCommand, false);
+    assert.equal(turn.prompt.attachments.length, 1);
   });
 });
 
@@ -573,11 +549,12 @@ describe("documentTurns is honest about nothing", () => {
         text: null,
         attachments: [
           {
+            id: "report", label: null, message_ranges: [],
             kind: "file",
             name: "report.pdf",
             media_type: "application/pdf",
             byte_len: 10,
-            source: { type: "file", path: "/w/report.pdf", resolved: true },
+            source: { type: "reference", reference: { type: "file", path: "/w/report.pdf", resolved: true } },
             dimensions: null,
           },
         ],

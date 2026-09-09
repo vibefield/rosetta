@@ -49,15 +49,14 @@ import type { TurnPart } from "./document-plan";
 import { Ledger } from "./Ledger";
 import { GapMarker, Marker, SummaryNote, Watermark } from "./Marker";
 import { Compaction } from "./Compaction";
-import { Attachments, Prompt } from "./Prompt";
+import { Prompt } from "./Prompt";
 import { SegmentActs } from "./Prose";
-import { MessagePreview } from "./MessagePreview";
+import { AuthoredMessage } from "./AuthoredMessage";
 import { ResponseHead } from "./ResponseHead";
 import { Subthread } from "./Subthread";
 import type { ThreadFocus, ThreadIndex } from "./thread-index";
 import { messageDomId, sessionContains } from "./thread-index";
 import { ThoughtLine } from "./Thinking";
-import { canOpenAttachment } from "./attachment-file-source";
 import type { TeamReportWorkPresentation } from "./Team";
 import { KnownTeamRoster, TeamEvent, TeamWorkthread } from "./Team";
 
@@ -710,20 +709,10 @@ export function TranscriptDocument({
               timelineId={rowId}
               onReceipt={onReceipt}
             />
-            {segment.text !== null && (
-              <MessagePreview
-                messageKey={`${segment.row.session_id}:${rowId}`}
-                role="agent"
-                text={segment.text}
-                onReceipt={onReceipt}
-                imageAttachments={segment.attachments.filter(canOpenAttachment)}
-                onOpenAttachment={onOpenAttachment}
-              />
-            )}
-            <Attachments
-              facts={segment.attachments}
-              onOpenAttachment={onOpenAttachment}
-            />
+            <AuthoredMessage text={segment.text} attachments={segment.attachments}
+              recordedText={segment.row.body.type === "agent" ? segment.row.body.text : null}
+              messageKey={`${segment.row.session_id}:${rowId}`} role="agent"
+              onReceipt={onReceipt} onOpenAttachment={onOpenAttachment} />
             {segment.citationLabels.length > 0 && (
               <p className="tr-cites">
                 {segment.citationLabels.map((label, at) => (

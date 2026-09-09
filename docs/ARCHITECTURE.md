@@ -693,6 +693,134 @@ The `MetricSample` usage shape intentionally mirrors what chopsticks already rea
 `UsageRevisionV2Fact.buckets` (`input_tokens`, `output_tokens`,
 `cache_creation_input_tokens`, `cache_read_input_tokens`).
 
+### 4.1.2 Authored images (2026-09-09)
+
+**Implemented.** The nine-adapter audit and remaining native-capture evidence
+work are in [RESEARCH_PLAN.md §5.12](groundtruth/RESEARCH_PLAN.md#512-authored-image-audit-2026-09-09).
+The interactive presentation is in
+[the transcript record §06A](../clients/app/design/transcript-record.html#prompt-images).
+This section owns the attachment contract. Its generated wire types, projection schema,
+and affected adapter normalizer versions change together.
+
+The unit remains one authored message: `User { text, attachments }` or
+`Agent { text, attachments, citations }`. An image does not create another human
+turn, response head, tool interaction, or compaction notice. Attachment-only messages
+are valid. Classification happens before media extraction: an image inside a tool
+result, delegated message, or injected environment does not become a human upload.
+
+`AttachmentRef` and `ProjectionAsset` provide stored media and three reader-facing
+facts: stable attachment identity for live updates; exact links from prose to images;
+and a truthful tile when the
+record proves an image existed but provides no usable source. The shape is:
+
+```text
+AttachmentRef {
+  id: string,                       // stable within the owning message
+  kind: AttachmentKind,
+  label: string?,                   // source-proven reader label, if present
+  name: string?,                    // filename; separate from the label
+  media_type: string?,
+  byte_len: u64?,
+  dimensions: Dimensions?,
+  message_ranges: TextRange[],       // exact mentions in final canonical text
+  source: AttachmentSource
+}
+
+AttachmentSource =
+  Asset { asset: AssetRef }
+  | Reference { reference: ResourceRef }
+  | Unavailable { reason: NotRecorded | Omitted | InvalidData | UnsupportedMedia }
+```
+
+`Asset` retains today's asset reference. `Reference` retains a bounded recorded
+file/URL locator, not bytes and not a promise that today's resource matches history;
+an asset cannot be nested inside that variant. `Unavailable` needs no invented URL,
+file path, or asset digest. Its reason describes source evidence, never a transient
+HTTP failure. Existing kind/metadata validation still applies; all new strings and
+collections receive the core's corresponding scalar/id/collection bounds. This
+contract retains the PNG/JPEG/GIF/WebP image-member allowlist.
+
+Attachment identity is derived from a stable native part identity, or a deterministic
+source-block position when none exists. It is not a content digest: two uses of the
+same image keep two attachment slots while sharing one immutable blob. An invalid
+or omitted first image retains its slot; a later image never inherits its identity
+or label. A late asset can update that same slot only through an exact source-proven
+join in the same owning session/message. Joins and candidate payloads stay in RAM,
+reconstructed by affected-scope ledger replay.
+
+`label` is presentation metadata, not a parsing rule. The renderer falls back to
+“Image 1”, “Image 2”, etc. when labels are absent. `message_ranges` are zero-based,
+half-open Unicode-scalar ranges in the **final** canonical text (including text
+externalized as `CanonicalText`); they are sorted, non-overlapping, bounded by that
+text, and must not conflict across attachments. An adapter emits a range only when
+the native representation proves the binding. No binding means ordinary text, not
+an occurrence-order guess. The Markdown layer uses source positions to decorate
+those spans without interpreting vendor syntax, creating nested links, or altering
+code spans. A link to an unavailable slot focuses its explanation instead of opening
+another image. This has a named consumer: both the transcript and full-message viewer
+must open the same attachment from the same mention, including after a search landing.
+
+**Normalization and storage.** Each native adapter recognizes its own content blocks,
+transport delimiters, inline data encodings, and exact asset joins. A shared pure
+adapter-support helper accepts already-classified bytes/data URLs, validates encoding
+and supported media signatures, extracts dimensions from bounded headers when proven,
+and constructs `ProjectionAsset` plus metadata. It knows no vendor envelopes. Signature
+checks do not prove a complete image will decode; renderer decode errors remain a
+separate state. A malformed image preserves an unavailable slot with a bounded reason
+without discarding the prompt or exposing its bytes as prose. Native shape drift
+continues through each adapter's existing raw parser.
+
+The helper never reads a local path or fetches a URL. Source-only references remain
+references; capture of external bytes would need a separate, explicitly ledgered
+capture design. The original recorded bytes are retained without resizing or
+re-encoding. Content addressing, durability-before-reference, replay and serving
+continue through the existing asset path (§6). No new cache, asset journal, thumbnail
+table, Base64 field in canonical JSON, or frontend native parser is introduced.
+
+The adapter removes transport text only when structural evidence identifies it;
+human-authored quotations of the same syntax survive. Human text blocks retain their
+relative order, attachment slots retain their relative order, and the initial UI
+presents images together below the text within the prompt. That is an intentional
+gallery layout, not a claim to reproduce arbitrary text/image interleaving. The raw
+ledger remains available if a future consumer needs an ordered rich-content model.
+This feature adds no OCR, invented captions, or image-content search. Existing
+authored prose and attachment filenames remain the search inputs; labels, source
+wrappers, encoded bytes, and temporary-path transport are not injected into prose.
+
+**Activation.** The core union, generated protocol bindings, seven affected adapters,
+and shared renderer land together with projection/protocol/normalizer version bumps.
+The Codex content-block facet is rebuilt from its pinned writer intermediate. The
+other six use their existing canonical image fields; isolated native image captures
+remain explicit watch gaps. Rebuild from the ledger; do not migrate old rows or repair
+them with renderer regexes. Existing
+ledgers containing inline media can recover the image without the original temporary
+file. Evidence the ledger never captured cannot be recreated.
+OpenCode authored prompt identities now derive from the owning native message instead
+of a text part, so its old part-based prompt anchors change on replay.
+
+Acceptance requires fixture replay for text+image, image-only, several images,
+repeated bytes, missing first image, exact labels, literal markup, malformed encoding,
+unsupported media, reference-only content, tool media exclusion, and late/out-of-order
+asset joins. Verify deterministic ids and source-generation replacement, asset durability
+before publication, ledger-only replay, absence of encoded bytes from timeline/search
+JSON, and no new canonical reconciliation state. The renderer must pass whole-image
+previews at wide/narrow widths, long text with visible attachments, keyboard open/close
+and focus restoration, failed-load retry, paging/search landing, light/dark themes, and
+stable scroll geometry while images load. Runtime performance claims require the usual
+frozen paired campaign; this implementation makes none.
+
+`crates/pipeline/tests/authored_images.rs` exercises durability before publication and
+rebuild into fresh assets after deleting the captured native files and original assets.
+Adapter conformance tests cover occurrence identity, invalid/missing inputs, exact
+bindings, checkpointed joins and replacement snapshots. These synthetic inputs are
+tests of the pinned grammar, not substitutes for native fixture captures.
+`clients/app/test/prompt-images.html` mounts the production transcript and nested file
+viewer with seven synthetic cases. Run it from `clients/app` using
+`npm run dev:web -- --config test/prompt-images.vite.config.ts`. It includes a one-shot
+HTTP failure for Retry, inline and externally stored long-message links, an unavailable
+first image and a theme switch. Opening an externally stored message reads its immutable
+text member rather than presenting the saved preview as the full message.
+
 ### 4.2 Normalization is a pure, versioned function
 
 ```rust

@@ -200,7 +200,7 @@ impl IngestOp {
     /// before its row; ledger-only system/context records produce no message.
     /// Usage on an otherwise invisible response becomes a session sample so
     /// narrowing can never erase accounting facts.
-    pub fn project_message(row: MessageRow) -> Vec<Self> {
+    pub fn project_message(mut row: MessageRow) -> Vec<Self> {
         let fallback_usage = usage_only(&row);
         if matches!(
             row.subtype.as_deref(),
@@ -223,6 +223,24 @@ impl IngestOp {
         }
 
         let mut assets = Vec::new();
+        // Range offsets describe Unicode scalars in the complete authored text,
+        // including when that text is externalized below. A bad annotation must
+        // never point into a preview or erase the owning message/image.
+        if row
+            .attachments
+            .iter()
+            .any(|attachment| !attachment.message_ranges.is_empty())
+        {
+            let len = row
+                .content
+                .as_deref()
+                .map_or(0, |text| text.chars().count());
+            for attachment in &mut row.attachments {
+                attachment
+                    .message_ranges
+                    .retain(|range| range.start < range.end && range.end as usize <= len);
+            }
+        }
         let content = nonempty(row.content).map(|content| {
             let (text, asset) = crate::CanonicalText::externalize(content);
             if let Some(asset) = asset {

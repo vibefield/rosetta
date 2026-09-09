@@ -682,6 +682,72 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
   .tr-meta-row { gap: 7px; padding-right: 6px; padding-left: 6px; }
 }
 </style>
+<style id="prompt-image-design">
+/* §06A · proposed 2026-09-09. Scoped specimens; shipping attachment CSS is unchanged. */
+.im-review { margin: 22px 0 12px; border: 1px solid var(--vf-hairline-strong); border-radius: 12px; background: var(--vf-sheet-surface); overflow: hidden; }
+.im-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--vf-hairline); }
+.im-tabs { display: flex; flex-wrap: wrap; gap: 3px; }
+.im-tabs button, .im-width, .im-viewer button { min-height: 30px; padding: 4px 10px; border: 0; border-radius: 7px; background: none; color: var(--vf-text-secondary); font: 12px var(--vf-font-sans); cursor: pointer; }
+.im-tabs button[aria-selected="true"] { background: var(--vf-fill); color: var(--vf-text-primary); }
+.im-width { margin-left: auto; box-shadow: inset 0 0 0 1px var(--vf-hairline-strong); }
+.im-width[aria-pressed="true"] { background: var(--vf-fill); color: var(--vf-text-primary); }
+.im-review button:focus-visible, .im-viewer button:focus-visible, .im-unavailable:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 3px; }
+.im-stage { width: 100%; max-width: 760px; margin: 0 auto; container: image-prompt / inline-size; }
+.im-stage[data-narrow="true"] { max-width: 360px; }
+.im-stage .tr { padding: 30px 24px 24px; }
+.im-stage .tr-prompt { display: block; }
+.im-stage .tr-resp { margin-top: 24px; }
+.im-note { margin: 0; padding: 14px 18px; border-top: 1px solid var(--vf-hairline); color: var(--vf-text-tertiary); font-size: 12px; line-height: 1.55; }
+.im-live { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.im-link { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; text-decoration-color: var(--vf-hairline-strong); text-underline-offset: 3px; cursor: pointer; }
+.im-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; max-width: 480px; margin-top: 14px; }
+.im-gallery[data-single="true"] { grid-template-columns: minmax(0, 1fr); max-width: 360px; }
+.im-gallery figure { min-width: 0; margin: 0; }
+.im-tile { display: grid; place-items: center; width: 100%; height: 156px; padding: 8px; box-sizing: border-box; border: 1px solid var(--vf-hairline-strong); border-radius: 8px; background: var(--vf-chrome-solid); overflow: hidden; cursor: zoom-in; }
+.im-gallery[data-single="true"] .im-tile { height: auto; aspect-ratio: 3 / 2; max-height: 240px; }
+.im-tile svg { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.im-tile:hover { border-color: var(--vf-text-faint); }
+.im-gallery figcaption { display: grid; gap: 1px; margin-top: 6px; color: var(--vf-text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; line-height: 1.45; }
+.im-gallery figcaption strong { font-weight: 500; color: var(--vf-text-secondary); }
+.im-unavailable { cursor: default; border-style: dashed; background: none; text-align: center; align-content: center; gap: 5px; color: var(--vf-text-secondary); }
+.im-unavailable b { font-size: 12px; font-weight: 500; }
+.im-unavailable span { max-width: 24ch; font-size: 11px; color: var(--vf-text-tertiary); line-height: 1.45; }
+.im-unavailable .im-retry { margin-top: 5px; padding: 4px 10px; border: 1px solid var(--vf-hairline-strong); border-radius: 6px; background: var(--vf-chrome-solid); color: var(--vf-text-secondary); font: 11px var(--vf-font-sans); cursor: pointer; }
+.im-more { grid-column: 1 / -1; justify-self: start; min-height: 28px; padding: 2px 0; border: 0; background: none; color: var(--vf-text-secondary); font: 12px var(--vf-font-sans); text-decoration: underline; text-decoration-color: var(--vf-hairline-strong); text-underline-offset: 3px; cursor: pointer; }
+.im-quiet { margin: 9px 0; color: var(--vf-text-tertiary); font-size: 12px; }
+.im-quiet summary { cursor: pointer; width: fit-content; }
+.im-quiet p { margin: 8px 0 0 15px; }
+.im-long { max-height: 21.7em; overflow: hidden; position: relative; }
+.im-long::after { content: ""; position: absolute; height: 3em; bottom: 0; inset-inline: 0; background: linear-gradient(transparent, var(--vf-fill)); pointer-events: none; }
+.im-preview-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--vf-hairline-strong); font-size: 10.5px; color: var(--vf-text-tertiary); }
+.im-preview-foot button { margin-left: auto; font-size: 11px; }
+.im-viewer { width: min(920px, calc(100vw - 32px)); max-width: none; max-height: 86vh; padding: 0; border: 1px solid var(--vf-hairline-strong); border-radius: 14px; background: var(--vf-chrome-solid); color: var(--vf-text-primary); box-shadow: var(--vf-shadow-island); }
+.im-viewer::backdrop { background: rgb(0 0 0 / 36%); }
+.im-viewer header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--vf-hairline); }
+.im-viewer h3 { margin: 0; font-size: 13px; font-weight: 500; }
+.im-viewer header p { margin: 2px 0 0; font-size: 11px; color: var(--vf-text-tertiary); }
+.im-viewer .im-close { margin-left: auto; }
+.im-viewer-tools { display: flex; gap: 5px; padding: 8px 16px; border-bottom: 1px solid var(--vf-hairline); }
+.im-viewer button[aria-pressed="true"] { background: var(--vf-fill); }
+.im-viewer-content { height: min(590px, 64vh); overflow: auto; background: var(--vf-canvas-bg); padding: 20px; box-sizing: border-box; }
+.im-viewer-content[data-mode="image"] { display: grid; place-items: center; }
+.im-viewer-content > svg { display: block; width: 100%; height: 100%; max-height: 100%; }
+.im-viewer-content[data-scale="actual"] { display: block; }
+.im-viewer-content[data-scale="actual"] > svg { width: var(--im-image-width); height: var(--im-image-height); max-width: none; max-height: none; }
+.im-viewer-content[data-mode="text"] { padding: 24px max(24px, calc((100% - 68ch) / 2)); font-size: 14px; line-height: 1.6; }
+.im-viewer-content[data-mode="text"] p { margin: 0 0 16px; }
+.im-viewer-tools[hidden] { display: none; }
+.im-contract { margin: 18px 0 24px; padding: 14px 18px; border: 1px solid var(--vf-hairline-strong); border-radius: 10px; background: var(--vf-chrome-solid); overflow: auto; color: var(--vf-text-secondary); font: 12px/1.65 var(--vf-font-mono); }
+@container image-prompt (max-width: 410px) {
+  .im-gallery { grid-template-columns: minmax(0, 1fr); }
+  .im-stage .tr { padding: 24px 16px; }
+}
+@media (max-width: 600px) {
+  #prompt-images { scroll-margin-top: 12px; }
+  .im-review { margin-inline: -16px; }
+  .im-controls { padding-inline: 10px; }
+}
+</style>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="g-read" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5.5L13 6v7.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z"/><path d="M9.5 2.5V6H13"/></symbol>
@@ -726,6 +792,7 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
     <span><b>Parent</b> <code>protos/agent-history-proto/design-agent-history.md</code> §5 · <code>vibe-field/DESIGN.md</code></span>
     <span><b>Companion code</b> <code>clients/app/renderer/src/components/Transcript.tsx</code> · <code>lib/model.ts</code> · <code>styles/room.css</code></span>
     <span><b>Status</b> the original record is locked (§12); §04A is revised against the Claude delegated-work census—Agent workers, Agent Teams and Workflows—and its standing-doc delta is appended in §10</span>
+    <span><b>New proposal · 2026-09-09</b> <a href="#prompt-images">§06A · Prompt images — interactive design and normalization contract</a></span>
   </div>
 </header>
 
@@ -1520,6 +1587,103 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
   <li><i>·</i><span><b>A change without a diff.</b> <code>Changed</code> when the operation is unproven, <em>no diff recorded</em> when the source kept none. Absence is stated, never faked with a zero.</span></li>
   <li><i>·</i><span><b>A missing image.</b> The dashed tile with its facts — the record's placeholder rule — instead of the injected <code>[Image: …]</code> sentence the pipeline currently lets through.</span></li>
 </ul>
+<section class="rec" id="prompt-images">
+  <span class="eyebrow">§06A · implemented 2026-09-09 · authored images</span>
+  <h2>The image belongs to the prompt</h2>
+  <p class="lead">Read the question and see what it points to, together. A screenshot is part of the human's message; it should not arrive as a path, a transport tag, or another turn.</p>
+  <p>The reported Codex record contains the image bytes. Its adapter now preserves those bytes and removes only structurally proven transport delimiters. Seven adapters with known image-input fields share the attachment contract; references and missing bytes keep an honest unavailable tile. The <a href="../../../docs/groundtruth/RESEARCH_PLAN.md#512-authored-image-audit-2026-09-09">evidence matrix</a> separates implemented writer shapes from native-capture gaps.</p>
+  <p><strong>Layout.</strong> The prompt keeps its one filled panel. Its text comes first, followed by ordered image previews. A single image gets up to 360×240px; several share a two-column grid that becomes one column in a narrow room. Every preview contains the whole image. A press opens the existing image viewer; Escape returns to the same point in the conversation.</p>
+</section>
+<div class="im-review" id="image-review">
+  <div class="im-controls">
+    <div class="im-tabs" role="tablist" aria-label="Prompt image examples">
+      <button type="button" role="tab" id="im-tab-single" aria-controls="im-panel" aria-selected="true" data-image-case="single">One image</button>
+      <button type="button" role="tab" id="im-tab-many" aria-controls="im-panel" aria-selected="false" tabindex="-1" data-image-case="many">Several images</button>
+      <button type="button" role="tab" id="im-tab-only" aria-controls="im-panel" aria-selected="false" tabindex="-1" data-image-case="only">Image only</button>
+      <button type="button" role="tab" id="im-tab-missing" aria-controls="im-panel" aria-selected="false" tabindex="-1" data-image-case="missing">Not stored</button>
+      <button type="button" role="tab" id="im-tab-error" aria-controls="im-panel" aria-selected="false" tabindex="-1" data-image-case="error">Load error</button>
+      <button type="button" role="tab" id="im-tab-long" aria-controls="im-panel" aria-selected="false" tabindex="-1" data-image-case="long">Long prompt</button>
+    </div>
+    <button class="im-width" type="button" id="im-width" aria-pressed="false">Narrow column</button>
+  </div>
+  <div class="im-stage" id="im-stage" data-narrow="false">
+    <div class="tr" id="im-panel" role="tabpanel" aria-labelledby="im-tab-single" tabindex="0"></div>
+  </div>
+  <p class="im-note" id="im-note"></p>
+  <span class="im-live" id="im-live" role="status"></span>
+</div>
+<p class="cap">Interactive design specimen with synthetic images. Try a thumbnail or its text link, <b>100%</b> in the viewer, Escape, a missing first image, Retry, and the narrow column. The production viewer remains the implementation home; this page models its open/close and fit behavior.</p>
+<table class="laws">
+  <tr><td>I-1</td><td>One message, ordered slots.</td><td>Text and images share the prompt and its anchor. An image-only prompt has no invented sentence. Repeated image bytes can share an asset, but remain distinct attachment occurrences. The gallery keeps attachment order; it does not reproduce arbitrary text/image interleaving.</td></tr>
+  <tr><td>I-2</td><td>See the whole image.</td><td>Fit inside the preview without cropping. Reserve the tile's geometry before loading, lazy-load offscreen bytes, and show only recorded or decoded facts. Portrait images keep their aspect ratio. Up to four previews are shown initially; <em>Show all N images</em> reveals the rest without changing the prompt's text.</td></tr>
+  <tr><td>I-3</td><td>Labels point exactly.</td><td>A proven image mention opens its own attachment. Missing image 1 cannot make image 2 become its target. An unavailable mention focuses the matching explanation. Unproven labels stay plain text. Filenames are secondary metadata; transport paths and tags are removed only by the native adapter when the structure proves their role.</td></tr>
+  <tr><td>I-4</td><td>Absence has a reason.</td><td><em>Image data was not recorded</em> covers a recorded reference or missing bytes. <em>Image omitted from the recording</em> requires explicit source evidence. <em>Recorded image data is invalid</em> and <em>Image format is not supported</em> describe other source states. A transient <em>Could not load image</em> keeps the same slot and offers Retry. Missing source bytes have no misleading Retry button.</td></tr>
+  <tr><td>I-5</td><td>Keep the context visible.</td><td>Images stay outside the long-text preview's height cap. Activity folds never hide a user attachment. Tool runs still close by default when they contain a single line; questions to the reader stay visible. No new response head or activity disclosure is introduced for an upload.</td></tr>
+  <tr><td>I-6</td><td>Use the room's viewer.</td><td>Thumbnail buttons and exact text mentions share one open action. Give each an accessible label, retain original bytes, allow fit/zoom in the viewer, and restore focus without moving the transcript. No remote image fetch or attempt to open today's temporary file is implied by a historical reference.</td></tr>
+</table>
+<section class="rec">
+  <h3>The normalization contract</h3>
+  <p>Keep the existing <code>User { text, attachments }</code> model. Extend each attachment with stable identity, a source-proven display label, exact text-mention ranges, and a source union: stored asset, recorded reference, or unavailable with a bounded reason. The same attachment contract serves agent-authored images when the native source proves that ownership.</p>
+</section>
+<pre class="im-contract">One canonical user message
+  text: the user's prose, in order
+  attachments:
+    image · stable slot · optional exact label and text ranges
+      → asset: stored bytes, served by Rosetta
+      → reference: recorded locator, no stored image
+      → unavailable: not recorded / omitted / invalid / unsupported
+
+Native adapter → shared media helper → existing projection assets → prompt + viewer</pre>
+<section class="rec">
+  <p>The <a href="../../../docs/ARCHITECTURE.md#412-authored-images-2026-09-09">architecture contract</a> defines validation, exact joins, replay and activation. Native decoding stays in Rust adapters; shared code validates bytes and creates content-addressed assets; the view consumes generated types. No encoded image bytes or vendor-wrapper parser belongs in the React message layer.</p>
+  <h3>Implementation and evidence</h3>
+  <ol>
+    <li>The Codex content-block facet is refreshed from its pinned writer. All seven applicable adapters have conformance tests; their watch records still call out the missing isolated native image captures.</li>
+    <li>The shared attachment extension and pure byte helper preserve unavailable slots and exact ownership. Copilot assets join by session-scoped native id; OpenCode parts assemble by their owning message.</li>
+    <li>Prompts, replies and full messages use one gallery and exact source-span renderer. Frontend transport-marker recovery and occurrence-order link guessing are removed.</li>
+    <li>Projection, protocol and normalizer versions are bumped together. Pipeline tests check durable assets and ledger-only reconstruction without native image files. Existing archives need the matching daemon and projection rebuild.</li>
+  </ol>
+  <p><strong>Status:</strong> implemented in the production message view. The interactive page remains the design record. <code>test/prompt-images.html</code> mounts the real components with seven synthetic cases, including a full message stored separately from its preview; run it from <code>clients/app</code> with <code>npm run dev:web -- --config test/prompt-images.vite.config.ts</code>.</p>
+  <p><strong>Production checks, 2026-09-09:</strong> whole-image previews, one- and two-column layouts, light/dark themes, long-message attachments and exact links, missing-first-image focus, viewer Fit/1:1, Escape focus restoration, and retry with unchanged frame geometry. The reported Codex image also replays byte-for-byte from the ledger without its temporary file. Synthetic normalization and replay tests supplement native captures; they do not claim complete image-input coverage for every agent.</p>
+</section>
+<dialog class="im-viewer" id="im-viewer" aria-labelledby="im-viewer-title" aria-describedby="im-viewer-facts">
+  <header><div><h3 id="im-viewer-title">Image</h3><p id="im-viewer-facts"></p></div><button type="button" class="im-close" id="im-close" autofocus>Close <span aria-hidden="true">×</span></button></header>
+  <div class="im-viewer-tools" id="im-viewer-tools" role="group" aria-label="Image scale"><button type="button" data-image-scale="fit" aria-pressed="true">Fit</button><button type="button" data-image-scale="actual" aria-pressed="false">100%</button></div>
+  <div class="im-viewer-content" id="im-viewer-content" data-mode="image" data-scale="fit"></div>
+</dialog>
+<template id="im-screenshot">
+  <svg viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Synthetic transcript screenshot with folded command activity" preserveAspectRatio="xMidYMid meet">
+    <rect width="760" height="480" rx="12" fill="#fafafa"/>
+    <rect x="28" y="28" width="704" height="44" rx="8" fill="#efeff3"/>
+    <text x="46" y="56" fill="#6b6b70" font-family="system-ui,sans-serif" font-size="16">History</text>
+    <text x="622" y="56" fill="#8e8e93" font-family="system-ui,sans-serif" font-size="14">Today</text>
+    <rect x="64" y="106" width="602" height="58" rx="10" fill="#f0f0f4"/>
+    <text x="82" y="141" fill="#303034" font-family="system-ui,sans-serif" font-size="19">Check the message view and keep tool details folded.</text>
+    <text x="64" y="213" fill="#8e8e93" font-family="system-ui,sans-serif" font-size="13" letter-spacing="1">AGENT</text>
+    <text x="64" y="246" fill="#303034" font-family="system-ui,sans-serif" font-size="18">I checked the transcript and its activity groups.</text>
+    <path d="m70 280 5 5-5 5M70 315l5 5-5 5" stroke="#929296" stroke-width="2" fill="none"/>
+    <text x="90" y="291" fill="#909095" font-family="system-ui,sans-serif" font-size="16">Ran 2 commands · inspected the transcript</text>
+    <text x="90" y="326" fill="#909095" font-family="system-ui,sans-serif" font-size="16">Ran git log · checked the latest changes</text>
+    <text x="64" y="377" fill="#303034" font-family="system-ui,sans-serif" font-size="18">Both groups stay closed until you open them.</text>
+    <path d="M64 418h408M64 440h315" stroke="#e4e4e9" stroke-width="8" stroke-linecap="round"/>
+  </svg>
+</template>
+<template id="im-portrait">
+  <svg viewBox="0 0 360 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Synthetic portrait interface screenshot, shown without cropping" preserveAspectRatio="xMidYMid meet">
+    <rect width="360" height="780" rx="20" fill="#f7f7fa"/>
+    <rect x="18" y="18" width="324" height="52" rx="12" fill="#eaeaf0"/>
+    <text x="38" y="51" fill="#303034" font-family="system-ui,sans-serif" font-size="18">History · mobile</text>
+    <rect x="24" y="98" width="312" height="116" rx="12" fill="#eaeaf0"/>
+    <text x="42" y="130" fill="#303034" font-family="system-ui,sans-serif" font-size="16">Keep the full screenshot</text>
+    <text x="42" y="157" fill="#303034" font-family="system-ui,sans-serif" font-size="16">visible, including this</text>
+    <text x="42" y="184" fill="#303034" font-family="system-ui,sans-serif" font-size="16">portrait view.</text>
+    <text x="24" y="267" fill="#8e8e93" font-family="system-ui,sans-serif" font-size="12">AGENT</text>
+    <path d="M24 300h290M24 327h256M24 354h272M24 407h282M24 434h237M24 461h266M24 514h291M24 541h255" stroke="#d9d9e0" stroke-width="8" stroke-linecap="round"/>
+    <rect x="24" y="597" width="312" height="105" rx="12" fill="#eaeaf0"/>
+    <text x="43" y="642" fill="#6b6b70" font-family="system-ui,sans-serif" font-size="16">The bottom is still visible.</text>
+    <path d="M131 752h98" stroke="#77777f" stroke-width="5" stroke-linecap="round"/>
+  </svg>
+</template>
 <section class="rec">
   <span class="eyebrow">§07</span>
   <h2>Time — days and sittings</h2>
@@ -2188,4 +2352,144 @@ and drive it with `browser-use run &lt;url&gt;`.</pre></div>
 })();
 </script>
 
+<script>
+/* §06A is a synthetic presentation prototype, not a native transcript parser. */
+(function () {
+  var review = document.getElementById('image-review');
+  var panel = document.getElementById('im-panel');
+  var note = document.getElementById('im-note');
+  var live = document.getElementById('im-live');
+  var stage = document.getElementById('im-stage');
+  var dialog = document.getElementById('im-viewer');
+  var viewerContent = document.getElementById('im-viewer-content');
+  var viewerTools = document.getElementById('im-viewer-tools');
+  var tabs = Array.from(review.querySelectorAll('[data-image-case]'));
+  var current = 'single', expanded = false, recovered = false, returnFocus = null;
+  var longParagraphs = [
+    'Review these two versions of the message view. The prompt should make it easy to connect a question with the screenshot that accompanied it. Keep the original image available when the reader needs to inspect a small detail.',
+    'In the wide view, compare the spacing above the response, the command summaries, and the gap between the last activity row and the answer. In the narrow view, check that the prompt remains readable and that no control covers its text.',
+    'Please consider long screenshots as well as landscape images. Seeing the top and bottom matters: a crop can hide the very issue the person is asking about. A smaller complete preview is useful if opening it takes one press.',
+    'Some older conversations may have retained only a reference to an image. Keep its place in the prompt and explain what is available. If one of two images is missing, the second image should keep its original identity and label.',
+    'Long messages should still show their attached images beside the text preview. Reading the full message is a separate action from inspecting its screenshot. Closing either viewer should return to the same place without moving the conversation.',
+    'Check keyboard access as well as mouse use. The reader should be able to reach a thumbnail, open the viewer, inspect the whole image, and press Escape to return. Loading and retry states should preserve the layout throughout.'
+  ];
+  var longText = longParagraphs.join('\n\n');
+  var image = function (label, mock, name, status) {
+    return { label: label, mock: mock, name: name, status: status || 'asset',
+      facts: mock === 'portrait' ? '360×780 · PNG' : '760×480 · PNG' };
+  };
+  var single = image('Image 1', 'screenshot', 'transcript.png');
+  var portrait = image('Image 2', 'portrait', 'mobile.png');
+  var cases = {
+    single: { text: '<p><button type="button" class="im-link" data-image-open="0">[Image #1]</button> can we always fold second level messages even when they are single?</p>', images: [single],
+      note: 'The image bytes were recorded. Only the adapter-owned transport delimiters disappear; the question and its exact image mention remain. The preview shows the whole image.',
+      reply: 'Single tool runs use the same collapsed summary as longer runs.' },
+    many: { text: '<p>Compare <button type="button" class="im-link" data-image-open="0">[Image #1]</button> with <button type="button" class="im-link" data-image-open="1">[Image #2]</button>, then check the other variants.</p>',
+      images: [single, portrait, image('Image 3', 'screenshot', 'variant-three.png'), image('Image 4', 'portrait', 'variant-four.png'), image('Image 5', 'screenshot', 'variant-five.png'), image('Image 6', 'portrait', 'variant-six.png')],
+      note: 'Four previews initially; Show all reveals the remaining images in order. Portrait images fit without cropping. Reusing the same bytes does not collapse attachment occurrences.',
+      reply: 'I can inspect each image while keeping its place in the comparison.' },
+    only: { text: '', images: [image('Image 1', 'portrait', 'mobile.png')],
+      note: 'An image-only prompt is complete. It gets the usual prompt panel and anchor, with no invented “no text recorded” sentence.',
+      reply: 'The screenshot stays attached to this turn.' },
+    missing: { text: '<p>Compare <button type="button" class="im-link" data-image-open="0">[Image #1]</button> with <button type="button" class="im-link" data-image-open="1">[Image #2]</button>.</p>',
+      images: [image('Image 1', 'screenshot', 'reference.png', 'reference'), portrait],
+      note: 'Image 1 has only a recorded reference. Its mention focuses that explanation. Image 2 still opens Image 2; no count-based reassignment or temporary-file lookup occurs.',
+      reply: 'Only the second image is available to inspect in this record.' },
+    error: { text: '<p>Check the spacing in <button type="button" class="im-link" data-image-open="0">[Image #1]</button>.</p>',
+      images: [image('Image 1', 'screenshot', 'transcript.png', 'load-error')],
+      note: 'This image has a stored asset, but the preview failed to load. Retry simulates a successful next request in this prototype; the same tile keeps its geometry.',
+      reply: 'The recorded image remains part of the prompt while the preview retries.' },
+    long: { text: '<div class="im-long">' + longParagraphs.map(function (p) { return '<p>' + p + '</p>'; }).join('') + '</div><div class="im-preview-foot"><span>Preview · ' + longText.length.toLocaleString() + ' characters</span><button type="button" class="im-link" data-full-prompt>View full message ↗</button></div>',
+      images: [single, portrait], note: 'The long-text preview and image gallery are siblings. The height cap applies only to text, so the images remain visible without opening the full message.',
+      reply: 'The gallery remains available below the message preview.' }
+  };
+  function statusOf(item) { return current === 'error' && recovered ? 'asset' : item.status; }
+  function renderGallery() {
+    var items = cases[current].images;
+    var gallery = document.getElementById('im-gallery');
+    gallery.dataset.single = String(items.length === 1);
+    gallery.replaceChildren();
+    items.slice(0, expanded ? items.length : 4).forEach(function (item, index) {
+      var figure = document.createElement('figure');
+      var state = statusOf(item);
+      if (state === 'asset') {
+        var button = document.createElement('button');
+        button.type = 'button'; button.className = 'im-tile'; button.dataset.imageOpen = String(index);
+        button.setAttribute('aria-label', 'Open ' + item.label); button.title = item.name;
+        button.appendChild(document.getElementById('im-' + item.mock).content.cloneNode(true));
+        figure.appendChild(button);
+      } else {
+        var missing = document.createElement('div'); missing.className = 'im-tile im-unavailable';
+        missing.id = 'im-missing-' + index; missing.tabIndex = -1;
+        missing.setAttribute('aria-label', item.label + (state === 'reference' ? ': image not stored; only a reference was recorded' : ': could not load image'));
+        missing.innerHTML = state === 'reference'
+          ? '<b>Image not stored</b><span>Only a reference was recorded.</span>'
+          : '<b>Couldn’t load image</b><span>The recorded asset could not be displayed.</span><button class="im-retry" type="button" data-image-retry>Retry</button>';
+        figure.appendChild(missing);
+      }
+      var caption = document.createElement('figcaption');
+      var label = document.createElement('strong'); label.textContent = item.label;
+      var facts = document.createElement('span'); facts.textContent = state === 'reference' ? 'reference.png' : item.facts;
+      caption.append(label, facts); figure.appendChild(caption); gallery.appendChild(figure);
+    });
+    if (items.length > 4) {
+      var more = document.createElement('button'); more.type = 'button'; more.className = 'im-more'; more.dataset.imageMore = '';
+      more.setAttribute('aria-expanded', String(expanded));
+      more.textContent = expanded ? 'Show fewer images' : 'Show all ' + items.length + ' images';
+      gallery.appendChild(more);
+    }
+  }
+  function renderCase(key) {
+    current = key; expanded = false; recovered = false;
+    tabs.forEach(function (tab) { var on = tab.dataset.imageCase === key; tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1; });
+    panel.setAttribute('aria-labelledby', 'im-tab-' + key);
+    panel.innerHTML = '<div class="tr-turn"><div class="tr-prompt">' + cases[key].text + '<div class="im-gallery" id="im-gallery"></div></div><div class="tr-resp"><div class="tr-head">Agent <span class="model">response</span></div><details class="im-quiet"><summary>Ran git log · checked recent changes</summary><p>One activity line. Its command details open separately in the app.</p></details><div class="tr-prose"><p>' + cases[key].reply + '</p></div></div></div>';
+    note.textContent = cases[key].note; live.textContent = ''; renderGallery();
+  }
+  function scale(mode) {
+    viewerContent.dataset.scale = mode;
+    viewerTools.querySelectorAll('button').forEach(function (button) { button.setAttribute('aria-pressed', String(button.dataset.imageScale === mode)); });
+  }
+  function openImage(index, trigger) {
+    var item = cases[current].images[index]; if (!item) return;
+    if (statusOf(item) !== 'asset') { var explanation = document.getElementById('im-missing-' + index); if (explanation) explanation.focus(); return; }
+    returnFocus = trigger; viewerContent.replaceChildren();
+    document.getElementById('im-viewer-title').textContent = item.label + ' · ' + item.name;
+    document.getElementById('im-viewer-facts').textContent = item.facts + ' · synthetic specimen';
+    viewerContent.dataset.mode = 'image'; viewerTools.hidden = false;
+    viewerContent.style.setProperty('--im-image-width', item.mock === 'portrait' ? '360px' : '760px');
+    viewerContent.style.setProperty('--im-image-height', item.mock === 'portrait' ? '780px' : '480px');
+    viewerContent.appendChild(document.getElementById('im-' + item.mock).content.cloneNode(true));
+    scale('fit'); dialog.showModal(); viewerContent.scrollTop = 0; viewerContent.scrollLeft = 0;
+  }
+  review.addEventListener('click', function (event) {
+    var tab = event.target.closest('[data-image-case]'); if (tab) { renderCase(tab.dataset.imageCase); return; }
+    var open = event.target.closest('[data-image-open]'); if (open) { openImage(Number(open.dataset.imageOpen), open); return; }
+    if (event.target.closest('[data-image-more]')) { expanded = !expanded; renderGallery(); review.querySelector('[data-image-more]').focus({ preventScroll: true }); return; }
+    if (event.target.closest('[data-image-retry]')) { recovered = true; renderGallery(); review.querySelector('.im-tile[data-image-open]').focus({ preventScroll: true }); live.textContent = 'Image 1 loaded.'; return; }
+    var full = event.target.closest('[data-full-prompt]');
+    if (full) {
+      returnFocus = full; viewerContent.replaceChildren(); viewerContent.dataset.mode = 'text'; viewerTools.hidden = true; scale('fit');
+      document.getElementById('im-viewer-title').textContent = 'Full message';
+      document.getElementById('im-viewer-facts').textContent = longText.length.toLocaleString() + ' characters · synthetic specimen';
+      longParagraphs.forEach(function (p) { var paragraph = document.createElement('p'); paragraph.textContent = p; viewerContent.appendChild(paragraph); });
+      dialog.showModal(); viewerContent.scrollTop = 0;
+    }
+  });
+  tabs.forEach(function (tab, index) {
+    tab.addEventListener('keydown', function (event) {
+      var next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null;
+      if (next === null) return; event.preventDefault(); renderCase(tabs[next].dataset.imageCase); tabs[next].focus();
+    });
+  });
+  document.getElementById('im-width').addEventListener('click', function (event) {
+    var narrow = stage.dataset.narrow !== 'true'; stage.dataset.narrow = String(narrow);
+    event.currentTarget.setAttribute('aria-pressed', String(narrow));
+  });
+  viewerTools.addEventListener('click', function (event) { var button = event.target.closest('[data-image-scale]'); if (button) scale(button.dataset.imageScale); });
+  document.getElementById('im-close').addEventListener('click', function () { dialog.close(); });
+  dialog.addEventListener('close', function () { if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true }); });
+  renderCase('single');
+})();
+</script>
 </html>

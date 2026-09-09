@@ -77,15 +77,17 @@ function findClose(text: string, from: number, mark: string): number {
  *   is a real and common way to write a README line, and autolinking the label
  *   puts an `<a>` inside an `<a>` — markup no browser is obliged to keep.
  */
-export function parseInline(text: string, insideLink = false): readonly Inline[] {
+export function parseInline(text: string, insideLink = false, source?: readonly number[]): readonly Inline[] {
   const out: Inline[] = [];
   let plain = "";
+  let positions: number[] = [];
   let index = 0;
 
   const flush = (): void => {
     if (plain === "") return;
-    out.push({ type: "text", value: plain });
+    out.push({ type: "text", value: plain, ...(source === undefined ? {} : { source: positions }) });
     plain = "";
+    positions = [];
   };
   const push = (node: Inline): void => {
     flush();
@@ -98,6 +100,7 @@ export function parseInline(text: string, insideLink = false): readonly Inline[]
 
     if (char === "\\" && index + 1 < text.length && /[\\`*_{}[\]()#+\-.!<>~|]/.test(text[index + 1])) {
       plain += text[index + 1];
+      if (source !== undefined) positions.push(source[index + 1]);
       index += 2;
       continue;
     }
@@ -158,7 +161,7 @@ export function parseInline(text: string, insideLink = false): readonly Inline[]
     if (delimiter !== undefined) {
       const close = findClose(text, index + delimiter.mark.length, delimiter.mark);
       if (close !== -1) {
-        const inner = parseInline(text.slice(index + delimiter.mark.length, close), insideLink);
+        const inner = parseInline(text.slice(index + delimiter.mark.length, close), insideLink, source?.slice(index + delimiter.mark.length, close));
         // `***bold italic***` is one mark carrying two, and nesting it here
         // keeps the delimiter table flat.
         push(
@@ -172,6 +175,7 @@ export function parseInline(text: string, insideLink = false): readonly Inline[]
     }
 
     plain += char;
+    if (source !== undefined) positions.push(source[index]);
     index += 1;
   }
 
@@ -181,11 +185,11 @@ export function parseInline(text: string, insideLink = false): readonly Inline[]
 
 /** Split a paragraph's lines into inline nodes, honouring the two ways
  * markdown spells a hard break. */
-export function parseInlineLines(lines: readonly string[]): readonly Inline[] {
+export function parseInlineLines(lines: readonly string[], sources?: readonly (readonly number[])[]): readonly Inline[] {
   const out: Inline[] = [];
   lines.forEach((line, index) => {
     const hard = /(?: {2,}|\\)$/.test(line);
-    out.push(...parseInline(hard ? line.replace(/(?: {2,}|\\)$/, "") : line.trimEnd()));
+    out.push(...parseInline(hard ? line.replace(/(?: {2,}|\\)$/, "") : line.trimEnd(), false, sources?.[index]));
     if (index === lines.length - 1) return;
     out.push(hard ? { type: "break" } : { type: "text", value: " " });
   });

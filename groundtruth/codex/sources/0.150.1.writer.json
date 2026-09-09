@@ -88,6 +88,112 @@
       },
       "facets": [
         {
+          "id": "content-blocks",
+          "path": "response_item.payload.content[] (ContentItem)",
+          "discriminator": "type",
+          "notes": "Pinned writer: https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/models.rs ContentItem and local_image_content_items. Local images may be surrounded by separate input_text label/path and closing blocks; image_url itself contains the recorded bytes or URL. Writer-derived conformance cases live in crates/adapters/codex/tests/projection.rs; native image-input capture remains an explicit fixture gap.",
+          "record_types": {
+            "input_text": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "input_text": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "output_text": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "output_text": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "input_image": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "input_image": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "image_url": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "detail": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  }
+                }
+              }
+            },
+            "input_audio": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "input_audio": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "audio_url": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
           "id": "event-msg",
           "path": "event_msg.payload (by payload.type)",
           "discriminator": "type",

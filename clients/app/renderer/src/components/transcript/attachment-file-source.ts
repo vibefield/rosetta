@@ -39,8 +39,8 @@ function viewerName(fact: AttachmentFact): string {
   const source = fact.ref?.source;
   const base =
     fact.name?.trim() ||
-    (source?.type === "asset" ? source.asset.digest : "") ||
-    "image";
+    fact.ref?.label?.trim() ||
+    "Image";
   const kind = resolveKind(base).viewer.id;
   if (kind === "image" || kind === "svg") return base;
   const mediaType = fact.mediaType ?? (source?.type === "asset" ? source.asset.media_type : null);

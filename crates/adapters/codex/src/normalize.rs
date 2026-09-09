@@ -312,6 +312,17 @@ fn response_item(
             row.subtype = item.phase.clone().or(subtype);
             row.uuid = item.id.clone();
             row.content = content;
+            if matches!(kind, MessageKind::User | MessageKind::Agent) {
+                let (text, attachments, assets) =
+                    crate::images::authored_content(item.content.as_deref().unwrap_or_default());
+                row.content = text;
+                row.attachments = attachments;
+                ops.extend(
+                    assets
+                        .into_iter()
+                        .map(|asset| IngestOp::ProjectionAsset { asset }),
+                );
+            }
             if kind == MessageKind::Agent {
                 stamp_model(&mut row, state);
                 begin_response(state, &row.timeline_id);

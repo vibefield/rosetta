@@ -5,7 +5,7 @@
 // is raw HTML: an HTML block is kept as the text it is, because rendering it
 // would be the one thing `types.ts` says this parser must never do.
 
-import { parseInline, parseInlineLines } from "./inline";
+import { parseInline, parseInlineLines } from "./inline.ts";
 import type { Alignment, Block, Inline } from "./types";
 
 const ATX_HEADING = /^ {0,3}(#{1,6})(?:\s+(.*?))?\s*(?:\s#+)?$/;
@@ -83,15 +83,36 @@ function alignmentOf(cell: string): Alignment {
   return null;
 }
 
-const inlineCells = (line: string): readonly (readonly Inline[])[] =>
-  splitRow(line).map((cell) => parseInline(cell));
+// Keep source positions through cell trimming and escaped pipes. The inline
+// parser owns unescaping, so a deleted escape never shifts later annotations.
+function inlineCells(line: string, source?: readonly number[]): readonly (readonly Inline[])[] {
+  const cells: (readonly Inline[])[] = [];
+  const lead = line.length - line.trimStart().length;
+  const start = lead + (line[lead] === "|" ? 1 : 0);
+  const trimmedEnd = line.trimEnd().length;
+  const end = trimmedEnd - (line[trimmedEnd - 1] === "|" ? 1 : 0);
+  let cellStart = start;
+  const push = (to: number) => {
+    const raw = line.slice(cellStart, to);
+    const from = cellStart + raw.length - raw.trimStart().length;
+    const cell = raw.trim();
+    cells.push(parseInline(cell, false, source?.slice(from, from + cell.length)));
+  };
+  for (let i = start; i < end; i += 1) {
+    if (line[i] === "\\" && line[i + 1] === "|") { i += 1; continue; }
+    if (line[i] === "|") { push(i); cellStart = i + 1; }
+  }
+  push(end);
+  return cells;
+}
 
-export function parseBlocks(lines: readonly string[]): readonly Block[] {
+export function parseBlocks(lines: readonly string[], sources?: readonly (readonly number[])[]): readonly Block[] {
   const out: Block[] = [];
   let index = 0;
 
   while (index < lines.length) {
     const line = lines[index];
+    const source = sources?.[index];
 
     if (isBlank(line)) {
       index += 1;
@@ -121,7 +142,7 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
       out.push({
         type: "heading",
         level: heading[1].length,
-        children: parseInline(heading[2] ?? ""),
+        children: parseInline(heading[2] ?? "", false, source?.slice(line.indexOf(heading[2] ?? "", (line.length - line.trimStart().length) + heading[1].length))),
       });
       index += 1;
       continue;
@@ -135,8 +156,10 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
 
     if (QUOTE.test(line)) {
       const body: string[] = [];
+      const bodySources: (readonly number[])[] = [];
       while (index < lines.length) {
         if (QUOTE.test(lines[index])) {
+          bodySources.push(sources?.[index].slice(QUOTE.exec(lines[index])![0].length) ?? []);
           body.push(lines[index].replace(QUOTE, ""));
           index += 1;
           continue;
@@ -145,9 +168,10 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
         // and stops at a blank one.
         if (isBlank(lines[index]) || startsBlock(lines[index])) break;
         body.push(lines[index]);
+        bodySources.push(sources?.[index] ?? []);
         index += 1;
       }
-      out.push({ type: "quote", children: parseBlocks(body) });
+      out.push({ type: "quote", children: parseBlocks(body, sources === undefined ? undefined : bodySources) });
       continue;
     }
 
@@ -157,12 +181,12 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
       TABLE_DELIMITER.test(lines[index + 1]) &&
       splitRow(lines[index]).length === splitRow(lines[index + 1]).length
     ) {
-      const head = inlineCells(lines[index]);
+      const head = inlineCells(lines[index], sources?.[index]);
       const align = splitRow(lines[index + 1]).map(alignmentOf);
       index += 2;
       const rows: (readonly (readonly Inline[])[])[] = [];
       while (index < lines.length && lines[index].includes("|") && !isBlank(lines[index])) {
-        rows.push(inlineCells(lines[index]));
+        rows.push(inlineCells(lines[index], sources?.[index]));
         index += 1;
       }
       out.push({ type: "table", head, align, rows });
@@ -193,6 +217,7 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
         pendingBlank = false;
 
         const body: string[] = [next.content];
+        const bodySources: (readonly number[])[] = [sources?.[index].slice(next.contentIndent) ?? []];
         index += 1;
         while (index < lines.length) {
           if (isBlank(lines[index])) {
@@ -204,6 +229,7 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
               bulletOf(lines[lookahead])?.indent !== bullet.indent
             ) {
               body.push("");
+              bodySources.push([]);
               index = lookahead;
               tight = false;
               continue;
@@ -212,18 +238,20 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
           }
           if (indentOf(lines[index]) >= next.contentIndent) {
             body.push(lines[index].slice(next.contentIndent));
+            bodySources.push(sources?.[index].slice(next.contentIndent) ?? []);
             index += 1;
             continue;
           }
           // A wrapped line under a bullet needs no indent to belong to it.
           if (!startsBlock(lines[index])) {
             body.push(lines[index].trim());
+            bodySources.push(sources?.[index].slice(lines[index].length - lines[index].trimStart().length) ?? []);
             index += 1;
             continue;
           }
           break;
         }
-        items.push(parseBlocks(body));
+        items.push(parseBlocks(body, sources === undefined ? undefined : bodySources));
       }
 
       out.push({ type: "list", ordered: bullet.ordered, start: bullet.start, tight, items });
@@ -243,8 +271,10 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
     }
 
     const paragraph: string[] = [];
+    const paragraphSources: (readonly number[])[] = [];
     while (index < lines.length && !isBlank(lines[index]) && !startsBlock(lines[index])) {
       paragraph.push(lines[index]);
+      paragraphSources.push(sources?.[index] ?? []);
       index += 1;
     }
     // A `===` or `---` under a paragraph makes it a heading after the fact,
@@ -255,17 +285,17 @@ export function parseBlocks(lines: readonly string[]): readonly Block[] {
       out.push({
         type: "heading",
         level: underline[1][0] === "=" ? 1 : 2,
-        children: parseInlineLines(paragraph),
+        children: parseInlineLines(paragraph, sources === undefined ? undefined : paragraphSources),
       });
       continue;
     }
     if (paragraph.length > 0) {
-      out.push({ type: "paragraph", children: parseInlineLines(paragraph) });
+      out.push({ type: "paragraph", children: parseInlineLines(paragraph, sources === undefined ? undefined : paragraphSources) });
       continue;
     }
 
     // Nothing claimed the line; take it as text so the loop always advances.
-    out.push({ type: "paragraph", children: parseInline(line) });
+    out.push({ type: "paragraph", children: parseInline(line, false, source) });
     index += 1;
   }
 

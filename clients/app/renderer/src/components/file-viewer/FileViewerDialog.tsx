@@ -18,10 +18,11 @@ import { diffKind, resolveKind } from "./registry";
 import { useFileContent } from "./use-file-content";
 import { FileViewerHeader } from "./FileViewerHeader";
 import type { HeaderAction } from "./FileViewerHeader";
-import type { FileHandle, FileSource, ViewerActionId } from "./types";
+import type { FileHandle, FileSource, ViewerActionId, ViewBodyProps } from "./types";
 import { fmtBytes } from "../../lib/format";
 
 export interface FileViewerDialogProps {
+  readonly renderMarkdown?: ViewBodyProps["renderMarkdown"];
   /** The file being read, or `null` for a closed dialog. */
   readonly handle: FileHandle | null;
   /** Where bytes come from. Must be stable across renders. */
@@ -52,6 +53,7 @@ export function FileViewerDialog({
   onReceipt,
   openInBrowser,
   asDiff = false,
+  renderMarkdown,
 }: FileViewerDialogProps) {
   const content = useFileContent(handle, source, asDiff);
 
@@ -153,7 +155,7 @@ export function FileViewerDialog({
 
           <div className="ah-fileview__body" key={handle.key}>
             {content.status === "ready" ? (
-              <Body file={content.file} mode={mode} />
+              <Body file={content.file} mode={mode} renderMarkdown={renderMarkdown} />
             ) : content.status === "reading" ? (
               // Styled to appear only if the read is slow enough to be worth
               // mentioning; a local file that lands in three milliseconds

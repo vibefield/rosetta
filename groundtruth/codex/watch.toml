@@ -3,6 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
+  "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "Compaction and the complete persisted rollout vocabulary are pinned from the 0.150.1 writer; an organic compaction fixture is still desirable for end-to-end replay coverage.",
 ]
 

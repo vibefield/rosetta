@@ -5,7 +5,7 @@
 // scans in one pass it is because exactly one thing on it is filled.
 //
 // Two variants the record draws:
-//   · attachments are tiles INSIDE the panel (16:10, radius 8, hairline), with
+//   · attachments are tiles INSIDE the panel (3:2, radius 8, hairline), with
 //     the facts in tabular figures beneath. A missing image is the dashed tile
 //     with what is known — absence stated, never faked (§06).
 //   · a prompt that is a local command wears a PILL instead of a panel, and
@@ -15,66 +15,10 @@
 //     that object: label + normalized value, with the CLI's prose discarded.
 import type { AttachmentFact, Prompt as PromptModel } from "../../lib/transcript";
 import { firstLine } from "../../lib/transcript";
-import { clock, fmtBytes } from "../../lib/format";
+import { clock } from "../../lib/format";
 import { Anchor } from "./Anchor";
-import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
+import { AuthoredMessage } from "./AuthoredMessage";
 import { Prose, SegmentActs } from "./Prose";
-import { MessagePreview } from "./MessagePreview";
-
-function captionOf(fact: AttachmentFact): string {
-  const size = fact.byteLen === null ? null : fmtBytes(fact.byteLen);
-  return [fact.caption, size].filter((piece) => piece !== null && piece !== "").join(" · ");
-}
-
-function Tile({
-  fact,
-  onOpenAttachment,
-}: {
-  readonly fact: AttachmentFact;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
-}) {
-  const url = fact.kind === "image" ? attachmentAssetUrl(fact) : null;
-  const caption = captionOf(fact);
-  return (
-    <figure>
-      {url === null ? (
-        // §06's placeholder rule: the dashed tile with its facts, never the
-        // injected `[Image: …]` sentence the pipeline let through.
-        <div className="tr-att__tile tr-att__tile--missing">
-          {fact.name ?? `${fact.kind} · not stored`}
-        </div>
-      ) : (
-        <button
-          className="tr-att__tile"
-          type="button"
-          title="Open image"
-          aria-label={`Open image${fact.name === null ? "" : ` — ${fact.name}`}`}
-          onClick={() => onOpenAttachment(fact)}
-        >
-          <img src={url} alt={fact.name ?? ""} loading="lazy" decoding="async" />
-        </button>
-      )}
-      {caption !== "" && <figcaption>{caption}</figcaption>}
-    </figure>
-  );
-}
-
-export function Attachments({
-  facts,
-  onOpenAttachment,
-}: {
-  readonly facts: readonly AttachmentFact[];
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
-}) {
-  if (facts.length === 0) return null;
-  return (
-    <div className="tr-att">
-      {facts.map((fact) => (
-        <Tile key={fact.key} fact={fact} onOpenAttachment={onOpenAttachment} />
-      ))}
-    </div>
-  );
-}
 
 export interface PromptPanelProps {
   readonly prompt: PromptModel;
@@ -92,28 +36,17 @@ export function PromptPanel({
   onReceipt,
   onOpenAttachment,
 }: PromptPanelProps) {
-  const openableImages = prompt.attachments.filter(canOpenAttachment);
   return (
     <div
       className={landed ? "tr-prompt is-landed" : "tr-prompt"}
       id={domId}
       data-timeline-id={prompt.row.timeline_id}
     >
-      {prompt.text === null ? (
-        prompt.attachments.length === 0 && (
-          <p className="tr-quiet">no text recorded</p>
-        )
-      ) : (
-        <MessagePreview
-          messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`}
-          role="user"
-          text={prompt.text}
-          onReceipt={onReceipt}
-          imageAttachments={openableImages}
-          onOpenAttachment={onOpenAttachment}
-        />
-      )}
-      <Attachments facts={prompt.attachments} onOpenAttachment={onOpenAttachment} />
+      {prompt.text === null && prompt.attachments.length === 0 && <p className="tr-quiet">no text recorded</p>}
+      <AuthoredMessage text={prompt.text} attachments={prompt.attachments}
+        recordedText={prompt.row.body.type === "user" ? prompt.row.body.text : null}
+        messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`} role="user"
+        onReceipt={onReceipt} onOpenAttachment={onOpenAttachment} />
     </div>
   );
 }

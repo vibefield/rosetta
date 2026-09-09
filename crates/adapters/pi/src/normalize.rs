@@ -194,6 +194,31 @@ fn message_entry(
         AgentMessage::Known(KnownMessage::User(message)) => {
             let mut row = row(ctx, entry, &entry.id, MessageKind::User, ts, None, None);
             row.content = user_content_text(&message.content);
+            if let UserContent::Blocks(blocks) = &message.content {
+                for (index, block) in blocks.iter().enumerate() {
+                    if let ContentBlock::Known(KnownContentBlock::Image {
+                        data, mime_type, ..
+                    }) = block
+                    {
+                        let (attachment, asset) = rosetta_adapter_support::media::from_base64(
+                            &format!("image-{index}"),
+                            rosetta_core::timeline::AttachmentKind::Image,
+                            mime_type,
+                            data,
+                        );
+                        row.attachments.push(attachment);
+                        ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+                    } else if matches!(block, ContentBlock::Other(value) if value["type"] == "image")
+                    {
+                        row.attachments
+                            .push(rosetta_core::timeline::AttachmentRef::unavailable(
+                                format!("image-{index}"),
+                                rosetta_core::timeline::AttachmentKind::Image,
+                                rosetta_core::timeline::AttachmentUnavailableReason::InvalidData,
+                            ));
+                    }
+                }
+            }
             IngestOp::push_message(ops, row);
         }
         AgentMessage::Known(KnownMessage::Assistant(message)) => {

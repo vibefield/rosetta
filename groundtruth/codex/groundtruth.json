@@ -19,7 +19,7 @@
       "agent_version": "0.149.1",
       "evidence": "writer",
       "path": "sources/0.150.1.writer.json",
-      "sha256": "2b48576ba2b0857abc5450f8752796a301f1ffd520c2251b26582359ee96e8c2",
+      "sha256": "6dec0213bc1c516b10b8010a279237744008c2c0fe5e49323024ac03c9688d0d",
       "writer_version": "rust-v0.150.1"
     },
     {
@@ -4067,6 +4067,116 @@
                       "fields": {}
                     },
                     "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
+            }
+          }
+        },
+        {
+          "id": "content-blocks",
+          "path": "response_item.payload.content[] (ContentItem)",
+          "discriminator": "type",
+          "notes": "Pinned writer: https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/models.rs ContentItem and local_image_content_items. Local images may be surrounded by separate input_text label/path and closing blocks; image_url itself contains the recorded bytes or URL. Writer-derived conformance cases live in crates/adapters/codex/tests/projection.rs; native image-input capture remains an explicit fixture gap.",
+          "record_types": {
+            "input_audio": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "input_audio": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "audio_url": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "input_image": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "input_image": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "image_url": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "detail": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "input_text": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "input_text": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  }
+                }
+              },
+              "evidence": "writer"
+            },
+            "output_text": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "output_text": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "text": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
                   }
                 }
               },

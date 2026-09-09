@@ -403,7 +403,12 @@ fn writer_declared_authored_media_projects_typed_references() {
     };
     assert_eq!(attachments.len(), 1);
     assert_eq!(attachments[0].kind, AttachmentKind::Image);
-    assert!(matches!(attachments[0].source, ResourceRef::Url { .. }));
+    assert!(matches!(
+        attachments[0].source,
+        rosetta_core::timeline::AttachmentSource::Reference {
+            reference: ResourceRef::Url { .. }
+        }
+    ));
 
     let media_only = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -643,5 +648,44 @@ fn undeclared_content_parts_are_soft_drift() {
                 .ops
                 .iter()
                 .all(|op| matches!(op, IngestOp::Drift(_)))
+    );
+}
+
+#[test]
+fn authored_image_data_url_materializes_but_tool_output_does_not() {
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    let mut ctx = synthetic_context();
+    let record = json!({"type":"context.append_message","message":{"role":"user","origin":{"kind":"user"},"id":"image","toolCalls":[],"content":[{"type":"image_url","imageUrl":{"url":png}}]},"time":1});
+    let result = KimiCodeAdapter.ingest_line(&mut ctx, "wire", record.to_string().as_bytes());
+    assert_eq!(result.status, LineStatus::Parsed);
+    let row = result
+        .ops
+        .iter()
+        .find_map(|op| {
+            if let IngestOp::Message(row) = op {
+                Some(row)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    row.validate().unwrap();
+    let TimelineBody::User { text, attachments } = &row.body else {
+        panic!("user")
+    };
+    assert!(text.is_none());
+    assert_eq!(attachments.len(), 1);
+    assert!(matches!(
+        attachments[0].source,
+        rosetta_core::timeline::AttachmentSource::Asset { .. }
+    ));
+    assert!(!serde_json::to_string(row).unwrap().contains("base64"));
+    let record = json!({"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool","result":{"output":[{"type":"image_url","imageUrl":{"url":png}}]}},"time":2});
+    let tool = KimiCodeAdapter.ingest_line(&mut ctx, "wire", record.to_string().as_bytes());
+    assert!(
+        !tool
+            .ops
+            .iter()
+            .any(|op| matches!(op, IngestOp::Message(_) | IngestOp::ProjectionAsset { .. }))
     );
 }

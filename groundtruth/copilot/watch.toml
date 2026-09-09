@@ -3,6 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
+  "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "The writer schema defines 53 persisted event types; hermetic fixtures currently exercise 12, and hosted-model parity is not captured.",
 ]
 

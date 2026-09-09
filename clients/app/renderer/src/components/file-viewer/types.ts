@@ -6,7 +6,7 @@
 // That seam is what lets the same dialog serve a search result, a session's
 // footprint or a dropped path later without being rewritten.
 
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { Language } from "./syntax";
 
 /** A file the viewer has been asked to show. */
@@ -97,6 +97,8 @@ export interface OpenFile {
 }
 
 export interface ViewBodyProps {
+  /** Optional rich Markdown presentation supplied by the content owner. */
+  readonly renderMarkdown?: (text: string) => ReactNode;
   readonly file: OpenFile;
   /** The current mode's id, or `""` for a view with no modes. */
   readonly mode: string;

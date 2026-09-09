@@ -311,8 +311,7 @@ export function resourceDisplay(resource: ResourceRef, context: LedgerContext): 
 }
 
 export function attachmentLabel(attachment: AttachmentRef): string {
-  const target = resourceLabel(attachment.source);
-  return attachment.name?.trim() || basename(target) || target;
+  return attachment.name?.trim() || attachment.label?.trim() || (attachment.kind === "image" ? "Image" : "Attachment");
 }
 
 export function citationLabel(citation: CitationRef): string {

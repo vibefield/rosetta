@@ -316,3 +316,33 @@ fn drift_distinguishes_unknown_types_from_known_parse_failures() {
     assert_eq!(outcome.status, LineStatus::Parsed);
     assert!(outcome.ops.is_empty());
 }
+
+#[test]
+fn user_images_use_native_mime_type_and_preserve_missing_first_slot() {
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    let mut line = user("images", None, "");
+    line["message"]["content"] = json!([
+        {"type":"image","data":"broken","mimeType":"image/png"},
+        {"type":"text","text":"compare"},
+        {"type":"image","data":png,"mimeType":"image/png"},
+        {"type":"image","data":png,"mimeType":"image/png"},
+        {"type":"text","text":"these"}
+    ]);
+    let (ops, statuses) = run(&[line]);
+    assert_eq!(statuses, [LineStatus::Parsed]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    rows[0].validate().unwrap();
+    let TimelineBody::User { text, attachments } = &rows[0].body else {
+        panic!("user")
+    };
+    assert_eq!(text.as_ref().unwrap().as_preview(), "compare\nthese");
+    assert_eq!(attachments.len(), 3);
+    assert!(matches!(
+        attachments[0].source,
+        rosetta_core::timeline::AttachmentSource::Unavailable { .. }
+    ));
+    assert_eq!(attachments[1].source, attachments[2].source);
+    assert_ne!(attachments[1].id, attachments[2].id);
+    assert!(!serde_json::to_string(rows[0]).unwrap().contains(png));
+}

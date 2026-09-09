@@ -41,8 +41,6 @@ import { ledgerLines, runSummary } from "./ledger.ts";
 import { withinPromptCluster } from "./sittings.ts";
 import type { LedgerContext } from "./vocabulary.ts";
 import {
-  attachmentLabel,
-  basename,
   canonicalText,
   citationLabel,
   noticeText,
@@ -51,12 +49,7 @@ import {
 
 /* ── attachments ─────────────────────────────────────────────────────────── */
 
-/**
- * One attachment tile's facts. A `missing` fact is §06's placeholder: the
- * pipeline let an `[Image: …]` sentence through and stored nothing, so the
- * record draws the dashed tile with what it knows instead of the injected
- * prose. Absence is stated, never faked.
- */
+/** One canonical authored attachment occurrence, including unavailable bytes. */
 export interface AttachmentFact {
   readonly key: string;
   readonly kind: AttachmentKind;
@@ -66,19 +59,9 @@ export interface AttachmentFact {
   readonly width: number | null;
   readonly height: number | null;
   readonly missing: boolean;
-  /** The stored reference; null for a placeholder recovered from prose. */
   readonly ref: AttachmentRef | null;
-  /** `2048×1536 · JPEG` — the tile's caption, empty when nothing is known. */
   readonly caption: string;
 }
-
-// Claude Code writes two different things ahead of pasted images. A numbered
-// marker (`[Image #4]`) identifies bytes that did arrive and stays in the
-// prose as a reader-facing link. A descriptive marker (`[Image: source: …]`
-// or `[Image: original 2400x1600, …]`) is injected transport; when no bytes
-// arrived it becomes the honest missing-image fact instead.
-const IMAGE_MARKER = /^\s*\[Image(?:\s*#(\d+))?(?::\s*([^\]]*))?\]\s*/;
-const NUMBERED_IMAGE_MARKER = /\[Image\s*#(\d+)\]/g;
 
 function mediaShortName(mediaType: string | null, name: string | null): string | null {
   if (mediaType !== null && mediaType !== "") {
@@ -96,109 +79,55 @@ function caption(width: number | null, height: number | null, type: string | nul
   return [size, type].filter((piece): piece is string => piece !== null).join(" · ");
 }
 
-function factFromRef(ref: AttachmentRef, index: number): AttachmentFact {
-  const name = attachmentLabel(ref);
+function factFromRef(ref: AttachmentRef): AttachmentFact {
+  const name = ref.name;
   const type = mediaShortName(ref.media_type, name);
   return {
-    key: `att-${index}`,
+    key: ref.id,
     kind: ref.kind,
     name,
     mediaType: ref.media_type,
     byteLen: ref.byte_len,
     width: ref.dimensions?.width ?? null,
     height: ref.dimensions?.height ?? null,
-    missing: false,
+    missing: ref.source.type !== "asset",
     ref,
     caption: caption(ref.dimensions?.width ?? null, ref.dimensions?.height ?? null, type),
   };
 }
 
-function factFromMarker(payload: string | null, index: number): AttachmentFact {
-  const source = payload === null ? null : /source:\s*(\S+)/.exec(payload);
-  const size = payload === null ? null : /(\d{2,5})\s*[x×]\s*(\d{2,5})/.exec(payload);
-  const path = source === null ? null : source[1];
-  const name = path === null ? null : basename(path);
-  const width = size === null ? null : Number(size[1]);
-  const height = size === null ? null : Number(size[2]);
-  const type = mediaShortName(null, name);
-  return {
-    key: `att-missing-${index}`,
-    kind: "image",
-    name,
-    mediaType: null,
-    byteLen: null,
-    width,
-    height,
-    missing: true,
-    ref: null,
-    caption: caption(width, height, type),
-  };
-}
-
-/**
- * Recover attachment facts from a prompt. A numbered marker whose row carries
- * stored bytes remains in the prose so it can open the same viewer as its
- * tile. Descriptive transport markers are removed; when the row carried no
- * attachment, each becomes a placeholder so the reader sees a missing image
- * rather than a sentence about one.
- */
+/** Native wrappers and image grammar belong to adapters, never the renderer. */
 export function readAttachments(
   text: string | null,
   refs: readonly AttachmentRef[],
 ): { text: string | null; attachments: AttachmentFact[] } {
-  const stored = refs.map(factFromRef);
-  const markers: (string | null)[] = [];
-  let rest = text ?? "";
-  for (;;) {
-    const match = IMAGE_MARKER.exec(rest);
-    if (match === null) break;
-    // This is the useful handle the user asked to keep. Leaving the whole
-    // match intact also preserves punctuation and spacing exactly as written.
-    if (match[1] !== undefined && stored.length > 0) break;
-    markers.push(match[2] ?? null);
-    rest = rest.slice(match[0].length);
-  }
-  const attachments =
-    stored.length > 0 ? stored : markers.map((payload, index) => factFromMarker(payload, index));
-  const trimmed = rest.trim();
-  return { text: trimmed === "" ? null : rest, attachments };
+  return { text: text?.trim() ? text : null, attachments: refs.map(factFromRef) };
 }
 
-/**
- * Which stored image each numbered marker names.
- *
- * Claude normally numbers images from one, but persisted sessions can carry
- * global numbers such as `#4` in a prompt containing only one or two images.
- * Direct local numbering wins; otherwise occurrence order pairs the markers
- * with the stored images. A lone stored image is unambiguous at any number.
- */
-export function imageMarkerTargets(
-  text: string,
-  attachments: readonly AttachmentFact[],
-): ReadonlyMap<string, AttachmentFact> {
-  const images = attachments.filter((fact) => fact.kind === "image" && !fact.missing);
-  const targets = new Map<string, AttachmentFact>();
-  if (images.length === 0) return targets;
+export interface AttachmentMention {
+  readonly start: number;
+  readonly end: number;
+  readonly target: AttachmentFact;
+}
 
-  const markers: RegExpMatchArray[] = [];
-  const seen = new Set<string>();
-  for (const match of text.matchAll(NUMBERED_IMAGE_MARKER)) {
-    if (seen.has(match[0])) continue;
-    seen.add(match[0]);
-    markers.push(match);
+/** Exact canonical Unicode-scalar spans, converted once to JS string offsets.
+ * Missing images retain their link; undocumented numbering stays plain text. */
+export function attachmentMentions(text: string, attachments: readonly AttachmentFact[]): readonly AttachmentMention[] {
+  if (!attachments.some(fact => fact.ref?.message_ranges?.length)) return [];
+  const offsets = [0];
+  let offset = 0;
+  for (const char of text) { offset += char.length; offsets.push(offset); }
+  const mentions: AttachmentMention[] = [];
+  for (const target of attachments) {
+    if (target.kind !== "image") continue;
+    for (const range of target.ref?.message_ranges ?? []) {
+      if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end <= range.start || range.end >= offsets.length) continue;
+      mentions.push({ start: offsets[range.start], end: offsets[range.end], target });
+    }
   }
-  const locallyNumbered = markers.every((match) => {
-    const index = Number(match[1]) - 1;
-    return index >= 0 && index < images.length;
-  });
-  markers.forEach((match, occurrence) => {
-    const target =
-      images.length === 1
-        ? images[0]
-        : images[locallyNumbered ? Number(match[1]) - 1 : occurrence];
-    if (target !== undefined) targets.set(match[0], target);
-  });
-  return targets;
+  mentions.sort((a, b) => a.start - b.start);
+  return mentions.filter((mention, index) => !mentions.some((other, otherIndex) =>
+    index !== otherIndex && other.start < mention.end && mention.start < other.end));
 }
 
 /* ── the prompt ──────────────────────────────────────────────────────────── */
@@ -453,7 +382,7 @@ function buildPrompt(
         : (collaboration?.summary ?? null);
   const refs = body.type === "user" ? body.attachments : [];
   const { text, attachments } = readAttachments(rawText, refs);
-  const isCommand = body.type === "user" && looksLocalCommand(text);
+  const isCommand = body.type === "user" && attachments.length === 0 && looksLocalCommand(text);
   const output =
     outputRow !== null && outputRow.body.type === "notice"
       ? canonicalText(

@@ -1,0 +1,17 @@
+/* Transcript record §06A: a bounded gallery inside its authored message. */
+.tr-attachments { container-type: inline-size; margin-top: 12px; min-width: 0; }
+.tr-att { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 480px; max-width: 100%; margin: 0; }
+.tr-att[data-single] { grid-template-columns: minmax(0, 1fr); width: 360px; }
+.tr-att figure { display: grid; align-content: start; gap: 6px; min-width: 0; margin: 0; }
+.tr-att__tile { display: grid; place-items: center; position: relative; width: 100%; height: auto; aspect-ratio: 3 / 2; box-sizing: border-box; overflow: hidden; border-radius: 8px; background: var(--vf-fill); box-shadow: inset 0 0 0 1px var(--vf-hairline); }
+button.tr-att__tile { padding: 0; border: 0; color: inherit; cursor: pointer; appearance: none; }
+.tr-att__tile img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.tr-att__tile--missing { align-content: center; gap: 8px; border: 1px dashed var(--vf-hairline-strong); box-shadow: none; padding: 16px; color: var(--vf-text-tertiary); font-size: 12px; line-height: 1.45; text-align: center; }
+.tr-att figcaption { display: grid; gap: 2px; min-width: 0; color: var(--vf-text-tertiary); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tr-att__label { color: var(--vf-text-secondary); font-size: 12px; }
+.tr-att__more, .tr-att__retry { appearance: none; border: 0; padding: 5px 0; background: transparent; color: var(--vf-text-secondary); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.tr-att__more { margin-top: 6px; }
+.tr-att__tile:focus-visible, .tr-att__more:focus-visible, .tr-att__retry:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 3px; }
+@container (max-width: 360px) { .tr-att { grid-template-columns: minmax(0, 1fr); width: 360px; } }
+.tr-prompt:has(.tr-attachments) { min-width: min(100%, 510px); box-sizing: border-box; }
+.tr-prompt:has(.tr-att[data-single]) { min-width: min(100%, 390px); }

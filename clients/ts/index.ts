@@ -4,6 +4,8 @@ export type * from "./generated/CanonicalText";
 export type * from "./generated/CommandResponse";
 export type * from "./generated/AttachmentKind";
 export type * from "./generated/AttachmentRef";
+export type * from "./generated/AttachmentSource";
+export type * from "./generated/AttachmentUnavailableReason";
 export type * from "./generated/BackfillState";
 export type * from "./generated/BoostRequest";
 export type * from "./generated/BoostResponse";

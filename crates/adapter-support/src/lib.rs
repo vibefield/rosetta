@@ -5,6 +5,7 @@
 //! pieces that production Rust parsers need.
 
 pub mod adapter;
+pub mod media;
 pub mod time;
 pub mod tool;
 

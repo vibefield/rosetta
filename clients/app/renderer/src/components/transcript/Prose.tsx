@@ -14,7 +14,7 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { AttachmentFact } from "../../lib/transcript";
-import { imageMarkerTargets } from "../../lib/transcript";
+import { attachmentMentions } from "../../lib/transcript";
 import { parseMarkdown } from "../file-viewer/markdown";
 import type { Block } from "../file-viewer/markdown";
 import { MarkdownBlocks } from "../file-viewer/markdown/render";
@@ -130,46 +130,35 @@ export interface ProseProps {
   readonly text: string;
   readonly onReceipt: (message: string) => void;
   readonly imageAttachments?: readonly AttachmentFact[];
-  /** Preserve global image numbering when only an excerpt is rendered. */
+  /** Ranges are relative to the complete message, including in a preview. */
   readonly imageMarkerSource?: string;
   readonly onOpenAttachment?: (fact: AttachmentFact) => void;
   /** An excerpt may end inside a fence; do not offer to copy partial code. */
   readonly excerpt?: boolean;
 }
 
-const IMAGE_LINK = /\[Image\s*#\d+\]/g;
-
-function linkedImageMarkers(
+function linkedAttachments(
   value: string,
-  targets: ReadonlyMap<string, AttachmentFact>,
+  source: readonly number[] | undefined,
+  targets: ReturnType<typeof attachmentMentions>,
   onOpen: (fact: AttachmentFact) => void,
 ): ReactNode {
+  if (source === undefined) return value;
   const nodes: ReactNode[] = [];
   let cursor = 0;
-  let key = 0;
-  for (const match of value.matchAll(IMAGE_LINK)) {
-    const start = match.index;
+  for (const target of targets) {
+    const start = source.indexOf(target.start);
+    const length = target.end - target.start;
+    // Only a complete, contiguous plain-text span can become a button. The
+    // parser never calls this for code or link labels; trims and escapes keep
+    // source positions instead of guessing from repeated rendered wording.
+    if (start < cursor || start + length > value.length || !source.slice(start, start + length).every((at, i) => at === target.start + i)) continue;
     if (start > cursor) nodes.push(value.slice(cursor, start));
-    const label = match[0];
-    const target = targets.get(label);
-    nodes.push(
-      target === undefined ? (
-        label
-      ) : (
-        <button
-          className="tr-image-link"
-          type="button"
-          title="Open image"
-          aria-label={`${label} — open image`}
-          key={key}
-          onClick={() => onOpen(target)}
-        >
-          {label}
-        </button>
-      ),
-    );
-    key += 1;
-    cursor = start + label.length;
+    const label = value.slice(start, start + length);
+    nodes.push(<button className="tr-image-link" type="button" key={target.start}
+      aria-label={`${label} — ${target.target.missing ? "image unavailable" : "open image"}`}
+      onClick={() => onOpen(target.target)}>{label}</button>);
+    cursor = start + length;
   }
   if (cursor === 0) return value;
   if (cursor < value.length) nodes.push(value.slice(cursor));
@@ -184,14 +173,15 @@ export function Prose({
   onOpenAttachment,
   excerpt = false,
 }: ProseProps) {
-  const parts = useMemo(() => partition(parseMarkdown(text)), [text]);
+  const trackSource = imageAttachments?.some(fact => fact.ref?.message_ranges?.length) ?? false;
+  const parts = useMemo(() => partition(parseMarkdown(text, trackSource)), [text, trackSource]);
   const imageTargets = useMemo(
-    () => imageMarkerTargets(imageMarkerSource, imageAttachments ?? []),
+    () => attachmentMentions(imageMarkerSource, imageAttachments ?? []),
     [imageMarkerSource, imageAttachments],
   );
   const renderText =
-    imageTargets.size > 0 && onOpenAttachment !== undefined
-      ? (value: string) => linkedImageMarkers(value, imageTargets, onOpenAttachment)
+    imageTargets.length > 0 && onOpenAttachment !== undefined
+      ? (value: string, source?: readonly number[]) => linkedAttachments(value, source, imageTargets, onOpenAttachment)
       : undefined;
   return (
     <>

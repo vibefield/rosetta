@@ -663,6 +663,67 @@ absorb — and disproves some assumptions a Claude-only view would have baked in
 - **Prior art exists**: xAI's `xai-grok-foreign-sessions` crate (Apache-2.0) already
   parses Claude Code and Codex stores in Rust — read before writing those adapters.
 
+### 5.12 Authored image audit (2026-09-09)
+
+**Implemented against known writer fields; native capture coverage remains incomplete.** The current registered roster has
+nine adapters. Seven have a known authored-image representation in their canonical
+pack or pinned writer; that does not establish complete fixture or normalization
+coverage. The other two have an evidence gap, not evidence that the product cannot
+accept images. Cursor remains uncaptured. The common contract is in
+[ARCHITECTURE.md §4.1.2](../ARCHITECTURE.md#412-authored-images-2026-09-09);
+the owning UI record is
+[§06A](../../clients/app/design/transcript-record.html#prompt-images).
+
+| Adapter / evidence reviewed | Authored-image evidence | Implemented projection | Remaining native evidence |
+|---|---|---|---|
+| [Claude Code 2.1.241](../../groundtruth/claude-code/groundtruth.json) | User image blocks with inline Base64 or URL sources | Shared validated assets or references; invalid slots survive. Team/injected/tool media is excluded from user uploads. No guessed label bindings. | Capture an isolated prompt with inline, URL and omitted media. Prove native mention bindings before adding any. |
+| [Codex 0.149.1 fixtures / 0.150.1 writer](../../groundtruth/codex/groundtruth.json) | Pinned writer's `ContentItem::InputImage` with `image_url`; local-image text delimiters surround the actual image block | Refreshed content-union facet; data URLs become assets. Only exact opener/image/closer sequences lose transport text. Source labels emit unambiguous Unicode-scalar spans. | Commit an isolated native image scenario, including local and remote inputs; conformance tests and the private local corroboration are not a harvested fixture. |
+| [Pi 0.84.3](../../groundtruth/pi/groundtruth.json) | Typed user `image` blocks with `data` and `mimeType` | Correct native MIME field binding; text and ordered image slots share one prompt. Invalid first slots and repeated bytes survive. | Capture text+image and image-only native sessions. |
+| [Grok 1.0.5](../../groundtruth/grok/groundtruth.json) | Observed `user_message_chunk` image content includes `data`, `mimeType`, and `uri`; prompt identity is in update metadata | Existing prompt accumulator now retains ordered attachments, inline assets and references across checkpoints. | Capture image/text chunk ownership, ordering and reference-only content. |
+| [OpenCode 1.18.22 / writer 1.18.23](../../groundtruth/opencode/groundtruth.json) | Message file parts with `mime`, `filename`, `url`, and optional source metadata | Exact message-id assembly produces one user prompt; native part ids remain stable attachment ids. Data URLs become assets, other URLs remain references. Fresh snapshot replay removes deleted parts. | Capture mixed file/text parts and native snapshot replacement/deletion. |
+| [Copilot 1.0.80](../../groundtruth/copilot/groundtruth.json) | `user.message.attachments` variants include inline data, asset ids, and omission metadata; `session.binary_asset` stores separately identified bytes | Inline/reference/omitted slots; exact session-scoped asset joins before or after the owner; checkpoints keep refs, not encoded bytes. Conflicting ids or byte metadata fail closed. | Capture the image variants and binary assets before/after the owner in native sessions. |
+| [Kimi Code 0.38.0](../../groundtruth/kimi-code/groundtruth.json) | `image_url` content parts with an `imageUrl` reference | Recorded data URLs can materialize; blob/remote locators remain references. Authored media retains ownership; tool/injected media does not become a user image. | Capture the URL encodings actually persisted by an image-input session. A tested data URL parser is not proof the writer emits one. |
+| [Hermes 0.20.5](../../groundtruth/hermes/groundtruth.json) | No authored-image field established by the captured pack reviewed here | No image attachments projected | Capture a pinned image-input scenario and inspect the writer's persistence path. Do not infer unsupported capability from a text-only corpus. |
+| [Antigravity 1.1.20](../../groundtruth/antigravity/groundtruth.json) | No authored-image field established by the captured pack reviewed here | No image attachments projected | Capture the input-media scenario for the enrolled CLI; keep IDE evidence separate. An image-generation tool name does not prove prompt-image persistence. |
+
+**Confirmed Codex failure.** A local 0.153.4 rollout corroborates the writer: a user
+message contains an opening image-label/path text block, an `input_image` data URL,
+a closing text block, and the user's question. The PNG is actually embedded (235,791
+decoded bytes, 1090×704); this is not a lost temporary-file problem. The previous
+adapter emitted only the text, explaining the visible wrapper and missing preview.
+No local transcript, prompt text, image, or private path is committed as fixture
+evidence. The new pipeline test proves ledger-only recovery into fresh asset members
+after deleting its synthetic native files and original assets.
+The opt-in check of the selected local record also passed: it rebuilt the same
+235,791 bytes and 1090×704 dimensions from the ledger alone. The test prints only
+those facts; private source paths and content are supplied at invocation time.
+
+Pinned primary-source checks:
+
+- [Codex `models.rs`, rust-v0.150.1](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/models.rs)
+  declares `InputImage`, local-image label/open/close helpers, and tests for mixed
+  local/remote images. The path in the opener is not XML-escaped, so this is a native
+  block-sequence format, not generic XML to parse in the frontend. A quoted opener
+  with no actual image block must remain ordinary prose.
+- [Pi `types.ts`, v0.84.3](https://github.com/earendil-works/pi/blob/v0.84.3/packages/ai/src/types.ts)
+  declares user image content as Base64 data plus MIME type.
+- [OpenCode session schema, v1.18.23](https://github.com/anomalyco/opencode/blob/v1.18.23/packages/schema/src/v1/session.ts)
+  declares file parts independently of text parts, making exact message assembly
+  part of image support rather than a rendering detail.
+
+Add `prompt-images` to the farm's capability matrix. Use small generated test images
+with known byte digests, not organic screenshots. Each applicable pack needs text+
+image, image-only, several images, repeated-image occurrences, missing/invalid first
+image, native labels, Unicode/path punctuation, and literal-wrapper negative cases;
+add tool-result exclusion and reference-only cases where native writers support them.
+Fragmented stores additionally need exact owner joins, replacement/deletion, late
+bytes, replay, and cross-session-id collision cases. Synthetic malformed-input Rust
+tests supplement genuine captures; they do not masquerade as writer evidence.
+The seven applicable `watch.toml` files explicitly retain the native-capture gap.
+The Codex facet was regenerated with `build_canonical` from its source intermediate
+and rendered; no canonical JSON was hand-edited. Other adapters use their existing
+canonical fields. Run boundary/fixture checks whenever these packs change.
+
 ## 6. Layer-1 exit criteria
 
 Each `watch.toml` explicitly marks its pack `captured` or `blocked`; absence of a

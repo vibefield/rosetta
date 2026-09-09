@@ -12,7 +12,7 @@
 export type Alignment = "left" | "center" | "right" | null;
 
 export type Inline =
-  | { readonly type: "text"; readonly value: string }
+  | { readonly type: "text"; readonly value: string; readonly source?: readonly number[] }
   | { readonly type: "code"; readonly value: string }
   | { readonly type: "strong"; readonly children: readonly Inline[] }
   | { readonly type: "emphasis"; readonly children: readonly Inline[] }

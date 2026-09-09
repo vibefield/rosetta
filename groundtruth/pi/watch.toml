@@ -3,6 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
+  "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "Compaction is fixture-backed; branch summaries and extension-defined custom/label entries remain writer-only.",
 ]
 

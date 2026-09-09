@@ -93,7 +93,7 @@ export type {
   Segment,
   Turn,
 } from "./turns.ts";
-export { documentTurns, imageMarkerTargets, localSetting, readAttachments } from "./turns.ts";
+export { documentTurns, attachmentMentions, localSetting, readAttachments } from "./turns.ts";
 
 export type { DayEntry, Sitting } from "./sittings.ts";
 export {

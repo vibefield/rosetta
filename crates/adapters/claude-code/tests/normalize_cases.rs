@@ -2315,3 +2315,33 @@ fn web_results_distinguish_empty_sources_from_unrecorded_prose_and_wrong_tools()
         assert_eq!(update.outcome.is_some(), expected, "{name}");
     }
 }
+
+#[test]
+fn invalid_authored_media_keeps_a_slot_without_guessing_image_numbering() {
+    let (ops, _) = run(&[user(
+        json!([
+            {"type":"text","text":"Compare [Image #4] with the first one."},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"invalid"}},
+            {"type":"image","source":{"type":"url","url":"https://example.test/image.png"}}
+        ]),
+        json!({}),
+    )]);
+    let rows = messages(&ops);
+    let TimelineBody::User { attachments, .. } = &rows[0].body else {
+        panic!("user")
+    };
+    assert_eq!(attachments.len(), 2);
+    assert!(matches!(
+        attachments[0].source,
+        rosetta_core::timeline::AttachmentSource::Unavailable { .. }
+    ));
+    assert!(
+        attachments
+            .iter()
+            .all(|image| image.message_ranges.is_empty())
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, IngestOp::ProjectionAsset { .. }))
+    );
+}

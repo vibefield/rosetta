@@ -15,10 +15,10 @@ export const MARKDOWN_MODES = [
 ] as const;
 
 export function MarkdownView(props: ViewBodyProps) {
-  const { file, mode } = props;
+  const { file, mode, renderMarkdown } = props;
   const blocks = useMemo(
-    () => (mode === "source" ? [] : parseMarkdown(file.text ?? "")),
-    [file, mode],
+    () => (mode === "source" || renderMarkdown !== undefined ? [] : parseMarkdown(file.text ?? "")),
+    [file, mode, renderMarkdown],
   );
 
   if (mode === "source") return <CodeView {...props} />;
@@ -26,7 +26,7 @@ export function MarkdownView(props: ViewBodyProps) {
   return (
     <div className="ah-fileview__scroll ah-md">
       <div className="ah-md__measure ah-markdown">
-        <MarkdownBlocks blocks={blocks} />
+        {renderMarkdown === undefined ? <MarkdownBlocks blocks={blocks} /> : renderMarkdown(file.text ?? "")}
       </div>
     </div>
   );

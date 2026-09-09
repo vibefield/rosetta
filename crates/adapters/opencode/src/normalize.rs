@@ -23,6 +23,8 @@ use crate::spec;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct OpenCodeState {
+    #[serde(default)]
+    prompts: std::collections::BTreeMap<String, crate::images::PromptParts>,
     /// Message usage is repeated on every joined part; attach it once.
     usage_messages: BTreeSet<String>,
     /// Current execution cwd used only to resolve relative tool arguments.
@@ -183,6 +185,22 @@ fn project(
     part: &PartData,
     ops: &mut Vec<IngestOp>,
 ) -> LineStatus {
+    if matches!(message, MessageData::User(_))
+        && matches!(part, PartData::Text(_) | PartData::File(_))
+    {
+        let prompt = match state.prompts.entry(record.message_id.clone()) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let mut row = timeline_row(ctx, record, message, MessageKind::User);
+                row.timeline_id =
+                    ids::timeline_id(&ctx.session_id, &format!("message:{}", record.message_id));
+                row.src_cursor = None;
+                entry.insert(crate::images::PromptParts::new(row))
+            }
+        };
+        prompt.update(ctx, &record.part_id, part, ops);
+        return LineStatus::Parsed;
+    }
     match part {
         PartData::Text(text) => {
             let kind = match message {
@@ -382,8 +400,17 @@ fn project(
         }
         // Execution boundaries carry no canonical timeline content. Their
         // persisted fields have no lossless canonical projection.
-        PartData::File(_)
-        | PartData::Subtask(_)
+        PartData::File(file) => {
+            if let Some((attachment, asset)) = crate::images::attachment(&record.part_id, file) {
+                let mut row = timeline_row(ctx, record, message, MessageKind::Agent);
+                row.attachments.push(attachment);
+                attach_usage(state, &record.message_id, message, &mut row);
+                ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+                IngestOp::push_message(ops, row);
+            }
+            LineStatus::Parsed
+        }
+        PartData::Subtask(_)
         | PartData::StepStart(_)
         | PartData::Snapshot(_)
         | PartData::Agent(_)
@@ -568,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn user_text_uses_the_part_id_as_timeline_identity() {
+    fn user_text_uses_its_owning_message_as_timeline_identity() {
         let message = json!({
             "role": "user",
             "agent": "build",
@@ -598,7 +625,7 @@ mod tests {
         assert_eq!(row.native_id.as_deref(), Some("msg-1"));
         assert_eq!(
             row.timeline_id,
-            rosetta_core::ids::timeline_id("session", "part-1")
+            rosetta_core::ids::timeline_id("session", "message:msg-1")
         );
     }
 

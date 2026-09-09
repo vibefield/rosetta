@@ -3,6 +3,7 @@
 [groundtruth]
 status = "captured"
 known_gaps = [
+  "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "Plan/subagent variants and compaction lifecycle are organic-only; feedback and checkpoint file bodies remain unobserved.",
 ]
 

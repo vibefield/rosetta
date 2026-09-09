@@ -10,3 +10,5 @@ pub mod time;
 pub mod tool;
 
 pub use adapter::CopilotAdapter;
+
+mod images;

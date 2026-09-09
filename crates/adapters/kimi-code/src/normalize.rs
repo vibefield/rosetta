@@ -14,7 +14,7 @@ use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
     DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot,
 };
-use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ResourceRef, ToolAction};
+use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ToolAction};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -426,7 +426,15 @@ fn context_message(
     row.subtype = subtype;
     row.uuid.clone_from(&line.message.id);
     row.content = content;
-    row.attachments = content_attachments(&line.message.content);
+    if kind == MessageKind::User {
+        let (attachments, assets) = content_attachments(&line.message.content);
+        row.attachments = attachments;
+        ops.extend(
+            assets
+                .into_iter()
+                .map(|asset| IngestOp::ProjectionAsset { asset }),
+        );
+    }
     IngestOp::push_message(ops, row);
     LineStatus::Parsed
 }
@@ -518,7 +526,13 @@ fn content_part(
     row.uuid.clone_from(&line.event.uuid);
     row.parent_uuid.clone_from(&line.event.parent_uuid);
     row.content = content;
-    row.attachments = content_attachments(std::slice::from_ref(part));
+    let (attachments, assets) = content_attachments(std::slice::from_ref(part));
+    row.attachments = attachments;
+    ops.extend(
+        assets
+            .into_iter()
+            .map(|asset| IngestOp::ProjectionAsset { asset }),
+    );
     stamp_response(&mut row, state);
     IngestOp::push_message(ops, row);
     LineStatus::Parsed
@@ -862,31 +876,37 @@ fn content_text(blocks: &[ContentBlock]) -> Result<Option<String>, ContentPartEr
     Ok((!joined.is_empty()).then_some(joined))
 }
 
-/// Kimi persists authored media as references, not bytes. Preserve only that
-/// user-facing reference and its coarse kind; encrypted/context payloads and
-/// tool-result media never call this helper.
-fn content_attachments(blocks: &[ContentBlock]) -> Vec<AttachmentRef> {
-    blocks
-        .iter()
-        .filter_map(|block| {
-            let (kind, media) = match block.block_type.as_str() {
-                "image_url" => (AttachmentKind::Image, block.image_url.as_ref()?),
-                "audio_url" => (AttachmentKind::Audio, block.audio_url.as_ref()?),
-                "video_url" => (AttachmentKind::Video, block.video_url.as_ref()?),
-                _ => return None,
-            };
-            (!media.url.is_empty()).then(|| AttachmentRef {
+/// Only authored content reaches this helper. URL references never trigger IO;
+/// a data URL materializes only the bytes actually recorded in the ledger.
+fn content_attachments(
+    blocks: &[ContentBlock],
+) -> (Vec<AttachmentRef>, Vec<rosetta_core::ProjectionAsset>) {
+    use rosetta_adapter_support::media;
+    let mut attachments = Vec::new();
+    let mut assets = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let (kind, source) = match block.block_type.as_str() {
+            "image_url" => (AttachmentKind::Image, block.image_url.as_ref()),
+            "audio_url" => (AttachmentKind::Audio, block.audio_url.as_ref()),
+            "video_url" => (AttachmentKind::Video, block.video_url.as_ref()),
+            _ => continue,
+        };
+        let id = format!("media-{index}");
+        let (mut attachment, asset) = match source {
+            Some(source) => media::from_url(&id, kind, &source.url, None),
+            None => media::unavailable(
+                &id,
                 kind,
-                name: media.id.clone(),
-                media_type: None,
-                byte_len: None,
-                source: ResourceRef::Url {
-                    url: media.url.clone(),
-                },
-                dimensions: None,
-            })
-        })
-        .collect()
+                rosetta_core::timeline::AttachmentUnavailableReason::InvalidData,
+            ),
+        };
+        attachment.name = source
+            .and_then(|source| source.id.as_deref())
+            .and_then(media::bounded_name);
+        attachments.push(attachment);
+        assets.extend(asset);
+    }
+    (attachments, assets)
 }
 
 fn usage_snapshot(usage: &RecordedUsage) -> Option<TokenSnapshot> {

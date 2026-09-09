@@ -249,6 +249,36 @@ fn user_chunk(
         _ => return Err(()),
     };
     let discriminator = format!("user:{prompt_index}");
+    let attachment = if content_type == "image" {
+        use rosetta_adapter_support::media;
+        use rosetta_core::timeline::{AttachmentKind, AttachmentUnavailableReason};
+        // Source position, not the event counter (which can repeat on resume),
+        // identifies this occurrence in the accumulated prompt.
+        let index = state
+            .messages
+            .get(&discriminator)
+            .map_or(0, |row| row.attachments.len());
+        let id = format!("image-{index}");
+        let (attachment, asset) = match (
+            content["data"].as_str(),
+            content["mimeType"].as_str(),
+            content["uri"].as_str(),
+        ) {
+            (Some(data), Some(mime), _) => {
+                media::from_base64(&id, AttachmentKind::Image, mime, data)
+            }
+            (None, mime, Some(uri)) => media::from_url(&id, AttachmentKind::Image, uri, mime),
+            _ => media::unavailable(
+                &id,
+                AttachmentKind::Image,
+                AttachmentUnavailableReason::InvalidData,
+            ),
+        };
+        ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+        Some(attachment)
+    } else {
+        None
+    };
     accumulate_message(
         ctx,
         state,
@@ -260,6 +290,7 @@ fn user_chunk(
             model: None,
             text,
             separator: "\n",
+            attachment,
         },
         ops,
     );
@@ -302,6 +333,7 @@ fn response_chunk(
             text: Some(text),
             // Model deltas concatenate byte-for-byte.
             separator: "",
+            attachment: None,
         },
         ops,
     );
@@ -322,6 +354,7 @@ struct ChunkSpec<'a> {
     model: Option<String>,
     text: Option<&'a str>,
     separator: &'a str,
+    attachment: Option<rosetta_core::timeline::AttachmentRef>,
 }
 
 fn accumulate_message(
@@ -341,6 +374,7 @@ fn accumulate_message(
         .get_mut(&spec.discriminator)
         .expect("message was inserted above");
     append(&mut row.content, spec.text, spec.separator);
+    row.attachments.extend(spec.attachment);
     row.src_cursor = ctx.src_cursor;
     row.src_offset = ctx.src_offset;
     IngestOp::push_message(ops, row.clone());

@@ -13,7 +13,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rosetta_adapter_support::tool::{
     canonical_text, lexical_resource, projection_record_kind, projection_shape_paths,
     terminal_update, unknown_interaction,
@@ -23,14 +22,14 @@ use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot,
 };
 use rosetta_core::timeline::{
-    AssetRef, AttachmentKind, AttachmentRef, CollaborationChannel, CollaborationEvent,
-    CorrelationDerivation, FAILURE_SUMMARY_MAX_BYTES, FailureKind, GroupDerivation, GroupKind,
-    ID_MAX_BYTES, Notice, Provenance, ResourceRef, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT,
-    TaskOp, TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
-    ToolFailure, ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming,
-    ToolUpdatePatch, WorkflowUsage,
+    AttachmentKind, CollaborationChannel, CollaborationEvent, CorrelationDerivation,
+    FAILURE_SUMMARY_MAX_BYTES, FailureKind, GroupDerivation, GroupKind, ID_MAX_BYTES, Notice,
+    Provenance, ResponseGroup, StatusBasis, TASK_SNAPSHOT_LIMIT, TaskOp, TaskSnapshot,
+    TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolFailure,
+    ToolOutcomePatch, ToolRequestPatch, ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
+    WorkflowUsage,
 };
-use rosetta_core::{IngestOp, ProjectionAsset, fold, ids};
+use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -651,8 +650,7 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
 
     let mut text = String::new();
     let mut results: Vec<ToolResultBlock<'_>> = Vec::new();
-    let mut attachments = Vec::new();
-    let mut assets = Vec::new();
+    let mut media_sources = Vec::new();
     let mut has_other_block = false;
     match &line.message.content {
         UserContent::Text(prompt) => match local_command_artifact(prompt) {
@@ -665,7 +663,7 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
             LocalCommandArtifact::None => text.push_str(prompt),
         },
         UserContent::Blocks(blocks) => {
-            for block in blocks {
+            for (index, block) in blocks.iter().enumerate() {
                 match block {
                     UserContentBlock::Known(KnownUserBlock::Text { text: block, .. }) => {
                         push_text(&mut text, block);
@@ -693,22 +691,10 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
                             .map(str::to_owned),
                     }),
                     UserContentBlock::Known(KnownUserBlock::Image { source, .. }) => {
-                        match authored_attachment(AttachmentKind::Image, source) {
-                            Some((attachment, asset)) => {
-                                attachments.push(attachment);
-                                assets.extend(asset);
-                            }
-                            None => has_other_block = true,
-                        }
+                        media_sources.push((index, AttachmentKind::Image, source));
                     }
                     UserContentBlock::Known(KnownUserBlock::Document { source, .. }) => {
-                        match authored_attachment(AttachmentKind::Document, source) {
-                            Some((attachment, asset)) => {
-                                attachments.push(attachment);
-                                assets.extend(asset);
-                            }
-                            None => has_other_block = true,
-                        }
+                        media_sources.push((index, AttachmentKind::Document, source));
                     }
                     UserContentBlock::Other(_) => has_other_block = true,
                 }
@@ -720,7 +706,13 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
     // deliveries, and top-level Agent Team envelopes. Classify those before
     // the human-message boundary; nested envelopes stay inside their owning
     // notification body and are never replayed as separate speech.
-    let collaboration = if attachments.is_empty() && !has_other_block && !text.is_empty() {
+    let structured_delivery = line
+        .origin
+        .as_ref()
+        .is_some_and(|origin| matches!(origin.kind.as_str(), "peer" | "coordinator"));
+    let collaboration = if structured_delivery
+        || (media_sources.is_empty() && !has_other_block && !text.is_empty())
+    {
         if let Some(notification) = crate::envelope::task_notification(&text) {
             let has_event = notification.task_id.is_some()
                 || notification.tool_use_id.is_some()
@@ -763,20 +755,22 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
         }
     // A turn made only of tool_results is the report-back for a tool call — it
     // folds into that call's row instead of becoming a row of its own.
-    } else if !text.is_empty() || !attachments.is_empty() || has_other_block || results.is_empty() {
+    } else if !text.is_empty() || !media_sources.is_empty() || has_other_block || results.is_empty()
+    {
         let mut row = emit.row(&seed, MessageKind::User, &line.uuid);
         row.content = (!text.is_empty()).then_some(text);
-        row.attachments = attachments;
+        for (index, kind, source) in media_sources {
+            let (attachment, asset) =
+                crate::media::authored_attachment(&format!("attachment-{index}"), kind, source);
+            row.attachments.push(attachment);
+            emit.ops
+                .extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+        }
         row.group = Some(TimelineGroup {
             id: line.uuid.clone(),
             kind: GroupKind::HumanTurn,
             derivation: GroupDerivation::Native,
         });
-        emit.ops.extend(
-            assets
-                .into_iter()
-                .map(|asset| IngestOp::ProjectionAsset { asset }),
-        );
         emit.push_row(row);
     }
 
@@ -1255,116 +1249,6 @@ fn bounded_utf8(mut value: String, max_bytes: usize) -> String {
     value.truncate(boundary);
     value.push_str("...");
     value
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum AuthoredSource {
-    Base64 {
-        media_type: String,
-        data: String,
-    },
-    Url {
-        url: String,
-    },
-    Text {
-        data: String,
-        #[serde(default)]
-        media_type: Option<String>,
-    },
-}
-
-/// Strictly decode only user-authored attachment sources. Tool-result media
-/// never calls this path. Invalid labels or bytes stay recoverable in the raw
-/// ledger and do not create a projection member that would fail the batch.
-fn authored_attachment(
-    kind: AttachmentKind,
-    source: &Value,
-) -> Option<(AttachmentRef, Option<ProjectionAsset>)> {
-    match serde_json::from_value::<AuthoredSource>(source.clone()).ok()? {
-        AuthoredSource::Url { url } if !url.is_empty() => Some((
-            AttachmentRef {
-                kind,
-                name: None,
-                media_type: None,
-                byte_len: None,
-                source: ResourceRef::Url { url },
-                dimensions: None,
-            },
-            None,
-        )),
-        AuthoredSource::Base64 { media_type, data } => {
-            let media_type = canonical_media_type(&media_type)?;
-            if kind == AttachmentKind::Image && !media_type.starts_with("image/") {
-                return None;
-            }
-            let bytes = STANDARD.decode(data).ok()?;
-            if bytes.is_empty() || !member_magic_matches(media_type, &bytes) {
-                return None;
-            }
-            member_attachment(kind, media_type, bytes)
-        }
-        AuthoredSource::Text { data, media_type } if kind == AttachmentKind::Document => {
-            if data.is_empty()
-                || media_type.as_deref().is_some_and(|value| {
-                    canonical_media_type(value) != Some("text/plain; charset=utf-8")
-                })
-            {
-                return None;
-            }
-            member_attachment(kind, "text/plain; charset=utf-8", data.into_bytes())
-        }
-        _ => None,
-    }
-}
-
-fn member_attachment(
-    kind: AttachmentKind,
-    media_type: &str,
-    bytes: Vec<u8>,
-) -> Option<(AttachmentRef, Option<ProjectionAsset>)> {
-    let asset = ProjectionAsset::new(media_type, bytes)?;
-    let reference = AssetRef {
-        url: asset.url()?,
-        digest: asset.digest.clone(),
-        media_type: asset.media_type.clone(),
-        byte_len: u64::try_from(asset.bytes.len()).ok()?,
-    };
-    Some((
-        AttachmentRef {
-            kind,
-            name: None,
-            media_type: Some(asset.media_type.clone()),
-            byte_len: Some(reference.byte_len),
-            source: ResourceRef::Asset { asset: reference },
-            dimensions: None,
-        },
-        Some(asset),
-    ))
-}
-
-fn canonical_media_type(media_type: &str) -> Option<&'static str> {
-    match media_type.to_ascii_lowercase().as_str() {
-        "image/png" => Some("image/png"),
-        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
-        "image/gif" => Some("image/gif"),
-        "image/webp" => Some("image/webp"),
-        "application/pdf" => Some("application/pdf"),
-        "text/plain" | "text/plain; charset=utf-8" => Some("text/plain; charset=utf-8"),
-        _ => None,
-    }
-}
-
-fn member_magic_matches(media_type: &str, bytes: &[u8]) -> bool {
-    match media_type {
-        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
-        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
-        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
-        "application/pdf" => bytes.starts_with(b"%PDF-"),
-        "text/plain; charset=utf-8" => std::str::from_utf8(bytes).is_ok(),
-        _ => false,
-    }
 }
 
 // --------------------------------------------------------------------- plumbing

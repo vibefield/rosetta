@@ -431,13 +431,19 @@ impl Drift for ResponseItem {
     }
 }
 
-/// Message content block (observed: input_text, output_text).
+/// Message content union declared by the pinned protocol ContentItem writer.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_url: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
