@@ -1,6 +1,7 @@
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import type { ProjectViewModel } from "./model.ts";
 import { projectKey } from "./model.ts";
+import { compareSessionActivity } from "./session-activity.ts";
 
 export interface SessionSearchResult {
   readonly session: SessionRow;
@@ -31,8 +32,7 @@ function compareSessionResults(
 ): number {
   return (
     right.hits.length - left.hits.length ||
-    right.session.updated_at - left.session.updated_at ||
-    left.session.id.localeCompare(right.session.id)
+    compareSessionActivity(left.session, right.session)
   );
 }
 

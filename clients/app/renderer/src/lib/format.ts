@@ -30,8 +30,10 @@ export function tokenText(n: number): string {
 }
 
 /** `now` under 90s, then minutes, hours, `yesterday`, days. */
-export function lastActive(ms: number, nowMs: number): string {
-  const delta = Math.max(0, nowMs - ms);
+export function lastActive(ms: number | null, nowMs: number): string {
+  if (ms === null || !Number.isFinite(ms)) return "unknown";
+  const delta = nowMs - ms;
+  if (delta < 0) return "future";
   if (delta < 90_000) return "now";
   const minutes = Math.floor(delta / 60_000);
   if (minutes < 60) return `${minutes}m`;
@@ -62,8 +64,6 @@ export function clockShort(ms: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-const DAY_MS = 86_400_000;
-
 function startOfDay(ms: number): number {
   const d = new Date(ms);
   d.setHours(0, 0, 0, 0);
@@ -71,11 +71,14 @@ function startOfDay(ms: number): number {
 }
 
 /** `Today`, `Yesterday`, then `Mon 24 Aug` — the session list's day breaks. */
-export function dayLabel(ms: number, nowMs: number): string {
+export function dayLabel(ms: number | null, nowMs: number): string {
+  if (ms === null || !Number.isFinite(ms)) return "Activity unknown";
   const today = startOfDay(nowMs);
   const day = startOfDay(ms);
-  if (day >= today) return "Today";
-  if (day >= today - DAY_MS) return "Yesterday";
+  if (day === today) return "Today";
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (day === yesterday.getTime()) return "Yesterday";
   const d = new Date(ms);
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 }

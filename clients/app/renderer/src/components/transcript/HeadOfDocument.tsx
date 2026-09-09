@@ -57,7 +57,7 @@ export interface HeadOfDocumentProps {
   readonly feed: TimelineFeed;
   /** The accumulator, 0..1, from `useHeadOfDocument`. */
   readonly pull: number;
-  /** The session's `started_at`, for the session-start line. */
+  /** First recorded conversation activity, for the session-start line. */
   readonly startedAt: number | null;
   /** The clock an anchor search is paging toward, while one runs. */
   readonly finding?: string | null;

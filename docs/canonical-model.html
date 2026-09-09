@@ -519,7 +519,8 @@
         <span class="f cu">root_session_id</span><span class="n">denormalized root of the subagent tree (= id for top-level sessions); contribution rolls up here</span>
         <span class="f">role</span><span class="n">main | subagent | team-member</span>
         <span class="f">title · summary</span><span class="n">ranked bounded evidence + native sidecars/databases</span>
-        <span class="f">started_at · updated_at</span><span class="n">filenames + mtime; updated_at tracked live</span>
+        <span class="f">started_at · updated_at</span><span class="n">source metadata/freshness; never used as conversation recency</span>
+        <span class="f">activity { first_at, last_at }?</span><span class="n">recorded conversation bounds, including descendant sessions; null until timestamped evidence exists</span>
       </div>
       <div class="evidence"><b>Ratification:</b> parent links are native everywhere they matter —
       claude-code <span class="f">agentId/isSidechain</span>, kimi <span class="f">parentAgentId</span>,

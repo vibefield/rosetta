@@ -12,17 +12,16 @@ export function getSessionStatus(
 ): SessionStatus {
   switch (session.stream_state) {
     case "streaming":
-      // The same green breath means two honest things: mid-backfill the
-      // daemon is reading this transcript right now; live, the agent is.
+      // This is ingestion completeness, never evidence of an active agent.
       return {
-        tone: "green",
-        isLive: true,
-        label: duringBackfill ? "indexing" : "live",
+        tone: "orange",
+        isLive: false,
+        label: duringBackfill ? "indexing" : "history incomplete",
       };
     case "pending":
       return { tone: "orange", isLive: false, label: "not yet indexed" };
     default:
-      return { tone: null, isLive: false, label: "done" };
+      return { tone: null, isLive: false, label: "history indexed" };
   }
 }
 

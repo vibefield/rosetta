@@ -36,6 +36,7 @@ fn session() -> SessionRow {
         summary: None,
         started_at: 0,
         updated_at: 0,
+        activity: None,
         stream_state: StreamState::Streaming,
     }
 }

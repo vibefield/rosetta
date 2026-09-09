@@ -1479,6 +1479,7 @@ pub fn apply_prepared_runtime(
                 summary: None,
                 started_at: 0,
                 updated_at: 0,
+                activity: None,
                 stream_state: StreamState::Pending,
             }));
         }
@@ -1619,6 +1620,7 @@ fn open_file(
                     summary: None,
                     started_at: 0,
                     updated_at: 0,
+                    activity: None,
                     stream_state: StreamState::Pending,
                 })],
                 checkpoints: vec![],

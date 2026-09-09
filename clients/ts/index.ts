@@ -54,6 +54,7 @@ export type * from "./generated/ServerFrame";
 export type * from "./generated/SessionResponse";
 export type * from "./generated/SessionRole";
 export type * from "./generated/SessionRow";
+export type * from "./generated/SessionActivity";
 export type * from "./generated/SessionDelegation";
 export type * from "./generated/SessionsResponse";
 export type * from "./generated/Stamp";

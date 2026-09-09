@@ -484,11 +484,7 @@ fn meta_snapshot(hub: &Hub) -> ServerFrame {
     let mut projects = hub.projects();
     projects.sort_by(|a, b| a.id.cmp(&b.id));
     let mut sessions = hub.sessions();
-    sessions.sort_by(|a, b| {
-        b.updated_at
-            .cmp(&a.updated_at)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    sessions.sort_by(rosetta_core::SessionRow::compare_recent);
     ServerFrame::MetaSnapshot {
         runtimes,
         projects,
@@ -634,6 +630,7 @@ mod tests {
                         summary: None,
                         started_at: 10_000,
                         updated_at: 10_000,
+                        activity: None,
                         stream_state: StreamState::Streaming,
                     }),
                 ],
@@ -879,6 +876,7 @@ mod tests {
                         summary: None,
                         started_at: 10_000,
                         updated_at: 10_000,
+                        activity: None,
                         stream_state: StreamState::Pending,
                     }),
                     IngestOp::Plan(PlanRow {

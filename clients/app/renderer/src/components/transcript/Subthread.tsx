@@ -104,10 +104,9 @@ export function Subthread({
   }, [targetTimelineId, session.id, feed, model, onFocusConsumed, onReceipt]);
 
   const kind = getRuntimeKind(session.runtime_id);
-  const range =
-    session.updated_at > session.started_at
-      ? `${clock(session.started_at)} → ${clock(session.updated_at)}`
-      : clock(session.started_at);
+  const range = session.activity
+    ? `${clock(session.activity.first_at)} → ${clock(session.activity.last_at)}`
+    : "Activity time unknown";
 
   return (
     <div className="tr-sub" data-anchored={anchored || undefined}>

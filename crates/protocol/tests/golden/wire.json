@@ -120,7 +120,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 18,
+      "protocol_version": 19,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -540,6 +540,10 @@
       ],
       "sessions": [
         {
+          "activity": {
+            "first_at": 11000,
+            "last_at": 19000
+          },
           "cwd": "/w/rosetta",
           "delegation": null,
           "id": "s1",
@@ -828,6 +832,10 @@
       "type": "timeline_meta_changed"
     },
     {
+      "activity": {
+        "first_at": 11000,
+        "last_at": 19000
+      },
       "cwd": "/w/rosetta",
       "delegation": null,
       "id": "s1",
@@ -886,7 +894,7 @@
       }
     ]
   },
-  "protocol_version": 18,
+  "protocol_version": 19,
   "runtimes": {
     "runtimes": [
       {
@@ -951,6 +959,10 @@
   },
   "session": {
     "session": {
+      "activity": {
+        "first_at": 11000,
+        "last_at": 19000
+      },
       "cwd": "/w/rosetta",
       "delegation": null,
       "id": "s1",
@@ -970,6 +982,10 @@
   "sessions": {
     "sessions": [
       {
+        "activity": {
+          "first_at": 11000,
+          "last_at": 19000
+        },
         "cwd": "/w/rosetta",
         "delegation": null,
         "id": "s1",
@@ -1045,7 +1061,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 18,
+    "protocol_version": 19,
     "schema_version": 16,
     "search": {
       "progress": null,

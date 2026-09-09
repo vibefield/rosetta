@@ -538,15 +538,19 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         summary: row.get("summary")?,
         started_at: row.get("started_at")?,
         updated_at: row.get("updated_at")?,
+        activity: None,
         stream_state: parse_state(&state),
     })
 }
 
 pub fn session(conn: &Connection, session_id: &str) -> Result<Option<SessionRow>, StoreError> {
-    let row = conn
+    let mut row = conn
         .prepare_cached("SELECT * FROM session WHERE id = ?1")?
         .query_row(params![session_id], session_from_row)
         .optional()?;
+    if let Some(row) = &mut row {
+        row.activity = crate::activity::session_activity(conn, &row.id)?;
+    }
     Ok(row)
 }
 
@@ -599,8 +603,11 @@ pub fn runtime(conn: &Connection, runtime_id: &str) -> Result<Option<RuntimeRow>
 pub fn all_sessions(conn: &Connection) -> Result<Vec<SessionRow>, StoreError> {
     let mut stmt = conn.prepare_cached("SELECT * FROM session ORDER BY id")?;
     let rows = stmt.query_map([], session_from_row)?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(StoreError::from)
+    let mut rows = rows.collect::<Result<Vec<_>, _>>()?;
+    for row in &mut rows {
+        row.activity = crate::activity::session_activity(conn, &row.id)?;
+    }
+    Ok(rows)
 }
 
 pub fn all_projects(conn: &Connection) -> Result<Vec<ProjectRow>, StoreError> {
@@ -698,26 +705,13 @@ pub fn session_list(
     project_id: Option<&str>,
     limit: i64,
 ) -> Result<Vec<SessionRow>, StoreError> {
-    let mut out = Vec::new();
-    match project_id {
-        Some(project) => {
-            let mut stmt = conn.prepare_cached(
-                "SELECT * FROM session WHERE project_id = ?1
-                 ORDER BY updated_at DESC, id LIMIT ?2",
-            )?;
-            let rows = stmt.query_map(params![project, limit], session_from_row)?;
-            for row in rows {
-                out.push(row?);
-            }
-        }
-        None => {
-            let mut stmt =
-                conn.prepare_cached("SELECT * FROM session ORDER BY updated_at DESC, id LIMIT ?1")?;
-            let rows = stmt.query_map(params![limit], session_from_row)?;
-            for row in rows {
-                out.push(row?);
-            }
-        }
+    // Limit after ranking by conversation time. A metadata-only rescan must
+    // neither promote an old session nor push a truly recent one off the page.
+    let mut out = all_sessions(conn)?;
+    out.retain(|row| project_id.is_none_or(|id| row.project_id.as_deref() == Some(id)));
+    out.sort_by(SessionRow::compare_recent);
+    if let Ok(limit) = usize::try_from(limit) {
+        out.truncate(limit);
     }
     Ok(out)
 }

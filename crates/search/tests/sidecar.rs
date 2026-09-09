@@ -47,6 +47,7 @@ fn session(id: &str, project_id: Option<&str>) -> SessionRow {
         summary: None,
         started_at: 1,
         updated_at: 2,
+        activity: None,
         stream_state: StreamState::Indexed,
     }
 }

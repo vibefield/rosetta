@@ -120,6 +120,7 @@ fn scaffolding(ops: &[IngestOp], runtime_id: &str, kind: &str) -> Vec<IngestOp> 
             summary: None,
             started_at: 0,
             updated_at: 0,
+            activity: None,
             stream_state: StreamState::Streaming,
         }));
     }

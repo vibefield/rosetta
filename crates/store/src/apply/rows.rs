@@ -135,7 +135,11 @@ fn update_encoded_tool(
            tool_name = ?7, tool_kind = ?8, tool_status = ?9,
            tool_status_basis = ?10, tool_detail = ?11,
            tool_error_kind = ?12, tool_error_summary = ?13, tool_diagnostic = ?14,
-           tool_started_at = ?15, tool_completed_at = ?16, tool_duration_ms = ?17
+           tool_started_at = ?15, tool_completed_at = ?16, tool_duration_ms = ?17,
+           activity_first_at = (SELECT MIN(value) FROM
+             (SELECT activity_first_at AS value UNION ALL SELECT ?15 UNION ALL SELECT ?16)),
+           activity_last_at = (SELECT MAX(value) FROM
+             (SELECT activity_last_at AS value UNION ALL SELECT ?15 UNION ALL SELECT ?16))
          WHERE id = ?1",
     )?
     .execute(params![
@@ -521,6 +525,7 @@ fn apply_message_inner(
         };
     }
     let message = message_codec::encode(&emitted)?;
+    let (activity_first, activity_last) = crate::activity::message_bounds(&emitted);
     let response_id = emitted
         .response
         .as_ref()
@@ -549,7 +554,11 @@ fn apply_message_inner(
                        tool_started_at = ?31, tool_completed_at = ?32, tool_duration_ms = ?33,
                        parent_tool_native_id = ?34, in_tokens = ?35, out_tokens = ?36,
                        cache_r_tokens = ?37, cache_w_tokens = ?38, think_tokens = ?39,
-                       agent_version = ?40, src_cursor = ?41, src_offset = ?42
+                       agent_version = ?40, src_cursor = ?41, src_offset = ?42,
+                       activity_first_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
+                         (SELECT MIN(value) FROM (SELECT activity_first_at AS value UNION ALL SELECT ?43)) END,
+                       activity_last_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
+                         (SELECT MAX(value) FROM (SELECT activity_last_at AS value UNION ALL SELECT ?44)) END
                      WHERE timeline_id = ?1",
                 )?
                 .execute(params![
@@ -595,6 +604,8 @@ fn apply_message_inner(
                     emitted.provenance.agent_version,
                     emitted.provenance.src_cursor,
                     emitted.provenance.src_offset,
+                    activity_first,
+                    activity_last,
                 ])?;
                 stats.messages_updated += 1;
             }
@@ -609,11 +620,11 @@ fn apply_message_inner(
                         tool_error_kind, tool_error_summary, tool_diagnostic, tool_started_at,
                         tool_completed_at, tool_duration_ms, parent_tool_native_id, in_tokens,
                         out_tokens, cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
-                        src_cursor, src_offset)
+                        src_cursor, src_offset, activity_first_at, activity_last_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                              ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
                              ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38,
-                             ?39, ?40, ?41, ?42)",
+                             ?39, ?40, ?41, ?42, ?43, ?44)",
                 )?
                 .execute(params![
                     emitted.timeline_id,
@@ -658,6 +669,8 @@ fn apply_message_inner(
                     emitted.provenance.agent_version,
                     emitted.provenance.src_cursor,
                     emitted.provenance.src_offset,
+                    activity_first,
+                    activity_last,
                 ])?;
                 stats.messages_inserted += 1;
             }
@@ -743,6 +756,7 @@ pub(super) fn apply_tool_updates(
         // what an uninterrupted fold would have refused (see
         // apply_projected_patch).
         let mut merge_state = ToolFoldState::assume_resolved(&tool);
+        let mut earliest_at = None;
         let mut latest_at = None;
         for (evidence, (patch, at)) in ordered {
             let mut patch = patch.clone();
@@ -758,6 +772,7 @@ pub(super) fn apply_tool_updates(
                     ),
                 })?;
             if let Some(at) = at {
+                earliest_at = Some(earliest_at.map_or(at, |current: Ms| current.min(at)));
                 latest_at = Some(latest_at.map_or(at, |current: Ms| current.max(at)));
             }
         }
@@ -773,6 +788,13 @@ pub(super) fn apply_tool_updates(
                     at: latest_at,
                 });
             }
+        }
+        for at in earliest_at
+            .into_iter()
+            .chain(latest_at)
+            .collect::<BTreeSet<_>>()
+        {
+            crate::activity::touch_tool(tx, &session_id, &correlation_key, at)?;
         }
         stats.profile.tool_result_write_nanos += elapsed_nanos(started);
         touch_session(tx, &session_id, latest_at, stats)?;

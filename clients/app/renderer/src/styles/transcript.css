@@ -604,7 +604,7 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-meta-row[data-state="running"] .tr-meta-status { border-color: var(--vf-green); }
 .tr-meta-row[data-state="running"] .tr-meta-status::after {
   width: 6px; height: 6px; border-radius: 999px; background: var(--vf-green);
-  content: ""; animation: breathe 1.6s ease-in-out infinite;
+  content: "";
 }
 .tr-meta-row[data-state="running"] .tr-meta-row__value { color: var(--vf-green); }
 .tr-meta-row[data-state="failed"] .tr-meta-status,
@@ -1020,7 +1020,7 @@ button.tr-sub__head:hover { color: var(--vf-text-primary); }
 .wf-attempt strong { color: var(--vf-text-secondary); font-weight: 500; }
 .wf-attempt__launch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-attempt__outcome { color: var(--vf-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.wf-attempt[data-state="running"] .wf-attempt__dot { background: var(--vf-green); animation: tr-breathe 1.6s ease-in-out infinite; }
+.wf-attempt[data-state="running"] .wf-attempt__dot { background: var(--vf-green); }
 .wf-attempt[data-state="failed"] .wf-attempt__dot { background: var(--vf-red); }
 .wf-attempt[data-state="failed"] .wf-attempt__outcome { color: var(--vf-red); }
 .wf-phase { border-top: 1px solid var(--vf-hairline); }

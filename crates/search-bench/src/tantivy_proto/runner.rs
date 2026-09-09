@@ -673,6 +673,7 @@ mod tests {
                         summary: None,
                         started_at: 1,
                         updated_at: 1,
+                        activity: None,
                         stream_state: StreamState::Indexed,
                     }),
                     message_op(message("m-user", 0, MessageKind::User, "ionosphere", 100)),

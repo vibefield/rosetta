@@ -38,6 +38,8 @@ import type { TimelineFeed } from "../../lib/hooks";
 import type { TimelineLayout } from "../../lib/transcript/use-transcript-tail";
 import { useTeamTimelines } from "../../lib/hooks";
 import { client } from "../../lib/rosetta";
+import { lastActive } from "../../lib/format";
+import { sessionLastActive } from "../../lib/session-activity";
 import { EmptyState } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
@@ -237,7 +239,10 @@ export function TranscriptDocument({
   onTimelineLayout,
 }: TranscriptDocumentProps) {
   const runtimeKind = getRuntimeKind(session.runtime_id);
-  const live = session.stream_state === "streaming" && !duringBackfill;
+  // Stream state describes indexing. Only newly arriving conversation rows
+  // can receive an activity accent, and it expires with recorded activity.
+  const recentActivity = !duringBackfill &&
+    lastActive(sessionLastActive(session), Date.now()) === "now";
   const directChildren = index.childrenByParent.get(session.id) ?? [];
   const teamIds = useMemo(
     () => teamSessionIds(session.id, directChildren, feed.rows),
@@ -600,9 +605,9 @@ export function TranscriptDocument({
             highlightedTimelineId={highlightedTimelineId}
             focusTimelineId={focusTimelineId}
             alive={(line) =>
-              live &&
+              recentActivity &&
               line.rows[0].session_id === session.id &&
-              (feed.watermark === null || line.rows[0].ordinal > feed.watermark)
+              feed.watermark !== null && line.rows[0].ordinal > feed.watermark
             }
             hasChildren={(line) =>
               (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).length > 0
@@ -814,7 +819,7 @@ export function TranscriptDocument({
             }
           />
         )}
-        {watermarkKey === part.key && <Watermark text="live from here" />}
+        {watermarkKey === part.key && <Watermark text="received since opening" />}
         <div className="tr-turn" data-timeline-id={part.firstRowId ?? undefined}>
           {part.prompts.length > 0 && (
             <Prompt
@@ -832,7 +837,7 @@ export function TranscriptDocument({
                 <ResponseHead
                   head={part.turn.head}
                   runtimeKind={runtimeKind}
-                  open={live && part.turn.head.endedAt === null}
+                  open={recentActivity && part.turn.head.endedAt === null}
                 />
               )}
               {part.after.map(renderSegment)}
@@ -885,15 +890,13 @@ export function TranscriptDocument({
         ) : session.stream_state !== "indexed" ? (
           <EmptyState
             title={
-              session.stream_state === "streaming"
-                ? "Being read right now"
-                : "This transcript is in line"
+              duringBackfill ? "Indexing history" : "History not yet available"
             }
-            description="rosettad is still reaching it — it opens the moment its turn comes."
+            description="No readable messages have been indexed for this session yet."
           >
-            <div className="ah-meter">
+            {duringBackfill && <div className="ah-meter">
               <i style={{ width: "8%" }} />
-            </div>
+            </div>}
           </EmptyState>
         ) : (
           <EmptyState
@@ -902,14 +905,9 @@ export function TranscriptDocument({
           />
         ))}
       {session.stream_state === "streaming" && (
-        <Watermark
-          text={duringBackfill ? "indexing" : "live"}
-          title={
-            duringBackfill
-              ? "rosettad is reading this transcript"
-              : "this session is still running"
-          }
-        />
+        <div className="tr-mark" title="Some source records have not been fully indexed">
+          {duringBackfill ? "indexing history" : "history incomplete"}
+        </div>
       )}
     </>
   );

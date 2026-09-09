@@ -212,6 +212,18 @@ pub struct SessionDelegation {
     pub configured_model: Option<String>,
 }
 
+/// Bounds of recorded conversation activity, including descendant sessions.
+/// Derived from canonical messages and native tool lifecycle timestamps;
+/// metadata edits, file dates, and ingestion progress never contribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionActivity {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub first_at: Ms,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub last_at: Ms,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SessionRow {
@@ -232,8 +244,22 @@ pub struct SessionRow {
     pub title: Option<String>,
     pub summary: Option<String>,
     pub started_at: Ms,
+    /// Source/metadata freshness, not conversation activity.
     pub updated_at: Ms,
+    /// Unknown until timestamped conversation evidence is available. This is
+    /// a read-time projection; SessionMeta and old ledger frames cannot set it.
+    #[serde(default)]
+    pub activity: Option<SessionActivity>,
     pub stream_state: StreamState,
+}
+
+impl SessionRow {
+    /// Most recent recorded conversation first; unknown activity sorts last.
+    pub fn compare_recent(&self, other: &Self) -> std::cmp::Ordering {
+        other.activity.map(|activity| activity.last_at)
+            .cmp(&self.activity.map(|activity| activity.last_at))
+            .then_with(|| self.id.cmp(&other.id))
+    }
 }
 
 /// One bounded title candidate for the transaction-local fold. The store

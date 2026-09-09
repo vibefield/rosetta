@@ -529,21 +529,32 @@ impl BulkReconciliationBuffer {
                 continue;
             };
             let message = &mut messages[*index].row;
+            if message.at.is_none() {
+                // Usage may supply the accounting bucket's missing timestamp,
+                // but that is not a timestamped conversation record. Use the
+                // ordinary usage path after inserting the undated opener so
+                // live ingest and cold replay preserve the same activity.
+                remaining_tail.push(buffered);
+                continue;
+            }
             message.usage = *tokens;
             if let Some(model) = model {
                 message.model = Some(model.clone());
-            }
-            if message.at.is_none() {
-                message.at = Some(*ts);
             }
             note_session_touch(&mut session_touches, session_id, Some(*ts));
             folded_usage = folded_usage.saturating_add(1);
         }
         let tail = remaining_tail;
 
+        let mut tool_activity: BTreeMap<ToolKey, (i64, i64)> = BTreeMap::new();
         for (key, at) in &native_updates {
             if openers.contains_key(key) || existing_openers.contains_key(key) {
                 note_session_touch(&mut session_touches, &key.session_id, *at);
+                if let Some(at) = *at {
+                    let bounds = tool_activity.entry(key.clone()).or_insert((at, at));
+                    bounds.0 = bounds.0.min(at);
+                    bounds.1 = bounds.1.max(at);
+                }
             }
         }
         let matched_updates = native_updates
@@ -561,6 +572,7 @@ impl BulkReconciliationBuffer {
             matched_updates,
             unmatched_updates,
             session_touches,
+            tool_activity,
             folded_usage,
             usage_seen,
             unmatched_usage: BTreeMap::new(),
@@ -781,6 +793,7 @@ pub(crate) struct BulkReconciliationPlan {
     matched_updates: u64,
     unmatched_updates: u64,
     session_touches: BTreeMap<String, i64>,
+    tool_activity: BTreeMap<ToolKey, (i64, i64)>,
     folded_usage: u64,
     usage_seen: BTreeSet<UsageKey>,
     unmatched_usage: BTreeMap<UsageKey, BufferedTail>,
@@ -894,6 +907,12 @@ pub(crate) fn apply_plan(
     }
     for (session_id, at) in &plan.session_touches {
         touch_session(tx, session_id, Some(*at), &mut stats)?;
+    }
+    for (key, (first, last)) in &plan.tool_activity {
+        crate::activity::touch_tool(tx, &key.session_id, &key.correlation_key, *first)?;
+        if first != last {
+            crate::activity::touch_tool(tx, &key.session_id, &key.correlation_key, *last)?;
+        }
     }
     debug_assert!(dirty_buckets.is_empty(), "cold maintenance defers buckets");
     Ok(stats)

@@ -39,6 +39,7 @@ import {
 } from "./lib/model";
 import type { ProjectViewModel } from "./lib/model";
 import { desktopHost } from "./lib/desktop-host";
+import { compareSessionActivity } from "./lib/session-activity";
 import { client } from "./lib/rosetta";
 import { createSearchResultsViewModel } from "./lib/search-results";
 import {
@@ -49,13 +50,22 @@ import {
 } from "./lib/search-sheet";
 import type { SearchFilters } from "./lib/search-sheet";
 
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
+function useNow(refreshKey: unknown): number {
+  const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
+    const refresh = () => setTick(Date.now());
+    const t = setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, []);
-  return now;
+  // Incoming metadata gets a fresh clock in the same render. Keep it stable
+  // for unrelated UI changes so project aggregates do not recompute per keypress.
+  return useMemo(() => Date.now(), [tick, refreshKey]);
 }
 
 /** The stepper's memory: which session's matches, in reading order, and
@@ -81,8 +91,8 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 export default function App() {
-  const nowMs = useNow();
   const { meta, status: metaStatus } = useMeta();
+  const nowMs = useNow(meta);
   const daemonStatus = useDaemonStatus();
   const {
     connectionError,
@@ -194,7 +204,7 @@ export default function App() {
           projectKey(s) === projectId &&
           s.parent_session_id === null,
       )
-      .sort((a, b) => b.updated_at - a.updated_at);
+      .sort(compareSessionActivity);
   }, [meta, projectId]);
 
   useEffect(() => {

@@ -454,6 +454,7 @@ mod tests {
                         summary: None,
                         started_at: 1,
                         updated_at: 2,
+                        activity: None,
                         stream_state: StreamState::Indexed,
                     }),
                     IngestOp::project_message(MessageRow {

@@ -611,7 +611,8 @@ impl MetaMirror {
         Ok(events)
     }
 
-    /// Reload exactly the rows a drained [`Effects`] touched; unchanged rows
+    /// Reload the rows a drained [`Effects`] touched and their activity
+    /// ancestors; unchanged rows
     /// emit nothing. An overflowed drain falls back to [`Self::warm`]. A named
     /// row the projection does not hold leaves the resident copy alone, unlike
     /// [`Self::refresh_meta`], which reads that absence as a removal.
@@ -625,7 +626,8 @@ impl MetaMirror {
         }
         let runtimes = fetch_named(conn, &effects.touched_runtimes, queries::runtime)?;
         let projects = fetch_named(conn, &effects.touched_projects, queries::project)?;
-        let sessions = fetch_named(conn, &effects.touched_sessions, queries::session)?;
+        let session_ids = self.activity_dependents(conn, &effects.touched_sessions)?;
+        let sessions = fetch_named(conn, &session_ids, queries::session)?;
 
         let mut events = Vec::new();
         for (_, row) in runtimes {
@@ -646,7 +648,8 @@ impl MetaMirror {
         Ok(events)
     }
 
-    /// Reload exactly the identity rows a drained [`MetaEffects`] named:
+    /// Reload the identity rows a drained [`MetaEffects`] named and their
+    /// old/current activity ancestors:
     /// upsert the ones the projection still holds, drop the ones it no
     /// longer does. Unchanged rows emit nothing, so the diffs are precisely
     /// the ones [`Self::warm`] would have produced for those rows, in the
@@ -666,7 +669,8 @@ impl MetaMirror {
     ) -> Result<Vec<Mutation>, StoreError> {
         let runtimes = fetch_named(conn, &effects.runtimes, queries::runtime)?;
         let projects = fetch_named(conn, &effects.projects, queries::project)?;
-        let sessions = fetch_named(conn, &effects.sessions, queries::session)?;
+        let session_ids = self.activity_dependents(conn, &effects.sessions)?;
+        let sessions = fetch_named(conn, &session_ids, queries::session)?;
 
         let mut events = Vec::new();
         for (id, row) in runtimes {
@@ -694,6 +698,29 @@ impl MetaMirror {
             }
         }
         Ok(events)
+    }
+
+    /// Child activity changes its ancestors too. Include the old ancestry when
+    /// a session is reparented or removed, so the old root can move backwards.
+    fn activity_dependents(
+        &self,
+        conn: &Connection,
+        ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, StoreError> {
+        let mut result = ids.clone();
+        for id in ids {
+            result.extend(crate::activity::ancestors(conn, id)?);
+            let mut visited = BTreeSet::new();
+            let mut current = Some(id.as_str());
+            while let Some(id) = current {
+                if !visited.insert(id) {
+                    break;
+                }
+                result.insert(id.to_owned());
+                current = self.sessions.get(id).and_then(|row| row.parent_session_id.as_deref());
+            }
+        }
+        Ok(result)
     }
 
     fn absorb_session(&mut self, row: SessionRow, events: &mut Vec<Mutation>) {

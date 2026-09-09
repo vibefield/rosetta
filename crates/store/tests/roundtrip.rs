@@ -61,6 +61,7 @@ fn session(id: &str) -> SessionRow {
         summary: None,
         started_at: 10_000,
         updated_at: 10_000,
+        activity: None,
         stream_state: StreamState::Streaming,
     }
 }
@@ -1558,6 +1559,15 @@ fn replacing_a_sibling_source_is_healed_by_affected_scope_replay() {
     // An empty replacement generation means the terminal record vanished.
     // The store does not retain a shadow fact to subtract. The pipeline's
     // affected-session healer replays the sibling opener from the raw ledger.
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .activity
+            .unwrap()
+            .last_at,
+        3_700_000
+    );
     store
         .apply(&Batch {
             source: Some(SourceWrite {
@@ -1617,6 +1627,15 @@ fn replacing_a_sibling_source_is_healed_by_affected_scope_replay() {
     let tool = entry_tool(&page[0]).cloned().unwrap();
     assert_eq!(tool.status.value, ToolStatus::Unknown);
     assert_eq!(tool.status.basis, StatusBasis::SourceFinalization);
+    assert_eq!(
+        queries::session(store.conn(), "s1")
+            .unwrap()
+            .unwrap()
+            .activity
+            .unwrap()
+            .last_at,
+        3_600_000
+    );
     assert_tool_reconciliation_is_ram_only(&store);
 }
 

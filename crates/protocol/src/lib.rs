@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 pub use rosetta_core::rows::{
-    Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, TokenSnapshot,
+    Ms, ProjectRow, RuntimeRow, SessionActivity, SessionRole, SessionRow, StreamState, TokenSnapshot,
 };
 pub use rosetta_core::{TimelineBody, TimelineEntry};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
@@ -31,7 +31,7 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

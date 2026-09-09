@@ -155,7 +155,6 @@ export function TranscriptColumn({
   const index = useMemo(() => buildThreadIndex(sessions), [sessions]);
   const fold = useFoldPreference();
 
-  const live = session?.stream_state === "streaming";
   const requestedTimelineId =
     focus !== null && focus.sessionId === session?.id ? focus.timelineId : null;
   const targetTimelineId = requestedTimelineId ?? metaFocus?.timelineId ?? null;
@@ -376,8 +375,8 @@ export function TranscriptColumn({
 
   const range = (() => {
     if (!session) return "";
-    const from = clockShort(session.started_at);
-    return live ? `${from} → now` : `${from} → ${clockShort(session.updated_at)}`;
+    if (!session.activity) return "Activity time unknown";
+    return `${clockShort(session.activity.first_at)} → ${clockShort(session.activity.last_at)}`;
   })();
 
   const jumpToDay = (day: DayEntry) => {
@@ -507,7 +506,7 @@ export function TranscriptColumn({
                   <HeadOfDocument
                     feed={feed}
                     pull={headOfDocument.pull}
-                    startedAt={session.started_at}
+                    startedAt={session.activity?.first_at ?? null}
                     finding={targetTimelineId === null ? null : "an anchor"}
                   />
                 }

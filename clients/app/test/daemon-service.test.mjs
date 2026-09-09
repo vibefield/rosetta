@@ -51,7 +51,8 @@ test("readiness requires the structured versioned event and accepts fragmented s
   const h = harness(t);
   const ready = h.service.start();
   const child = h.children[0];
-  assert.equal(child.args.at(-1), "--json");
+  assert.ok(child.args.includes("--json"));
+  assert.ok(child.args.includes("--announce"));
   child.stdout.emit("data", "serving http://127.0.0.1:9999\n");
   assert.equal(h.service.state().origin, null);
   const greeting = JSON.stringify({

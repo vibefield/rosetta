@@ -24,6 +24,7 @@ use tempfile::TempDir;
 #[derive(Debug, PartialEq)]
 struct Snapshot {
     sessions: usize,
+    activity: Vec<(String, Option<rosetta_core::SessionActivity>)>,
     indexed_sessions: i64,
     messages: i64,
     tool_rows: i64,
@@ -42,6 +43,8 @@ fn snapshot(store: &Store) -> Snapshot {
             .unwrap_or(0)
     };
     Snapshot {
+        activity: queries::all_sessions(store.conn()).unwrap().into_iter()
+            .map(|row| (row.id, row.activity)).collect(),
         sessions: queries::session_list(store.conn(), None, 1000)
             .unwrap()
             .len(),

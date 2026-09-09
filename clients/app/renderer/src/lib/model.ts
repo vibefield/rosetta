@@ -8,6 +8,7 @@ import type {
 } from "@rosetta/protocol";
 import type { AgentShare } from "./agents";
 import { projectTint } from "./tint.ts";
+import { sessionLastActive } from "./session-activity.ts";
 
 export interface ProjectStats {
   /** Daily token totals over the heatmap's window (53 Sunday-aligned weeks
@@ -191,9 +192,10 @@ export function buildProjectViewModel(
     }))
     .sort((left, right) => right.pct - left.pct);
 
-  const lastActiveMs = rootSessions.length
-    ? Math.max(...rootSessions.map((session) => session.updated_at))
-    : null;
+  const lastActiveMs = rootSessions.reduce<number | null>((latest, session) => {
+    const at = sessionLastActive(session);
+    return at === null ? latest : latest === null ? at : Math.max(latest, at);
+  }, null);
   return {
     row: projectRow,
     tint: projectTint(projectRow.id),

@@ -3,6 +3,7 @@
 //! fail closed on ordinary open; `rosettad rebuild` explicitly reconstructs and
 //! atomically replaces the projection from the durable raw ledger.
 
+mod activity;
 pub mod apply;
 pub mod assets;
 mod bulk;

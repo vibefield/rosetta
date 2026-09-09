@@ -75,6 +75,26 @@ async function run() {
     await until(atBottom, "initial session did not land at the foot");
     console.log("Fixture rendered; checking motion and scroll behavior.");
 
+    const activity = await check(() => ({
+      old: document.querySelector('[data-motion-key="s7"] .ah-last').textContent,
+      status: document.querySelector('[data-motion-key="s0"] .ah-session-list-item__status').title,
+      days: [...document.querySelectorAll(".ah-session-list .ah-day")].map(node => node.textContent),
+      falseRunning: document.querySelector('[title="this session is still running"]') !== null,
+    }));
+    assert.equal(activity.old, "yesterday", "a fresh metadata date must not make an old conversation now");
+    assert.equal(activity.status, "history incomplete");
+    assert.deepEqual(activity.days, ["Today", "Yesterday"]);
+    assert.equal(activity.falseRunning, false);
+
+    await check(() => document.querySelector('[aria-label="Tasks, 2"]').click());
+    await until(() => Boolean(document.querySelector('[aria-label="Full task list"]')), "task panel did not open");
+    assert.deepEqual(await check(() => [...document.querySelectorAll(".tr-meta-row__value")].map(node => node.textContent)), ["—", "1m 00s"]);
+    await check(() => [...document.querySelectorAll('.tr-meta-tab')].find(node => node.textContent === "Workflows").click());
+    await until(() => Boolean(document.querySelector('[aria-label="Workflow runs"]')), "workflow panel did not open");
+    assert.equal(await check(() => document.querySelector(".tr-meta-row__value").textContent), "—");
+    await check(() => document.querySelector('[aria-label="Close session work"]').click());
+    await until(() => !document.querySelector('.tr-meta-popover'), "work panel did not close");
+
     const reorder = await check(() => {
       const target = document.querySelector('[data-motion-key="p5"]');
       const before = target.getBoundingClientRect().top;

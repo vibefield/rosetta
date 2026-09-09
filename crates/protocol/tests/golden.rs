@@ -66,6 +66,7 @@ fn session_row() -> SessionRow {
         summary: Some("A summary".into()),
         started_at: 10_000,
         updated_at: 20_000,
+        activity: Some(rosetta_protocol::SessionActivity { first_at: 11_000, last_at: 19_000 }),
         stream_state: StreamState::Streaming,
     }
 }

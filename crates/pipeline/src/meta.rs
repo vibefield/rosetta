@@ -408,6 +408,18 @@ pub fn meta_ingest_inventory_into(
         ops: meta_ops,
         ..
     } = output;
+    // Admission is part of a captured source's durable identity. New policy
+    // can exclude a previously projected source from metadata admission, but
+    // a re-skim must not turn its existing cursor into a different source.
+    // Preserve that legacy binding while continuing to capture its raw tail;
+    // newly discovered internal sources still have no projected session.
+    for file in files.iter_mut().filter(|file| file.ledger_only) {
+        if rosetta_store::queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)?
+            .is_some_and(|cursor| cursor.session_id.as_deref() == Some(file.session_id.as_str()))
+        {
+            file.ledger_only = false;
+        }
+    }
     let mut ops: Vec<IngestOp> =
         Vec::with_capacity(1 + projects.len() + sessions.len() + meta_ops.len());
     ops.push(IngestOp::Runtime(runtime.clone()));
@@ -795,6 +807,7 @@ fn admit_identified(
                 summary: None,
                 started_at: skim.started_at.unwrap_or(source.modified_ms),
                 updated_at: source.modified_ms,
+                activity: None,
                 stream_state: StreamState::Pending,
             },
         );
@@ -828,6 +841,7 @@ fn admit_identified(
                 summary: None,
                 started_at: skim.started_at.unwrap_or(source.modified_ms),
                 updated_at: source.modified_ms,
+                activity: None,
                 stream_state: StreamState::Pending,
             },
         );
@@ -850,6 +864,7 @@ fn admit_identified(
         summary: skim.summary,
         started_at: skim.started_at.unwrap_or(source.modified_ms),
         updated_at: skim.updated_at.unwrap_or(source.modified_ms),
+        activity: None,
         stream_state: StreamState::Pending,
     };
     merge_session(&mut output.sessions, row);
@@ -1131,6 +1146,7 @@ mod tests {
             summary: None,
             started_at,
             updated_at: started_at,
+            activity: None,
             stream_state: StreamState::Pending,
         }
     }

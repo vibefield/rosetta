@@ -12,7 +12,8 @@ rosetta-store = { path = "../store" }
 ts-rs = { workspace = true, optional = true }
 
 [features]
-# TypeScript binding generation: `TS_RS_EXPORT_DIR=<abs path to clients/ts/generated>
+# TypeScript binding generation: `TS_RS_LARGE_INT=number
+# TS_RS_EXPORT_DIR=<abs path to clients/ts/generated>
 # cargo test -p rosetta-protocol --features ts` regenerates the committed
 # client types.
 ts = ["dep:ts-rs", "rosetta-core/ts", "rosetta-search/ts", "rosetta-store/ts"]

@@ -2,6 +2,7 @@ import type { SessionRow } from "@rosetta/protocol";
 import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
 import { isSessionCooking } from "../../lib/ingest";
+import { sessionLastActive } from "../../lib/session-activity";
 import { getSessionStatus, getSessionTitle } from "./session-display";
 import type { SessionFacts } from "./types";
 
@@ -34,7 +35,7 @@ export function SessionListItem({
   const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
   const isCooking = cookingState && landedFacts === null;
   const title = getSessionTitle(session);
-  const lastActiveLabel = lastActive(session.updated_at, currentTimestamp);
+  const lastActiveLabel = lastActive(sessionLastActive(session), currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
   const accessibleMetadata = [
     roleLabel === null ? null : `${roleLabel} session`,
@@ -92,7 +93,9 @@ export function SessionListItem({
             <span>·</span>
           </>
         )}
-        <span>{duration(session.started_at, session.updated_at)}</span>
+        <span title="Span of recorded conversation activity">
+          {session.activity ? duration(session.activity.first_at, session.activity.last_at) : "—"}
+        </span>
         {landedFacts !== null && landedFacts.tokens > 0 && (
           <>
             <span>·</span>

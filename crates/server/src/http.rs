@@ -821,11 +821,7 @@ async fn sessions(
     if let Some(project) = &query.project {
         sessions.retain(|session| session.project_id.as_deref() == Some(project));
     }
-    sessions.sort_by(|a, b| {
-        b.updated_at
-            .cmp(&a.updated_at)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    sessions.sort_by(rosetta_core::SessionRow::compare_recent);
     sessions.truncate(limit);
     Ok(Json(SessionsResponse { sessions }))
 }

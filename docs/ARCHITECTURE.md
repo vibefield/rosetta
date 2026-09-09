@@ -12,6 +12,21 @@ The production runtime is Rust end to end; development-time evidence tooling is
 standard-library Python. Speed is a feature: cold backfill of a full `~/.claude` in
 seconds, file-change → consumer latency in the low tens of milliseconds.
 
+Session recency is `SessionRow.activity`, a nullable projection of recorded
+conversation time. User, agent, reasoning, summary, collaboration and tool rows
+contribute timestamps; notices, metadata refreshes and standalone usage accounting
+do not. Native tool lifecycle timestamps and matched update records contribute to
+the resolved tool row. First/last bounds live on message rows so replacing a source
+removes its old activity; normal affected-source replay also repairs cross-source
+tool joins. Indexed min/max reads include descendants along `parent_session_id`,
+and metadata notifications refresh both current and former ancestors when parentage
+changes. Old metadata frames cannot assert activity: existing archives recover it
+through the same validated raw-ledger rebuild as the rest of the projection.
+`started_at`/`updated_at` retain source metadata semantics, while `stream_state`
+describes indexing completeness and never asserts that an agent is running.
+Archived task/workflow states are likewise last-recorded facts: missing completion
+evidence never starts a wall-clock duration or an indefinite activity animation.
+
 > **Implementation checkpoint (2026-08-31).** Nine ground-truth/runtime-adapter packs are
 > registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,
 > and SQLite snapshots; virtual membership/deletion, generation reconciliation, deterministic
@@ -551,6 +566,10 @@ placeholder. Existing source definitions default to ordinary projection. Codex's
 internal guardian approval reviews use this policy; ordinary delegated work and
 code-review subagents remain visible. This is a fresh-ingest boundary, not a cleanup
 or migration of an existing archive.
+Rescanning an older, already projected source retains its stored cursor/source
+binding while capturing subsequent raw records. Reclassifying that binding during
+startup would conflict with its ledger identity and abort catch-up; the fresh
+admission policy does not perform that conversion.
 
 > **Activation status (2026-08-30): shipped in projection schema 12.** Core types, every captured
 > adapter, canonical store/search, protocol, and the client share one closed user-facing timeline

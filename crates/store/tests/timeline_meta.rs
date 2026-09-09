@@ -50,6 +50,7 @@ fn base_batch() -> Batch {
                 summary: None,
                 started_at: 1,
                 updated_at: 1,
+                activity: None,
                 stream_state: StreamState::Streaming,
             }),
         ],
@@ -72,6 +73,7 @@ fn workflow_child(id: &str, native_id: &str) -> SessionRow {
         summary: None,
         started_at: 1_250,
         updated_at: 1_500,
+        activity: None,
         stream_state: StreamState::Indexed,
     }
 }

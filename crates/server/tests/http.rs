@@ -50,6 +50,7 @@ fn session(id: &str) -> SessionRow {
         summary: None,
         started_at: 10_000,
         updated_at: 10_000,
+        activity: None,
         stream_state: StreamState::Streaming,
     }
 }
@@ -1381,6 +1382,25 @@ async fn search_session_scope_widens_roots_and_prefix_widens_terms() {
     let parsed: SearchResponse = serde_json::from_value(body).unwrap();
     assert_eq!(parsed.hits.len(), 1);
     assert_eq!(parsed.hits[0].timeline_id, "m-s2");
+}
+
+#[tokio::test]
+async fn sessions_order_by_recorded_activity_before_limiting() {
+    let mut h = harness();
+    let mut stale = message("old", MessageKind::User, "old conversation");
+    stale.ts = Some(100);
+    let mut recent = message("new", MessageKind::User, "recent conversation");
+    recent.session_id = "s2".into();
+    recent.ts = Some(200);
+    h.append_unscoped(vec![stale, recent]);
+    let mut refreshed = session("s1");
+    refreshed.updated_at = 99_000_000;
+    h.store.apply(&Batch { ops: vec![IngestOp::SessionMeta(refreshed)], ..Batch::default() }).unwrap();
+    h.hub.warm(h.store.conn()).unwrap();
+    let (status, body) = h.get("/api/sessions?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["sessions"][0]["id"], "s2");
+    assert_eq!(body["sessions"][0]["activity"]["last_at"], 200);
 }
 
 #[tokio::test]

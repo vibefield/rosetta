@@ -44,6 +44,7 @@ fn meta_batch() -> Batch {
                 summary: None,
                 started_at: 10_000,
                 updated_at: 10_000,
+                activity: None,
                 stream_state: StreamState::Streaming,
             }),
         ],

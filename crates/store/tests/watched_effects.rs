@@ -31,6 +31,7 @@ fn session(id: &str) -> SessionRow {
         summary: None,
         started_at: 10_000,
         updated_at: 10_000,
+        activity: None,
         stream_state: StreamState::Streaming,
     }
 }

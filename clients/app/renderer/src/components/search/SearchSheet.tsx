@@ -19,6 +19,7 @@ import type {
 } from "@rosetta/protocol";
 import { AgentMark, agentLabel } from "../../lib/agents";
 import { dayLabel } from "../../lib/format";
+import { sessionLastActive } from "../../lib/session-activity";
 import { SEARCH_LIMIT } from "../../lib/hooks";
 import type { SearchFeed } from "../../lib/hooks";
 import { SearchGlyph } from "../../lib/icons";
@@ -148,7 +149,7 @@ function HeadLine({
           {head.hitCount} {head.hitCount === 1 ? "hit" : "hits"}
         </span>
         <span aria-hidden="true">·</span>
-        <span>{dayLabel(head.session.updated_at, nowMs)}</span>
+        <span>{dayLabel(sessionLastActive(head.session), nowMs)}</span>
       </span>
     </div>
   );

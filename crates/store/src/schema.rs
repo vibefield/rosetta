@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS session (
   updated_at        INTEGER NOT NULL,
   stream_state      TEXT NOT NULL DEFAULT 'pending'
 );
+CREATE INDEX IF NOT EXISTS session_parent ON session(parent_session_id);
 
 CREATE TABLE IF NOT EXISTS plan (
   session_id TEXT NOT NULL REFERENCES session(id),
@@ -175,6 +176,8 @@ CREATE TABLE IF NOT EXISTS message (
   uuid           TEXT,
   parent_uuid    TEXT,
   ts             INTEGER,
+  activity_first_at INTEGER,
+  activity_last_at  INTEGER,
   model          TEXT,
   effort         TEXT,
   content        TEXT,                    -- inline prose or member preview
@@ -367,6 +370,10 @@ LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
            FROM file_edit f JOIN session s ON s.id = f.session_id
            GROUP BY rid) f ON f.rid = r.id
 WHERE r.id = r.root_session_id;
+
+-- Keep these during cold loads: progressive metadata reads must remain bounded.
+CREATE INDEX IF NOT EXISTS message_activity_first ON message(session_id, activity_first_at);
+CREATE INDEX IF NOT EXISTS message_activity_last ON message(session_id, activity_last_at);
 "#;
 
 /// Read/presentation indexes that are unnecessary while an unpublished,
@@ -376,7 +383,6 @@ WHERE r.id = r.root_session_id;
 pub(crate) const BULK_DROP_INDEXES: &str = r#"
 DROP INDEX IF EXISTS session_project;
 DROP INDEX IF EXISTS session_runtime;
-DROP INDEX IF EXISTS session_parent;
 DROP INDEX IF EXISTS task_session;
 DROP INDEX IF EXISTS message_bucket_key;
 DROP INDEX IF EXISTS timeline_meta_message;
@@ -393,7 +399,6 @@ DROP INDEX IF EXISTS usage_bucket_hour;
 pub(crate) const BULK_CREATE_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS session_parent  ON session(parent_session_id);
 CREATE INDEX IF NOT EXISTS session_title_src ON session(title_src_cursor);
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(

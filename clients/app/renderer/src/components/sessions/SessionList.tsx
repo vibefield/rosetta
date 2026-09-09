@@ -1,5 +1,6 @@
 import type { SessionRow } from "@rosetta/protocol";
 import { dayLabel } from "../../lib/format";
+import { sessionLastActive } from "../../lib/session-activity";
 import { useListMotion } from "../../lib/use-list-motion";
 import { EmptyState } from "../ui";
 import { SessionListItem } from "./SessionListItem";
@@ -36,7 +37,7 @@ function groupSessionsByDay(
   const groups: SessionDayGroup[] = [];
 
   for (const session of sessions) {
-    const label = dayLabel(session.updated_at, currentTimestamp);
+    const label = dayLabel(sessionLastActive(session), currentTimestamp);
     const currentGroup = groups.at(-1);
     if (currentGroup?.label === label) {
       currentGroup.sessions.push(session);

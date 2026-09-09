@@ -58,7 +58,11 @@ const sessions = [
   title,
   summary: null,
   started_at: now - i * 3_600_000 - 600000,
-  updated_at: now - (i < 4 ? i * 3600000 : 86400000 + i * 3600000),
+  updated_at: now, // rescan rewrote metadata; conversation dates below stay old
+  activity: {
+    first_at: now - (i < 4 ? i * 3600000 : 86400000 + i * 3600000) - 600000,
+    last_at: now - (i < 4 ? i * 3600000 : 86400000 + i * 3600000),
+  },
   stream_state: i === 0 ? "streaming" : "indexed",
 }));
 const prompts = [
@@ -117,7 +121,16 @@ function Fixture() {
   const feed = {
     rows: displayedRows,
     snapshotReady: ready,
-    timelineMeta: null,
+    timelineMeta: {
+      tasks: [
+        { id: "stale-task", subject: "Unfinished archived task", status: "in_progress", started_at: now - 30 * 86400000, terminal_at: null, timeline_id: null },
+        { id: "finished-task", subject: "Finished archived task", status: "completed", started_at: now - 60000, terminal_at: now, timeline_id: null },
+      ],
+      workflows: [
+        { id: "stale-workflow", name: "Unfinished archived workflow", status: "running", started_at: now - 30 * 86400000, duration_ms: null, worker_count: 0, child_session_ids: [], timeline_id: null },
+      ],
+      plans: [], artifacts: [],
+    },
     status: "live",
     watermark: 123,
     earlier: { kind: "none" },
@@ -161,7 +174,7 @@ function Fixture() {
   const promote = () =>
     setSessions((old) => {
       const last = old.at(-1);
-      return [{ ...last, updated_at: now }, ...old.slice(0, -1)];
+      return [{ ...last, activity: { ...last.activity, last_at: now } }, ...old.slice(0, -1)];
     });
   // The integration runner uses the same state transitions as these controls.
   Object.assign(window, {
