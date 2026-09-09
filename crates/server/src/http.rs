@@ -846,19 +846,7 @@ fn expand_session_scope(state: &AppState, raw: Option<&str>) -> Result<Vec<Strin
             rosetta_search::MAX_SEARCH_SESSIONS
         )));
     }
-    let mut scope = requested.clone();
-    for session in state.hub.sessions() {
-        let Some(parent) = session.parent_session_id.as_deref() else {
-            continue;
-        };
-        let rolls_up = requested
-            .iter()
-            .any(|id| *id == session.root_session_id || id == parent);
-        if rolls_up && !scope.contains(&session.id) {
-            scope.push(session.id);
-        }
-    }
-    Ok(scope)
+    Ok(state.hub.session_scope(&requested))
 }
 
 async fn session(

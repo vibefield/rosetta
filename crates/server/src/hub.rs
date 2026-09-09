@@ -384,6 +384,32 @@ impl Hub {
         state.mirror.session(session_id).cloned()
     }
 
+    /// Every session id that rolls up to one of `requested`: the requested ids
+    /// themselves, every session whose root is one of them, and the direct
+    /// children of a requested id that is itself a child. Walked under the
+    /// mirror lock without cloning rows, because a live monitor asks this on
+    /// every keystroke.
+    pub fn session_scope(&self, requested: &[String]) -> Vec<String> {
+        let state = self.state.lock().expect("hub state poisoned");
+        let mut seen: std::collections::HashSet<&str> =
+            requested.iter().map(String::as_str).collect();
+        let mut widened: Vec<String> = Vec::new();
+        for session in state.mirror.sessions() {
+            let Some(parent) = session.parent_session_id.as_deref() else {
+                continue;
+            };
+            let rolls_up = requested
+                .iter()
+                .any(|id| *id == session.root_session_id || id == parent);
+            if rolls_up && seen.insert(session.id.as_str()) {
+                widened.push(session.id.clone());
+            }
+        }
+        let mut scope = requested.to_vec();
+        scope.extend(widened);
+        scope
+    }
+
     pub fn projects(&self) -> Vec<ProjectRow> {
         let state = self.state.lock().expect("hub state poisoned");
         state.mirror.projects().cloned().collect()
