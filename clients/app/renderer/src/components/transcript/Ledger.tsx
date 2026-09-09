@@ -282,16 +282,26 @@ export function Ledger({
     (focusTimelineId !== null &&
       rowsOf(member).some((row) => row.timeline_id === focusTimelineId));
   const focusInside = members.some(inside);
+  // §05 — the room's activity act is the DEFAULT every run follows: closed,
+  // or open while the act holds every run open. A press on the head is an
+  // override (`true`/`false`); the next press of the act clears it.
+  const everyRunOpen = !useFoldPreference().folded;
   // A run that was one line when it mounted is drawn open, and a live run
   // that grows under the reader's eye keeps that state: nothing closes on its
-  // own any more than it opens (R-5). A run that arrives complete is closed.
-  const [open, setOpen] = useState(() => !summary.closedByDefault);
+  // own any more than it opens (R-5). A run that arrives complete follows
+  // the room.
+  const [override, setOverride] = useState<boolean | null>(() =>
+    summary.closedByDefault ? null : true,
+  );
+  const actRef = useRef(everyRunOpen);
   useEffect(() => {
-    if (focusInside) setOpen(true);
+    if (actRef.current === everyRunOpen) return;
+    actRef.current = everyRunOpen;
+    setOverride(null);
+  }, [everyRunOpen]);
+  useEffect(() => {
+    if (focusInside) setOverride(true);
   }, [focusInside]);
-  // §05 — while the room's activity act holds every run open, the head is a
-  // title, not a control: it reads as expanded and a press changes nothing.
-  const everyRunOpen = !useFoldPreference().folded;
   // A landing rings a row after scrolling to it, and the column scrolled
   // before this ladder was shown. Open on the ring, then bring the row in.
   const highlightInside =
@@ -303,7 +313,7 @@ export function Ledger({
   domIdRef.current = domIdOf;
   useEffect(() => {
     if (!highlightInside || highlightedTimelineId === null) return;
-    setOpen(true);
+    setOverride(true);
     const frame = window.requestAnimationFrame(() => {
       document
         .getElementById(domIdRef.current(highlightedTimelineId))
@@ -409,10 +419,8 @@ export function Ledger({
   // then the head carries the line that is happening.
   const running = summary.running !== null && alive(summary.running) ? summary.running : null;
   const span = summary.spanMs !== null && summary.spanMs >= 1000 ? spanText(summary.spanMs) : null;
-  const expanded = everyRunOpen || open || focusInside;
-  const toggle = () => {
-    if (!everyRunOpen) setOpen((value) => !value);
-  };
+  const expanded = override ?? (everyRunOpen || focusInside);
+  const toggle = () => setOverride(!expanded);
   return (
     <div className={closed ? "tr-seg tr-ledger" : "tr-ledger"}>
       {closed ? anchor : null}
@@ -421,7 +429,6 @@ export function Ledger({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        aria-disabled={everyRunOpen || undefined}
         data-state={running === null ? undefined : "running"}
         onClick={toggle}
         onKeyDown={(event) => {
@@ -471,9 +478,8 @@ export function Ledger({
         </span>
       </div> : null}
       {/* One wrapper in both states, so a live run that grows into a head
-          keeps its lines' open state (R-5). Always in the DOM: with the class
-          on, `[data-fold="off"]` reveals every ladder at once, which is the
-          column head's activity act — one CSS switch, no walk. */}
+          keeps its lines' open state (R-5). Always in the DOM, shown by the
+          head's own `aria-expanded`. */}
       <div className={closed ? "tr-ladder" : undefined}>{drawn}</div>
     </div>
   );

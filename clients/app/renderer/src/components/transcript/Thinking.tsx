@@ -9,7 +9,7 @@
 // The segment owns `data-open` because the clamp is a CSS rule keyed on it,
 // so the disclosure and the element the stylesheet reads are one component.
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { firstLine, spanText } from "../../lib/transcript";
 import { useFoldPreference } from "./fold-preference";
 import { LineChevron, ThoughtGlyph } from "./glyphs";
@@ -76,20 +76,25 @@ export function ThoughtLine({
    * the matched words must be on the page, not one press away. */
   readonly forceOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (forceOpen || hit) setOpen(true);
-  }, [forceOpen, hit]);
-  // §05 — the room's activity act opens every run, and a thought alone is one.
+  // §05 — the room's activity act is the default, a press is an override,
+  // and the next press of the act clears it — as the run's head does.
   const everyRunOpen = !useFoldPreference().folded;
-  const isOpen = open || everyRunOpen;
+  const [override, setOverride] = useState<boolean | null>(null);
+  const actRef = useRef(everyRunOpen);
+  useEffect(() => {
+    if (actRef.current === everyRunOpen) return;
+    actRef.current = everyRunOpen;
+    setOverride(null);
+  }, [everyRunOpen]);
+  useEffect(() => {
+    if (forceOpen || hit) setOverride(true);
+  }, [forceOpen, hit]);
+  const isOpen = override ?? everyRunOpen;
   const span = spanMs === null || spanMs < 1000 ? null : spanText(spanMs);
   // A thought may open with a blank line; the head names the first line
   // that says something.
   const lead = text.trimStart();
-  const toggle = () => {
-    if (!everyRunOpen) setOpen((value) => !value);
-  };
+  const toggle = () => setOverride(!isOpen);
   return (
     <div
       className="tr-seg tr-ledger tr-thought"
@@ -103,7 +108,6 @@ export function ThoughtLine({
         role="button"
         tabIndex={0}
         aria-expanded={isOpen}
-        aria-disabled={everyRunOpen || undefined}
         data-thought=""
         onClick={toggle}
         onKeyDown={(event) => {

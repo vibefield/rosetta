@@ -336,11 +336,10 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; appearance: none; }
 .tr-ladder > .tr-seg { margin: 6px 0 6px 26px; }
 .tr-ladder > .tr-mark { margin: 8px 0; }
 .tr-ladder > .tr-summary { margin: 8px 0 8px 26px; }
-/* §05 — the room's activity act, in one switch: no React state walks the
-   document, and a run the reader opened by hand keeps its own state. With a
-   head on every run the act keeps the head as the ladder's title (R-4). */
-[data-fold="off"] .tr-fold[aria-expanded="false"] + .tr-ladder { display: block; }
-[data-fold="off"] .tr-fold .chev { transform: rotate(90deg); }
+/* §05 — the room's activity act is a store every head reads (see
+   `fold-preference.ts`): it sets each run's default and the head's own
+   `aria-expanded` is the one switch, so a press on a head still folds it
+   while the act holds the room open. `[data-fold]` styles nothing here. */
 
 /* the detail — opens in place, inset under its line */
 .tr-detail {

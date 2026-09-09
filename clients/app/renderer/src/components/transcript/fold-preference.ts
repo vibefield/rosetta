@@ -6,14 +6,18 @@
 // property of this machine's reader, so it does not travel until the store
 // does.
 //
-// The switch itself is CSS. `data-fold="off"` on the column reveals every
-// ladder and keeps every head as its ladder's title (R-4), so flipping the
-// room never walks React state and a run the reader opened by hand keeps its
-// own `aria-expanded`. It is ONE store, not one state per caller, so a head
-// can read it too: while every run is open the head is not a control.
+// The act sets the room's DEFAULT; every head follows it until pressed. It
+// is ONE store, not one state per caller, so each run's head reads it, draws
+// itself open or closed accordingly, and still folds or opens on its own
+// press (a press is an override; the next press of the act clears every
+// override). `data-fold` on the column remains for styling only.
+//
+// v2: the meaning changed with transcript-fold (2026-09-09). Before, "open"
+// unfolded the few runs past eight lines; now it opens every run in the
+// room, so the preference starts over, folded.
 import { useCallback, useSyncExternalStore } from "react";
 
-const STORE_KEY = "ah.transcript.fold.v1";
+const STORE_KEY = "ah.transcript.fold.v2";
 
 /** Folded is the default: the ledger's closed sentence is the point. */
 function load(): boolean {
