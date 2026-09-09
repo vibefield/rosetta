@@ -257,7 +257,7 @@ export function WorktreeColumn({
             description="The engine is walking the project root."
           />
         ) : (
-          <>
+          <div className="ah-railbody" data-split={hasSiblingWorktrees || undefined}>
             <WorktreeFileTree
               engine={engine}
               stale={stale}
@@ -274,7 +274,7 @@ export function WorktreeColumn({
             {hasSiblingWorktrees && (
               <WorktreeList facts={facts} openRoot={shownRoot} homeDirectory={homeDirectory} />
             )}
-          </>
+          </div>
         )
       ) : connection === null ? (
         <EmptyState title="Reading the repository" description="Asking git for its status." />

@@ -579,11 +579,12 @@ code, .mono { font-family: var(--vf-font-mono); }
    — `components/worktree` — and leaves the stylesheet speaking the record's
    language.
 
-   The mille tree owns its own scroller and is sized to its CONTENT, so the
-   worktrees below sit against the last row the way the proto's single-flow
-   rail draws them. `flex-shrink` caps that height at the space the foot
-   leaves, and the unmeasured case falls back to filling the column. */
-.ah-railtree { flex: 0 1 auto; height: 100%; min-height: 0; padding: 6px 6px 0; }
+   Files take 70% of the area below the tabs and worktrees take 30%, including
+   their heading. Both scroll independently; expanding a folder never moves
+   the divider. With no sibling worktrees, files take the whole area. */
+.ah-railbody { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
+.ah-railbody[data-split] { grid-template-rows: minmax(0, 7fr) minmax(0, 3fr); }
+.ah-railtree { height: 100%; min-height: 0; padding: 6px 6px 0; }
 .ah-railtree[data-mille-theme] [role="tree"] {
   padding-bottom: var(--ah-scroll-foot, 32px);
   scroll-padding-bottom: var(--ah-scroll-foot, 32px);
@@ -591,13 +592,10 @@ code, .mono { font-family: var(--vf-font-mono); }
 }
 /* the engine lags a project switch: the old tree dims rather than lies */
 .ah-railtree[data-stale] { opacity: 0.45; transition: opacity 160ms; }
-/* A repository can have dozens of worktrees. Keep their heading in view
-   and give the list its own bounded viewport, leaving room for the files.
-   Only the file tree gives up height: proportional shrinking would crush
-   this list when the virtualized tree reports thousands of rows. */
-.ah-railfoot { display: flex; flex-direction: column; flex: none; min-height: 0; max-height: 45%; }
+/* Keep the worktree heading fixed above its scrollable list. */
+.ah-railfoot { display: flex; flex-direction: column; min-height: 0; }
 .ah-railfoot__list {
-  min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin;
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin;
   padding: 0 6px var(--ah-scroll-foot, 32px);
   scroll-padding-bottom: var(--ah-scroll-foot, 32px);
 }
