@@ -295,6 +295,16 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
 /* the session summary — a footnote at the end, not a state */
 .tr-summary { margin: 18px 0 0; padding: 2px 0 2px 14px; border-left: 2px solid var(--vf-hairline-strong); color: var(--vf-text-tertiary); font-size: 13px; }
 .tr-summary .eyebrow { margin-bottom: 4px; }
+.tr-compaction { margin: 18px 0; min-width: 0; }
+.tr-compaction > summary { margin: 0; min-height: 28px; cursor: pointer; list-style: none; color: var(--vf-text-tertiary); }
+.tr-compaction > summary::-webkit-details-marker { display: none; }
+.tr-compaction > summary:focus-visible { outline: 1.5px solid var(--vf-select); outline-offset: 3px; border-radius: 4px; }
+.tr-compaction__label { display: inline-flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.tr-compaction__chev { display: inline-block; font-size: 14px; }
+.tr-compaction[open] .tr-compaction__chev { transform: rotate(90deg); }
+.tr-compaction__hint { color: var(--vf-text-faint); }
+.tr-compaction__body { margin: 10px 0 0; padding: 4px 0 4px 14px; border-left: 1px solid var(--vf-hairline-strong); overflow-wrap: anywhere; }
+.tr-compaction__byline { margin: 0 0 14px; color: var(--vf-text-tertiary); font-size: 11px; }
 
 /* annotations for the anatomy specimen */
 .anno { position: absolute; z-index: 3; width: 18px; height: 18px; border-radius: 999px; background: var(--vf-select); color: #fff; font-size: 10.5px; font-weight: 600; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--vf-sheet-surface); pointer-events: none; }
@@ -901,7 +911,10 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
             </div></div>
           </div>
         </div>
-        <div class="tr-mark" style="position:relative"><i class="anno" style="left:-34px;top:-2px">G</i>context compacted</div>
+        <details class="tr-compaction" style="position:relative">
+          <summary class="tr-mark"><i class="anno" style="left:-34px;top:2px">G</i><span class="tr-compaction__label"><span class="tr-compaction__chev" aria-hidden="true">›</span>Context compacted <span class="tr-compaction__hint">· summary</span></span></summary>
+          <div class="tr-compaction__body"><p class="tr-compaction__byline">Agent-generated context for continuing this session.</p><div class="tr-prose"><h3>Work preserved</h3><p>The radius now goes through the shared token. Seven consumers were checked; four belong to <code>widgetlab</code>.</p><h3>Next step</h3><p>Verify the shadow after the geometry change. Keep the existing design constraints.</p></div></div>
+        </details>
         <div class="tr-seg tr-prose"><span class="tr-anchor">23:53:40</span><p>Seven consumers, four of them in <code>widgetlab</code>. The radius is safe to move only through the token — which is what §4 already says.</p><div class="tr-acts"><button type="button">copy</button><button type="button">→ chip</button></div></div>
       </div>
     </div>
@@ -917,7 +930,7 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
   <li><i>D</i><span><b>The ledger, folded.</b> Inside it, consecutive commands fold to one line and a failed one breaks the fold. A run — everything between two things said, reasoning and notices included — closes by default at two lines to one sentence of nouns, acts first, the changed files named, with the failure count in red at the right beside the span (amended 2026-09-08, <code>protos/agent-history-proto/transcript-fold/</code>; it was eight lines, tool rows only). It opens to the ladder; the head stays as its title. The room's <em>activity</em> act in the column head opens every run at once and keeps the head.</span></li>
   <li><i>E</i><span><b>Prose with structure.</b> Headings, lists and code keep the markdown renderer that exists; code gains the language bar and a copy act.</span></li>
   <li><i>F</i><span><b>The Agent worker and its durable child thread.</b> A proven invocation opens one canonical worker document under the calling line — the whole grammar one size down (13px), on the ledger's rail, headed by the child's mark, name, role and range. Follow-ups, peer deliveries and resumes append there. Agent Teams and Workflow runs use the other §04A geometries.</span></li>
-  <li><i>G</i><span><b>A system marker.</b> Every <code>Notice</code> joins the watermark and the gap as a drawn hairline line: compaction, model change, mode change, permission, handoff. Runtime errors take red text — still a line, never a filled alarm.</span></li>
+  <li><i>G</i><span><b>A system marker.</b> Every <code>Notice</code> joins the watermark and the gap as a drawn hairline line: compaction, model change, mode change, permission, handoff. Runtime errors take red text — still a line, never a filled alarm. <b>Compaction summary, decided 2026-09-09:</b> a generated recap belongs to the compaction marker and closes by default to <em>Context compacted · summary</em>. Opening reveals an attribution line and the complete Markdown, with copy. It stays outside activity folds and adds neither a human prompt nor a response head. Only a neighboring boundary linked by the summary's native parent id, in the same session and sitting, joins the disclosure; both anchors remain reachable. Without that boundary, the recap draws the same way on its own. Search landing opens it. An actual <code>/compact</code> invocation remains a command pill; proximity or the summary's stock wording never proves which command caused it.</span></li>
   <li><i>H</i><span><b>The command pill.</b> A prompt that is a local command wears a pill instead of a panel, and its <code>command_output</code> rides beside it in the caption ramp. The pair is one object.</span></li>
 </ul>
 <section class="rec">

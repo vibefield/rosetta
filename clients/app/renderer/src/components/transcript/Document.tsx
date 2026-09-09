@@ -46,6 +46,7 @@ import type { TranscriptModel } from "./document-model";
 import type { TurnPart } from "./document-plan";
 import { Ledger } from "./Ledger";
 import { GapMarker, Marker, SummaryNote, Watermark } from "./Marker";
+import { Compaction } from "./Compaction";
 import { Attachments, Prompt } from "./Prompt";
 import { Prose, SegmentActs } from "./Prose";
 import { ResponseHead } from "./ResponseHead";
@@ -674,6 +675,18 @@ export function TranscriptDocument({
             domId={domIdOf(rowId)}
             timelineId={rowId}
             hit={hit}
+          />
+        );
+      case "compaction":
+        return (
+          <Compaction
+            key={segment.key}
+            text={segment.text}
+            domId={domIdOf(rowId)}
+            timelineId={rowId}
+            hit={segment.rows.some((row) => row.timeline_id === highlightedTimelineId)}
+            forceOpen={segment.rows.some((row) => row.timeline_id === focusTimelineId)}
+            onReceipt={onReceipt}
           />
         );
       case "prose":

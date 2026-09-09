@@ -11,8 +11,8 @@ use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, TitleKind};
 use rosetta_core::timeline::{
     AttachmentKind, CollaborationChannel, CollaborationEventKind, CollaborationOp,
-    CollaborationStatus, Notice, ParticipantColor, TimelineBody, TimelineEntry, ToolAction,
-    ToolStatus,
+    CollaborationStatus, Notice, ParticipantColor, SummaryPurpose, TimelineBody, TimelineEntry,
+    ToolAction, ToolStatus,
 };
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
@@ -1927,6 +1927,97 @@ fn system_compaction_becomes_a_closed_notice() {
         }
     ));
     assert!(drift(&ops).is_empty(), "compactMetadata is a typed field");
+}
+
+#[test]
+fn compact_summary_is_generated_context_in_main_and_child_streams() {
+    let recap = "This session is being continued from a previous conversation that ran out of context.\n\n# Summary\n\nKeep the full recap.";
+    for stream in ["transcript", "subagent-transcript"] {
+        for content in [json!(recap), json!([{"type": "text", "text": recap}])] {
+            let line = user(
+                content,
+                json!({
+                    "parentUuid": "267a8426-e8c4-441a-8ad2-2a3466c630a1",
+                    "isCompactSummary": true,
+                    "isVisibleInTranscriptOnly": true,
+                }),
+            );
+            let (ops, statuses) = run_stream(stream, &[line]);
+            assert_eq!(statuses, [LineStatus::Parsed]);
+            let rows = messages(&ops);
+            assert_eq!(rows.len(), 1);
+            assert!(
+                matches!(&rows[0].body, TimelineBody::Summary { purpose, text }
+                if *purpose == SummaryPurpose::Compaction && text.as_preview() == recap)
+            );
+            assert_eq!(rows[0].group.kind, rosetta_core::GroupKind::SystemCycle);
+            assert_eq!(
+                rows[0].group.derivation,
+                rosetta_core::GroupDerivation::Native
+            );
+            assert_eq!(
+                rows[0].parent_native_id.as_deref(),
+                Some("267a8426-e8c4-441a-8ad2-2a3466c630a1")
+            );
+            assert!(rows[0].native_id.is_some());
+            assert!(drift(&ops).is_empty());
+        }
+    }
+}
+
+#[test]
+fn compact_summary_flag_is_authoritative_and_quoted_transport_stays_text() {
+    for content in [
+        "<command-name>/compact</command-name>",
+        "<teammate-message teammate_id=\"worker\">A quoted delivery</teammate-message>",
+    ] {
+        let (ops, _) = run(&[user(json!(content), json!({"isCompactSummary": true}))]);
+        let rows = messages(&ops);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0].body, TimelineBody::Summary { .. }));
+        assert_eq!(text(rows[0]), Some(content));
+    }
+    let prose = "This session is being continued from a previous conversation that ran out of context.\n\nA human can paste these words.";
+    for flags in [
+        json!({}),
+        json!({"isVisibleInTranscriptOnly": true}),
+        json!({"isCompactSummary": false}),
+    ] {
+        let (ops, _) = run(&[user(json!(prose), flags)]);
+        let rows = messages(&ops);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0].body, TimelineBody::User { .. }));
+        assert_eq!(rows[0].group.kind, rosetta_core::GroupKind::HumanTurn);
+        assert_eq!(text(rows[0]), Some(prose));
+    }
+}
+
+#[test]
+fn oversized_compact_summary_retains_the_complete_stored_text() {
+    let recap = format!(
+        "# Summary\n\n{}\nEnd of full recap.",
+        "preserved context ".repeat(5_000)
+    );
+    let (ops, _) = run(&[user(json!(recap), json!({"isCompactSummary": true}))]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    let TimelineBody::Summary {
+        text: rosetta_core::CanonicalText::Member { asset, .. },
+        ..
+    } = &rows[0].body
+    else {
+        panic!("large compaction text must be stored as a member");
+    };
+    let stored = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ProjectionAsset { asset: stored } if stored.digest == asset.digest => {
+                Some(stored)
+            }
+            _ => None,
+        })
+        .expect("full recap asset");
+    assert_eq!(stored.bytes, recap.as_bytes());
 }
 
 #[test]

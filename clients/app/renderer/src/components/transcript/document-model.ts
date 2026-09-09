@@ -39,6 +39,10 @@ function buildRepresentatives(turns: readonly Turn[]): Map<string, string> {
   for (const turn of turns) {
     if (turn.prompt !== null) claim(turn.prompt.rows, turn.prompt.row.timeline_id);
     for (const segment of turn.segments) {
+      if (segment.kind === "compaction") {
+        claim(segment.rows, segment.row.timeline_id);
+        continue;
+      }
       if (segment.kind === "ledger") {
         for (const member of segment.members) {
           if (member.kind !== "line") {

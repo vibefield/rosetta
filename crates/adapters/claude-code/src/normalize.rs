@@ -600,7 +600,10 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
     // split one reply into several fake turns. The paired flags are the native
     // provenance; content matching would mistake a literal human sentence for
     // transport.
-    if line.is_meta == Some(true) && line.turn_companion == Some(true) {
+    if line.is_meta == Some(true)
+        && line.turn_companion == Some(true)
+        && line.is_compact_summary != Some(true)
+    {
         return;
     }
 
@@ -613,6 +616,35 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
         model: None,
         effort: None,
     };
+
+    // The CLI stores its generated continuation recap with the API `user`
+    // role. The native flag, not the recap's boilerplate, proves compaction.
+    // Preserve its text verbatim before interpreting any command/team markup
+    // quoted inside it, and retain the parent link to its compact boundary.
+    if line.is_compact_summary == Some(true) {
+        let mut text = String::new();
+        match &line.message.content {
+            UserContent::Text(content) => text.push_str(content),
+            UserContent::Blocks(blocks) => {
+                for block in blocks {
+                    if let UserContentBlock::Known(KnownUserBlock::Text { text: block, .. }) = block
+                    {
+                        push_text(&mut text, block);
+                    }
+                }
+            }
+        }
+        let mut row = emit.row(&seed, MessageKind::Summary, &line.uuid);
+        row.subtype = Some("compact_summary".to_owned());
+        row.content = Some(text);
+        row.group = Some(TimelineGroup {
+            id: line.uuid.clone(),
+            kind: GroupKind::SystemCycle,
+            derivation: GroupDerivation::Native,
+        });
+        emit.push_row(row);
+        return;
+    }
 
     let mut text = String::new();
     let mut results: Vec<ToolResultBlock<'_>> = Vec::new();

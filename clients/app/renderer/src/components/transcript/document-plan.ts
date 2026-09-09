@@ -64,7 +64,7 @@ function firstRowIdOf(prompts: readonly Prompt[], segments: readonly Segment[]):
 }
 
 function segmentRows(segment: Segment): readonly TimelineEntry[] {
-  return segment.kind === "ledger" ? segment.rows : [segment.row];
+  return segment.kind === "ledger" || segment.kind === "compaction" ? segment.rows : [segment.row];
 }
 
 /** A turn's own first row, for the sitting it belongs to. */

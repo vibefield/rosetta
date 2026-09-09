@@ -1100,6 +1100,25 @@ button.tr-sub__head:hover { color: var(--vf-text-primary); }
 button.tr-mark { width: 100%; border: 0; background: none; padding: 0; cursor: pointer; font-family: inherit; }
 button.tr-mark:hover { color: var(--vf-text-tertiary); }
 
+/* A generated recap folds into its compaction marker, outside tool activity. */
+.tr-compaction { margin: 18px 0; min-width: 0; }
+.tr-compaction > summary { margin: 0; min-height: 28px; cursor: pointer; list-style: none; color: var(--vf-text-tertiary); }
+.tr-compaction > summary::-webkit-details-marker { display: none; }
+.tr-compaction > summary:hover { color: var(--vf-text-secondary); }
+.tr-compaction > summary:focus-visible { outline: 1.5px solid var(--vf-select); outline-offset: 3px; border-radius: 4px; }
+.tr-compaction__label { display: inline-flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.tr-compaction__label .chev { display: inline-flex; flex: none; }
+.tr-compaction__label .chev svg { width: 12px; height: 12px; }
+.tr-compaction[open] .chev svg { transform: rotate(90deg); }
+.tr-compaction__hint { color: var(--vf-text-faint); }
+.tr-compaction__body { margin: 10px 0 0; padding: 4px 0 4px 14px; border-left: 1px solid var(--vf-hairline-strong); overflow-wrap: anywhere; }
+.tr-compaction__byline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin: 0 0 14px; color: var(--vf-text-tertiary); font-size: 11px; }
+.tr-compaction__byline button { margin-left: auto; white-space: nowrap; }
+.tr-compaction__byline button, .tr-compaction__status button { padding: 2px 0; border: 0; background: none; color: var(--vf-text-tertiary); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.tr-compaction__byline button:hover, .tr-compaction__status button:hover { color: var(--vf-text-primary); }
+.tr-compaction__status { color: var(--vf-text-tertiary); font-size: 12px; }
+.tr-compaction__body .tr-prose > :first-child { margin-top: 0; }
+
 /* the session summary — a footnote at the end, not a state */
 .tr-summary {
   margin: 18px 0 0; padding: 2px 0 2px 14px; border-left: 2px solid var(--vf-hairline-strong);

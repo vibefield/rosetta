@@ -29,6 +29,7 @@
 import type {
   AttachmentKind,
   AttachmentRef,
+  CanonicalText,
   CitationRef,
   CollaborationEvent,
   Notice,
@@ -325,6 +326,15 @@ export type Segment =
       readonly text: string;
     }
   | {
+      readonly kind: "compaction";
+      readonly key: string;
+      readonly row: TimelineEntry;
+      /** The summary and, when proven, its neighboring boundary, in order. */
+      readonly rows: readonly TimelineEntry[];
+      readonly at: number | null;
+      readonly text: CanonicalText;
+    }
+  | {
       readonly kind: "collaboration";
       readonly key: string;
       readonly row: TimelineEntry;
@@ -402,8 +412,9 @@ function isAgentAuthored(row: TimelineEntry): boolean {
     case "agent":
     case "thinking":
     case "tool_use":
-    case "summary":
       return true;
+    case "summary":
+      return row.body.purpose !== "compaction";
     case "collaboration":
     case "user":
     case "notice":
@@ -546,6 +557,32 @@ function runOther(member: LedgerMember): RunOther | null {
   }
 }
 
+/** Combine only a direct native parent/child pair. Reversed timestamps are
+ * common after compaction; proximity to `/compact` is not evidence of a link.
+ * A page or sitting boundary leaves each record independently drawable. */
+function compactionPairs(
+  rows: readonly TimelineEntry[],
+  cutBefore: ReadonlySet<string>,
+): Map<string, readonly TimelineEntry[]> {
+  const pairs = new Map<string, readonly TimelineEntry[]>();
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1];
+    const current = rows[index];
+    if (cutBefore.has(current.timeline_id) || previous.session_id !== current.session_id
+        || current.ordinal !== previous.ordinal + 1) continue;
+    const summary = previous.body.type === "summary" ? previous : current;
+    const boundary = summary === previous ? current : previous;
+    if (summary.body.type !== "summary" || summary.body.purpose !== "compaction"
+        || boundary.body.type !== "notice" || boundary.body.notice.type !== "compaction"
+        || boundary.native_id === null || summary.parent_native_id !== boundary.native_id
+        || pairs.has(summary.timeline_id) || pairs.has(boundary.timeline_id)) continue;
+    const pair = [previous, current];
+    pairs.set(summary.timeline_id, pair);
+    pairs.set(boundary.timeline_id, pair);
+  }
+  return pairs;
+}
+
 /**
  * The reply's segments. R-1: speech is the boundary — a prose row or a team
  * message closes the run, and everything between two of them (tool rows,
@@ -553,8 +590,9 @@ function runOther(member: LedgerMember): RunOther | null {
  * gets the run's summary fold. A lone thought stays a `thinking` segment,
  * a lone notice a `marker`. A run that holds only notices and summaries has
  * no sentence to close to, so its members stand as
- * their own segments. A sitting boundary (`cutBefore`) closes a run as speech
- * does, so no run straddles a pill.
+ * their own segments. Compaction recaps (and their paired boundary) stay
+ * outside activity folds. A sitting boundary (`cutBefore`) also closes a run,
+ * so no run straddles a pill.
  */
 function buildSegments(
   rows: readonly TimelineEntry[],
@@ -563,6 +601,7 @@ function buildSegments(
   cutBefore: ReadonlySet<string>,
 ): Segment[] {
   const segments: Segment[] = [];
+  const pairs = compactionPairs(rows, cutBefore);
   let members: LedgerMember[] = [];
   let runRows: TimelineEntry[] = [];
   let tools: TimelineEntry[] = [];
@@ -626,6 +665,10 @@ function buildSegments(
         continue;
       }
       case "notice": {
+        if (pairs.has(row.timeline_id)) {
+          flushRun();
+          continue;
+        }
         const segment = markerSegment(row);
         if (segment === null) continue;
         flushTools();
@@ -634,6 +677,19 @@ function buildSegments(
         continue;
       }
       case "summary": {
+        if (row.body.purpose === "compaction") {
+          flushRun();
+          const paired = pairs.get(row.timeline_id) ?? [row];
+          segments.push({
+            kind: "compaction",
+            key: row.timeline_id,
+            row,
+            rows: paired,
+            at: firstStamp(paired),
+            text: row.body.text,
+          });
+          continue;
+        }
         const segment = summarySegment(row);
         if (segment === null) continue;
         flushTools();
@@ -766,7 +822,7 @@ export function documentTurns(
           };
     const headIndex = Math.max(
       0,
-      segments.findIndex((segment) => segment.kind !== "marker"),
+      segments.findIndex((segment) => segment.kind !== "marker" && segment.kind !== "compaction"),
     );
 
     const at = promptRow?.at ?? firstStamp(body);

@@ -82,6 +82,20 @@ array — see §8.1), `teamName`, `classifierMetaLines` (RAW STRING of
 newline-delimited JSON), `interruptedMessageId`, `toolDenialKind`
 (e.g. 'automode-blocked'), `queuePriority`, `userFeedback`.
 
+**Compaction recaps** — `user.isCompactSummary: true` identifies generated
+continuation context, despite `message.role: "user"`. Project it as
+`summary { purpose: "compaction" }` in a native `system_cycle`, retaining the
+full text and native parent link. `isVisibleInTranscriptOnly` alone does not
+prove compaction, and humans quoting the same stock introduction remain humans.
+Observed 2026-09-09 in writer 2.1.261: VibeField session
+`089359ef-9ea9-4b69-aa42-87b38db9ae09`, rows 1446–1450. Summary
+`fc8455aa-e1ea-45f5-af45-a4f8f5a98bab` parents compact boundary
+`267a8426-e8c4-441a-8ad2-2a3466c630a1`; both flags are true. The boundary's
+`compactMetadata.trigger` is `manual`, although the recap says the conversation
+ran out of context. The `/compact` echo and output follow the recap in file
+order with earlier command timestamps. Neither wording nor timestamp proximity
+is a causal join. Normalizer 24 replays existing projections with this category.
+
 **assistant** — extends base: `requestId` (absent in `--bare -p` fixtures →
 treat optional), `message` payload {model, id, type:'message', role, content[],
 stop_reason (end_turn|tool_use|stop_sequence|max_tokens|null), stop_sequence,

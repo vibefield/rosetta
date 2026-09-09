@@ -36,7 +36,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        23
+        24
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
