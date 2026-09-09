@@ -75,7 +75,7 @@ test(
       const expanded = new Set([root.id]);
       let sawLoading = false;
       let sawPartialRows = false;
-      let partialHadAuthoritativeCount = false;
+      let sawIncompleteAuthoritativeCount = false;
 
       const observe = () => {
         const snapshot = client.getSnapshot();
@@ -87,12 +87,15 @@ test(
           includeIgnored: false,
         });
         const hydratedChildren = Math.max(0, rows.length - 1);
+        const childCount = snapshot.directChildCount(root.id);
         if (load.state === "loading") sawLoading = true;
-        if (load.state === "loading" && hydratedChildren > 0) {
+        if (load.state === "loading" && hydratedChildren > 0 && childCount === null) {
           sawPartialRows = true;
-          partialHadAuthoritativeCount ||=
-            snapshot.directChildCount(root.id) !== null;
         }
+        // The final count can arrive before the asynchronous load task closes.
+        // A known count must describe the entire directory, never a partial page.
+        sawIncompleteAuthoritativeCount ||=
+          childCount !== null && childCount !== WIDE_DIRECTORY_SIZE;
       };
 
       subscription = client.on("change", observe);
@@ -122,9 +125,9 @@ test(
         "rows must arrive before directory completion",
       );
       assert.equal(
-        partialHadAuthoritativeCount,
+        sawIncompleteAuthoritativeCount,
         false,
-        "a partial listing must remain pending until end-of-directory",
+        "only the complete directory may publish an authoritative count",
       );
     } finally {
       subscription?.dispose();
