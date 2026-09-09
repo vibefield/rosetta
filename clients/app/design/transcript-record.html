@@ -157,6 +157,33 @@ blockquote.claim p { margin: 0; color: inherit; font-size: inherit; }
 .tr-prompt { display: inline-block; max-width: 100%; padding: 11px 15px 12px; border-radius: 10px; background: var(--vf-fill); color: var(--vf-text-primary); }
 .tr-prompt p + p { margin-top: 8px; }
 .tr-prompt code { font-family: var(--vf-font-mono); font-size: 12.5px; }
+/* Message boundaries, 2026-09-09 — the resting page keeps its bare replies. */
+.tr-prompt { transition: background-color 140ms ease; }
+.tr-seg.tr-prose {
+  --tr-hover-fill: color-mix(in srgb, var(--vf-foreground) 2%, transparent);
+  border-radius: 3px;
+  box-shadow: 0 0 0 6px transparent;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+.tr-prompt:has(:focus-visible) {
+  background: color-mix(in srgb, var(--vf-fill) 98%, var(--vf-foreground));
+}
+.tr-seg.tr-prose:has(:focus-visible) {
+  background: var(--tr-hover-fill);
+  box-shadow: 0 0 0 6px var(--tr-hover-fill);
+}
+@media (hover: hover) and (pointer: fine) {
+  .tr-prompt:hover {
+    background: color-mix(in srgb, var(--vf-fill) 98%, var(--vf-foreground));
+  }
+  .tr-seg.tr-prose:hover {
+    background: var(--tr-hover-fill);
+    box-shadow: 0 0 0 6px var(--tr-hover-fill);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tr-prompt, .tr-seg.tr-prose { transition: none; }
+}
 .tr-att { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .tr-att figure { margin: 0; display: grid; gap: 4px; }
 .tr-att__tile { width: 176px; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--vf-hairline-strong); background: var(--vf-chrome-solid); cursor: zoom-in; }
@@ -2061,6 +2088,7 @@ Native adapter → shared media helper → existing projection assets → prompt
 <section class="rec">
   <span class="eyebrow">§12</span>
   <h2>Decided — seven choices, locked</h2>
+  <p><strong>Message hover · 2026-09-09.</strong> Hovering an authored reply reveals a faint neutral ground around that message, including images and citations. A prompt gently deepens its existing fill. Both use a 2% ink tint, with no hover outline or border. The cue follows each individual message, including prompts stacked in a cluster; keyboard focus inside a message receives the same treatment. The 140ms colour transition changes no spacing or line wrapping and respects reduced motion. Replies remain bare at rest, and search landing rings retain their accent.</p>
   <p><strong>A · B · A · C · A · A · B.</strong> The prompt is the panel; consecutive commands fold; anchors live in the margin; reasoning is muted, clamped prose; the diff opens in place, capped; site icons keep their colour; the page above is fetched on approach and revealed on the pull. The page is drawn to those answers. The cards stay as the record of what else was on the table and no longer take a press; the ring is the decision.</p>
   <p><strong>Q8–Q12 · A · B · A · A · A</strong> (2026-09-08, drawn in <code>protos/agent-history-proto/transcript-fold/index.html</code>). A run closes at two lines; its head names the changed files, acts first; reasoning joins the run and alone is a <em>Thought</em> line that opens to Q4 C's clamp; a live run stays closed and carries its running line; task checklists fold with everything else. Q4 C is not reversed — it moves one level down.</p>
   <p><strong>Quieter closed runs</strong> (2026-09-09). The top-level collapsed summary and its filenames use tertiary gray; hover or keyboard focus restores secondary ink. Expanded activity keeps its existing contrast, and live activity and failures keep their status colors.</p>

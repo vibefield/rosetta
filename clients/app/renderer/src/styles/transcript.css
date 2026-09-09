@@ -9,7 +9,7 @@
    the rule is written here instead, marked WRITTEN, because a component
    cannot carry a stylesheet's job.
 
-   The claim it draws: the prompt is the only container, the reply is bare, the
+   The claim it draws: at rest the prompt is the only container, the reply is bare, the
    machinery is a ledger you can read without opening, and hue is spent only on
    what did not complete or is still happening.
 
@@ -80,6 +80,7 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
 .tr-prompt {
   display: inline-block; max-width: 100%; padding: 11px 15px 12px;
   border-radius: 10px; background: var(--vf-fill); color: var(--vf-text-primary);
+  transition: background-color 140ms ease;
   /* WRITTEN — the record's specimen held prose; a real prompt holds pasted
      urls and injected tags, and one unbreakable token must not push the
      panel past the measure it is content-hugging inside. */
@@ -87,6 +88,35 @@ button.tr-anchor { border: 0; background: none; font-weight: 400; }
 }
 .tr-prompt p + p { margin-top: 8px; }
 .tr-prompt code { font-family: var(--vf-font-mono); font-size: 12.5px; }
+
+/* Message boundaries (2026-09-09): reveal the authored block under the pointer,
+   including its images and citations. Paint into the existing space around a
+   reply so text, wrapping, sticky actions and scroll geometry stay stationary. */
+.tr-seg.tr-prose {
+  --tr-hover-fill: color-mix(in srgb, var(--vf-foreground) 2%, transparent);
+  border-radius: 3px;
+  box-shadow: 0 0 0 6px transparent;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+.tr-prompt:has(:focus-visible) {
+  background: color-mix(in srgb, var(--vf-fill) 98%, var(--vf-foreground));
+}
+.tr-seg.tr-prose:has(:focus-visible) {
+  background: var(--tr-hover-fill);
+  box-shadow: 0 0 0 6px var(--tr-hover-fill);
+}
+@media (hover: hover) and (pointer: fine) {
+  .tr-prompt:hover {
+    background: color-mix(in srgb, var(--vf-fill) 98%, var(--vf-foreground));
+  }
+  .tr-seg.tr-prose:hover {
+    background: var(--tr-hover-fill);
+    box-shadow: 0 0 0 6px var(--tr-hover-fill);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tr-prompt, .tr-seg.tr-prose { transition: none; }
+}
 
 /* Claude's numbered paste marker is a second handle for the same image. It
    reads like a link and acts like the thumbnail, without navigating away. */
