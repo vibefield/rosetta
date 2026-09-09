@@ -24,7 +24,7 @@ export function WorktreeList({ facts, openRoot, homeDirectory }: WorktreeListPro
       <div className="ah-railsplit">
         <span className="ah-eyebrow">Worktrees</span>
       </div>
-      <div className="ah-railfoot__list">
+      <div className="ah-railfoot__list" role="region" aria-label="Worktrees" tabIndex={0}>
         {facts.worktrees.map((worktree) => {
           // The count belongs to the checkout the shell actually read, and
           // git reports it for one worktree at a time.

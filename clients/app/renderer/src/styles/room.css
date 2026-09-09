@@ -553,10 +553,22 @@ code, .mono { font-family: var(--vf-font-mono); }
   height: 100%; min-height: 0;
   border: 0; border-radius: 0; box-shadow: none;
   --composer-h: 0px;
+  --ah-scroll-foot: calc(32px + env(safe-area-inset-bottom, 0px));
+  --ah-floating-foot: calc(24px + env(safe-area-inset-bottom, 0px));
 }
-/* no composer in the standalone app; scrollers keep a quiet foot */
-.ah-scroll { padding-bottom: 26px; }
-.ah-newpill { bottom: 26px; }
+/* The search strip takes its own height. The grid fills only what remains:
+   a 100% height with an automatic minimum pushed every column's foot below
+   the window, including the transcript's absolutely positioned control. */
+.ah-cols { flex: 1; height: auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.ah-col { min-height: 0; }
+/* Real scrollable space after the last row, also respected by keyboard
+   reveals. The fallback keeps standalone component previews comfortable. */
+.ah-scroll {
+  min-height: 0;
+  padding-bottom: var(--ah-scroll-foot, 32px);
+  scroll-padding-bottom: var(--ah-scroll-foot, 32px);
+}
+.ah-newpill { bottom: var(--ah-floating-foot, 24px); }
 /* Four columns: the worktree rail is real now (the proto's base grid rules
    above already carry the rail track and its H-3 close); the footprint
    guest still waits on Q4, so its 0px fifth track stays empty. */
@@ -572,11 +584,25 @@ code, .mono { font-family: var(--vf-font-mono); }
    rail draws them. `flex-shrink` caps that height at the space the foot
    leaves, and the unmeasured case falls back to filling the column. */
 .ah-railtree { flex: 0 1 auto; height: 100%; min-height: 0; padding: 6px 6px 0; }
+.ah-railtree[data-mille-theme] [role="tree"] {
+  padding-bottom: var(--ah-scroll-foot, 32px);
+  scroll-padding-bottom: var(--ah-scroll-foot, 32px);
+  overscroll-behavior-y: contain;
+}
 /* the engine lags a project switch: the old tree dims rather than lies */
 .ah-railtree[data-stale] { opacity: 0.45; transition: opacity 160ms; }
-.ah-railfoot { flex: none; padding-bottom: 12px; }
-.ah-railfoot__list { padding: 0 6px 4px; }
-.ah-railsplit { margin: 12px 12px 6px; padding-top: 12px; border-top: 1px solid var(--vf-hairline); }
+/* A repository can have dozens of worktrees. Keep their heading in view
+   and give the list its own bounded viewport, leaving room for the files.
+   Only the file tree gives up height: proportional shrinking would crush
+   this list when the virtualized tree reports thousands of rows. */
+.ah-railfoot { display: flex; flex-direction: column; flex: none; min-height: 0; max-height: 45%; }
+.ah-railfoot__list {
+  min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin;
+  padding: 0 6px var(--ah-scroll-foot, 32px);
+  scroll-padding-bottom: var(--ah-scroll-foot, 32px);
+}
+.ah-railfoot__list:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+.ah-railsplit { flex: none; margin: 12px 12px 6px; padding-top: 12px; border-top: 1px solid var(--vf-hairline); }
 .ah-worktree {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   width: 100%; padding: 7px 9px; border: 0; border-radius: 9px; background: transparent;

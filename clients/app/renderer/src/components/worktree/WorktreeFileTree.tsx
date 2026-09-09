@@ -81,8 +81,10 @@ function useContentHeight(resetKey: string): {
         return;
       }
       const style = getComputedStyle(scroller);
+      const wrapperStyle = getComputedStyle(wrapper);
       const padding =
-        (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+        (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0) +
+        (parseFloat(wrapperStyle.paddingTop) || 0) + (parseFloat(wrapperStyle.paddingBottom) || 0);
       const next = sizer.offsetHeight + padding;
       // An unchanged height sets no state, which is what stops the loop this
       // would otherwise be: the height lands as an inline style, and that is
