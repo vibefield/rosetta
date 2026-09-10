@@ -676,7 +676,7 @@ the owning UI record is
 
 | Adapter / evidence reviewed | Authored-image evidence | Implemented projection | Remaining native evidence |
 |---|---|---|---|
-| [Claude Code 2.1.241](../../groundtruth/claude-code/groundtruth.json) | User image blocks with inline Base64 or URL sources | Shared validated assets or references; invalid slots survive. Team/injected/tool media is excluded from user uploads. No guessed label bindings. | Capture an isolated prompt with inline, URL and omitted media. Prove native mention bindings before adding any. |
+| [Claude Code 2.1.241](../../groundtruth/claude-code/groundtruth.json) | User image blocks with inline Base64 or URL sources | Shared validated assets or references; invalid slots survive. Team/injected/tool media is excluded from user uploads. The 2.1.267 writer’s `imagePasteIds` binds numbered markers to image blocks. | Capture an isolated prompt with inline, URL and omitted media; native paste binding is writer-proven and covered by synthetic conformance tests. |
 | [Codex 0.149.1 fixtures / 0.150.1 writer](../../groundtruth/codex/groundtruth.json) | Pinned writer's `ContentItem::InputImage` with `image_url`; local-image text delimiters surround the actual image block | Refreshed content-union facet; data URLs become assets. Only exact opener/image/closer sequences lose transport text. Source labels emit unambiguous Unicode-scalar spans. | Commit an isolated native image scenario, including local and remote inputs; conformance tests and the private local corroboration are not a harvested fixture. |
 | [Pi 0.84.3](../../groundtruth/pi/groundtruth.json) | Typed user `image` blocks with `data` and `mimeType` | Correct native MIME field binding; text and ordered image slots share one prompt. Invalid first slots and repeated bytes survive. | Capture text+image and image-only native sessions. |
 | [Grok 1.0.5](../../groundtruth/grok/groundtruth.json) | Observed `user_message_chunk` image content includes `data`, `mimeType`, and `uri`; prompt identity is in update metadata | Existing prompt accumulator now retains ordered attachments, inline assets and references across checkpoints. | Capture image/text chunk ownership, ordering and reference-only content. |
@@ -685,6 +685,19 @@ the owning UI record is
 | [Kimi Code 0.38.0](../../groundtruth/kimi-code/groundtruth.json) | `image_url` content parts with an `imageUrl` reference | Recorded data URLs can materialize; blob/remote locators remain references. Authored media retains ownership; tool/injected media does not become a user image. | Capture the URL encodings actually persisted by an image-input session. A tested data URL parser is not proof the writer emits one. |
 | [Hermes 0.20.5](../../groundtruth/hermes/groundtruth.json) | No authored-image field established by the captured pack reviewed here | No image attachments projected | Capture a pinned image-input scenario and inspect the writer's persistence path. Do not infer unsupported capability from a text-only corpus. |
 | [Antigravity 1.1.20](../../groundtruth/antigravity/groundtruth.json) | No authored-image field established by the captured pack reviewed here | No image attachments projected | Capture the input-media scenario for the enrolled CLI; keep IDE evidence separate. An image-generation tool name does not prove prompt-image persistence. |
+
+**Claude numbered-image links.** The 2.1.267 native writer carries `imagePasteIds`
+through user-message construction and pairs its entries with top-level image blocks
+using an image-only counter. The binding is recorded in the `image-paste-bindings`
+facet, sourced from `sources/2.1.267.image-paste-writer.json` with the inspected
+binary’s checksum. IDs are session-managed numbers, so the first image may be
+`[Image #7]`; local attachment order alone does not establish its label. The adapter
+now projects labels and exact final-text Unicode-scalar ranges only for complete,
+unique integer ID lists. Missing image bytes keep their slot; documents do not consume
+an image ID. A local failing prompt corroborated `[1]` alongside one stored image,
+with no canonical label/ranges before this fix. No private prompt or image is committed.
+Normalizer version 27 causes installed projections to replay quiet Claude sources on
+the next daemon catch-up; the wire shape and projection schema are unchanged.
 
 **Confirmed Codex failure.** A local 0.153.4 rollout corroborates the writer: a user
 message contains an opening image-label/path text block, an `input_image` data URL,

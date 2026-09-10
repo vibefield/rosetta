@@ -1,7 +1,9 @@
 //! Claude authored source variants; generic decoding lives in adapter-support.
 
 use rosetta_adapter_support::media::{self, MaterializedAttachment};
-use rosetta_core::timeline::{AttachmentKind, AttachmentUnavailableReason};
+use rosetta_core::timeline::{
+    AttachmentKind, AttachmentRef, AttachmentUnavailableReason, CITATION_RANGE_LIMIT, TextRange,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -45,5 +47,60 @@ pub(crate) fn authored_attachment(
             )
         }
         _ => media::unavailable(id, kind, AttachmentUnavailableReason::InvalidData),
+    }
+}
+
+/// The native paste IDs are parallel to image blocks, not all content blocks.
+/// Ground truth: transcript / image-paste-bindings (Claude Code 2.1.267 writer).
+pub(crate) fn bind_paste_images(
+    text: &str,
+    paste_ids: Option<&Value>,
+    attachments: &mut [AttachmentRef],
+) {
+    let Some(raw_ids) = paste_ids.and_then(Value::as_array) else {
+        return;
+    };
+    let image_count = attachments
+        .iter()
+        .filter(|attachment| attachment.kind == AttachmentKind::Image)
+        .count();
+    if raw_ids.len() != image_count {
+        return;
+    }
+    // Missing, malformed or duplicate IDs cannot establish an exact binding.
+    let Some(ids) = raw_ids
+        .iter()
+        .map(|id| {
+            id.as_u64()
+                .filter(|id| *id > 0 && *id <= 9_007_199_254_740_991)
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+    if ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len() {
+        return;
+    }
+    for (attachment, id) in attachments
+        .iter_mut()
+        .filter(|attachment| attachment.kind == AttachmentKind::Image)
+        .zip(ids)
+    {
+        let label = format!("[Image #{id}]");
+        attachment.message_ranges = text
+            .match_indices(&label)
+            .take(CITATION_RANGE_LIMIT)
+            .filter_map(|(start, matched)| {
+                Some(TextRange {
+                    start: text[..start].chars().count().try_into().ok()?,
+                    end: text[..start + matched.len()]
+                        .chars()
+                        .count()
+                        .try_into()
+                        .ok()?,
+                })
+            })
+            .collect();
+        attachment.label = Some(label);
     }
 }

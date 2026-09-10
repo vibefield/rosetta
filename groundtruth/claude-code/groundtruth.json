@@ -2,10 +2,18 @@
   "format": "rosetta-groundtruth/1",
   "agent": "claude-code",
   "agent_version": "2.1.241",
-  "evidence": "fixture",
+  "evidence": "writer",
   "generator": "tools.groundtruth canonical 2",
   "data_root": "~/.claude",
   "sources": [
+    {
+      "generator": "writer-source Claude Code 2.1.267 native darwin-arm64 executable, embedded JavaScript, sha256 a681f3008f0050029aeebcab3af51bb6a55ddeb625a3af3141a4416d43cd2558",
+      "agent_version": "2.1.241",
+      "evidence": "writer",
+      "path": "sources/2.1.267.image-paste-writer.json",
+      "sha256": "2c2dd1e5a588552a26e13439f26a2efbafeb23ed5d32af37ade28eb8cdb3157d",
+      "writer_version": "2.1.267"
+    },
     {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "2.1.241",
@@ -53,7 +61,7 @@
       "glob": "projects/*/*.jsonl",
       "file_format": "jsonl",
       "discipline": "append_only",
-      "evidence": "fixture",
+      "evidence": "writer",
       "notes": "Session transcripts; project dir = cwd slug; per-record `version` stamp; `-c` appends to the same file. Census: 19 record types incl. attachment (most common), progress, ai-title (summary's successor?), bridge-session, pr-link, file-history-delta, and ~2k lines with NO type field.",
       "discriminator": "type",
       "record_types": {
@@ -4639,6 +4647,24 @@
         }
       },
       "facets": [
+        {
+          "id": "image-paste-bindings",
+          "path": "user.imagePasteIds",
+          "notes": "Claude Code 2.1.267 persists imagePasteIds on each user record. Its message splitting and rendering code advances an image-only counter through top-level message.content blocks and pairs imagePasteIds[counter] with that image block. Text, document and tool_result blocks do not consume an ID. The ID is the number in [Image #N], and is not necessarily the local attachment position. Inspection is limited to this binding; it does not claim a complete writer schema or native image-input fixture. Normalization requires a complete, unique integer ID list and preserves invalid-image slots. The conformance fixtures are synthetic.",
+          "record_types": {
+            "image-paste-ids": {
+              "observed": 0,
+              "shape": {
+                "kind": "array",
+                "items": {
+                  "kind": "number"
+                }
+              },
+              "evidence": "writer"
+            }
+          },
+          "discriminator": "field presence"
+        },
         {
           "id": "assistant-content-blocks",
           "path": "assistant.message.content[]",

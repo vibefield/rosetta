@@ -1749,7 +1749,7 @@ fn a_stored_image_keeps_claudes_numbered_reference_in_the_authored_text() {
                 "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"
             }}
         ]),
-        json!({}),
+        json!({"imagePasteIds": [1]}),
     )]);
     let rows = messages(&ops);
     assert_eq!(rows.len(), 1);
@@ -1761,6 +1761,16 @@ fn a_stored_image_keeps_claudes_numbered_reference_in_the_authored_text() {
         Some("let me show you a draft [Image #1], then refine the outline")
     );
     assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].label.as_deref(), Some("[Image #1]"));
+    let text = text.as_ref().unwrap().as_preview();
+    let range = attachments[0].message_ranges[0];
+    assert_eq!(
+        text.chars()
+            .skip(range.start as usize)
+            .take((range.end - range.start) as usize)
+            .collect::<String>(),
+        "[Image #1]"
+    );
 }
 
 #[test]
@@ -2344,4 +2354,90 @@ fn invalid_authored_media_keeps_a_slot_without_guessing_image_numbering() {
         !ops.iter()
             .any(|op| matches!(op, IngestOp::ProjectionAsset { .. }))
     );
+}
+
+#[test]
+fn image_paste_ids_bind_nonsequential_labels_across_mixed_blocks() {
+    let (ops, _) = run(&[user(
+        json!([
+            {"type":"text","text":"😀 Compare [Image #12] with [Image #7]."},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"invalid"}},
+            {"type":"document","source":{"type":"text","data":"notes"}},
+            {"type":"text","text":"Inspect [Image #12] again; [Image #1] is not attached."},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgpib2R5"}}
+        ]),
+        json!({"imagePasteIds":[7,12]}),
+    )]);
+    let rows = messages(&ops);
+    let TimelineBody::User { text, attachments } = &rows[0].body else {
+        panic!("user")
+    };
+    assert_eq!(attachments.len(), 3);
+    assert_eq!(attachments[0].label.as_deref(), Some("[Image #7]"));
+    assert_eq!(attachments[1].label, None);
+    assert_eq!(attachments[2].label.as_deref(), Some("[Image #12]"));
+    assert_eq!(attachments[0].message_ranges.len(), 1);
+    assert_eq!(attachments[2].message_ranges.len(), 2);
+    let chars: Vec<char> = text.as_ref().unwrap().as_preview().chars().collect();
+    for image in attachments
+        .iter()
+        .filter(|attachment| attachment.kind == AttachmentKind::Image)
+    {
+        for range in &image.message_ranges {
+            assert_eq!(
+                chars[range.start as usize..range.end as usize]
+                    .iter()
+                    .collect::<String>(),
+                image.label.as_ref().unwrap().as_str()
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_or_incomplete_paste_ids_never_reassign_a_marker() {
+    for ids in [
+        json!([]),
+        json!([1]),
+        json!([1, 1]),
+        json!([0, 2]),
+        json!([1, "2"]),
+        json!([1, 2.5]),
+        json!([1, 9007199254740992_u64]),
+        json!({"1":1}),
+    ] {
+        let (ops, _) = run(&[user(
+            json!([
+                {"type":"text","text":"[Image #1] and [Image #2]"},
+                {"type":"image","source":{"type":"base64","media_type":"image/png","data":"invalid"}},
+                {"type":"image","source":{"type":"url","url":"https://example.test/image.png"}}
+            ]),
+            json!({"imagePasteIds":ids}),
+        )]);
+        let rows = messages(&ops);
+        let TimelineBody::User { attachments, .. } = &rows[0].body else {
+            panic!("user")
+        };
+        assert!(
+            attachments
+                .iter()
+                .all(|image| image.label.is_none() && image.message_ranges.is_empty()),
+            "{ids}"
+        );
+    }
+}
+
+#[test]
+fn image_only_prompt_retains_its_native_paste_label() {
+    let (ops, _) = run(&[user(
+        json!([{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}}]),
+        json!({"imagePasteIds":[19]}),
+    )]);
+    let rows = messages(&ops);
+    let TimelineBody::User { text, attachments } = &rows[0].body else {
+        panic!("user")
+    };
+    assert!(text.is_none());
+    assert_eq!(attachments[0].label.as_deref(), Some("[Image #19]"));
+    assert!(attachments[0].message_ranges.is_empty());
 }

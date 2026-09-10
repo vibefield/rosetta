@@ -756,7 +756,9 @@ reconstructed by affected-scope ledger replay.
 half-open Unicode-scalar ranges in the **final** canonical text (including text
 externalized as `CanonicalText`); they are sorted, non-overlapping, bounded by that
 text, and must not conflict across attachments. An adapter emits a range only when
-the native representation proves the binding. No binding means ordinary text, not
+the native representation proves the binding. Claude Code uses the recorded
+`imagePasteIds` list in image-block order; Codex uses its native image delimiters.
+Missing or ambiguous IDs leave the binding absent. No binding means ordinary text, not
 an occurrence-order guess. The Markdown layer uses source positions to decorate
 those spans without interpreting vendor syntax, creating nested links, or altering
 code spans. A link to an unavailable slot focuses its explanation instead of opening

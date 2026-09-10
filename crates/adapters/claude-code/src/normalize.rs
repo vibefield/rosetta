@@ -766,6 +766,11 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
             emit.ops
                 .extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
         }
+        crate::media::bind_paste_images(
+            row.content.as_deref().unwrap_or_default(),
+            line.image_paste_ids.as_ref(),
+            &mut row.attachments,
+        );
         row.group = Some(TimelineGroup {
             id: line.uuid.clone(),
             kind: GroupKind::HumanTurn,
