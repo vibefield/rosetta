@@ -22,7 +22,14 @@ export class OrderedCache<T> {
     while (low < high) {
       const mid = (low + high) >>> 1;
       const candidate = this.ordered[mid];
-      if (candidate === undefined) break;
+      if (candidate === undefined) {
+        // `mid` is always within `[0, ordered.length)` while `low < high`, so a hole
+        // here means the ordering is already corrupt. Fail loudly rather than break
+        // out and return a position that would splice the row into the wrong slot.
+        throw new Error(
+          `OrderedCache invariant violated: no row at index ${mid} of ${this.ordered.length}`,
+        );
+      }
       if (this.compare(candidate, row) < 0) low = mid + 1;
       else high = mid;
     }

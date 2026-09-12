@@ -22,3 +22,20 @@ the wire incompatibly, bump it together with Rust's `PROTOCOL_VERSION`, regenera
 the bindings, and refresh the wire golden. The protocol tests check that both
 languages agree. HTTP responses expose `x-rosetta-protocol-version`; WebSockets
 announce the same version in `hello`. Mismatches fail with an actionable error.
+
+## Package shape
+
+`exports` is exactly two entries, and they are the whole public surface:
+
+- `.` — the client plus the generated types. `client.ts` uses `fetch`,
+  `WebSocket`, `AbortController`, and `URLSearchParams`, so a consumer of this
+  entry needs `DOM` in its `lib`.
+- `./protocol-version` — the bare wire number and nothing else. It carries no
+  DOM dependency, so a supervisor that only checks a spawned daemon's version
+  imports it here instead of dragging the browser client into its typecheck.
+  TypeScript resolves the adjacent `protocol-version.d.mts` for the `.mjs`
+  under `moduleResolution` `Bundler` or `Node16`.
+
+`imports["#ordered-cache"]` is internal to the package. Everything else is
+encapsulated by `exports`: there are no deep imports of `./client` or
+`./generated/*`, and adding one is a change to this file, not to a consumer.
