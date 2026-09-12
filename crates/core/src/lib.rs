@@ -14,8 +14,9 @@ pub use assets::{ImageAsset, ProjectionAsset};
 pub use ops::IngestOp;
 pub use rows::{
     DriftFact, EditKind, FileEditRow, GitCommitRow, MessageKind, MessageRow, Ms, PlanRow,
-    ProjectRow, RuntimeRow, SessionActivity, SessionDelegation, SessionRole, SessionRow, SessionTitleRow,
-    SessionUsageRow, StreamState, TaskRow, TaskStatus, TitleKind, TokenSnapshot, ToolCall,
+    ProjectRow, RuntimeProvenance, RuntimeRow, SessionActivity, SessionDelegation, SessionRole,
+    SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TaskRow, TaskStatus, TitleKind,
+    TokenSnapshot, ToolCall,
 };
 pub use timeline::{
     CanonicalError, CanonicalText, CollaborationChannel, CollaborationEvent,

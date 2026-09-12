@@ -6,6 +6,7 @@
 
 pub mod board;
 pub mod consent;
+pub mod enrolled;
 pub mod health;
 pub mod http;
 pub mod hub;
@@ -13,9 +14,12 @@ pub mod ws;
 
 pub use board::ProgressBoard;
 pub use consent::{BoostLedger, ConsentGate, GrantError};
+pub use enrolled::EnrolledRuntimes;
 // The roll-call row travels with the gate that publishes it, so the daemon
 // binary needs no protocol dependency of its own.
-pub use health::{DaemonHealth, IngestCounterSource, IngestCounters, RuntimeTick};
+pub use health::{DaemonHealth, IngestCounterSource, IngestCounters, RuntimeIdentity, RuntimeTick};
 pub use http::{AppState, ProjectionReader, RawCommandReader, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};
-pub use rosetta_protocol::{BackfillState, DiscoveryRow, IngestPhase, PROTOCOL_VERSION};
+pub use rosetta_protocol::{
+    BackfillState, DiscoveryRow, IngestPhase, PROTOCOL_VERSION, RuntimeProvenance,
+};

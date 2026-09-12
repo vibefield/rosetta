@@ -66,6 +66,9 @@ pub struct AppState {
     /// Lossless command bodies stay out of the projection and are recovered
     /// through this synchronous engine boundary only on explicit disclosure.
     pub raw_commands: Option<Arc<dyn RawCommandReader>>,
+    /// This start's supervisor-enrolled runtimes: labels and provenance the
+    /// mirror does not hold, applied to runtime rows on the way out.
+    pub enrolled: Arc<crate::enrolled::EnrolledRuntimes>,
 }
 
 pub trait RawCommandReader: Send + Sync {
@@ -87,6 +90,7 @@ impl AppState {
             consent: None,
             boost: None,
             raw_commands: None,
+            enrolled: Arc::default(),
         }
     }
 
@@ -102,7 +106,15 @@ impl AppState {
             consent: None,
             boost: None,
             raw_commands: None,
+            enrolled: Arc::default(),
         }
+    }
+
+    /// Attach this start's enrolled-runtime presentation (the serve loop
+    /// builds it from its enrollment file).
+    pub fn with_enrolled(mut self, enrolled: Arc<crate::enrolled::EnrolledRuntimes>) -> Self {
+        self.enrolled = enrolled;
+        self
     }
 
     /// Attach the daemon's health surface (the serve loop updates it).
@@ -762,6 +774,7 @@ async fn boost(
 async fn runtimes(State(state): State<AppState>) -> Json<RuntimesResponse> {
     let mut runtimes = state.hub.runtimes();
     runtimes.sort_by(|a, b| a.id.cmp(&b.id));
+    state.enrolled.decorate_all(&mut runtimes);
     Json(RuntimesResponse { runtimes })
 }
 

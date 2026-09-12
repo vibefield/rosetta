@@ -102,6 +102,8 @@ fn scaffolding(ops: &[IngestOp], runtime_id: &str, kind: &str) -> Vec<IngestOp> 
                 skills: None,
                 versions_seen: None,
                 discovered_at: 0,
+                label: None,
+                provenance: Default::default(),
             })
         })
         .collect();

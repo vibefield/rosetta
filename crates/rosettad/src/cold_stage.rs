@@ -5,6 +5,12 @@
 //! binds one named staging directory to its projection, records consent before
 //! payload capture, and lets the next process rebuild sealed generations from
 //! that ledger before it returns to the source roots for unfinished work.
+//!
+//! Format 2 (2026-09-12) adds `runtimes`: every consented runtime with its id,
+//! kind, identity root, and ledger directory, so a supervisor-enrolled runtime
+//! rides the generation exactly the way a discovered one does. Format 1 is
+//! still read: it names discovered kinds only, and the daemon synthesizes
+//! their targets from `enabled_agents` and `runtime_roots` as before.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
@@ -13,7 +19,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-const FORMAT: u32 = 1;
+use crate::enroll::RuntimeTarget;
+use crate::runtime_ledger::ledger_dir_name;
+
+const FORMAT: u32 = 2;
 const MANIFEST: &str = ".cold-generation.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,8 +30,59 @@ struct Manifest {
     format: u32,
     projection: String,
     ledger: String,
+    /// Consented DISCOVERED kinds (format 1's whole story).
     enabled_agents: BTreeSet<String>,
+    /// Discovered kind → the expanded root it was captured from.
     runtime_roots: BTreeMap<String, String>,
+    /// Every consented runtime, discovered and enrolled (format 2).
+    #[serde(default)]
+    runtimes: Vec<ManifestRuntime>,
+}
+
+/// One runtime the generation captures: identifiers only, never a label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ManifestRuntime {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    pub(crate) data_root: String,
+    pub(crate) ledger_dir: String,
+}
+
+impl ManifestRuntime {
+    pub(crate) fn is_enrolled(&self) -> bool {
+        !crate::runtime_ledger::is_layout_root(&self.data_root)
+    }
+}
+
+/// The consented set as the manifest records it, built from this start's
+/// targets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ColdEnrollment {
+    pub(crate) enabled_agents: BTreeSet<String>,
+    pub(crate) runtime_roots: BTreeMap<String, String>,
+    pub(crate) runtimes: Vec<ManifestRuntime>,
+}
+
+impl ColdEnrollment {
+    pub(crate) fn from_targets<'a>(targets: impl IntoIterator<Item = &'a RuntimeTarget>) -> Self {
+        let mut out = Self::default();
+        for target in targets {
+            if !target.is_enrolled() {
+                out.enabled_agents.insert(target.kind().to_string());
+                out.runtime_roots.insert(
+                    target.kind().to_string(),
+                    target.root.to_string_lossy().into_owned(),
+                );
+            }
+            out.runtimes.push(ManifestRuntime {
+                id: target.id().to_string(),
+                kind: target.kind().to_string(),
+                data_root: target.runtime.data_root.clone(),
+                ledger_dir: ledger_dir_name(target.kind(), &target.runtime.data_root),
+            });
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +91,17 @@ pub(crate) struct ColdGeneration {
     pub(crate) ledger_published: bool,
     pub(crate) enabled_agents: BTreeSet<String>,
     pub(crate) runtime_roots: BTreeMap<String, String>,
+    /// Empty for a format-1 manifest: its runtimes are the discovered ones
+    /// named by `enabled_agents`.
+    pub(crate) runtimes: Vec<ManifestRuntime>,
+}
+
+impl ColdGeneration {
+    /// The enrolled runtimes this generation captured — the ones the next
+    /// start's `--enroll` file must still name.
+    pub(crate) fn enrolled_runtimes(&self) -> impl Iterator<Item = &ManifestRuntime> {
+        self.runtimes.iter().filter(|runtime| runtime.is_enrolled())
+    }
 }
 
 #[derive(Debug)]
@@ -87,6 +158,7 @@ impl ServeColdStage {
             ledger_published,
             enabled_agents: manifest.enabled_agents,
             runtime_roots: manifest.runtime_roots,
+            runtimes: manifest.runtimes,
         }))
     }
 
@@ -96,12 +168,11 @@ impl ServeColdStage {
     pub(crate) fn open(
         destination: &Path,
         projection: &Path,
-        enabled_agents: &BTreeSet<String>,
-        runtime_roots: &BTreeMap<String, String>,
+        enrollment: &ColdEnrollment,
     ) -> Result<Self, String> {
         if let Some(mut generation) = Self::inspect(destination, projection)? {
             for (kind, root) in &generation.runtime_roots {
-                if let Some(current) = runtime_roots.get(kind)
+                if let Some(current) = enrollment.runtime_roots.get(kind)
                     && current != root
                 {
                     return Err(format!(
@@ -111,8 +182,8 @@ impl ServeColdStage {
             }
             generation
                 .enabled_agents
-                .extend(enabled_agents.iter().cloned());
-            for (kind, root) in runtime_roots {
+                .extend(enrollment.enabled_agents.iter().cloned());
+            for (kind, root) in &enrollment.runtime_roots {
                 if generation.enabled_agents.contains(kind) {
                     generation
                         .runtime_roots
@@ -120,11 +191,21 @@ impl ServeColdStage {
                         .or_insert_with(|| root.clone());
                 }
             }
+            for runtime in &enrollment.runtimes {
+                if !generation
+                    .runtimes
+                    .iter()
+                    .any(|known| known.id == runtime.id)
+                {
+                    generation.runtimes.push(runtime.clone());
+                }
+            }
             let manifest = manifest_for(
                 destination,
                 projection,
                 generation.enabled_agents.clone(),
                 generation.runtime_roots.clone(),
+                generation.runtimes.clone(),
             )?;
             write_manifest(&generation.path, &manifest)?;
             return Ok(Self {
@@ -165,12 +246,14 @@ impl ServeColdStage {
         let manifest = manifest_for(
             destination,
             projection,
-            enabled_agents.clone(),
-            runtime_roots
+            enrollment.enabled_agents.clone(),
+            enrollment
+                .runtime_roots
                 .iter()
-                .filter(|(kind, _)| enabled_agents.contains(*kind))
+                .filter(|(kind, _)| enrollment.enabled_agents.contains(*kind))
                 .map(|(kind, root)| (kind.clone(), root.clone()))
                 .collect(),
+            enrollment.runtimes.clone(),
         )?;
         write_manifest(&path, &manifest)?;
         sync_directory(parent)?;
@@ -179,6 +262,7 @@ impl ServeColdStage {
             ledger_published: false,
             enabled_agents: manifest.enabled_agents,
             runtime_roots: manifest.runtime_roots,
+            runtimes: manifest.runtimes,
         };
         Ok(Self {
             path,
@@ -243,6 +327,7 @@ fn manifest_for(
     projection: &Path,
     enabled_agents: BTreeSet<String>,
     runtime_roots: BTreeMap<String, String>,
+    runtimes: Vec<ManifestRuntime>,
 ) -> Result<Manifest, String> {
     Ok(Manifest {
         format: FORMAT,
@@ -250,6 +335,7 @@ fn manifest_for(
         ledger: file_name(destination, "ledger")?,
         enabled_agents,
         runtime_roots,
+        runtimes,
     })
 }
 
@@ -259,13 +345,16 @@ fn read_manifest(root: &Path, destination: &Path, projection: &Path) -> Result<M
         .map_err(|error| format!("reading cold manifest {}: {error}", path.display()))?;
     let manifest: Manifest = serde_json::from_slice(&payload)
         .map_err(|error| format!("decoding cold manifest {}: {error}", path.display()))?;
-    if manifest.format != FORMAT
+    if !matches!(manifest.format, 1 | 2)
         || manifest.projection != file_name(projection, "projection")?
         || manifest.ledger != file_name(destination, "ledger")?
         || manifest
             .runtime_roots
             .keys()
             .any(|kind| !manifest.enabled_agents.contains(kind))
+        || manifest.runtimes.iter().any(|runtime| {
+            !runtime.is_enrolled() && !manifest.enabled_agents.contains(&runtime.kind)
+        })
     {
         return Err(format!(
             "cold manifest {} does not belong to this projection/ledger",
@@ -355,8 +444,27 @@ fn sync_directory(_path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn roots(kind: &str, root: &str) -> BTreeMap<String, String> {
-        BTreeMap::from([(kind.to_string(), root.to_string())])
+    fn discovered(kind: &str, root: &str) -> ColdEnrollment {
+        let data_root = format!("~/.{kind}");
+        ColdEnrollment {
+            enabled_agents: BTreeSet::from([kind.to_string()]),
+            runtime_roots: BTreeMap::from([(kind.to_string(), root.to_string())]),
+            runtimes: vec![ManifestRuntime {
+                id: rosetta_core::ids::runtime_id(kind, &data_root),
+                kind: kind.to_string(),
+                data_root,
+                ledger_dir: kind.to_string(),
+            }],
+        }
+    }
+
+    fn enrolled(kind: &str, root: &str) -> ManifestRuntime {
+        ManifestRuntime {
+            id: rosetta_core::ids::runtime_id(kind, root),
+            kind: kind.to_string(),
+            data_root: root.to_string(),
+            ledger_dir: ledger_dir_name(kind, root),
+        }
     }
 
     #[test]
@@ -364,9 +472,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("rosetta.db");
         let ledger = dir.path().join("rosetta.ledger");
-        let enabled = BTreeSet::from(["claude-code".to_string()]);
-        let stage =
-            ServeColdStage::open(&ledger, &db, &enabled, &roots("claude-code", "/a")).unwrap();
+        let enrollment = discovered("claude-code", "/a");
+        let stage = ServeColdStage::open(&ledger, &db, &enrollment).unwrap();
         let staged = stage.path().to_path_buf();
         std::fs::create_dir(stage.path().join("claude-code")).unwrap();
         std::fs::write(stage.path().join("claude-code/evidence"), b"raw").unwrap();
@@ -374,8 +481,9 @@ mod tests {
 
         assert!(staged.is_dir());
         let found = ServeColdStage::inspect(&ledger, &db).unwrap().unwrap();
-        assert_eq!(found.enabled_agents, enabled);
-        assert_eq!(found.runtime_roots, roots("claude-code", "/a"));
+        assert_eq!(found.enabled_agents, enrollment.enabled_agents);
+        assert_eq!(found.runtime_roots, enrollment.runtime_roots);
+        assert_eq!(found.runtimes, enrollment.runtimes);
         assert_eq!(
             std::fs::read(found.path.join("claude-code/evidence")).unwrap(),
             b"raw"
@@ -387,16 +495,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("rosetta.db");
         let ledger = dir.path().join("rosetta.ledger");
-        let enabled = BTreeSet::from(["codex".to_string()]);
-        let mut stage =
-            ServeColdStage::open(&ledger, &db, &enabled, &roots("codex", "/c")).unwrap();
+        let enrollment = discovered("codex", "/c");
+        let mut stage = ServeColdStage::open(&ledger, &db, &enrollment).unwrap();
         stage.publish().unwrap();
         drop(stage);
 
         let found = ServeColdStage::inspect(&ledger, &db).unwrap().unwrap();
         assert!(found.ledger_published);
-        let mut reopened =
-            ServeColdStage::open(&ledger, &db, &enabled, &roots("codex", "/c")).unwrap();
+        let mut reopened = ServeColdStage::open(&ledger, &db, &enrollment).unwrap();
         reopened.publish().unwrap();
         assert!(ledger.is_dir());
     }
@@ -406,9 +512,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("rosetta.db");
         let ledger = dir.path().join("rosetta.ledger");
-        let enabled = BTreeSet::from(["codex".to_string()]);
-        let mut stage =
-            ServeColdStage::open(&ledger, &db, &enabled, &roots("codex", "/c")).unwrap();
+        let mut stage = ServeColdStage::open(&ledger, &db, &discovered("codex", "/c")).unwrap();
         stage.publish().unwrap();
         stage.complete().unwrap();
 
@@ -424,8 +528,7 @@ mod tests {
         let staged = staged_path(&ledger).unwrap();
         std::fs::create_dir(&staged).unwrap();
 
-        let enabled = BTreeSet::from(["codex".to_string()]);
-        let stage = ServeColdStage::open(&ledger, &db, &enabled, &roots("codex", "/c")).unwrap();
+        let stage = ServeColdStage::open(&ledger, &db, &discovered("codex", "/c")).unwrap();
         assert!(stage.path().join(MANIFEST).is_file());
     }
 
@@ -434,10 +537,56 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("rosetta.db");
         let ledger = dir.path().join("rosetta.ledger");
-        let enabled = BTreeSet::from(["claude-code".to_string()]);
-        drop(ServeColdStage::open(&ledger, &db, &enabled, &roots("claude-code", "/old")).unwrap());
-        let error = ServeColdStage::open(&ledger, &db, &enabled, &roots("claude-code", "/new"))
-            .unwrap_err();
+        drop(ServeColdStage::open(&ledger, &db, &discovered("claude-code", "/old")).unwrap());
+        let error =
+            ServeColdStage::open(&ledger, &db, &discovered("claude-code", "/new")).unwrap_err();
         assert!(error.contains("staged root /old moved to /new"), "{error}");
+    }
+
+    #[test]
+    fn enrolled_runtimes_ride_the_manifest_and_a_format_one_manifest_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("rosetta.db");
+        let ledger = dir.path().join("rosetta.ledger");
+        let mut enrollment = discovered("claude-code", "/a");
+        enrollment
+            .runtimes
+            .push(enrolled("claude-code", "/users/u1/agents/kim"));
+        drop(ServeColdStage::open(&ledger, &db, &enrollment).unwrap());
+        let found = ServeColdStage::inspect(&ledger, &db).unwrap().unwrap();
+        assert_eq!(found.runtimes.len(), 2);
+        let kim: Vec<_> = found.enrolled_runtimes().collect();
+        assert_eq!(kim.len(), 1);
+        assert_eq!(kim[0].data_root, "/users/u1/agents/kim");
+        assert!(kim[0].ledger_dir.starts_with("claude-code~"));
+        // Reopening with the same file merges by id: no duplicate entry.
+        drop(ServeColdStage::open(&ledger, &db, &enrollment).unwrap());
+        assert_eq!(
+            ServeColdStage::inspect(&ledger, &db)
+                .unwrap()
+                .unwrap()
+                .runtimes
+                .len(),
+            2
+        );
+
+        // A manifest from before format 2 names discovered kinds only.
+        let staged = staged_path(&ledger).unwrap();
+        std::fs::write(
+            staged.join(MANIFEST),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "format": 1,
+                "projection": "rosetta.db",
+                "ledger": "rosetta.ledger",
+                "enabled_agents": ["codex"],
+                "runtime_roots": { "codex": "/c" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let legacy = ServeColdStage::inspect(&ledger, &db).unwrap().unwrap();
+        assert_eq!(legacy.enabled_agents, BTreeSet::from(["codex".to_string()]));
+        assert!(legacy.runtimes.is_empty());
+        assert_eq!(legacy.enrolled_runtimes().count(), 0);
     }
 }

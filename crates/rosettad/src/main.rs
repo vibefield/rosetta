@@ -4,13 +4,17 @@
 //!   rosettad sources [--home DIR] [--agent KIND ...]
 //!   rosettad streams [--agent KIND ...]
 //!   rosettad meta --db PATH [--home DIR] [--agent KIND ...] [--profile]
-//!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--audit-boundaries]
-//!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N]
-//!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...]
+//!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--audit-boundaries]
+//!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N]
+//!   rosettad serve --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] ...
+//!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE]
 //!   rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long]
 //!
 //! `ingest` implies consent for the selected agents (the CLI user asked);
 //! the app flow instead runs `discover`, asks, and flips `enabled` itself.
+//! `--enroll FILE` (2026-09-12) is a supervisor's enrollment file: consent for
+//! discovered kinds given at start, plus extra managed data roots of a kind
+//! that are consented by construction — see `enroll.rs`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -29,15 +33,19 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents, SourceWake};
 use rosetta_pipeline::{
-    Discovery, IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport,
-    Metric, PreparedRuntime, RebuildOptions, StreamReport, apply_prepared_runtime, discover,
-    meta_ingest_into, meta_ingest_inventory_into, prepare_captured_runtime, prepare_runtime,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport, Metric,
+    PreparedRuntime, RebuildOptions, StreamReport, apply_prepared_runtime, meta_ingest_into,
+    meta_ingest_inventory_into, prepare_captured_runtime, prepare_runtime,
     rebuild_runtime_with_options, stream_backfill_into,
 };
 use rosetta_search::{
     Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness, synchronize_fts5_once,
 };
+use rosetta_server::RuntimeIdentity;
 use rosetta_store::Store;
+
+use crate::enroll::{Enrollment, RuntimeTarget, resolve_targets};
+use crate::runtime_ledger::{LedgerRuntime, ledger_runtimes, open_runtime_ledger};
 
 mod announce;
 mod bench;
@@ -45,8 +53,10 @@ mod brutal;
 mod cold_progress;
 mod cold_stage;
 mod engine;
+mod enroll;
 mod ledger_cmd;
 mod recovery;
+mod runtime_ledger;
 mod serve;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
@@ -88,18 +98,28 @@ fn main() -> ExitCode {
                 "  brutal-ingest --db PATH [--home DIR] [--agent KIND ...] [--granularity file|line] [--durability none|fsync|sqlite-full] [--page-size 4096|65536] [--sqlite-location disk|memory] [--source-cache default|bypass] [--quick-check] [--json]"
             );
             eprintln!(
-                "  ingest --db PATH [--home DIR] [--agent KIND ...] [--profile] [--json] [--audit-boundaries]"
+                "  ingest --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--json] [--audit-boundaries]"
             );
-            eprintln!("  watch --db PATH [--home DIR] [--agent KIND ...] [--ticks N] [--profile]");
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--announce [--announce-dir DIR]]"
+                "  watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N] [--profile]"
             );
-            eprintln!("  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--profile]");
+            eprintln!(
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--announce [--announce-dir DIR]]"
+            );
+            eprintln!(
+                "  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE] [--profile]"
+            );
             eprintln!(
                 "  ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]"
             );
             eprintln!(
                 "  (ingest and watch keep a raw ledger at <db>.ledger/ unless --ledger overrides)"
+            );
+            eprintln!(
+                "  (--enroll FILE: a supervisor's JSON enrollment — {{\"format\":1,\"enabled_kinds\":[KIND...],\"runtimes\":[{{\"kind\",\"data_root\",\"label\"}}...]}};"
+            );
+            eprintln!(
+                "   enabled_kinds consents discovered kinds at start, runtimes adds managed absolute roots that are consented by construction)"
             );
             return ExitCode::from(2);
         }
@@ -133,6 +153,9 @@ struct Flags {
     /// serve only: consent for every installed runtime from the command
     /// line — the headless stand-in for the app's roll call.
     all_agents: bool,
+    /// The supervisor's enrollment file (`enroll.rs`): consent for
+    /// discovered kinds plus managed extra roots. Read once at start.
+    enroll: Option<PathBuf>,
     /// serve only: expose the completed metadata projection and keep serving,
     /// but do not read any complete source records.
     stop_after_meta: bool,
@@ -226,6 +249,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         ledger: None,
         addr: None,
         all_agents: false,
+        enroll: None,
         stop_after_meta: false,
         restart_incomplete: false,
         slice_budget: None,
@@ -273,6 +297,9 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--all-agents" => {
                 flags.all_agents = true;
                 at += 1;
+            }
+            "--enroll" => {
+                flags.enroll = Some(PathBuf::from(take_value(args, &mut at)?));
             }
             "--stop-after-meta" => {
                 flags.stop_after_meta = true;
@@ -590,8 +617,60 @@ fn projection_lock(db: &std::path::Path) -> Result<ProjectionLock, String> {
     })
 }
 
-fn open_ledger(root: &std::path::Path, kind: &str) -> Result<Ledger, String> {
-    Ledger::open(&root.join(kind)).map_err(|error| error.to_string())
+/// The supervisor's enrollment file, validated before any work starts.
+fn load_enrollment(flags: &Flags) -> Result<Option<Enrollment>, String> {
+    flags
+        .enroll
+        .as_deref()
+        .map(|path| Enrollment::load(path, &registry(), &flags.home))
+        .transpose()
+}
+
+/// Consent for a finite command's targets, as runtime ids. Enrolled targets
+/// are consented by construction. For discovered targets, `--agent` names
+/// kinds outright; otherwise an `--enroll` file's `enabled_kinds` is the
+/// headless roll call; without either, every installed adapter (the CLI user
+/// asked). Only installed discovered targets can be consented.
+fn cli_consent(
+    flags: &Flags,
+    enrollment: Option<&Enrollment>,
+    targets: &[RuntimeTarget],
+) -> std::collections::BTreeSet<String> {
+    let mut consented: std::collections::BTreeSet<String> = targets
+        .iter()
+        .filter(|target| target.is_enrolled())
+        .map(|target| target.id().to_string())
+        .collect();
+    match (flags.agents.is_empty(), enrollment) {
+        (false, _) | (true, None) => consented.extend(
+            targets
+                .iter()
+                .filter(|target| !target.is_enrolled() && target.installed())
+                .map(|target| target.id().to_string()),
+        ),
+        (true, Some(enrollment)) => {
+            let (ids, warnings) = enrollment.enabled_discovered(targets);
+            for warning in warnings {
+                eprintln!("{warning}");
+            }
+            consented.extend(ids);
+        }
+    }
+    consented
+}
+
+/// Why a target is skipped by a finite command, or `None` when it runs.
+fn skip_reason(
+    target: &RuntimeTarget,
+    consented: &std::collections::BTreeSet<String>,
+) -> Option<&'static str> {
+    if !target.installed() && !target.is_enrolled() {
+        Some("not-installed")
+    } else if !consented.contains(target.id()) {
+        Some("not-enrolled")
+    } else {
+        None
+    }
 }
 
 fn acknowledge_search(store: &mut Store, worker: &Fts5SearchWorker) -> Result<(), String> {
@@ -694,6 +773,7 @@ pub(crate) fn record_backfill_failures(
 pub(crate) struct CapturedColdRuntime {
     pub(crate) adapter: &'static dyn AgentAdapter,
     pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) identity: RuntimeIdentity,
     pub(crate) root: PathBuf,
     pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
     pub(crate) discovery_truncated: bool,
@@ -712,6 +792,7 @@ pub(crate) struct CapturedColdRuntime {
 pub(crate) struct ColdCaptureRequest {
     pub(crate) adapter: &'static dyn AgentAdapter,
     pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) identity: RuntimeIdentity,
     pub(crate) root: PathBuf,
     pub(crate) inventory: Vec<rosetta_capture::ScannedFile>,
     pub(crate) discovery_truncated: bool,
@@ -725,6 +806,7 @@ pub(crate) struct ColdCaptureRequest {
 pub(crate) struct PlannedColdRuntime {
     pub(crate) adapter: &'static dyn AgentAdapter,
     pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) identity: RuntimeIdentity,
     pub(crate) root: PathBuf,
     pub(crate) files: Vec<rosetta_pipeline::SessionFile>,
     pub(crate) discovery_truncated: bool,
@@ -744,6 +826,7 @@ pub(crate) fn plan_parallel_cold_runtime(
     let ColdCaptureRequest {
         adapter,
         mut runtime,
+        identity,
         root,
         inventory,
         discovery_truncated,
@@ -758,7 +841,7 @@ pub(crate) fn plan_parallel_cold_runtime(
     let mut planner = Store::open_in_memory_for_cold_planning()
         .map_err(|error| format!("opening {} cold planner: {error}", adapter.kind()))?;
     let mut ledger = write_raw_ledger
-        .then(|| open_ledger(&ledger_root, adapter.kind()))
+        .then(|| open_runtime_ledger(&ledger_root, &runtime))
         .transpose()?
         .map(Ledger::defer_sync_until_flush)
         .map(|ledger| {
@@ -789,6 +872,7 @@ pub(crate) fn plan_parallel_cold_runtime(
     Ok(PlannedColdRuntime {
         adapter,
         runtime,
+        identity,
         root,
         files,
         discovery_truncated,
@@ -809,6 +893,7 @@ pub(crate) fn finish_parallel_cold_runtime(
     let PlannedColdRuntime {
         adapter,
         runtime,
+        identity,
         root,
         files,
         discovery_truncated,
@@ -843,6 +928,7 @@ pub(crate) fn finish_parallel_cold_runtime(
     Ok(CapturedColdRuntime {
         adapter,
         runtime,
+        identity,
         root,
         roster: files,
         discovery_truncated,
@@ -868,9 +954,16 @@ fn capture_parallel_cold_runtime(
 pub(crate) struct AppliedColdRuntime {
     pub(crate) adapter: &'static dyn AgentAdapter,
     pub(crate) runtime: rosetta_core::rows::RuntimeRow,
+    pub(crate) identity: RuntimeIdentity,
     pub(crate) root: PathBuf,
     pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
     pub(crate) ledger: Option<Ledger>,
+}
+
+/// The log name of a runtime: its kind, with the enrollment label when one
+/// exists.
+pub(crate) fn identity_name(identity: &RuntimeIdentity) -> String {
+    enroll::runtime_name(&identity.kind, identity.label.as_deref(), None)
 }
 
 pub(crate) fn apply_captured_cold_runtime(
@@ -881,12 +974,14 @@ pub(crate) fn apply_captured_cold_runtime(
     failures: &mut Vec<String>,
 ) -> Result<AppliedColdRuntime, String> {
     instrument.merge_snapshot(&captured.profile);
+    let name = identity_name(&captured.identity);
     if flags.json && flags.profile {
         bench::emit(&serde_json::json!({
             "event": "stage-profile",
             "command": "ingest",
             "stage": "parallel-metadata",
             "agent": captured.adapter.kind(),
+            "runtime": captured.runtime.id,
             "wallMs": captured.meta_wall_ms,
             "report": captured.meta_profile.report(),
         }));
@@ -895,6 +990,7 @@ pub(crate) fn apply_captured_cold_runtime(
             "command": "ingest",
             "stage": "parallel-stream-prepare",
             "agent": captured.adapter.kind(),
+            "runtime": captured.runtime.id,
             "wallMs": captured.stream_wall_ms,
             "captureWallMs": captured.wall_ms,
             "report": captured.stream_profile.report(),
@@ -905,6 +1001,7 @@ pub(crate) fn apply_captured_cold_runtime(
         bench::emit(&serde_json::json!({
             "event": "stream-prepared",
             "agent": captured.adapter.kind(),
+            "runtime": captured.runtime.id,
             "records": captured.stream.records,
             "parsed": captured.stream.parsed,
             "unknown": captured.stream.unknown,
@@ -918,15 +1015,14 @@ pub(crate) fn apply_captured_cold_runtime(
         }));
     } else {
         println!(
-            "{}: prepared {} records and {} sessions in {:.2}s",
-            captured.adapter.kind(),
+            "{name}: prepared {} records and {} sessions in {:.2}s",
             captured.stream.records,
             captured.meta.sessions,
             captured.wall_ms / 1_000.0,
         );
     }
     record_backfill_failures(
-        captured.adapter.kind(),
+        &name,
         captured.discovery_truncated,
         &captured.meta,
         &captured.stream,
@@ -957,6 +1053,7 @@ pub(crate) fn apply_captured_cold_runtime(
         bench::emit(&serde_json::json!({
             "event": "canonical-applied",
             "agent": captured.adapter.kind(),
+            "runtime": captured.runtime.id,
             "files": report.files,
             "messagesInserted": report.stats.messages_inserted,
             "messagesUpdated": report.stats.messages_updated,
@@ -969,10 +1066,11 @@ pub(crate) fn apply_captured_cold_runtime(
     // capture producers instead of leaving one global serial tail.
     instrument
         .flush_bulk_reconciliation(store)
-        .map_err(|error| format!("reconciling {}: {error}", captured.adapter.kind()))?;
+        .map_err(|error| format!("reconciling {name}: {error}"))?;
     Ok(AppliedColdRuntime {
         adapter: captured.adapter,
         runtime: captured.runtime,
+        identity: captured.identity,
         root: captured.root,
         roster: captured.roster,
         ledger: captured.ledger,
@@ -983,8 +1081,8 @@ pub(crate) fn apply_captured_cold_runtime(
 fn ingest_parallel_cold(
     flags: &Flags,
     db: &std::path::Path,
-    adapters: &[&'static dyn AgentAdapter],
-    discoveries: &[Discovery],
+    targets: &[RuntimeTarget],
+    consented: &std::collections::BTreeSet<String>,
     opts: &IngestOptions,
     instrument: &Instrument,
     mut store: Store,
@@ -1019,34 +1117,38 @@ fn ingest_parallel_cold(
 
     let ledger_root = ledger_stage.path().to_path_buf();
     let mut work = Vec::new();
-    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
-        if !discovery.installed {
+    for target in targets {
+        if let Some(reason) = skip_reason(target, consented) {
             if flags.json {
                 bench::emit(&serde_json::json!({
                     "event": "skipped",
                     "phase": "ingest",
-                    "agent": adapter.kind(),
-                    "reason": "not-installed",
+                    "agent": target.kind(),
+                    "runtime": target.id(),
+                    "reason": reason,
                 }));
             } else {
-                println!("{}: not installed, skipping", adapter.kind());
+                println!("{}: {reason}, skipping", target.name());
             }
             continue;
         }
         work.push((
-            adapter,
-            discovery.runtime.clone(),
-            discovery.root.clone(),
-            discovery.inventory.clone(),
-            discovery.walk_truncated,
-            discovery.streamable_bytes,
+            target.adapter,
+            target.runtime.clone(),
+            target.identity(),
+            target.root.clone(),
+            target.census.inventory.clone(),
+            target.census.walk_truncated,
+            target.census.streamable_bytes,
         ));
     }
     if work.is_empty() {
         return Err("nothing to ingest: no selected runtime is installed".into());
     }
     if flags.experiment_cold_small_first {
-        work.sort_by(|left, right| (left.5, left.0.kind()).cmp(&(right.5, right.0.kind())));
+        work.sort_by(|left, right| {
+            (left.6, left.0.kind(), &left.1.id).cmp(&(right.6, right.0.kind(), &right.1.id))
+        });
     }
 
     let (mut ingest_ledgers, failures) = std::thread::scope(|scope| {
@@ -1056,7 +1158,7 @@ fn ingest_parallel_cold(
             let worker_count = work.len();
             let (sender, receiver) = std::sync::mpsc::channel();
             let mut handles = Vec::with_capacity(worker_count);
-            for (adapter, runtime, root, inventory, discovery_truncated, _) in work {
+            for (adapter, runtime, identity, root, inventory, discovery_truncated, _) in work {
                 let ledger_root = ledger_root.clone();
                 let opts = opts.clone();
                 let sender = sender.clone();
@@ -1066,6 +1168,7 @@ fn ingest_parallel_cold(
                     let result = capture_parallel_cold_runtime(ColdCaptureRequest {
                         adapter,
                         runtime,
+                        identity,
                         root,
                         inventory,
                         discovery_truncated,
@@ -1104,7 +1207,7 @@ fn ingest_parallel_cold(
             }
         } else {
             let mut handles = Vec::with_capacity(work.len());
-            for (adapter, runtime, root, inventory, discovery_truncated, _) in work {
+            for (adapter, runtime, identity, root, inventory, discovery_truncated, _) in work {
                 let ledger_root = ledger_root.clone();
                 let opts = opts.clone();
                 let write_raw_ledger = !flags.experiment_skip_raw_ledger;
@@ -1113,6 +1216,7 @@ fn ingest_parallel_cold(
                     capture_parallel_cold_runtime(ColdCaptureRequest {
                         adapter,
                         runtime,
+                        identity,
                         root,
                         inventory,
                         discovery_truncated,
@@ -1231,6 +1335,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         instrument.enable_boundary_evidence();
     }
     let adapters = selected(&flags)?;
+    let enrollment = load_enrollment(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
     let (mut store, private_projection) = open_for_backfill(&db)?;
@@ -1254,8 +1359,14 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     let mut ingest_ledgers = Vec::new();
     let stage_started = Instant::now();
     let stage_before = instrument.snapshot();
-    let discoveries =
-        discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
+    let targets = resolve_targets(
+        &adapters,
+        &flags.home,
+        enrollment.as_ref(),
+        &opts,
+        &instrument,
+    )?;
+    let consented = cli_consent(&flags, enrollment.as_ref(), &targets);
     if flags.json && flags.profile {
         bench::emit_stage_profile("discovery", None, stage_started, &stage_before, &instrument);
     }
@@ -1267,8 +1378,8 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         return ingest_parallel_cold(
             &flags,
             &db,
-            &adapters,
-            &discoveries,
+            &targets,
+            &consented,
             &opts,
             &instrument,
             store,
@@ -1278,26 +1389,28 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     }
     let mut failures = Vec::new();
 
-    for (adapter, discovery) in adapters.iter().zip(&discoveries) {
-        if !discovery.installed {
+    for target in &targets {
+        if let Some(reason) = skip_reason(target, &consented) {
             if flags.json {
                 bench::emit(&serde_json::json!({
                     "event": "skipped",
                     "phase": "ingest",
-                    "agent": adapter.kind(),
-                    "reason": "not-installed",
+                    "agent": target.kind(),
+                    "runtime": target.id(),
+                    "reason": reason,
                 }));
             } else {
-                println!("{}: not installed, skipping", adapter.kind());
+                println!("{}: {reason}, skipping", target.name());
             }
             continue;
         }
-        let mut runtime = discovery.runtime.clone();
-        runtime.enabled = true; // CLI ingest is explicit consent
-        if discovery.walk_truncated {
-            failures.push(format!("{} discovery walk was truncated", adapter.kind()));
+        let adapter = target.adapter;
+        let name = target.name();
+        let runtime = target.enabled_runtime(); // CLI ingest is explicit consent
+        if target.census.walk_truncated {
+            failures.push(format!("{name} discovery walk was truncated"));
         }
-        let ledger = open_ledger(ledgers, adapter.kind())?;
+        let ledger = open_runtime_ledger(ledgers, &runtime)?;
         ingest_ledgers.push(if defer_ledger_sync {
             ledger.defer_sync_until_flush()
         } else {
@@ -1310,9 +1423,9 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         let stage_started = Instant::now();
         let stage_before = instrument.snapshot();
         let (meta, files) = meta_ingest_into(
-            *adapter,
+            adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
             &opts,
             &instrument,
@@ -1332,8 +1445,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             bench::emit(&bench::meta_event(adapter.kind(), &meta));
         } else {
             println!(
-                "{}: meta — {} sessions, {} projects, {} files ({} inventory-only, {} unidentified)",
-                adapter.kind(),
+                "{name}: meta — {} sessions, {} projects, {} files ({} inventory-only, {} unidentified)",
                 meta.sessions,
                 meta.projects,
                 meta.files_matched,
@@ -1342,19 +1454,17 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             );
         }
         if meta.walk_truncated {
-            failures.push(format!("{} meta walk was truncated", adapter.kind()));
+            failures.push(format!("{name} meta walk was truncated"));
         }
         if meta.files_unidentified > 0 {
             failures.push(format!(
-                "{} left {} streamable files unidentified",
-                adapter.kind(),
+                "{name} left {} streamable files unidentified",
                 meta.files_unidentified
             ));
         }
         if meta.files_vanished > 0 {
             failures.push(format!(
-                "{} lost {} files during meta ingest",
-                adapter.kind(),
+                "{name} lost {} files during meta ingest",
                 meta.files_vanished
             ));
         }
@@ -1362,9 +1472,9 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
         let stage_started = Instant::now();
         let stage_before = instrument.snapshot();
         let stream = stream_backfill_into(
-            *adapter,
+            adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
             &files,
             &opts,
@@ -1385,6 +1495,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             bench::emit(&serde_json::json!({
                 "event": "stream",
                 "agent": adapter.kind(),
+                "runtime": runtime.id,
                 "records": stream.records,
                 "parsed": stream.parsed,
                 "unknown": stream.unknown,
@@ -1401,9 +1512,8 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             }));
         } else {
             println!(
-                "{}: stream — {} records ({} parsed, {} unknown, {} hard errors), \
+                "{name}: stream — {} records ({} parsed, {} unknown, {} hard errors), \
                  {} rows inserted, {} tool results merged, {} sessions indexed",
-                adapter.kind(),
                 stream.records,
                 stream.parsed,
                 stream.unknown,
@@ -1421,8 +1531,7 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             || stream.files_incomplete > 0
         {
             failures.push(format!(
-                "{} ingest incomplete: {} hard, {} oversized, {} missing, {} retry-exhausted, {} conflicts, {} incomplete files",
-                adapter.kind(),
+                "{name} ingest incomplete: {} hard, {} oversized, {} missing, {} retry-exhausted, {} conflicts, {} incomplete files",
                 stream.hard_errors,
                 stream.oversized,
                 stream.files_missing,
@@ -1579,6 +1688,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let wake = SourceWake::default();
     let instrument = Instrument::new();
     let adapters = selected(&flags)?;
+    let enrollment = load_enrollment(&flags)?;
     let _projection_lock = projection_lock(&db)?;
 
     let mut store = open_progressive_backfill(&db)?;
@@ -1586,29 +1696,36 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let public_ledgers = ledger_root(&flags, &db);
     let search = Fts5SidecarSearch::new(db.clone());
     let search_worker = Fts5SearchWorker::start(search);
-    let discoveries =
-        discover(&adapters, &flags.home, &opts, &instrument).map_err(|error| error.to_string())?;
+    let targets = resolve_targets(
+        &adapters,
+        &flags.home,
+        enrollment.as_ref(),
+        &opts,
+        &instrument,
+    )?;
+    let consented = cli_consent(&flags, enrollment.as_ref(), &targets);
 
     let mut pending_runners = Vec::new();
     let mut failures = Vec::new();
-    for (adapter, discovery) in adapters.iter().zip(&discoveries) {
-        if !discovery.installed {
-            println!("{}: not installed, skipping", adapter.kind());
+    for target in &targets {
+        if let Some(reason) = skip_reason(target, &consented) {
+            println!("{}: {reason}, skipping", target.name());
             continue;
         }
-        let mut runtime = discovery.runtime.clone();
-        runtime.enabled = true; // watching is explicit consent
+        let adapter = target.adapter;
+        let name = target.name();
+        let runtime = target.enabled_runtime(); // watching is explicit consent
 
         // Watch BEFORE the backfill scan: a write landing mid-backfill still
         // produces a hint for the first live tick.
-        let events = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+        let events = NotifyEvents::watch_with_wake(&target.root, &wake)
             .map_err(|error| error.to_string())?;
-        let mut ledger = open_ledger(&public_ledgers, adapter.kind())?;
+        let mut ledger = open_runtime_ledger(&public_ledgers, &runtime)?;
 
         let (meta, files) = meta_ingest_into(
-            *adapter,
+            adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
             &opts,
             &instrument,
@@ -1616,9 +1733,9 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
         let stream = stream_backfill_into(
-            *adapter,
+            adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
             &files,
             &opts,
@@ -1629,24 +1746,24 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         search_worker.wake();
         acknowledge_search(&mut store, &search_worker)?;
         println!(
-            "{}: backfilled {} sessions ({} rows) — watching {}",
-            adapter.kind(),
+            "{name}: backfilled {} sessions ({} rows) — watching {}",
             meta.sessions,
             stream.stats.messages_inserted,
-            discovery.root.display(),
+            target.root.display(),
         );
         record_backfill_failures(
-            adapter.kind(),
-            discovery.walk_truncated,
+            &name,
+            target.census.walk_truncated,
             &meta,
             &stream,
             &mut failures,
         );
 
         pending_runners.push((
-            *adapter,
+            adapter,
             runtime,
-            discovery.root.clone(),
+            target.identity(),
+            target.root.clone(),
             events,
             Some(ledger),
         ));
@@ -1657,7 +1774,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     if !failures.is_empty() {
         return Err(failures.join("; "));
     }
-    for (_, _, _, _, ledger) in &mut pending_runners {
+    for (_, _, _, _, _, ledger) in &mut pending_runners {
         let ledger = ledger.as_mut().expect("a watch runner owns its ledger");
         instrument
             .ledger_write(ledger, |ledger| ledger.flush())
@@ -1671,10 +1788,10 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     search_worker.wake();
 
     let mut runners = Vec::new();
-    for (adapter, runtime, root, events, ledger) in pending_runners {
+    for (adapter, runtime, identity, root, events, ledger) in pending_runners {
         let ledger = match ledger {
             Some(ledger) => ledger,
-            None => open_ledger(&public_ledgers, adapter.kind())?,
+            None => open_runtime_ledger(&public_ledgers, &runtime)?,
         };
         let runner = LiveRunner::start_with_ledger(
             adapter,
@@ -1688,7 +1805,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             &instrument,
         )
         .map_err(|error| error.to_string())?;
-        runners.push((adapter.kind(), runner, 0_u64));
+        runners.push((identity_name(&identity), runner, 0_u64));
     }
 
     let mut remaining = flags.ticks;
@@ -1743,64 +1860,74 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn rebuild_adapters(
+/// Every runtime ledger under `ledgers`, each with the identity it replays
+/// as: the stamp's (a discovered runtime's `~` root or an enrolled runtime's
+/// absolute one), or the legacy per-kind convention for a stamp-less
+/// directory. `--agent` selects by kind and may name every runtime of that
+/// kind; `--enroll` only names a stamp-less enrolled directory.
+fn rebuild_runtimes(
     flags: &Flags,
     ledgers: &std::path::Path,
     preflight: bool,
-) -> Result<Vec<&'static dyn AgentAdapter>, String> {
+    enrollment: Option<&Enrollment>,
+) -> Result<Vec<LedgerRuntime>, String> {
     let requested = selected(flags)?;
-    let mut chosen = Vec::new();
-    for adapter in requested {
-        let dir = ledgers.join(adapter.kind());
-        if dir.is_dir() {
+    let everything = ledger_runtimes(ledgers, &registry(), enrollment)?;
+    let mut chosen: Vec<LedgerRuntime> = Vec::new();
+    if flags.agents.is_empty() {
+        chosen = everything;
+    } else {
+        let mut rest = Vec::new();
+        for entry in everything {
+            if requested
+                .iter()
+                .any(|adapter| adapter.kind() == entry.adapter.kind())
+            {
+                chosen.push(entry);
+            } else {
+                rest.push(entry);
+            }
+        }
+        for adapter in &requested {
             if !chosen
                 .iter()
-                .any(|existing: &&dyn AgentAdapter| existing.kind() == adapter.kind())
+                .any(|entry| entry.adapter.kind() == adapter.kind())
             {
-                chosen.push(adapter);
+                return Err(format!(
+                    "no {} ledger at {}",
+                    adapter.kind(),
+                    ledgers.join(adapter.kind()).display()
+                ));
             }
-        } else if !flags.agents.is_empty() {
-            return Err(format!("no {} ledger at {}", adapter.kind(), dir.display()));
+        }
+        // A partial rebuild would silently erase every unselected runtime
+        // from a shared projection. Require the selected set to cover every
+        // ledger dir.
+        if let Some(omitted) = rest.first() {
+            return Err(format!(
+                "ledger {} would be omitted; rebuild is whole-projection, so select every ledger runtime",
+                omitted.dir_name()
+            ));
         }
     }
     if chosen.is_empty() {
         return Err(format!("no runtime ledgers at {}", ledgers.display()));
     }
 
-    // A partial rebuild would silently erase every unselected runtime from a
-    // shared projection. Require the selected set to cover every ledger dir.
-    for entry in std::fs::read_dir(ledgers)
-        .map_err(|error| format!("listing {}: {error}", ledgers.display()))?
-    {
-        let entry = entry.map_err(|error| format!("listing {}: {error}", ledgers.display()))?;
-        if !entry
-            .file_type()
-            .map_err(|error| format!("stating {}: {error}", entry.path().display()))?
-            .is_dir()
-        {
-            continue;
-        }
-        let kind = entry.file_name().to_string_lossy().into_owned();
-        if !chosen.iter().any(|adapter| adapter.kind() == kind) {
-            return Err(format!(
-                "ledger {kind} would be omitted; rebuild is whole-projection, so select every ledger runtime"
-            ));
-        }
-    }
-
     if preflight {
-        for adapter in &chosen {
-            let dir = ledgers.join(adapter.kind());
-            let scan =
-                rosetta_capture::visit_ledger::<rosetta_capture::CaptureError, _>(&dir, |_| Ok(()))
-                    .map_err(|error| error.to_string())?;
+        for entry in &chosen {
+            let scan = rosetta_capture::visit_ledger::<rosetta_capture::CaptureError, _>(
+                &entry.dir,
+                |_| Ok(()),
+            )
+            .map_err(|error| error.to_string())?;
             if scan.entries == 0 {
-                return Err(format!("{} ledger is empty", dir.display()));
+                return Err(format!("{} ledger is empty", entry.dir.display()));
             }
             if scan.torn_segments > 0 {
                 return Err(format!(
                     "{} has {} torn/corrupt segment tails; refusing to replace the projection",
-                    dir.display(),
+                    entry.dir.display(),
                     scan.torn_segments
                 ));
             }
@@ -1948,21 +2075,6 @@ fn install_rebuilt_projection(db: &std::path::Path, temp: &std::path::Path) -> R
 /// Rebuild into a private sibling database and atomically install it only
 /// after every runtime replays cleanly. The live projection is never the work
 /// surface, so validation or replay failure leaves it byte-for-byte usable.
-fn ledger_runtime(adapter: &dyn AgentAdapter) -> rosetta_core::rows::RuntimeRow {
-    let layout = adapter.layout();
-    rosetta_core::rows::RuntimeRow {
-        id: rosetta_core::ids::runtime_id(adapter.kind(), &layout.data_root),
-        kind: adapter.kind().to_string(),
-        data_root: layout.data_root.clone(),
-        enabled: true,
-        account: None,
-        config: None,
-        skills: None,
-        versions_seen: None,
-        discovered_at: 0,
-    }
-}
-
 fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("rebuild needs --db PATH")?;
@@ -1970,10 +2082,16 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     if !ledgers.is_dir() {
         return Err(format!("no ledger at {}", ledgers.display()));
     }
+    let enrollment = load_enrollment(&flags)?;
     let instrument = Instrument::new();
     let stage_started = Instant::now();
     let stage_before = instrument.snapshot();
-    let adapters = rebuild_adapters(&flags, &ledgers, !flags.experiment_skip_ledger_preflight)?;
+    let runtimes = rebuild_runtimes(
+        &flags,
+        &ledgers,
+        !flags.experiment_skip_ledger_preflight,
+        enrollment.as_ref(),
+    )?;
     if flags.json && flags.profile {
         bench::emit_command_stage_profile(
             "rebuild",
@@ -2028,10 +2146,11 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
         let prefetch_ledger = flags.experiment_prefetch_ledger;
         let prepared = std::thread::scope(|scope| {
             let mut handles = Vec::new();
-            for adapter in adapters {
-                let runtime = ledger_runtime(adapter);
-                let dir = ledgers.join(adapter.kind());
-                let cache = cache_root.join(format!("{}.json", adapter.kind()));
+            for entry in runtimes {
+                let cache = cache_root.join(format!("{}.json", entry.dir_name()));
+                let adapter = entry.adapter;
+                let runtime = entry.runtime;
+                let dir = entry.dir;
                 handles.push(scope.spawn(move || {
                     let local = Instrument::new();
                     let started = Instant::now();
@@ -2108,15 +2227,16 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
             reports.push((adapter.kind(), report, profile));
         }
     } else {
-        for adapter in adapters {
+        for entry in runtimes {
             let stage_started = Instant::now();
             let profile_before = instrument.snapshot();
-            let dir = ledgers.join(adapter.kind());
-            let runtime = ledger_runtime(adapter);
+            let dir_name = entry.dir_name();
+            let adapter = entry.adapter;
+            let runtime = entry.runtime;
             let report = rebuild_runtime_with_options(
                 adapter,
                 &runtime,
-                &dir,
+                &entry.dir,
                 &mut store,
                 &instrument,
                 RebuildOptions {
@@ -2126,7 +2246,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                     election_cache: flags
                         .experiment_election_cache
                         .as_ref()
-                        .map(|root| root.join(format!("{}.json", adapter.kind()))),
+                        .map(|root| root.join(format!("{dir_name}.json"))),
                     prefetch_ledger: flags.experiment_prefetch_ledger,
                     allow_unsealed_sources: false,
                     cancel: None,

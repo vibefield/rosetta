@@ -47,6 +47,8 @@ fn meta_batch() -> Batch {
                 skills: None,
                 versions_seen: None,
                 discovered_at: 1_000,
+                label: None,
+                provenance: Default::default(),
             }),
             IngestOp::Project(ProjectRow {
                 id: "p1".into(),
@@ -234,6 +236,8 @@ fn absorb_meta_leaves_the_mirror_a_rewarm_would_have_built() {
                     skills: None,
                     versions_seen: None,
                     discovered_at: 1_000,
+                    label: None,
+                    provenance: Default::default(),
                 }),
             ],
             ..Batch::default()

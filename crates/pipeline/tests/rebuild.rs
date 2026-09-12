@@ -43,8 +43,11 @@ fn snapshot(store: &Store) -> Snapshot {
             .unwrap_or(0)
     };
     Snapshot {
-        activity: queries::all_sessions(store.conn()).unwrap().into_iter()
-            .map(|row| (row.id, row.activity)).collect(),
+        activity: queries::all_sessions(store.conn())
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.id, row.activity))
+            .collect(),
         sessions: queries::session_list(store.conn(), None, 1000)
             .unwrap()
             .len(),
@@ -89,6 +92,8 @@ fn resume_replay_ignores_a_never_sealed_source_but_ordinary_rebuild_fails_closed
         skills: None,
         versions_seen: None,
         discovered_at: 1,
+        label: None,
+        provenance: Default::default(),
     };
 
     let mut strict = Store::open_in_memory().unwrap();
@@ -732,6 +737,8 @@ fn codex_runtime() -> RuntimeRow {
         skills: None,
         versions_seen: None,
         discovered_at: 1,
+        label: None,
+        provenance: Default::default(),
     }
 }
 

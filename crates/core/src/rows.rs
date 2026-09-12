@@ -164,6 +164,27 @@ impl TokenSnapshot {
 /// JSON-bearing tool representation behind this alias.
 pub type ToolCall = ToolInteraction;
 
+/// Where a runtime's enrollment came from. `Discovered` is the roll call: the
+/// layout's `~`-relative root, consented by the user. `Enrolled` is a root the
+/// daemon's supervisor named in its enrollment file — consented by
+/// construction and never on the roll call. A serve-time fact only: the
+/// projection has no column for it and the daemon fills it from the file on
+/// every start (2026-09-12).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum RuntimeProvenance {
+    #[default]
+    Discovered,
+    Enrolled,
+}
+
+impl RuntimeProvenance {
+    pub fn is_discovered(&self) -> bool {
+        *self == Self::Discovered
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RuntimeRow {
@@ -176,6 +197,16 @@ pub struct RuntimeRow {
     pub skills: Option<serde_json::Value>,
     pub versions_seen: Option<serde_json::Value>,
     pub discovered_at: Ms,
+    /// Presentation label from the daemon's enrollment file (a persona name).
+    /// Serve-time only: never a projection column, and omitted from the wire
+    /// and from ledger meta frames when absent, so an undecorated row
+    /// serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Omitted when `Discovered` (the default) for the same reason; a reader
+    /// treats absence as discovered.
+    #[serde(default, skip_serializing_if = "RuntimeProvenance::is_discovered")]
+    pub provenance: RuntimeProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,7 +287,9 @@ pub struct SessionRow {
 impl SessionRow {
     /// Most recent recorded conversation first; unknown activity sorts last.
     pub fn compare_recent(&self, other: &Self) -> std::cmp::Ordering {
-        other.activity.map(|activity| activity.last_at)
+        other
+            .activity
+            .map(|activity| activity.last_at)
             .cmp(&self.activity.map(|activity| activity.last_at))
             .then_with(|| self.id.cmp(&other.id))
     }

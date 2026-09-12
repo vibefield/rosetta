@@ -36,6 +36,9 @@ const COLD_HINT_BURST: usize = 32;
 pub(crate) struct BackfillRuntime {
     pub adapter: &'static dyn AgentAdapter,
     pub runtime: RuntimeRow,
+    /// The log name — the kind, with the enrollment label for an enrolled
+    /// runtime. Health entries key by `runtime.id`.
+    pub name: String,
     pub root: PathBuf,
     pub discovery_truncated: bool,
     pub events: NotifyEvents,
@@ -293,7 +296,7 @@ impl ColdEngine {
             cx.store.observe_effects_watched(cx.hub.watched_sessions());
             let entry = &mut cx.backfills[index];
             cx.health
-                .ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
+                .ingest_stream(&entry.runtime.id, entry.stream_meter.source());
             entry.stream_meter.begin();
             let pass_opts = match lane {
                 ColdLane::Boost => cx.audit_free,
@@ -466,7 +469,7 @@ impl ColdEngine {
             // dark.
             cx.store.observe_effects_watched(cx.hub.watched_sessions());
             cx.health
-                .ingest_stream(entry.adapter.kind(), entry.stream_meter.source());
+                .ingest_stream(&entry.runtime.id, entry.stream_meter.source());
             entry.stream_meter.begin();
             let report = rosetta_pipeline::stream_backfill_into(
                 entry.adapter,
@@ -486,19 +489,19 @@ impl ColdEngine {
             absorb_effects(cx.store, cx.hub)?;
             let stream_totals = entry.stream_meter.snapshot();
             cx.health.ingest_done(
-                entry.adapter.kind(),
+                &entry.runtime.id,
                 stream_totals.bytes_read,
                 stream_totals.records,
             );
             println!(
                 "{}: backfilled {} sessions ({} rows) — watching {}",
-                entry.adapter.kind(),
+                entry.name,
                 entry.meta.sessions,
                 entry.stream.stats.messages_inserted,
                 entry.root.display(),
             );
             record_backfill_failures(
-                entry.adapter.kind(),
+                &entry.name,
                 entry.discovery_truncated,
                 &entry.meta,
                 &entry.stream,

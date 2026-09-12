@@ -492,7 +492,11 @@ capture contract explicit.
   to size-rotated segment files, checksummed with blake3, and durably flushed before the
   corresponding projection transaction. By default `rosettad` stores one runtime
   ledger at `<projection>.ledger/<agent>/`; `--ledger` overrides that root. Segments are
-  self-describing and scanned incrementally during rebuild. Since 2026-09-04 a new segment
+  self-describing and scanned incrementally during rebuild.
+  *Correction (2026-09-12):* the per-`<agent>` directory is the DISCOVERED runtime's
+  ledger; a supervisor-enrolled runtime of the same kind (§5.2, "Supervisor-enrolled
+  runtimes") lives in `<projection>.ledger/<agent>~<digest>/`, and every runtime
+  directory carries a `runtime.json` stamp naming its owner. Since 2026-09-04 a new segment
   lands inside one zstd stream (magic `RLZ1`); the frame stream inside is byte-for-byte the
   plain `RLG1` one, per-frame blake3 integrity is unchanged, and readers keep both containers
   forever, so nothing is rebuilt for the format's sake. The stream flushes at every checkpoint
@@ -985,6 +989,63 @@ the stream is at-least-once; anything display-critical reconciles via a durable 
 read. Slow consumers get coalesced updates + overflow signal rather than back-pressuring
 ingestion.
 
+#### Supervisor-enrolled runtimes (2026-09-12)
+
+A sibling product runs one rosettad per user and manages agent *personas*: one vendor
+data root per persona under the user's own directory, bound to the agent process through
+the vendor's root variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …). A user therefore has
+SEVERAL runtimes of one kind — the OS-native `~/.claude` (discovered on the roll call,
+consented by the user) plus N managed roots the supervisor owns. The projection side
+always admitted this (`agent_runtime.id = runtime_id(kind, data_root)`); the serve side
+now does too, through a start-time **enrollment file**:
+
+- **`serve --enroll FILE`** (also `ingest`, `watch`, `rebuild`). FILE is JSON the
+  supervisor writes, read once at start, tolerant of unknown top-level fields:
+  `{"format": 1, "enabled_kinds": ["claude-code"], "runtimes": [{"kind": "claude-code",
+  "data_root": "/abs/users/u1/agents/roots/claude-code/9a3d", "label": "Kim"}]}`.
+  `enabled_kinds` is consent for DISCOVERED kinds given at start — the headless stand-in
+  for the roll call, like `--agent`, but it never narrows the adapter registry the roll
+  call shows; an unknown or uninstalled kind is warned about, never fatal. `runtimes`
+  are explicit roots: `data_root` MUST be absolute (`~` forms are refused), `kind` a
+  registered adapter; a duplicate, a root nested with another enrolled root, a root equal
+  to or nested with the kind's native root, and a missing or non-directory root are each
+  a startup refusal naming the entry (a missing root is a refusal, not a skip: the
+  supervisor enrolls a root after creating it). `label` is presentation only.
+- **Consent by construction.** Enrolled runtimes are never on the roll call
+  (`/api/discoveries` lists native layout roots only), never part of the one-shot consent
+  gate, always ingested and watched — an enrolled root that is still empty is watched
+  from the first start, so the persona's first session appears live. With at least one
+  enrolled runtime the daemon never waits in `awaiting_consent`; the roll call still
+  publishes for the app. Every serve mode iterates one list of runtime **targets**
+  (`{adapter, runtime, root, label, provenance}`; the census walk is the same for both
+  kinds of target), and `consented` is a set of runtime IDS: a roll-call grant or a
+  persisted `enabled` flag for a kind maps to that kind's discovered target.
+- **The file is the truth for enrolled runtimes on every start.** Consent for discovered
+  kinds still persists as `agent_runtime.enabled` on their `~`-rooted rows. An enabled
+  row with an absolute `data_root` is an enrolled runtime from an earlier start; if this
+  start's file no longer names it, it is not watched and its rows stay public ("retired"
+  for now). The predicate is the existing invariant that layouts never embed machine
+  paths: a `~`-relative `data_root` is discovered, an absolute one is enrolled.
+- **Ledger directory per runtime, backward compatible.** A discovered runtime of kind K
+  keeps `<projection>.ledger/K/`; an enrolled one uses `<projection>.ledger/K~<digest>/`,
+  `<digest>` = the first 12 hex characters of blake3 over the absolute `data_root`
+  (`~` never occurs in a kind id). Opening a runtime's ledger writes
+  `<dir>/runtime.json` = `{"format": 1, "id", "kind", "data_root"}` when absent
+  (identifiers only; discovered runtimes are stamped additively too), and `rebuild`
+  reconstructs each runtime's identity and root from the stamp. A directory without a
+  stamp is the legacy per-kind convention (kind = directory name, root = the layout's
+  `~` form). The cold-generation manifest is format 2: it adds
+  `runtimes: [{id, kind, data_root, ledger_dir}]` and still reads format 1.
+- **Labels and provenance are serve-time facts, never persisted.** `RuntimeRow` carries
+  `label` and `provenance` (`discovered | enrolled`) on the wire, both omitted when
+  absent/default so an undecorated row — and every ledger meta frame — serializes as
+  before; `/api/runtimes`, the `/ws/meta` snapshot and its runtime mutations fill them
+  from the in-memory enrollment for enrolled rows. `DaemonStatus.runtimes` and the
+  backfill meters are keyed by `runtime_id` and carry `label` beside `kind`. All additive
+  (serde defaults): `PROTOCOL_VERSION` stays 20.
+- Deferred to §11: live mutation of the enrolled set, and rediscovery without restart —
+  the supervisor restarts the daemon when the set changes.
+
 ---
 
 ## 6. Storage
@@ -1028,7 +1089,9 @@ ingestion.
   rebuild. The disposable Tantivy prototype clears latency/build/filter/determinism gates
   but not relevance, product-mix, or storage acceptance, so it is not production.
 - **On-disk layout:** `<projection>.ledger/<agent>/` (`RLZ1`/`RLG1` segments plus the derived
-  `.segments` index) + the configured SQLite file +
+  `.segments` index, and since 2026-09-12 a `runtime.json` identity stamp; a
+  supervisor-enrolled runtime of the same kind uses `<projection>.ledger/<agent>~<digest>/`,
+  §5.2) + the configured SQLite file +
   optional canonical `<projection>.assets/` members; `--ledger` can relocate the segment root.
   An adopted search backend owns a disposable `<projection>.search/`. Ledger is precious; the
   canonical projection and search index are rebuildable.
@@ -1395,3 +1458,5 @@ layer's design is frozen.
 | Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
+| Enrolled-set live mutation | the `--enroll` file is read once at start; the supervisor restarts the daemon when a persona is added or retired (2026-09-12) | a restart per persona change costs the app a visible reconnect, or a persona is created faster than a restart settles |
+| Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |

@@ -133,9 +133,12 @@ fn live_commit_reaches_subscribers_before_eight_quiet_runtimes_are_polled() {
         live.clone(),
         None,
     );
-    let mut runners = vec![("claude-code", active)];
+    let mut runners = vec![(
+        RuntimeIdentity::new(runtime.id.clone(), "claude-code", None),
+        active,
+    )];
     let checked = Arc::new(AtomicUsize::new(0));
-    for _ in 0..8 {
+    for index in 0..8 {
         let (subscription, _) = hub.subscribe_session(&files[0].session_id, now_ms());
         let quiet = LiveRunner::resume_from_roster(
             &ClaudeCodeAdapter,
@@ -151,7 +154,10 @@ fn live_commit_reaches_subscribers_before_eight_quiet_runtimes_are_polled() {
             live.clone(),
             None,
         );
-        runners.push(("quiet", quiet));
+        runners.push((
+            RuntimeIdentity::new(format!("quiet-{index}"), "quiet", None),
+            quiet,
+        ));
     }
     let worker = Fts5SearchWorker::start(Fts5SidecarSearch::new(db));
     let flags = parse_flags(&["--ticks".into(), "1".into()]).unwrap();

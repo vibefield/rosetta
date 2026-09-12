@@ -40,6 +40,7 @@ export type * from "./generated/ProjectRow";
 export type * from "./generated/ProjectsResponse";
 export type * from "./generated/RuntimeBackfill";
 export type * from "./generated/RuntimeIngestStatus";
+export type * from "./generated/RuntimeProvenance";
 export type * from "./generated/RuntimeRow";
 export type * from "./generated/ResponseGroup";
 export type * from "./generated/ResponseRuntime";

@@ -123,6 +123,8 @@ fn fixture(include_visible: bool) -> Fixture {
         skills: None,
         versions_seen: None,
         discovered_at: 1,
+        label: None,
+        provenance: Default::default(),
     };
     Fixture {
         ledger_dir: temp.path().join("ledger"),

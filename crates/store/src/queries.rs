@@ -158,6 +158,10 @@ pub struct CommandSource {
     pub cursor_id: i64,
     pub runtime_id: String,
     pub agent_kind: String,
+    /// The runtime's identity root (`~`-relative for a discovered runtime,
+    /// absolute for a supervisor-enrolled one). The daemon derives the
+    /// runtime's ledger directory from it.
+    pub data_root: String,
     pub relative_path: String,
     pub session_id: String,
     pub generation: u64,
@@ -262,7 +266,7 @@ pub fn command_source(
 ) -> Result<Option<CommandSource>, StoreError> {
     let raw = conn
         .prepare_cached(
-            "SELECT c.id, c.runtime_id, r.kind, c.path, c.session_id,
+            "SELECT c.id, c.runtime_id, r.kind, r.data_root, c.path, c.session_id,
                     c.active_generation, m.src_offset, m.tool_correlation_key
              FROM message m
              JOIN ingest_cursor c ON c.id = m.src_cursor
@@ -278,9 +282,10 @@ pub fn command_source(
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
+                row.get::<_, String>(5)?,
                 row.get::<_, i64>(6)?,
-                row.get::<_, String>(7)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })
         .optional()?;
@@ -289,6 +294,7 @@ pub fn command_source(
             cursor_id,
             runtime_id,
             agent_kind,
+            data_root,
             relative_path,
             source_session_id,
             generation,
@@ -307,6 +313,7 @@ pub fn command_source(
                 cursor_id,
                 runtime_id,
                 agent_kind,
+                data_root,
                 relative_path,
                 session_id: source_session_id,
                 generation,
@@ -581,6 +588,8 @@ fn runtime_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeRow> {
         skills: json_column(row, "skills")?,
         versions_seen: json_column(row, "versions_seen")?,
         discovered_at: row.get("discovered_at")?,
+        label: None,
+        provenance: Default::default(),
     })
 }
 

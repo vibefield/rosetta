@@ -2,8 +2,18 @@
 
 /**
  * One watched runtime's live-ingest counters, cumulative since start.
+ * Keyed by `runtime_id` since 2026-09-12 (see [`RuntimeBackfill`]).
  */
-export type RuntimeIngestStatus = { kind: string, ticks: number, events: number, polls: number, rescans: number, admissions: number, 
+export type RuntimeIngestStatus = { kind: string, 
+/**
+ * Canonical runtime id (`RuntimeRow.id`); empty from a daemon that
+ * predates it.
+ */
+runtime_id: string, 
+/**
+ * The enrollment file's presentation label, for enrolled runtimes.
+ */
+label: string | null, ticks: number, events: number, polls: number, rescans: number, admissions: number, 
 /**
  * Rows written by the live lane (inserts + replacements).
  */

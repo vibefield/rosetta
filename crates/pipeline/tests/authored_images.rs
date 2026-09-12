@@ -34,6 +34,8 @@ fn exercise(header: &str, message: &str) -> Vec<(u64, Option<(u32, u32)>)> {
         skills: None,
         versions_seen: None,
         discovered_at: 1,
+        label: None,
+        provenance: Default::default(),
     };
     let session = ids::session_id(&runtime.id, native);
     let projection = temp.path().join("original.sqlite");

@@ -34,21 +34,25 @@ use rosetta_pipeline::{
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
-    AppState, BoostLedger, ConsentGate, DaemonHealth, DiscoveryRow, Hub, HubConfig,
-    IngestCounterSource, IngestCounters, ProjectionReader, RawCommandReader, RuntimeTick, router,
+    AppState, BoostLedger, ConsentGate, DaemonHealth, EnrolledRuntimes, Hub, HubConfig,
+    IngestCounterSource, IngestCounters, ProjectionReader, RawCommandReader, RuntimeIdentity,
+    RuntimeTick, router,
 };
 use rosetta_store::{Store, queries};
 
-use crate::cold_stage::ServeColdStage;
+use crate::cold_stage::{ColdEnrollment, ColdGeneration, ServeColdStage};
 use crate::engine::{
     BackfillRuntime, ColdCx, ColdEngine, StreamMeter, absorb_effects, acknowledge_search, now_ms,
 };
+use crate::enroll::{RuntimeTarget, discovered_by_kind, resolve_targets};
 use crate::recovery::restart_incomplete_projection;
+use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_runtime_ledger};
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, apply_captured_cold_runtime,
-    finish_parallel_cold_runtime, install_rebuilt_projection, ledger_root, make_single_file,
-    open_ledger, open_progressive_backfill, parse_flags, plan_parallel_cold_runtime,
-    projection_lock, projection_parent, record_backfill_failures, selected,
+    finish_parallel_cold_runtime, identity_name, install_rebuilt_projection, ledger_root,
+    load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
+    plan_parallel_cold_runtime, projection_lock, projection_parent, record_backfill_failures,
+    selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
@@ -81,9 +85,59 @@ impl RawCommandReader for LedgerCommandReader {
             timeline_id: source.timeline_id.clone(),
             correlation_key: source.correlation_key.clone(),
         };
-        read_raw_command(adapter, &self.root.join(&source.agent_kind), &locator)
-            .map_err(|error| error.to_string())
+        // The runtime's ledger directory follows its identity root: the
+        // per-kind directory for a discovered runtime, `<kind>~<digest>` for
+        // a supervisor-enrolled one.
+        let dir = ledger_dir_for(&self.root, &source.agent_kind, &source.data_root);
+        read_raw_command(adapter, &dir, &locator).map_err(|error| error.to_string())
     }
+}
+
+/// The consented targets a serve mode iterates, in target order.
+fn consented_targets<'a>(
+    targets: &'a [RuntimeTarget],
+    consented: &'a BTreeSet<String>,
+) -> impl Iterator<Item = &'a RuntimeTarget> + 'a {
+    targets
+        .iter()
+        .filter(move |target| consented.contains(target.id()))
+}
+
+/// Map a resumed generation's consent onto this start's targets: its
+/// discovered kinds go to those kinds' discovered targets; its enrolled
+/// runtimes must still be named by this start's file, or the generation
+/// cannot finish — its staged evidence would publish without its rows.
+fn generation_consent(
+    generation: &ColdGeneration,
+    targets: &[RuntimeTarget],
+) -> Result<BTreeSet<String>, String> {
+    let by_kind = discovered_by_kind(targets);
+    let mut consented = BTreeSet::new();
+    for kind in &generation.enabled_agents {
+        match by_kind.get(kind.as_str()) {
+            Some(target) => {
+                consented.insert(target.id().to_string());
+            }
+            None => {
+                return Err(format!(
+                    "cold generation names unavailable adapters: {kind}"
+                ));
+            }
+        }
+    }
+    for runtime in generation.enrolled_runtimes() {
+        if !targets
+            .iter()
+            .any(|target| target.is_enrolled() && target.id() == runtime.id)
+        {
+            return Err(format!(
+                "cannot resume cold generation: it holds enrolled runtime {} {} which this start's --enroll file no longer names; add it back, or run `rosettad rebuild`",
+                runtime.kind, runtime.data_root
+            ));
+        }
+        consented.insert(runtime.id.clone());
+    }
+    Ok(consented)
 }
 
 /// A live meter over the pipeline's always-on atomic counters: the status
@@ -156,6 +210,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let live = LiveOptions::default();
     let instrument = Arc::new(Instrument::new());
     let adapters = selected(&flags)?;
+    // The supervisor's file is validated before anything binds or reads: a
+    // bad entry is a startup refusal the supervisor sees at once.
+    let enrollment = load_enrollment(&flags)?;
+    let enrolled_presentation = Arc::new(EnrolledRuntimes::new(
+        enrollment
+            .iter()
+            .flat_map(|enrollment| enrollment.presentation()),
+    ));
     let _projection_lock = projection_lock(&db)?;
     let public_ledgers = ledger_root(&flags, &db);
     // A named fresh-cold generation is the normal resume source. Inspect it
@@ -171,16 +233,18 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     } else {
         None
     };
-    let mut recovered_enrollment = recovered
+    // Kind-granular consent carried over from an archived projection: the
+    // discovered kinds it had enabled. Its enrolled runtimes are recorded
+    // only — their consent is this start's file.
+    let recovered_enrollment = recovered
         .as_ref()
         .map(|recovery| recovery.enabled_agents.clone())
         .unwrap_or_default();
     if let Some(generation) = &pending_cold {
-        recovered_enrollment.extend(generation.enabled_agents.iter().cloned());
         println!(
             "recovery: resuming cold generation at {} — {} enrolled runtimes",
             generation.path.display(),
-            generation.enabled_agents.len()
+            generation.enabled_agents.len() + generation.enrolled_runtimes().count()
         );
     }
     if let Some(recovery) = &recovered {
@@ -189,6 +253,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             recovery.path.display(),
             recovery.enabled_agents.len()
         );
+        for runtime in &recovery.enrolled_runtimes {
+            println!(
+                "recovery: archived projection also held enrolled {} {} — consented only if this start's --enroll names it",
+                runtime.kind, runtime.data_root
+            );
+        }
     }
 
     // A normal fresh app launch keeps canonical construction in RAM and lets
@@ -280,6 +350,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
         .with_boost(boost.clone())
+        .with_enrolled(enrolled_presentation)
         .with_raw_commands(Arc::new(LedgerCommandReader {
             root: public_ledgers.clone(),
             adapters: crate::registry(),
@@ -342,63 +413,110 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     store.observe_meta_effects();
 
     // The census fills the roll-call board; consent decides what is read.
-    let discoveries = rosetta_pipeline::discover(&adapters, &flags.home, &opts, &instrument)
-        .map_err(|error| error.to_string())?;
-    // Consent persists as the projection's `enabled` flags — enrollment
-    // happens once, and restarts proceed without asking again.
-    let persisted: BTreeSet<String> = rosetta_store::queries::all_runtimes(store.conn())
-        .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?
-        .into_iter()
-        .filter(|runtime| runtime.enabled)
-        .map(|runtime| runtime.kind)
-        .collect();
-    let installed: BTreeSet<String> = adapters
+    // Targets: one Discovered per selected adapter, then this start's
+    // Enrolled roots (`enroll.rs`). Consent is a set of runtime IDS.
+    let targets = resolve_targets(
+        &adapters,
+        &flags.home,
+        enrollment.as_ref(),
+        &opts,
+        &instrument,
+    )?;
+    let by_kind = discovered_by_kind(&targets);
+    let installed_ids = |kind: &str| {
+        by_kind
+            .get(kind)
+            .filter(|target| target.installed())
+            .map(|target| target.id().to_string())
+    };
+    // Consent for DISCOVERED kinds persists as the projection's `enabled`
+    // flags on their `~`-rooted rows — enrollment happens once, and restarts
+    // proceed without asking again. An enabled row with an absolute root is a
+    // supervisor-enrolled runtime from an earlier start: the file is its
+    // truth on every start, so one the file no longer names is not watched
+    // (its rows stay public — "retired" for now).
+    let persisted_rows = rosetta_store::queries::all_runtimes(store.conn())
+        .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?;
+    let persisted: BTreeSet<String> = persisted_rows
         .iter()
-        .zip(&discoveries)
-        .filter(|(_, discovery)| discovery.installed)
-        .map(|(adapter, _)| adapter.kind().to_string())
+        .filter(|runtime| runtime.enabled && is_layout_root(&runtime.data_root))
+        .map(|runtime| runtime.kind.clone())
         .collect();
+    for retired in persisted_rows.iter().filter(|runtime| {
+        runtime.enabled
+            && !is_layout_root(&runtime.data_root)
+            && !targets.iter().any(|target| target.id() == runtime.id)
+    }) {
+        println!(
+            "{} {}: enrolled on an earlier start but absent from --enroll; not watched (its rows stay public)",
+            retired.kind, retired.data_root
+        );
+    }
     let mut consented: BTreeSet<String> = if warm_live {
         // Enrollment is user state, not a discovery result. A temporarily
         // missing root disables its runner below but must not silently revoke
         // consent from the standing canonical projection.
-        persisted.clone()
+        persisted
+            .iter()
+            .filter_map(|kind| {
+                by_kind
+                    .get(kind.as_str())
+                    .map(|target| target.id().to_string())
+            })
+            .collect()
     } else {
-        persisted.intersection(&installed).cloned().collect()
+        persisted
+            .iter()
+            .filter_map(|kind| installed_ids(kind))
+            .collect()
     };
-    if pending_cold.is_some() {
+    let generation_consented = match &pending_cold {
         // The manifest is durable consent and its ledger may remain rebuildable
         // even if discovery currently cannot see the source root. The resume
         // branch below diagnoses an unavailable root instead of silently
         // dropping an enrolled runtime from the generation.
-        consented.extend(recovered_enrollment.iter().cloned());
-    } else {
-        consented.extend(recovered_enrollment.intersection(&installed).cloned());
-    }
+        Some(generation) => generation_consent(generation, &targets)?,
+        None => BTreeSet::new(),
+    };
+    consented.extend(generation_consented.iter().cloned());
+    consented.extend(
+        recovered_enrollment
+            .iter()
+            .filter_map(|kind| installed_ids(kind)),
+    );
     // `--agent` names kinds outright and `--all-agents` says everything
     // installed — both are consent from the command line, the headless
-    // stand-in for the app's roll call.
+    // stand-in for the app's roll call. So is the file's `enabled_kinds`.
     if !flags.agents.is_empty() || flags.all_agents {
-        consented.extend(installed.iter().cloned());
+        consented.extend(
+            targets
+                .iter()
+                .filter(|target| !target.is_enrolled() && target.installed())
+                .map(|target| target.id().to_string()),
+        );
     }
+    if let Some(enrollment) = &enrollment {
+        let (ids, warnings) = enrollment.enabled_discovered(&targets);
+        for warning in warnings {
+            eprintln!("{warning}");
+        }
+        consented.extend(ids);
+        // Enrolled runtimes are consented by construction. They are never on
+        // the roll call, never part of the one-shot gate, always ingested.
+        consented.extend(enrollment.enrolled_ids());
+    }
+    // The roll call lists native layout roots only.
     consent.publish(
-        adapters
+        targets
             .iter()
-            .zip(&discoveries)
-            .map(|(adapter, discovery)| DiscoveryRow {
-                kind: adapter.kind().to_string(),
-                data_root: discovery.runtime.data_root.clone(),
-                installed: discovery.installed,
-                files: discovery.file_count as u64,
-                bytes: discovery.total_bytes,
-                newest_modified_ms: discovery.newest_modified_ms,
-                enabled: consented.contains(adapter.kind()),
-            })
+            .filter(|target| !target.is_enrolled())
+            .map(|target| target.discovery_row(consented.contains(target.id())))
             .collect(),
     );
     if consented.is_empty() && !warm_live {
         // Nothing enrolled and nobody said yes: the board is published and
-        // NOTHING has been read. Wait for the roll call.
+        // NOTHING has been read. Wait for the roll call. (With at least one
+        // enrolled runtime there is work, so this never arms.)
         let granted = consent.arm();
         health.ingest_await_consent();
         println!("no enrolled agents — choose in the app (or pass --all-agents)");
@@ -408,7 +526,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
             match granted.recv_timeout(CONSENT_POLL) {
                 Ok(kinds) => {
-                    consented.extend(kinds);
+                    // The grant names kinds; each maps to that kind's
+                    // discovered target, exactly as the app has always meant.
+                    consented.extend(kinds.iter().filter_map(|kind| installed_ids(kind)));
                     break;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -416,41 +536,34 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         }
     }
-    for (adapter, discovery) in adapters.iter().zip(&discoveries) {
-        if discovery.installed && consented.contains(adapter.kind()) {
+    for target in consented_targets(&targets, &consented) {
+        if target.active() {
             // Meter denominators are the STREAMABLE census — the files the
             // skim and stream phases will actually read. The full footprint
             // (inventory streams included) belongs to the roll call, not to
             // a progress meter that could then never reach 100%.
             health.ingest_register(
-                adapter.kind(),
-                discovery.streamable_count as u64,
-                discovery.streamable_bytes,
+                &target.identity(),
+                target.census.streamable_count as u64,
+                target.census.streamable_bytes,
             );
         }
     }
 
-    let runtime_roots: BTreeMap<String, String> = adapters
-        .iter()
-        .zip(&discoveries)
-        .map(|(adapter, discovery)| {
-            (
-                adapter.kind().to_string(),
-                discovery.root.to_string_lossy().into_owned(),
-            )
-        })
-        .collect();
-
     if fresh_fast {
         let temp = cold_temp.expect("fresh fast serve owns a private projection file");
-        let ledger_stage = ServeColdStage::open(&public_ledgers, &db, &consented, &runtime_roots)?;
+        let ledger_stage = ServeColdStage::open(
+            &public_ledgers,
+            &db,
+            &ColdEnrollment::from_targets(consented_targets(&targets, &consented)),
+        )?;
         let outcome = if pending_cold.is_some() {
             run_resumed_fresh_serve(
                 &flags,
                 &db,
-                &adapters,
-                &discoveries,
+                &targets,
                 &consented,
+                &generation_consented,
                 &opts,
                 &live,
                 &instrument,
@@ -468,8 +581,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             run_fresh_fast_serve(
                 &flags,
                 &db,
-                &adapters,
-                &discoveries,
+                &targets,
                 &consented,
                 &opts,
                 &live,
@@ -522,8 +634,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     if warm_live {
         let (mut store, absorbed) = run_warm_live_serve(
             &flags,
-            &adapters,
-            &discoveries,
+            &targets,
             &consented,
             &opts,
             &live,
@@ -556,32 +667,32 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let wake = SourceWake::default();
     let mut backfills = Vec::new();
     let mut failures = Vec::new();
-    for (adapter, discovery) in adapters.iter().zip(&discoveries) {
-        if !discovery.installed {
-            println!("{}: not installed, skipping", adapter.kind());
+    for target in &targets {
+        if !target.installed() && !target.is_enrolled() {
+            println!("{}: not installed, skipping", target.name());
             continue;
         }
-        if !consented.contains(adapter.kind()) {
-            println!("{}: installed but not enrolled, skipping", adapter.kind());
+        if !consented.contains(target.id()) {
+            println!("{}: installed but not enrolled, skipping", target.name());
             continue;
         }
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let mut runtime = discovery.runtime.clone();
-        runtime.enabled = true; // consent, persisted for the next start
+        let adapter = target.adapter;
+        let runtime = target.enabled_runtime(); // consent, persisted for the next start
 
-        let events = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+        let events = NotifyEvents::watch_with_wake(&target.root, &wake)
             .map_err(|error| error.to_string())?;
-        let mut ledger = open_ledger(&public_ledgers, adapter.kind())?;
+        let mut ledger = open_runtime_ledger(&public_ledgers, &runtime)?;
         health.ingest_skim(
-            adapter.kind(),
+            &runtime.id,
             counter_source(&instrument, instrument.snapshot()),
         );
         let (meta, files) = rosetta_pipeline::meta_ingest_into(
-            *adapter,
+            adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
             &opts,
             &instrument,
@@ -589,19 +700,16 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
         let stream_meter = StreamMeter::new(&instrument);
-        health.ingest_skim_done(
-            adapter.kind(),
-            meta.sessions as u64,
-            meta.files_skimmed as u64,
-        );
+        health.ingest_skim_done(&runtime.id, meta.sessions as u64, meta.files_skimmed as u64);
         // Every skim's lists fan out the moment its batch commits.
         absorb_effects(&mut store, &hub)?;
         let roster = files.clone();
         backfills.push(BackfillRuntime {
-            adapter: *adapter,
+            adapter,
             runtime,
-            root: discovery.root.clone(),
-            discovery_truncated: discovery.walk_truncated,
+            name: target.name(),
+            root: target.root.clone(),
+            discovery_truncated: target.census.walk_truncated,
             events,
             ledger: Some(ledger),
             meta,
@@ -636,7 +744,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         for entry in &backfills {
             println!(
                 "{}: {} sessions, {} projects, {} matched files ({} skimmed, {} inventory-only, {} unidentified)",
-                entry.adapter.kind(),
+                entry.name,
                 entry.meta.sessions,
                 entry.meta.projects,
                 entry.meta.files_matched,
@@ -766,6 +874,13 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 break;
             }
             let ledger = entry.ledger.take().expect("a backfill owns its ledger");
+            let identity = targets
+                .iter()
+                .find(|target| target.id() == entry.runtime.id)
+                .map(RuntimeTarget::identity)
+                .unwrap_or_else(|| {
+                    RuntimeIdentity::new(&entry.runtime.id, entry.adapter.kind(), None)
+                });
             let runner = LiveRunner::resume_from_roster(
                 entry.adapter,
                 entry.runtime,
@@ -776,7 +891,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 live.clone(),
                 Some(ledger),
             );
-            runners.push((entry.adapter.kind(), runner, 0_u64));
+            runners.push((identity, runner, 0_u64));
         }
         let published = absorb_effects(&mut store, &hub)?;
         store.observe_effects();
@@ -797,27 +912,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 wake.wait(live.tick);
             }
             more_hints = false;
-            for (kind, runner, _) in &mut runners {
+            for (identity, runner, _) in &mut runners {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
                 more_hints |= runner
                     .tick_ready(&mut store, &instrument)
                     .map_err(|error| error.to_string())?;
-                let report = runner.report();
-                health.update(
-                    kind,
-                    RuntimeTick {
-                        ticks: report.ticks,
-                        events: report.events,
-                        polls: report.polls,
-                        rescans: report.rescans,
-                        admissions: report.admissions,
-                        live_rows: report.stream.stats.messages_inserted
-                            + report.stream.stats.messages_updated,
-                    },
-                    now_ms(),
-                );
+                update_live_health(&health, identity, runner);
                 absorbed += absorb_effects(&mut store, &hub)? as u64;
             }
             search_worker.wake();
@@ -836,11 +938,15 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         Ok(Err(error)) => return Err(format!("server: {error}")),
         Err(error) => return Err(format!("server task: {error}")),
     }
-    for (kind, runner, _) in &runners {
+    for (identity, runner, _) in &runners {
         let report = runner.report();
         println!(
-            "{kind}: {} ticks — {} events, {} polls, {} rows live",
-            report.ticks, report.events, report.polls, report.stream.stats.messages_inserted,
+            "{}: {} ticks — {} events, {} polls, {} rows live",
+            identity_name(identity),
+            report.ticks,
+            report.events,
+            report.polls,
+            report.stream.stats.messages_inserted,
         );
     }
     acknowledge_search(&mut store, &search_worker)?;
@@ -856,9 +962,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
 fn run_resumed_fresh_serve(
     flags: &Flags,
     db: &Path,
-    adapters: &[&'static dyn rosetta_adapter_support::AgentAdapter],
-    discoveries: &[rosetta_pipeline::Discovery],
+    targets: &[RuntimeTarget],
     consented: &BTreeSet<String>,
+    generation_consented: &BTreeSet<String>,
     opts: &IngestOptions,
     live: &LiveOptions,
     instrument: &Arc<Instrument>,
@@ -889,16 +995,14 @@ fn run_resumed_fresh_serve(
     let status_board = board.clone();
     health.ingest_project_source(Arc::new(move || status_board.snapshot()));
 
-    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
-        if !consented.contains(adapter.kind()) {
-            continue;
-        }
-        handled.insert(adapter.kind().to_string());
-        if !discovery.installed {
+    for target in consented_targets(targets, consented) {
+        let adapter = target.adapter;
+        let name = target.name();
+        handled.insert(target.id().to_string());
+        if !target.active() {
             return Err(format!(
-                "cannot resume {} cold generation: data root {} is unavailable",
-                adapter.kind(),
-                discovery.root.display()
+                "cannot resume {name} cold generation: data root {} is unavailable",
+                target.root.display()
             ));
         }
         if stop.load(Ordering::SeqCst) {
@@ -907,13 +1011,12 @@ fn run_resumed_fresh_serve(
 
         // Watch before touching either recovery evidence or today's inventory.
         // Hints queue while sealed generations rebuild into the fresh RAM view.
-        let watcher = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+        let watcher = NotifyEvents::watch_with_wake(&target.root, &wake)
             .map_err(|error| error.to_string())?;
-        let mut runtime = discovery.runtime.clone();
-        runtime.enabled = true;
-        let ledger_dir = stage_root.join(adapter.kind());
+        let runtime = target.enabled_runtime();
+        let ledger_dir = ledger_dir(&stage_root, &runtime);
         let baseline = instrument.snapshot();
-        health.ingest_stream(adapter.kind(), counter_source(instrument, baseline));
+        health.ingest_stream(&runtime.id, counter_source(instrument, baseline));
         health.ingest_phase(rosetta_server::IngestPhase::Restoring);
 
         let unsealed = if has_ledger_segments(&ledger_dir)? {
@@ -930,25 +1033,21 @@ fn run_resumed_fresh_serve(
                     ..RebuildOptions::default()
                 },
             )
-            .map_err(|error| format!("replaying {} staged ledger: {error}", adapter.kind()))?;
+            .map_err(|error| format!("replaying {name} staged ledger: {error}"))?;
             if report.hard_errors != 0 {
                 return Err(format!(
-                    "{} staged ledger replay had {} hard normalization errors",
-                    adapter.kind(),
+                    "{name} staged ledger replay had {} hard normalization errors",
                     report.hard_errors
                 ));
             }
             if report.torn_segments != 0 {
                 println!(
-                    "{}: recovered {} sealed ledger segments ({} torn tail ignored)",
-                    adapter.kind(),
-                    report.segments,
-                    report.torn_segments
+                    "{name}: recovered {} sealed ledger segments ({} torn tail ignored)",
+                    report.segments, report.torn_segments
                 );
             } else {
                 println!(
-                    "{}: recovered {} sealed ledger segments",
-                    adapter.kind(),
+                    "{name}: recovered {} sealed ledger segments",
                     report.segments
                 );
             }
@@ -960,42 +1059,38 @@ fn run_resumed_fresh_serve(
         // Current bounded metadata settles the roster after replay. A raw-only
         // source must still be present: otherwise there is no complete evidence
         // from which this generation can ever be published.
-        let mut ledger = open_ledger(&stage_root, adapter.kind())?
+        let mut ledger = open_runtime_ledger(&stage_root, &runtime)?
             .defer_sync_until_flush()
             .into_async(4);
         health.ingest_skim(
-            adapter.kind(),
+            &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
         let (meta, roster) = meta_ingest_inventory_into(
             adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
-            &discovery.inventory,
-            discovery.walk_truncated,
+            &target.census.inventory,
+            target.census.walk_truncated,
             &cold_opts,
             instrument,
             Some(&mut ledger),
         )
-        .map_err(|error| format!("{} resume metadata: {error}", adapter.kind()))?;
+        .map_err(|error| format!("{name} resume metadata: {error}"))?;
         for (path, (generation, source)) in &unsealed {
             let file = roster
                 .iter()
                 .find(|file| file.relative_path == *path)
                 .ok_or_else(|| {
-                    format!(
-                        "cannot finish {}: interrupted source {path} is no longer present",
-                        adapter.kind()
-                    )
+                    format!("cannot finish {name}: interrupted source {path} is no longer present")
                 })?;
             if file.stream_id != source.stream_id
                 || file.session_id != source.session_id
                 || file.native_session_id != source.native_session_id
             {
                 return Err(format!(
-                    "cannot finish {}: interrupted source {path} changed identity",
-                    adapter.kind()
+                    "cannot finish {name}: interrupted source {path} changed identity"
                 ));
             }
             reserve_unsealed_generation(
@@ -1009,11 +1104,7 @@ fn run_resumed_fresh_serve(
             .map_err(|error| format!("reserving {path} generation: {error}"))?;
         }
 
-        health.ingest_skim_done(
-            adapter.kind(),
-            meta.sessions as u64,
-            meta.files_skimmed as u64,
-        );
+        health.ingest_skim_done(&runtime.id, meta.sessions as u64, meta.files_skimmed as u64);
         let ownership = queries::session_list(store.conn(), None, i64::MAX)
             .map_err(|error| format!("reading resumed progress ownership: {error}"))?
             .into_iter()
@@ -1021,7 +1112,7 @@ fn run_resumed_fresh_serve(
             .collect();
         let mut observed_opts = cold_opts.clone();
         observed_opts.progress = Some(crate::cold_progress::ColdProgress::observe(
-            adapter.kind(),
+            &runtime.id,
             &roster,
             &ownership,
             board.clone(),
@@ -1029,23 +1120,23 @@ fn run_resumed_fresh_serve(
             false,
         ));
         health.ingest_stream(
-            adapter.kind(),
+            &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
         let stream = stream_backfill_into(
             adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
             &roster,
             &observed_opts,
             instrument,
             Some(&mut ledger),
         )
-        .map_err(|error| format!("{} resume source catch-up: {error}", adapter.kind()))?;
+        .map_err(|error| format!("{name} resume source catch-up: {error}"))?;
         record_backfill_failures(
-            adapter.kind(),
-            discovery.walk_truncated,
+            &name,
+            target.census.walk_truncated,
             &meta,
             &stream,
             &mut failures,
@@ -1055,7 +1146,7 @@ fn run_resumed_fresh_serve(
             .map_err(|error| error.to_string())?;
         absorb_effects(&mut store, hub)?;
         let session_ids = queries::session_list(store.conn(), None, i64::MAX)
-            .map_err(|error| format!("reading {} resumed sessions: {error}", adapter.kind()))?
+            .map_err(|error| format!("reading {name} resumed sessions: {error}"))?
             .into_iter()
             .filter(|session| session.runtime_id == runtime.id)
             .map(|session| session.id)
@@ -1067,18 +1158,26 @@ fn run_resumed_fresh_serve(
                 session_id,
             );
         }
-        health.ingest_done(adapter.kind(), stream.payload_bytes, stream.records);
-        events.insert(adapter.kind().to_string(), watcher);
+        health.ingest_done(&runtime.id, stream.payload_bytes, stream.records);
+        events.insert(runtime.id.clone(), watcher);
         applied.push(AppliedColdRuntime {
             adapter,
             runtime,
-            root: discovery.root.clone(),
+            identity: target.identity(),
+            root: target.root.clone(),
             roster,
             ledger: Some(ledger),
         });
     }
 
-    let unavailable = consented.difference(&handled).cloned().collect::<Vec<_>>();
+    // Every runtime the generation captured must have been handled above;
+    // `generation_consent` already refused an enrolled runtime the file no
+    // longer names, so a miss here is a kind the selection dropped.
+    let unavailable = generation_consented
+        .difference(&handled)
+        .filter_map(|id| targets.iter().find(|target| target.id() == id))
+        .map(RuntimeTarget::name)
+        .collect::<Vec<_>>();
     if !unavailable.is_empty() {
         return Err(format!(
             "cold generation names unavailable adapters: {}",
@@ -1116,9 +1215,9 @@ fn run_resumed_fresh_serve(
     let mut runners = Vec::with_capacity(applied.len());
     for output in applied {
         let watcher = events
-            .remove(output.adapter.kind())
-            .ok_or_else(|| format!("lost {} resume watcher", output.adapter.kind()))?;
-        let ledger = open_ledger(&public_ledgers, output.adapter.kind())?;
+            .remove(&output.runtime.id)
+            .ok_or_else(|| format!("lost {} resume watcher", identity_name(&output.identity)))?;
+        let ledger = open_runtime_ledger(&public_ledgers, &output.runtime)?;
         let runner = LiveRunner::resume_from_roster(
             output.adapter,
             output.runtime,
@@ -1129,7 +1228,7 @@ fn run_resumed_fresh_serve(
             live.clone(),
             Some(ledger),
         );
-        runners.push((output.adapter.kind(), runner));
+        runners.push((output.identity, runner));
     }
     let absorbed = drive_live_runners(
         flags,
@@ -1169,8 +1268,7 @@ fn has_ledger_segments(path: &Path) -> Result<bool, String> {
 fn run_fresh_fast_serve(
     flags: &Flags,
     db: &std::path::Path,
-    adapters: &[&'static dyn rosetta_adapter_support::AgentAdapter],
-    discoveries: &[rosetta_pipeline::Discovery],
+    targets: &[RuntimeTarget],
     consented: &BTreeSet<String>,
     opts: &IngestOptions,
     live: &LiveOptions,
@@ -1199,27 +1297,30 @@ fn run_fresh_fast_serve(
         cancel: Some(stop.clone()),
         ..opts.clone()
     };
-    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
-        if !discovery.installed || !consented.contains(adapter.kind()) {
+    for target in consented_targets(targets, consented) {
+        if !target.active() {
             continue;
         }
         if stop.load(Ordering::SeqCst) {
             return Err("stopped before cold metadata completed".into());
         }
-        let watcher = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+        let adapter = target.adapter;
+        let name = target.name();
+        let watcher = NotifyEvents::watch_with_wake(&target.root, &wake)
             .map_err(|error| error.to_string())?;
         let worker_instrument = Arc::new(Instrument::new());
         let skim_baseline = worker_instrument.snapshot();
         health.ingest_skim(
-            adapter.kind(),
+            target.id(),
             counter_source(&worker_instrument, skim_baseline),
         );
         let plan = plan_parallel_cold_runtime(ColdCaptureRequest {
             adapter,
-            runtime: discovery.runtime.clone(),
-            root: discovery.root.clone(),
-            inventory: discovery.inventory.clone(),
-            discovery_truncated: discovery.walk_truncated,
+            runtime: target.runtime.clone(),
+            identity: target.identity(),
+            root: target.root.clone(),
+            inventory: target.census.inventory.clone(),
+            discovery_truncated: target.census.walk_truncated,
             ledger_root: ledger_stage.path().to_path_buf(),
             opts: cold_opts.clone(),
             write_raw_ledger: true,
@@ -1233,26 +1334,25 @@ fn run_fresh_fast_serve(
         for batch in plan
             .planner
             .planned_metadata_batches()
-            .map_err(|error| format!("reading {} metadata plan: {error}", adapter.kind()))?
+            .map_err(|error| format!("reading {name} metadata plan: {error}"))?
         {
             instrument
                 .apply(&mut store, &batch)
-                .map_err(|error| format!("publishing {} metadata: {error}", adapter.kind()))?;
+                .map_err(|error| format!("publishing {name} metadata: {error}"))?;
         }
         absorb_effects(&mut store, hub)?;
         health.ingest_skim_done(
-            adapter.kind(),
+            target.id(),
             plan.meta.sessions as u64,
             plan.meta.files_skimmed as u64,
         );
         println!(
-            "{}: metadata public — {} sessions, {} projects, {} streamable files",
-            adapter.kind(),
+            "{name}: metadata public — {} sessions, {} projects, {} streamable files",
             plan.meta.sessions,
             plan.meta.projects,
             plan.files.len(),
         );
-        events.insert(adapter.kind().to_string(), watcher);
+        events.insert(target.id().to_string(), watcher);
         planned.push(plan);
     }
     if planned.is_empty() {
@@ -1274,7 +1374,7 @@ fn run_fresh_fast_serve(
     health.ingest_project_source(Arc::new(move || status_board.snapshot()));
     for plan in &mut planned {
         plan.opts.progress = Some(crate::cold_progress::ColdProgress::observe(
-            plan.adapter.kind(),
+            &plan.runtime.id,
             &plan.files,
             &ownership,
             board.clone(),
@@ -1288,10 +1388,7 @@ fn run_fresh_fast_serve(
     // become browseable while a large agent is still parsing.
     for plan in &planned {
         let baseline = plan.instrument.snapshot();
-        health.ingest_stream(
-            plan.adapter.kind(),
-            counter_source(&plan.instrument, baseline),
-        );
+        health.ingest_stream(&plan.runtime.id, counter_source(&plan.instrument, baseline));
     }
     let mut failures = Vec::new();
     let mut applied = std::thread::scope(|scope| {
@@ -1315,8 +1412,9 @@ fn run_fresh_fast_serve(
                 .recv()
                 .map_err(|_| "fresh cold capture channel closed".to_string())??;
             let mut runtime_failures = Vec::new();
+            let name = identity_name(&captured.identity);
             record_backfill_failures(
-                captured.adapter.kind(),
+                &name,
                 captured.discovery_truncated,
                 &captured.meta,
                 &captured.stream,
@@ -1326,10 +1424,10 @@ fn run_fresh_fast_serve(
                 failures.extend(runtime_failures);
                 continue;
             }
-            let kind = captured.adapter.kind().to_string();
+            let runtime_id = captured.runtime.id.clone();
             let payload_bytes = captured.stream.payload_bytes;
             let records = captured.stream.records;
-            health.ingest_runtime_stage(&kind, rosetta_server::BackfillState::Applying);
+            health.ingest_runtime_stage(&runtime_id, rosetta_server::BackfillState::Applying);
             captured.prepared.mark_metadata_preapplied();
             let output = apply_captured_cold_runtime(
                 flags,
@@ -1340,7 +1438,7 @@ fn run_fresh_fast_serve(
             )?;
             absorb_effects(&mut store, hub)?;
             let session_ids = queries::session_list(store.conn(), None, i64::MAX)
-                .map_err(|error| format!("reading {kind} sessions after cold apply: {error}"))?
+                .map_err(|error| format!("reading {name} sessions after cold apply: {error}"))?
                 .into_iter()
                 .filter(|session| session.runtime_id == output.runtime.id)
                 .map(|session| session.id)
@@ -1352,9 +1450,9 @@ fn run_fresh_fast_serve(
                     session_id,
                 );
             }
-            health.ingest_done(&kind, payload_bytes, records);
+            health.ingest_done(&runtime_id, payload_bytes, records);
             println!(
-                "{kind}: canonical RAM public — {records} records, {} sessions",
+                "{name}: canonical RAM public — {records} records, {} sessions",
                 session_ids.len()
             );
             outputs.push(output);
@@ -1411,9 +1509,9 @@ fn run_fresh_fast_serve(
     let mut runners = Vec::with_capacity(applied.len());
     for output in applied {
         let watcher = events
-            .remove(output.adapter.kind())
-            .ok_or_else(|| format!("lost {} cold watcher", output.adapter.kind()))?;
-        let ledger = open_ledger(&public_ledgers, output.adapter.kind())?;
+            .remove(&output.runtime.id)
+            .ok_or_else(|| format!("lost {} cold watcher", identity_name(&output.identity)))?;
+        let ledger = open_runtime_ledger(&public_ledgers, &output.runtime)?;
         let runner = LiveRunner::resume_from_roster(
             output.adapter,
             output.runtime,
@@ -1424,7 +1522,7 @@ fn run_fresh_fast_serve(
             live.clone(),
             Some(ledger),
         );
-        runners.push((output.adapter.kind(), runner));
+        runners.push((output.identity, runner));
     }
     let absorbed = drive_live_runners(
         flags,
@@ -1444,8 +1542,7 @@ fn run_fresh_fast_serve(
 #[allow(clippy::too_many_arguments)]
 fn run_warm_live_serve(
     flags: &Flags,
-    adapters: &[&'static dyn rosetta_adapter_support::AgentAdapter],
-    discoveries: &[rosetta_pipeline::Discovery],
+    targets: &[RuntimeTarget],
     consented: &BTreeSet<String>,
     opts: &IngestOptions,
     live: &LiveOptions,
@@ -1459,14 +1556,12 @@ fn run_warm_live_serve(
 ) -> Result<(Store, u64), String> {
     let wake = SourceWake::default();
     let mut runners = Vec::new();
-    for (adapter, discovery) in adapters.iter().copied().zip(discoveries) {
-        if !consented.contains(adapter.kind()) {
-            continue;
-        }
-        if !discovery.installed {
+    for target in consented_targets(targets, consented) {
+        let adapter = target.adapter;
+        let name = target.name();
+        if !target.active() {
             eprintln!(
-                "{}: enrolled data root is unavailable; standing canonical data remains public",
-                adapter.kind()
+                "{name}: enrolled data root is unavailable; standing canonical data remains public"
             );
             continue;
         }
@@ -1477,43 +1572,39 @@ fn run_warm_live_serve(
         // Watch before the bounded current inventory is skimmed. The forced
         // catch-up below then combines queued hints with cursor-relative stat
         // evidence, closing both the offline and scan/watch races.
-        let watcher = NotifyEvents::watch_with_wake(&discovery.root, &wake)
+        let watcher = NotifyEvents::watch_with_wake(&target.root, &wake)
             .map_err(|error| error.to_string())?;
-        let mut ledger = open_ledger(public_ledgers, adapter.kind())?;
-        let mut runtime = discovery.runtime.clone();
-        runtime.enabled = true;
+        let runtime = target.enabled_runtime();
+        let mut ledger = open_runtime_ledger(public_ledgers, &runtime)?;
         let (meta, roster) = meta_ingest_inventory_into(
             adapter,
             &runtime,
-            &discovery.root,
+            &target.root,
             &mut store,
-            &discovery.inventory,
-            discovery.walk_truncated,
+            &target.census.inventory,
+            target.census.walk_truncated,
             opts,
             instrument,
             Some(&mut ledger),
         )
-        .map_err(|error| format!("{} warm metadata catch-up: {error}", adapter.kind()))?;
+        .map_err(|error| format!("{name} warm metadata catch-up: {error}"))?;
         if meta.walk_truncated || meta.files_unidentified > 0 || meta.files_vanished > 0 {
             eprintln!(
-                "{}: warm inventory changed during scan (truncated={}, unidentified={}, vanished={}); live admission will retry",
-                adapter.kind(),
-                meta.walk_truncated,
-                meta.files_unidentified,
-                meta.files_vanished
+                "{name}: warm inventory changed during scan (truncated={}, unidentified={}, vanished={}); live admission will retry",
+                meta.walk_truncated, meta.files_unidentified, meta.files_vanished
             );
         }
         let runner = LiveRunner::resume_from_roster(
             adapter,
             runtime,
-            discovery.root.clone(),
+            target.root.clone(),
             Box::new(watcher),
             roster,
             opts.clone(),
             live.clone(),
             Some(ledger),
         );
-        runners.push((adapter.kind(), runner));
+        runners.push((target.identity(), runner));
     }
 
     let absorbed = drive_live_runners(
@@ -1535,7 +1626,7 @@ fn run_warm_live_serve(
 fn drive_live_runners(
     flags: &Flags,
     store: &mut Store,
-    runners: &mut [(&'static str, LiveRunner<'static>)],
+    runners: &mut [(RuntimeIdentity, LiveRunner<'static>)],
     wake: &SourceWake,
     idle_wait: Duration,
     instrument: &Instrument,
@@ -1552,14 +1643,14 @@ fn drive_live_runners(
     // One non-blocking recovery pass is part of entering live mode. It catches
     // offline growth and the private-public handoff even if the OS watcher
     // dropped or coalesced the corresponding event.
-    for (kind, runner) in runners.iter_mut() {
+    for (identity, runner) in runners.iter_mut() {
         if stop.load(Ordering::SeqCst) {
             break;
         }
         runner
             .catch_up(store, instrument)
-            .map_err(|error| format!("{kind} startup catch-up: {error}"))?;
-        update_live_health(health, kind, runner);
+            .map_err(|error| format!("{} startup catch-up: {error}", identity_name(identity)))?;
+        update_live_health(health, identity, runner);
         search_worker.wake();
         acknowledge_search(store, search_worker)?;
         absorbed += absorb_effects(store, hub)? as u64;
@@ -1577,14 +1668,14 @@ fn drive_live_runners(
             wake.wait(idle_wait);
         }
         more_hints = false;
-        for (kind, runner) in runners.iter_mut() {
+        for (identity, runner) in runners.iter_mut() {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
             more_hints |= runner
                 .tick_ready(store, instrument)
                 .map_err(|error| error.to_string())?;
-            update_live_health(health, kind, runner);
+            update_live_health(health, identity, runner);
             // Publish this runtime's commits before doing work for the next.
             absorbed += absorb_effects(store, hub)? as u64;
         }
@@ -1592,10 +1683,11 @@ fn drive_live_runners(
         acknowledge_search(store, search_worker)?;
         absorbed += absorb_effects(store, hub)? as u64;
     }
-    for (kind, runner) in runners.iter() {
+    for (identity, runner) in runners.iter() {
         let report = runner.report();
         println!(
-            "{kind}: {} ticks — {} events, {} polls, {} rows live",
+            "{}: {} ticks — {} events, {} polls, {} rows live",
+            identity_name(identity),
             report.ticks,
             report.events,
             report.polls,
@@ -1605,10 +1697,10 @@ fn drive_live_runners(
     Ok(absorbed)
 }
 
-fn update_live_health(health: &DaemonHealth, kind: &str, runner: &LiveRunner<'_>) {
+fn update_live_health(health: &DaemonHealth, identity: &RuntimeIdentity, runner: &LiveRunner<'_>) {
     let report = runner.report();
     health.update(
-        kind,
+        identity,
         RuntimeTick {
             ticks: report.ticks,
             events: report.events,

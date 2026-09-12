@@ -19,6 +19,8 @@ fn ledger_only_cursor_advances_without_projection_or_search_effects() {
                 skills: None,
                 versions_seen: None,
                 discovered_at: 0,
+                label: None,
+                provenance: Default::default(),
             })],
             checkpoints: vec![CheckpointUpdate {
                 runtime_id: "runtime".into(),

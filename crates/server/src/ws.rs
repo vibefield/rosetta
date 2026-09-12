@@ -21,6 +21,7 @@ use rosetta_protocol::{PROTOCOL_VERSION, ServerFrame, Stamp};
 use rosetta_store::hot::{Mutation, Replay};
 use rosetta_store::{queries, timeline_meta};
 
+use crate::enrolled::EnrolledRuntimes;
 use crate::http::{
     AppState, Failure, ProjectionReader, origin_allowed, read_timeline_page, with_read,
 };
@@ -138,7 +139,7 @@ pub(crate) async fn meta(State(state): State<AppState>, upgrade: WebSocketUpgrad
         let (sender, receiver) = socket.split();
         let mut sink = WsSink(sender);
         tokio::select! {
-            _ = run_meta_stream(state.hub, &mut sink) => {}
+            _ = run_meta_stream(state.hub, state.enrolled, &mut sink) => {}
             _ = drain_until_close(receiver) => {}
         }
     })
@@ -478,9 +479,10 @@ async fn next_or_ping<S: FrameSink>(sub: &Subscription, sink: &mut S) -> ItemOrE
     }
 }
 
-fn meta_snapshot(hub: &Hub) -> ServerFrame {
+fn meta_snapshot(hub: &Hub, enrolled: &EnrolledRuntimes) -> ServerFrame {
     let mut runtimes = hub.runtimes();
     runtimes.sort_by(|a, b| a.id.cmp(&b.id));
+    enrolled.decorate_all(&mut runtimes);
     let mut projects = hub.projects();
     projects.sort_by(|a, b| a.id.cmp(&b.id));
     let mut sessions = hub.sessions();
@@ -494,7 +496,13 @@ fn meta_snapshot(hub: &Hub) -> ServerFrame {
 
 /// The metadata subscription: hello, the mirror as one snapshot, then
 /// precise diffs. Meta has no ring, so resync just re-reads the mirror.
-pub(crate) async fn run_meta_stream<S: FrameSink>(hub: Arc<Hub>, sink: &mut S) {
+/// Runtime rows — in the snapshot and in diffs — carry this start's enrolled
+/// presentation, which the mirror deliberately does not hold.
+pub(crate) async fn run_meta_stream<S: FrameSink>(
+    hub: Arc<Hub>,
+    enrolled: Arc<EnrolledRuntimes>,
+    sink: &mut S,
+) {
     let sub = Arc::new(hub.subscribe_meta());
     if sink
         .send(ServerFrame::Hello {
@@ -506,7 +514,7 @@ pub(crate) async fn run_meta_stream<S: FrameSink>(hub: Arc<Hub>, sink: &mut S) {
     {
         return;
     }
-    if sink.send(meta_snapshot(&hub)).await.is_err() {
+    if sink.send(meta_snapshot(&hub, &enrolled)).await.is_err() {
         return;
     }
 
@@ -517,10 +525,11 @@ pub(crate) async fn run_meta_stream<S: FrameSink>(hub: Arc<Hub>, sink: &mut S) {
         };
         match item {
             HubItem::Mutation { stamp, mutation } => {
-                let frame = ServerFrame::Mutation {
-                    stamp,
-                    mutation: (*mutation).clone(),
-                };
+                let mut mutation = (*mutation).clone();
+                if let Mutation::Runtime(row) = &mut mutation {
+                    enrolled.decorate(row);
+                }
+                let frame = ServerFrame::Mutation { stamp, mutation };
                 if sink.send(frame).await.is_err() {
                     return;
                 }
@@ -530,7 +539,7 @@ pub(crate) async fn run_meta_stream<S: FrameSink>(hub: Arc<Hub>, sink: &mut S) {
                     return;
                 }
                 hub.resync(&sub, now_ms());
-                if sink.send(meta_snapshot(&hub)).await.is_err() {
+                if sink.send(meta_snapshot(&hub, &enrolled)).await.is_err() {
                     return;
                 }
             }
@@ -609,6 +618,8 @@ mod tests {
                         skills: None,
                         versions_seen: None,
                         discovered_at: 1_000,
+                        label: None,
+                        provenance: Default::default(),
                     }),
                     IngestOp::Project(ProjectRow {
                         id: "p1".into(),
@@ -855,6 +866,8 @@ mod tests {
                         skills: None,
                         versions_seen: None,
                         discovered_at: 1_000,
+                        label: None,
+                        provenance: Default::default(),
                     }),
                     IngestOp::Project(ProjectRow {
                         id: "p1".into(),
@@ -1181,9 +1194,10 @@ mod tests {
         let sink = RecordingSink::default();
         let frames = sink.frames.clone();
         let hub = h.state.hub.clone();
+        let enrolled = h.state.enrolled.clone();
         let task = tokio::spawn(async move {
             let mut sink = sink;
-            run_meta_stream(hub, &mut sink).await;
+            run_meta_stream(hub, enrolled, &mut sink).await;
         });
         wait_for_frames(&frames, 2).await;
         {

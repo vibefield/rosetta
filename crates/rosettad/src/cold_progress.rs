@@ -8,7 +8,9 @@ use rosetta_server::BackfillState;
 use rosetta_server::{DaemonHealth, ProgressBoard};
 
 pub(crate) struct ColdProgress {
-    kind: String,
+    /// The health entry this observer feeds — keyed by runtime id, since two
+    /// runtimes of one kind each carry their own meter.
+    runtime_id: String,
     plan: IngestPlan,
     board: Arc<ProgressBoard>,
     health: Arc<DaemonHealth>,
@@ -16,7 +18,7 @@ pub(crate) struct ColdProgress {
 
 impl ColdProgress {
     pub fn observe(
-        kind: &str,
+        runtime_id: &str,
         files: &[SessionFile],
         ownership: &BTreeMap<String, Option<String>>,
         board: Arc<ProgressBoard>,
@@ -42,9 +44,9 @@ impl ColdProgress {
         } else {
             0
         };
-        health.ingest_stream_total(kind, total);
+        health.ingest_stream_total(runtime_id, total);
         Arc::new(Self {
-            kind: kind.to_owned(),
+            runtime_id: runtime_id.to_owned(),
             plan,
             board,
             health,
@@ -55,7 +57,7 @@ impl ColdProgress {
 impl std::fmt::Debug for ColdProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ColdProgress")
-            .field("kind", &self.kind)
+            .field("runtime_id", &self.runtime_id)
             .finish_non_exhaustive()
     }
 }
@@ -70,6 +72,6 @@ impl ColdProgressObserver for ColdProgress {
 
     fn reading_finished(&self) {
         self.health
-            .ingest_runtime_stage(&self.kind, BackfillState::Preparing);
+            .ingest_runtime_stage(&self.runtime_id, BackfillState::Preparing);
     }
 }

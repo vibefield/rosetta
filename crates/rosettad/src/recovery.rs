@@ -28,7 +28,20 @@ const PERMANENT_MANIFEST: &str = "recovery.json";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IncompleteRecovery {
     pub(crate) path: PathBuf,
+    /// Consent for DISCOVERED kinds, read off the archived projection's
+    /// `~`-rooted enabled rows.
     pub(crate) enabled_agents: BTreeSet<String>,
+    /// Supervisor-enrolled runtimes the archived projection held (absolute
+    /// roots). Recorded for the record only: their consent is this start's
+    /// `--enroll` file, never the archive.
+    pub(crate) enrolled_runtimes: Vec<RecoveredRuntime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecoveredRuntime {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    pub(crate) data_root: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +51,7 @@ struct RecoveryPlan {
     recovery_id: String,
     artifacts: Vec<String>,
     enabled_agents: BTreeSet<String>,
+    enrolled_runtimes: Vec<RecoveredRuntime>,
 }
 
 /// Retire an interrupted projection and its sibling artifacts without losing
@@ -54,17 +68,31 @@ pub(crate) fn restart_incomplete_projection(
         read_plan(&marker, db, ledger)?
     } else {
         if db.exists() {
-            let (canonical_ready, enabled_agents) = inspect_projection(db)?;
-            if canonical_ready {
+            let inspected = inspect_projection(db)?;
+            if inspected.canonical_ready {
                 return Ok(None);
             }
-            create_plan(db, ledger, "canonical_ready=false", enabled_agents, &marker)?
+            create_plan(
+                db,
+                ledger,
+                "canonical_ready=false",
+                inspected.enabled_agents,
+                inspected.enrolled_runtimes,
+                &marker,
+            )?
         } else {
             let existing = existing_artifacts(db, ledger)?;
             if existing.is_empty() {
                 return Ok(None);
             }
-            create_plan(db, ledger, "projection-missing", BTreeSet::new(), &marker)?
+            create_plan(
+                db,
+                ledger,
+                "projection-missing",
+                BTreeSet::new(),
+                Vec::new(),
+                &marker,
+            )?
         }
     };
 
@@ -144,6 +172,7 @@ pub(crate) fn restart_incomplete_projection(
     Ok(Some(IncompleteRecovery {
         path: recovery,
         enabled_agents: plan.enabled_agents,
+        enrolled_runtimes: plan.enrolled_runtimes,
     }))
 }
 
@@ -152,6 +181,7 @@ fn create_plan(
     ledger: &Path,
     reason: &str,
     enabled_agents: BTreeSet<String>,
+    enrolled_runtimes: Vec<RecoveredRuntime>,
     marker: &Path,
 ) -> Result<RecoveryPlan, String> {
     let parent = artifact_parent(db)?;
@@ -188,6 +218,7 @@ fn create_plan(
         recovery_id,
         artifacts,
         enabled_agents,
+        enrolled_runtimes,
     };
     write_new_synced(marker, &plan_bytes(&plan)?)?;
     sync_directory(parent)?;
@@ -245,16 +276,55 @@ fn read_plan(marker: &Path, db: &Path, ledger: &Path) -> Result<RecoveryPlan, St
         required_string_array(object.get("enabled_agents"), "enabled_agents", marker)?
             .into_iter()
             .collect();
+    // Markers written before 2026-09-12 carry no enrolled list; absent reads
+    // as empty, since the file is those runtimes' consent anyway.
+    let enrolled_runtimes = match object.get("enrolled_runtimes") {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| {
+                format!(
+                    "recovery marker {} has a non-array enrolled_runtimes",
+                    marker.display()
+                )
+            })?
+            .iter()
+            .map(|entry| {
+                let object = entry.as_object().ok_or_else(|| {
+                    format!(
+                        "recovery marker {} has a non-object enrolled runtime",
+                        marker.display()
+                    )
+                })?;
+                Ok(RecoveredRuntime {
+                    id: required_string(object.get("id"), "enrolled_runtimes.id", marker)?,
+                    kind: required_string(object.get("kind"), "enrolled_runtimes.kind", marker)?,
+                    data_root: required_string(
+                        object.get("data_root"),
+                        "enrolled_runtimes.data_root",
+                        marker,
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    };
     Ok(RecoveryPlan {
         db_name,
         reason,
         recovery_id,
         artifacts,
         enabled_agents,
+        enrolled_runtimes,
     })
 }
 
-fn inspect_projection(db: &Path) -> Result<(bool, BTreeSet<String>), String> {
+struct InspectedProjection {
+    canonical_ready: bool,
+    enabled_agents: BTreeSet<String>,
+    enrolled_runtimes: Vec<RecoveredRuntime>,
+}
+
+fn inspect_projection(db: &Path) -> Result<InspectedProjection, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let connection = Connection::open_with_flags(db, flags).map_err(|error| {
         format!(
@@ -280,15 +350,42 @@ fn inspect_projection(db: &Path) -> Result<(bool, BTreeSet<String>), String> {
             db.display()
         ));
     }
+    // An enabled row with the layout's `~` root is the user's consent for
+    // that kind's discovered runtime. An enabled row with an absolute root is
+    // a supervisor-enrolled runtime: recorded, but never consent for the
+    // native runtime of its kind.
     let mut statement = connection
-        .prepare("SELECT kind FROM agent_runtime WHERE enabled = 1 ORDER BY kind")
+        .prepare("SELECT id, kind, data_root FROM agent_runtime WHERE enabled = 1 ORDER BY id")
         .map_err(|error| format!("reading enrollment from {}: {error}", db.display()))?;
-    let enabled_agents = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| format!("querying enrollment from {}: {error}", db.display()))?
-        .collect::<Result<BTreeSet<_>, _>>()
-        .map_err(|error| format!("decoding enrollment from {}: {error}", db.display()))?;
-    Ok((ready == 1, enabled_agents))
+    let mut enabled_agents = BTreeSet::new();
+    let mut enrolled_runtimes = Vec::new();
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| format!("querying enrollment from {}: {error}", db.display()))?;
+    for row in rows {
+        let (id, kind, data_root) =
+            row.map_err(|error| format!("decoding enrollment from {}: {error}", db.display()))?;
+        if crate::runtime_ledger::is_layout_root(&data_root) {
+            enabled_agents.insert(kind);
+        } else {
+            enrolled_runtimes.push(RecoveredRuntime {
+                id,
+                kind,
+                data_root,
+            });
+        }
+    }
+    Ok(InspectedProjection {
+        canonical_ready: ready == 1,
+        enabled_agents,
+        enrolled_runtimes,
+    })
 }
 
 fn allowed_artifacts(db: &Path, ledger: &Path) -> Result<BTreeSet<String>, String> {
@@ -343,6 +440,17 @@ fn existing_artifacts(db: &Path, ledger: &Path) -> Result<Vec<String>, String> {
 }
 
 fn plan_bytes(plan: &RecoveryPlan) -> Result<Vec<u8>, String> {
+    let enrolled_runtimes: Vec<Value> = plan
+        .enrolled_runtimes
+        .iter()
+        .map(|runtime| {
+            json!({
+                "id": runtime.id,
+                "kind": runtime.kind,
+                "data_root": runtime.data_root,
+            })
+        })
+        .collect();
     let mut bytes = serde_json::to_vec_pretty(&json!({
         "format": RECOVERY_FORMAT,
         "reason": plan.reason,
@@ -350,6 +458,7 @@ fn plan_bytes(plan: &RecoveryPlan) -> Result<Vec<u8>, String> {
         "recovery": plan.recovery_id,
         "artifacts": plan.artifacts,
         "enabled_agents": plan.enabled_agents,
+        "enrolled_runtimes": enrolled_runtimes,
     }))
     .map_err(|error| format!("serializing incomplete recovery plan: {error}"))?;
     bytes.push(b'\n');
@@ -482,6 +591,7 @@ mod tests {
     use super::*;
     use rosetta_store::Store;
 
+    /// A consented DISCOVERED runtime: the layout's `~` root.
     fn enable(store: &Store, kind: &str) {
         store
             .conn()
@@ -489,7 +599,20 @@ mod tests {
                 "INSERT INTO agent_runtime
                    (id, kind, data_root, enabled, discovered_at)
                  VALUES (?1, ?2, ?3, 1, 0)",
-                rusqlite::params![format!("runtime-{kind}"), kind, format!("/{kind}")],
+                rusqlite::params![format!("runtime-{kind}"), kind, format!("~/.{kind}")],
+            )
+            .unwrap();
+    }
+
+    /// A supervisor-enrolled runtime: an absolute root.
+    fn enroll(store: &Store, kind: &str, root: &str) {
+        store
+            .conn()
+            .execute(
+                "INSERT INTO agent_runtime
+                   (id, kind, data_root, enabled, discovered_at)
+                 VALUES (?1, ?2, ?3, 1, 0)",
+                rusqlite::params![format!("enrolled-{kind}"), kind, root],
             )
             .unwrap();
     }
@@ -512,6 +635,7 @@ mod tests {
         let db = temp.path().join("rosetta.db");
         let store = Store::open_progressive(&db).unwrap();
         enable(&store, "claude-code");
+        enroll(&store, "claude-code", "/users/u1/agents/kim");
         drop(store);
         let ledger = db.with_extension("ledger");
         std::fs::create_dir(&ledger).unwrap();
@@ -525,9 +649,19 @@ mod tests {
         let recovered = restart_incomplete_projection(&db, &ledger)
             .unwrap()
             .expect("incomplete projection is retired");
+        // The enrolled row is recorded but is NOT consent for the native
+        // claude-code runtime: only the `~` row counts as a kind.
         assert_eq!(
             recovered.enabled_agents,
             BTreeSet::from(["claude-code".to_string()])
+        );
+        assert_eq!(
+            recovered.enrolled_runtimes,
+            vec![RecoveredRuntime {
+                id: "enrolled-claude-code".into(),
+                kind: "claude-code".into(),
+                data_root: "/users/u1/agents/kim".into(),
+            }]
         );
         assert!(!db.exists());
         assert!(!ledger.exists());
@@ -556,8 +690,16 @@ mod tests {
         let ledger = db.with_extension("ledger");
         std::fs::create_dir(&ledger).unwrap();
         let marker = appended(&db, ".restart.json");
-        let (_, enabled) = inspect_projection(&db).unwrap();
-        let plan = create_plan(&db, &ledger, "canonical_ready=false", enabled, &marker).unwrap();
+        let inspected = inspect_projection(&db).unwrap();
+        let plan = create_plan(
+            &db,
+            &ledger,
+            "canonical_ready=false",
+            inspected.enabled_agents,
+            inspected.enrolled_runtimes,
+            &marker,
+        )
+        .unwrap();
         let recovery = temp.path().join(RECOVERY_ROOT).join(&plan.recovery_id);
         std::fs::rename(&db, recovery.join("rosetta.db")).unwrap();
 

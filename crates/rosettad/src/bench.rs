@@ -14,7 +14,8 @@ use rosetta_store::Store;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
-use crate::{ledger_root, open_ledger, parse_flags, projection_lock, selected};
+use crate::runtime_ledger::open_runtime_ledger;
+use crate::{ledger_root, parse_flags, projection_lock, selected};
 
 pub(crate) fn emit(event: &Value) {
     println!("{event}");
@@ -638,7 +639,7 @@ pub(crate) fn cmd_meta(args: &[String]) -> Result<(), String> {
 
         let mut runtime = discovery.runtime.clone();
         runtime.enabled = true;
-        let mut ledger = open_ledger(&ledgers, adapter.kind())?;
+        let mut ledger = open_runtime_ledger(&ledgers, &runtime)?;
         let (meta, _) = meta_ingest_into(
             *adapter,
             &runtime,

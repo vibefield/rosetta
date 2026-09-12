@@ -248,13 +248,17 @@ fn interrupted_first_serve_is_preserved_and_restarted_through_ram() {
     let db = temp.path().join("archive/rosetta.db");
     std::fs::create_dir_all(db.parent().unwrap()).unwrap();
 
+    // A consented DISCOVERED runtime carries the layout's `~` root; only such
+    // a row is kind-granular consent the archive can hand on (an absolute
+    // root would be a supervisor-enrolled runtime, whose consent is the
+    // `--enroll` file, never the archive — 2026-09-12).
     let store = rosetta_store::Store::open_progressive(&db).unwrap();
     store
         .conn()
         .execute(
             "INSERT INTO agent_runtime
                (id, kind, data_root, enabled, discovered_at)
-             VALUES ('old-claude', 'claude-code', '/old/.claude', 1, 0)",
+             VALUES ('old-claude', 'claude-code', '~/.claude', 1, 0)",
             [],
         )
         .unwrap();

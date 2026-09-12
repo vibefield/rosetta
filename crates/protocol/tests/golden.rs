@@ -18,10 +18,10 @@ use rosetta_protocol::{
     ContributionResponse, ContributionRow, DaemonStatus, DiscoveriesResponse, DiscoveryRow,
     EnableRequest, EnableResponse, ErrorCode, HeatmapDay, HeatmapResponse, HourTotal, HubStatus,
     IngestPhase, IngestProgress, ModelDay, Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow,
-    ProjectsResponse, ResponseRuntime, RuntimeBackfill, RuntimeIngestStatus, RuntimeRow,
-    RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState,
-    ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse,
-    StreamState, TimelineEntryResponse, TimelineMeta, TimelineMetaArtifact,
+    ProjectsResponse, ResponseRuntime, RuntimeBackfill, RuntimeIngestStatus, RuntimeProvenance,
+    RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse,
+    SearchState, ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp,
+    StatusResponse, StreamState, TimelineEntryResponse, TimelineMeta, TimelineMetaArtifact,
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
@@ -39,6 +39,26 @@ fn runtime_row() -> RuntimeRow {
         skills: Some(serde_json::json!(["review"])),
         versions_seen: Some(serde_json::json!(["2.1.240"])),
         discovered_at: 1_000,
+        label: None,
+        provenance: Default::default(),
+    }
+}
+
+/// A supervisor-enrolled runtime of the same kind (2026-09-12): an absolute
+/// identity root, and the two serve-time fields only such a row carries.
+fn enrolled_runtime_row() -> RuntimeRow {
+    RuntimeRow {
+        id: "rt-kim".into(),
+        kind: "claude-code".into(),
+        data_root: "/users/u1/agents/roots/claude-code/9a3d".into(),
+        enabled: true,
+        account: None,
+        config: None,
+        skills: None,
+        versions_seen: None,
+        discovered_at: 2_000,
+        label: Some("Kim".into()),
+        provenance: RuntimeProvenance::Enrolled,
     }
 }
 
@@ -66,7 +86,10 @@ fn session_row() -> SessionRow {
         summary: Some("A summary".into()),
         started_at: 10_000,
         updated_at: 20_000,
-        activity: Some(rosetta_protocol::SessionActivity { first_at: 11_000, last_at: 19_000 }),
+        activity: Some(rosetta_protocol::SessionActivity {
+            first_at: 11_000,
+            last_at: 19_000,
+        }),
         stream_state: StreamState::Streaming,
     }
 }
@@ -338,16 +361,32 @@ fn exemplars() -> serde_json::Value {
         daemon: Some(DaemonStatus {
             started_at: 1_000,
             uptime_ms: 60_000,
-            runtimes: vec![RuntimeIngestStatus {
-                kind: "claude-code".into(),
-                ticks: 100,
-                events: 5,
-                polls: 20,
-                rescans: 1,
-                admissions: 2,
-                live_rows: 12,
-                last_activity_ms: Some(50_000),
-            }],
+            runtimes: vec![
+                RuntimeIngestStatus {
+                    kind: "claude-code".into(),
+                    runtime_id: "rt1".into(),
+                    label: None,
+                    ticks: 100,
+                    events: 5,
+                    polls: 20,
+                    rescans: 1,
+                    admissions: 2,
+                    live_rows: 12,
+                    last_activity_ms: Some(50_000),
+                },
+                RuntimeIngestStatus {
+                    kind: "claude-code".into(),
+                    runtime_id: "rt-kim".into(),
+                    label: Some("Kim".into()),
+                    ticks: 3,
+                    events: 0,
+                    polls: 1,
+                    rescans: 0,
+                    admissions: 0,
+                    live_rows: 0,
+                    last_activity_ms: None,
+                },
+            ],
             hub: HubStatus {
                 subscribers: 2,
                 rings: 1,
@@ -359,16 +398,32 @@ fn exemplars() -> serde_json::Value {
             },
             ingest: IngestProgress {
                 phase: IngestPhase::Backfilling,
-                runtimes: vec![RuntimeBackfill {
-                    kind: "claude-code".into(),
-                    state: BackfillState::Streaming,
-                    files_total: 1_209,
-                    bytes_total: 2_147_483_648,
-                    files_skimmed: 1_209,
-                    bytes_streamed: 1_073_741_824,
-                    sessions_total: 5_912,
-                    records: 214_032,
-                }],
+                runtimes: vec![
+                    RuntimeBackfill {
+                        kind: "claude-code".into(),
+                        runtime_id: "rt1".into(),
+                        label: None,
+                        state: BackfillState::Streaming,
+                        files_total: 1_209,
+                        bytes_total: 2_147_483_648,
+                        files_skimmed: 1_209,
+                        bytes_streamed: 1_073_741_824,
+                        sessions_total: 5_912,
+                        records: 214_032,
+                    },
+                    RuntimeBackfill {
+                        kind: "claude-code".into(),
+                        runtime_id: "rt-kim".into(),
+                        label: Some("Kim".into()),
+                        state: BackfillState::Queued,
+                        files_total: 4,
+                        bytes_total: 65_536,
+                        files_skimmed: 0,
+                        bytes_streamed: 0,
+                        sessions_total: 0,
+                        records: 0,
+                    },
+                ],
                 projects: vec![
                     ProjectBackfill {
                         project_id: Some("p1".into()),
@@ -471,7 +526,7 @@ fn exemplars() -> serde_json::Value {
     serde_json::json!({
         "protocol_version": PROTOCOL_VERSION,
         "status": status,
-        "runtimes": RuntimesResponse { runtimes: vec![runtime_row()] },
+        "runtimes": RuntimesResponse { runtimes: vec![runtime_row(), enrolled_runtime_row()] },
         "projects": ProjectsResponse { projects: vec![project_row()] },
         "sessions": SessionsResponse { sessions: vec![session_row()] },
         "session": SessionResponse { session: session_row() },

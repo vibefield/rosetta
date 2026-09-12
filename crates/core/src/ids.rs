@@ -17,6 +17,14 @@ pub fn runtime_id(kind: &str, data_root: &str) -> String {
     derive("rosetta/runtime", &[kind, data_root])
 }
 
+/// A short filesystem-safe discriminator for a supervisor-enrolled data root:
+/// the first 12 hex characters of blake3 over the absolute root. It names the
+/// runtime's ledger directory beside its kind (`<kind>~<digest>`); identity
+/// itself is the stamp inside that directory, never the name.
+pub fn root_digest(data_root: &str) -> String {
+    blake3::hash(data_root.as_bytes()).to_hex()[..12].to_string()
+}
+
 /// Rosetta's own project abstraction. `worktree_group` is a local folder path
 /// shared only by linked worktrees; ordinary clones use their own root. Both
 /// routes intentionally share one id domain so a deleted source checkout and

@@ -16,6 +16,8 @@ fn runtime() -> RuntimeRow {
         skills: None,
         versions_seen: None,
         discovered_at: 1,
+        label: None,
+        provenance: Default::default(),
     }
 }
 

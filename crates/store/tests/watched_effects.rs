@@ -49,6 +49,8 @@ fn meta_batch() -> Batch {
                 skills: None,
                 versions_seen: None,
                 discovered_at: 1_000,
+                label: None,
+                provenance: Default::default(),
             }),
             IngestOp::Project(ProjectRow {
                 id: "p1".into(),

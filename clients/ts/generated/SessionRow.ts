@@ -4,24 +4,24 @@ import type { SessionDelegation } from "./SessionDelegation";
 import type { SessionRole } from "./SessionRole";
 import type { StreamState } from "./StreamState";
 
-export type SessionRow = { id: string, native_session_id: string, runtime_id: string, project_id: string | null,
+export type SessionRow = { id: string, native_session_id: string, runtime_id: string, project_id: string | null, 
 /**
  * One normalized primary working directory, selected by the adapter's
  * bounded metadata admission. Timeline records never mutate it.
  */
-cwd: string | null, parent_session_id: string | null,
+cwd: string | null, parent_session_id: string | null, 
 /**
  * Exact child-launch and team metadata, when a native sidecar proves it.
  */
-delegation: SessionDelegation | null,
+delegation: SessionDelegation | null, 
 /**
  * `== id` for top-level sessions; subagent trees roll up here.
  */
-root_session_id: string, role: SessionRole, title: string | null, summary: string | null, started_at: number,
+root_session_id: string, role: SessionRole, title: string | null, summary: string | null, started_at: number, 
 /**
  * Source/metadata freshness, not conversation activity.
  */
-updated_at: number,
+updated_at: number, 
 /**
  * Unknown until timestamped conversation evidence is available. This is
  * a read-time projection; SessionMeta and old ledger frames cannot set it.

@@ -17,7 +17,8 @@
 use serde::{Deserialize, Serialize};
 
 pub use rosetta_core::rows::{
-    Ms, ProjectRow, RuntimeRow, SessionActivity, SessionRole, SessionRow, StreamState, TokenSnapshot,
+    Ms, ProjectRow, RuntimeProvenance, RuntimeRow, SessionActivity, SessionRole, SessionRow,
+    StreamState, TokenSnapshot,
 };
 pub use rosetta_core::{TimelineBody, TimelineEntry};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
@@ -137,10 +138,21 @@ pub struct ProjectBackfill {
 /// Cold-start progress for one runtime. Denominators come from discovery's
 /// census walk; numerators advance live while the writer streams, so both
 /// meters are determinate: skims measure in files, streams in bytes.
+///
+/// Entries are keyed by `runtime_id` since 2026-09-12: a supervisor may enroll
+/// several roots of one kind, so `kind` alone no longer identifies a row.
+/// Both additions carry serde defaults, so an older daemon's block still parses.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RuntimeBackfill {
     pub kind: String,
+    /// Canonical runtime id (`RuntimeRow.id`); empty from a daemon that
+    /// predates it.
+    #[serde(default)]
+    pub runtime_id: String,
+    /// The enrollment file's presentation label, for enrolled runtimes.
+    #[serde(default)]
+    pub label: Option<String>,
     pub state: BackfillState,
     /// Census file denominator from discovery's walk.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -221,10 +233,18 @@ pub struct BoostResponse {
 }
 
 /// One watched runtime's live-ingest counters, cumulative since start.
+/// Keyed by `runtime_id` since 2026-09-12 (see [`RuntimeBackfill`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RuntimeIngestStatus {
     pub kind: String,
+    /// Canonical runtime id (`RuntimeRow.id`); empty from a daemon that
+    /// predates it.
+    #[serde(default)]
+    pub runtime_id: String,
+    /// The enrollment file's presentation label, for enrolled runtimes.
+    #[serde(default)]
+    pub label: Option<String>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub ticks: u64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]

@@ -41,6 +41,8 @@ fn named_memory_projection_is_visible_to_committed_readers() {
                 skills: None,
                 versions_seen: None,
                 discovered_at: 1,
+                label: None,
+                provenance: Default::default(),
             })],
             ..Batch::default()
         })
@@ -68,6 +70,8 @@ fn named_memory_projection_is_visible_to_committed_readers() {
                 skills: None,
                 versions_seen: None,
                 discovered_at: 2,
+                label: None,
+                provenance: Default::default(),
             })],
             ..Batch::default()
         })

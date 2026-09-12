@@ -39,6 +39,8 @@ fn an_archived_public_source_can_resume_after_internal_session_policy_changes() 
         skills: None,
         versions_seen: None,
         discovered_at: 0,
+        label: None,
+        provenance: Default::default(),
     };
     let mut store = Store::open_in_memory().unwrap();
     let ledger_path = temp.path().join("ledger");

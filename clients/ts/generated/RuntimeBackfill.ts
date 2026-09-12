@@ -5,8 +5,21 @@ import type { BackfillState } from "./BackfillState";
  * Cold-start progress for one runtime. Denominators come from discovery's
  * census walk; numerators advance live while the writer streams, so both
  * meters are determinate: skims measure in files, streams in bytes.
+ *
+ * Entries are keyed by `runtime_id` since 2026-09-12: a supervisor may enroll
+ * several roots of one kind, so `kind` alone no longer identifies a row.
+ * Both additions carry serde defaults, so an older daemon's block still parses.
  */
-export type RuntimeBackfill = { kind: string, state: BackfillState, 
+export type RuntimeBackfill = { kind: string, 
+/**
+ * Canonical runtime id (`RuntimeRow.id`); empty from a daemon that
+ * predates it.
+ */
+runtime_id: string, 
+/**
+ * The enrollment file's presentation label, for enrolled runtimes.
+ */
+label: string | null, state: BackfillState, 
 /**
  * Census file denominator from discovery's walk.
  */

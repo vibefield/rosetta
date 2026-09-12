@@ -28,7 +28,7 @@ pub mod stream;
 
 pub use checkpoint::PipeCheckpoint;
 pub use command::{RawCommandLocator, read_raw_command};
-pub use discover::{Discovery, discover, expand_data_root};
+pub use discover::{Discovery, discover, discover_root, expand_data_root};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{HintMapping, LiveOptions, LiveReport, LiveRunner, map_hint, stream_live};
 pub use meta::{

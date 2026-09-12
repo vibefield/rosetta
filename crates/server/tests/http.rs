@@ -110,6 +110,8 @@ fn harness() -> Harness {
                     skills: None,
                     versions_seen: None,
                     discovered_at: 1_000,
+                    label: None,
+                    provenance: Default::default(),
                 }),
                 IngestOp::Project(ProjectRow {
                     id: "p1".into(),
@@ -882,6 +884,8 @@ async fn progressive_projection_lists_are_visible_before_canonical_or_search_rea
                     skills: None,
                     versions_seen: None,
                     discovered_at: 1,
+                    label: None,
+                    provenance: Default::default(),
                 }),
                 IngestOp::Project(ProjectRow {
                     id: "p1".into(),
@@ -951,6 +955,8 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
             skills: None,
             versions_seen: None,
             discovered_at: 1,
+            label: None,
+            provenance: Default::default(),
         }),
         IngestOp::Project(ProjectRow {
             id: "p1".into(),
@@ -1078,6 +1084,8 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
             skills: None,
             versions_seen: None,
             discovered_at: 1,
+            label: None,
+            provenance: Default::default(),
         }),
         IngestOp::Project(ProjectRow {
             id: "p1".into(),
@@ -1238,6 +1246,67 @@ async fn lists_serve_from_the_mirror_and_missing_sessions_are_404() {
     assert_eq!(body["projects"][0]["id"], "p1");
 }
 
+/// Two runtimes of one kind: the mirror holds neither label nor provenance
+/// (they are this start's enrollment, never a column), and the transport
+/// decorates only the enrolled row on the way out.
+#[tokio::test]
+async fn runtimes_carry_enrolled_labels_and_provenance_from_the_serve_time_map() {
+    let mut h = harness();
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::Runtime(RuntimeRow {
+                id: "rt-kim".into(),
+                kind: "claude-code".into(),
+                data_root: "/users/u1/agents/roots/claude-code/9a3d".into(),
+                enabled: true,
+                account: None,
+                config: None,
+                skills: None,
+                versions_seen: None,
+                discovered_at: 2_000,
+                label: None,
+                provenance: Default::default(),
+            })],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    h.hub.rewarm(h.store.conn()).unwrap();
+    let enrolled = Arc::new(rosetta_server::EnrolledRuntimes::new([(
+        "rt-kim".to_string(),
+        Some("Kim".to_string()),
+    )]));
+    let app = router(
+        AppState::with_search(h.hub.clone(), h.db.clone(), Arc::new(h.search.clone()))
+            .with_enrolled(enrolled),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/runtimes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let rows = body["runtimes"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let kim = rows.iter().find(|row| row["id"] == "rt-kim").unwrap();
+    assert_eq!(kim["kind"], "claude-code");
+    assert_eq!(kim["label"], "Kim");
+    assert_eq!(kim["provenance"], "enrolled");
+    let native = rows.iter().find(|row| row["id"] == "rt1").unwrap();
+    assert_eq!(native["kind"], "claude-code");
+    assert!(native.get("label").is_none(), "{native}");
+    assert!(native.get("provenance").is_none(), "{native}");
+    // The projection itself never learned either fact.
+    let stored = queries::runtime(h.store.conn(), "rt-kim").unwrap().unwrap();
+    assert!(stored.label.is_none() && stored.provenance.is_discovered());
+}
+
 #[tokio::test]
 async fn timeline_pages_bind_a_watermark_that_expires_on_rewrite() {
     let mut h = harness();
@@ -1395,7 +1464,12 @@ async fn sessions_order_by_recorded_activity_before_limiting() {
     h.append_unscoped(vec![stale, recent]);
     let mut refreshed = session("s1");
     refreshed.updated_at = 99_000_000;
-    h.store.apply(&Batch { ops: vec![IngestOp::SessionMeta(refreshed)], ..Batch::default() }).unwrap();
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::SessionMeta(refreshed)],
+            ..Batch::default()
+        })
+        .unwrap();
     h.hub.warm(h.store.conn()).unwrap();
     let (status, body) = h.get("/api/sessions?limit=1").await;
     assert_eq!(status, StatusCode::OK);
@@ -1694,7 +1768,7 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
     ));
     let health = std::sync::Arc::new(rosetta_server::DaemonHealth::new(1_000));
     health.update(
-        "claude-code",
+        &rosetta_server::RuntimeIdentity::new("rt-native", "claude-code", None),
         rosetta_server::RuntimeTick {
             ticks: 10,
             events: 2,
@@ -1703,6 +1777,13 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
             admissions: 1,
             live_rows: 7,
         },
+        5_000,
+    );
+    // A second runtime of the SAME kind is its own status row, keyed by id
+    // and carrying the enrollment file's label.
+    health.update(
+        &rosetta_server::RuntimeIdentity::new("rt-kim", "claude-code", Some("Kim".into())),
+        rosetta_server::RuntimeTick::default(),
         5_000,
     );
     let app = router(AppState::new(hub, db).with_daemon_health(health));
@@ -1718,9 +1799,15 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let daemon = &body["daemon"];
+    assert_eq!(daemon["runtimes"].as_array().unwrap().len(), 2);
+    assert_eq!(daemon["runtimes"][1]["kind"], "claude-code");
+    assert_eq!(daemon["runtimes"][1]["runtime_id"], "rt-native");
+    assert!(daemon["runtimes"][1]["label"].is_null());
+    assert_eq!(daemon["runtimes"][1]["live_rows"], 7);
+    assert_eq!(daemon["runtimes"][1]["last_activity_ms"], 5_000);
+    assert_eq!(daemon["runtimes"][0]["runtime_id"], "rt-kim");
     assert_eq!(daemon["runtimes"][0]["kind"], "claude-code");
-    assert_eq!(daemon["runtimes"][0]["live_rows"], 7);
-    assert_eq!(daemon["runtimes"][0]["last_activity_ms"], 5_000);
+    assert_eq!(daemon["runtimes"][0]["label"], "Kim");
     assert_eq!(daemon["hub"]["subscribers"], 0);
     assert!(daemon["uptime_ms"].is_number());
 }

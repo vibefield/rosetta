@@ -915,6 +915,19 @@
         "versions_seen": [
           "2.1.240"
         ]
+      },
+      {
+        "account": null,
+        "config": null,
+        "data_root": "/users/u1/agents/roots/claude-code/9a3d",
+        "discovered_at": 2000,
+        "enabled": true,
+        "id": "rt-kim",
+        "kind": "claude-code",
+        "label": "Kim",
+        "provenance": "enrolled",
+        "skills": null,
+        "versions_seen": null
       }
     ]
   },
@@ -1040,9 +1053,23 @@
             "files_skimmed": 1209,
             "files_total": 1209,
             "kind": "claude-code",
+            "label": null,
             "records": 214032,
+            "runtime_id": "rt1",
             "sessions_total": 5912,
             "state": "streaming"
+          },
+          {
+            "bytes_streamed": 0,
+            "bytes_total": 65536,
+            "files_skimmed": 0,
+            "files_total": 4,
+            "kind": "claude-code",
+            "label": "Kim",
+            "records": 0,
+            "runtime_id": "rt-kim",
+            "sessions_total": 0,
+            "state": "queued"
           }
         ]
       },
@@ -1051,11 +1078,25 @@
           "admissions": 2,
           "events": 5,
           "kind": "claude-code",
+          "label": null,
           "last_activity_ms": 50000,
           "live_rows": 12,
           "polls": 20,
           "rescans": 1,
+          "runtime_id": "rt1",
           "ticks": 100
+        },
+        {
+          "admissions": 0,
+          "events": 0,
+          "kind": "claude-code",
+          "label": "Kim",
+          "last_activity_ms": null,
+          "live_rows": 0,
+          "polls": 1,
+          "rescans": 0,
+          "runtime_id": "rt-kim",
+          "ticks": 3
         }
       ],
       "started_at": 1000,

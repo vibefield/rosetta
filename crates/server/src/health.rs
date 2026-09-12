@@ -29,8 +29,32 @@ pub struct IngestCounters {
 
 pub type IngestCounterSource = Arc<dyn Fn() -> IngestCounters + Send + Sync>;
 
+/// How the serve loop names a runtime to the health surface. Entries are keyed
+/// by the canonical runtime id (2026-09-12): a supervisor may enroll several
+/// roots of one kind, so `kind` is presentation, not identity. `label` is the
+/// enrollment file's name for an enrolled runtime and rides the status rows
+/// verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeIdentity {
+    pub id: String,
+    pub kind: String,
+    pub label: Option<String>,
+}
+
+impl RuntimeIdentity {
+    pub fn new(id: impl Into<String>, kind: impl Into<String>, label: Option<String>) -> Self {
+        Self {
+            id: id.into(),
+            kind: kind.into(),
+            label,
+        }
+    }
+}
+
 struct BackfillEntry {
+    runtime_id: String,
     kind: String,
+    label: Option<String>,
     state: BackfillState,
     files_total: u64,
     bytes_total: u64,
@@ -73,12 +97,15 @@ impl RuntimeTick {
 }
 
 struct RuntimeEntry {
+    kind: String,
+    label: Option<String>,
     latest: RuntimeTick,
     last_activity_ms: Option<Ms>,
 }
 
 pub struct DaemonHealth {
     started_at_ms: Ms,
+    /// Keyed by runtime id.
     runtimes: Mutex<BTreeMap<String, RuntimeEntry>>,
     ingest: Mutex<IngestState>,
 }
@@ -104,11 +131,14 @@ impl DaemonHealth {
         ingest.phase = IngestPhase::AwaitingConsent;
     }
 
-    /// Enroll one installed runtime with its census denominators, queued.
-    pub fn ingest_register(&self, kind: &str, files_total: u64, bytes_total: u64) {
+    /// Enroll one runtime with its census denominators, queued. Every later
+    /// ingest call names the entry by `runtime.id`.
+    pub fn ingest_register(&self, runtime: &RuntimeIdentity, files_total: u64, bytes_total: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.entries.push(BackfillEntry {
-            kind: kind.to_string(),
+            runtime_id: runtime.id.clone(),
+            kind: runtime.kind.clone(),
+            label: runtime.label.clone(),
             state: BackfillState::Queued,
             files_total,
             bytes_total,
@@ -121,10 +151,10 @@ impl DaemonHealth {
     }
 
     /// The skim begins: install the live counter source for its meter.
-    pub fn ingest_skim(&self, kind: &str, source: IngestCounterSource) {
+    pub fn ingest_skim(&self, runtime_id: &str, source: IngestCounterSource) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::Backfilling;
-        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = BackfillState::Skimming;
             entry.live = Some(source);
         }
@@ -132,9 +162,9 @@ impl DaemonHealth {
 
     /// The skim landed: freeze its metadata counts and return the runtime to
     /// the transcript queue. No complete source record has been read yet.
-    pub fn ingest_skim_done(&self, kind: &str, sessions_total: u64, files_skimmed: u64) {
+    pub fn ingest_skim_done(&self, runtime_id: &str, sessions_total: u64, files_skimmed: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
-        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = BackfillState::Queued;
             entry.sessions_total = sessions_total;
             entry.files_skimmed = files_skimmed;
@@ -155,10 +185,10 @@ impl DaemonHealth {
 
     /// Complete-record streaming begins for this runtime. The meter is
     /// cumulative across its interleaved per-file calls.
-    pub fn ingest_stream(&self, kind: &str, source: IngestCounterSource) {
+    pub fn ingest_stream(&self, runtime_id: &str, source: IngestCounterSource) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::Backfilling;
-        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = BackfillState::Streaming;
             entry.live = Some(source);
         }
@@ -166,17 +196,17 @@ impl DaemonHealth {
 
     /// Replace discovery's whole inventory with the streamable plan's bytes.
     /// Zero denotes an unknown payload total (document/database snapshots).
-    pub fn ingest_stream_total(&self, kind: &str, bytes_total: u64) {
+    pub fn ingest_stream_total(&self, runtime_id: &str, bytes_total: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
-        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.bytes_total = bytes_total;
         }
     }
 
     /// One runtime's backfill is done: freeze its final numerators.
-    pub fn ingest_done(&self, kind: &str, bytes_streamed: u64, records: u64) {
+    pub fn ingest_done(&self, runtime_id: &str, bytes_streamed: u64, records: u64) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
-        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = BackfillState::Done;
             entry.bytes_streamed = bytes_streamed;
             entry.records = records;
@@ -185,9 +215,9 @@ impl DaemonHealth {
     }
 
     /// Keep live numerators visible during the CPU/write stages after reading.
-    pub fn ingest_runtime_stage(&self, kind: &str, state: BackfillState) {
+    pub fn ingest_runtime_stage(&self, runtime_id: &str, state: BackfillState) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
-        if let Some(entry) = ingest.entries.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = state;
         }
     }
@@ -242,6 +272,8 @@ impl DaemonHealth {
                     let live = entry.live.as_ref().map(|source| source());
                     let mut row = RuntimeBackfill {
                         kind: entry.kind.clone(),
+                        runtime_id: entry.runtime_id.clone(),
+                        label: entry.label.clone(),
                         state: entry.state,
                         files_total: entry.files_total,
                         bytes_total: entry.bytes_total,
@@ -273,12 +305,16 @@ impl DaemonHealth {
 
     /// Record one runtime's counters after a tick. Activity (not mere
     /// ticking or idle polling) advances `last_activity_ms`.
-    pub fn update(&self, kind: &str, tick: RuntimeTick, now_ms: Ms) {
+    pub fn update(&self, runtime: &RuntimeIdentity, tick: RuntimeTick, now_ms: Ms) {
         let mut runtimes = self.runtimes.lock().expect("health state poisoned");
-        let entry = runtimes.entry(kind.to_string()).or_insert(RuntimeEntry {
-            latest: RuntimeTick::default(),
-            last_activity_ms: None,
-        });
+        let entry = runtimes
+            .entry(runtime.id.clone())
+            .or_insert_with(|| RuntimeEntry {
+                kind: runtime.kind.clone(),
+                label: runtime.label.clone(),
+                latest: RuntimeTick::default(),
+                last_activity_ms: None,
+            });
         if entry.latest.activity() != tick.activity() {
             entry.last_activity_ms = Some(now_ms);
         }
@@ -292,8 +328,10 @@ impl DaemonHealth {
             uptime_ms: u64::try_from(now_ms.saturating_sub(self.started_at_ms)).unwrap_or(0),
             runtimes: runtimes
                 .iter()
-                .map(|(kind, entry)| RuntimeIngestStatus {
-                    kind: kind.clone(),
+                .map(|(runtime_id, entry)| RuntimeIngestStatus {
+                    kind: entry.kind.clone(),
+                    runtime_id: runtime_id.clone(),
+                    label: entry.label.clone(),
                     ticks: entry.latest.ticks,
                     events: entry.latest.events,
                     polls: entry.latest.polls,
@@ -309,20 +347,31 @@ impl DaemonHealth {
     }
 }
 
+fn entry_mut<'a>(ingest: &'a mut IngestState, runtime_id: &str) -> Option<&'a mut BackfillEntry> {
+    ingest
+        .entries
+        .iter_mut()
+        .find(|entry| entry.runtime_id == runtime_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hub::HubConfig;
 
+    fn identity(id: &str) -> RuntimeIdentity {
+        RuntimeIdentity::new(id, "claude-code", None)
+    }
+
     #[test]
     fn activity_moves_the_clock_but_idle_ticks_do_not() {
         let hub = Hub::new(HubConfig::default(), 1);
         let health = DaemonHealth::new(1_000);
-        health.update("claude-code", RuntimeTick::default(), 1_000);
+        health.update(&identity("rt1"), RuntimeTick::default(), 1_000);
 
         // Idle ticks and polls are not activity.
         health.update(
-            "claude-code",
+            &identity("rt1"),
             RuntimeTick {
                 ticks: 5,
                 polls: 2,
@@ -338,7 +387,7 @@ mod tests {
 
         // A live row is.
         health.update(
-            "claude-code",
+            &identity("rt1"),
             RuntimeTick {
                 ticks: 6,
                 polls: 2,
@@ -364,13 +413,13 @@ mod tests {
             IngestPhase::Discovering
         );
 
-        health.ingest_register("claude-code", 100, 1_000_000);
+        health.ingest_register(&identity("rt1"), 100, 1_000_000);
         let counter = Arc::new(AtomicU64::new(0));
 
         // Skimming: the files meter reads through the live source.
         let skim_counter = counter.clone();
         health.ingest_skim(
-            "claude-code",
+            "rt1",
             Arc::new(move || IngestCounters {
                 files_skimmed: skim_counter.load(Ordering::Relaxed),
                 ..IngestCounters::default()
@@ -385,7 +434,7 @@ mod tests {
 
         // Streaming: skim numbers freeze; the byte meter goes live.
         let stream_counter = counter.clone();
-        health.ingest_skim_done("claude-code", 250, 100);
+        health.ingest_skim_done("rt1", 250, 100);
         let ingest = health.snapshot(&hub, 2_500).ingest;
         assert_eq!(ingest.runtimes[0].state, BackfillState::Queued);
         assert_eq!(ingest.runtimes[0].files_skimmed, 100);
@@ -398,7 +447,7 @@ mod tests {
         assert_eq!(ingest.runtimes[0].records, 0);
 
         health.ingest_stream(
-            "claude-code",
+            "rt1",
             Arc::new(move || IngestCounters {
                 bytes_read: stream_counter.load(Ordering::Relaxed),
                 records: 7,
@@ -409,13 +458,15 @@ mod tests {
         let ingest = health.snapshot(&hub, 3_000).ingest;
         assert_eq!(ingest.phase, IngestPhase::Backfilling);
         assert_eq!(ingest.runtimes[0].state, BackfillState::Streaming);
+        assert_eq!(ingest.runtimes[0].runtime_id, "rt1");
+        assert_eq!(ingest.runtimes[0].kind, "claude-code");
         assert_eq!(ingest.runtimes[0].files_skimmed, 100);
         assert_eq!(ingest.runtimes[0].sessions_total, 250);
         assert_eq!(ingest.runtimes[0].bytes_streamed, 600_000);
         assert_eq!(ingest.runtimes[0].records, 7);
 
         // Done freezes finals; live flips the phase and drops every source.
-        health.ingest_done("claude-code", 1_000_000, 5_000);
+        health.ingest_done("rt1", 1_000_000, 5_000);
         health.ingest_live();
         counter.store(9, Ordering::Relaxed);
         let ingest = health.snapshot(&hub, 4_000).ingest;
@@ -458,7 +509,11 @@ mod tests {
         let hub = Hub::new(HubConfig::default(), 1);
         let counter = Arc::new(AtomicU64::new(4));
         let observed = counter.clone();
-        health.ingest_register("agent", 100, 1_000);
+        health.ingest_register(
+            &RuntimeIdentity::new("agent", "claude-code", Some("Kim".into())),
+            100,
+            1_000,
+        );
         health.ingest_skim(
             "agent",
             Arc::new(move || IngestCounters {
@@ -495,6 +550,7 @@ mod tests {
         counter.store(400, Ordering::Relaxed);
         health.ingest_runtime_stage("agent", BackfillState::Preparing);
         let status = health.snapshot(&hub, 2_000).ingest;
+        assert_eq!(status.runtimes[0].label.as_deref(), Some("Kim"));
         assert_eq!(status.runtimes[0].bytes_streamed, 400);
         assert_eq!(status.projects[0].bytes_streamed, 400);
         assert_eq!(
