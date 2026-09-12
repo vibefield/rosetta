@@ -21,7 +21,9 @@ export class OrderedCache<T> {
     let high = this.ordered.length;
     while (low < high) {
       const mid = (low + high) >>> 1;
-      if (this.compare(this.ordered[mid], row) < 0) low = mid + 1;
+      const candidate = this.ordered[mid];
+      if (candidate === undefined) break;
+      if (this.compare(candidate, row) < 0) low = mid + 1;
       else high = mid;
     }
     return low;

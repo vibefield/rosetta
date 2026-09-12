@@ -2,13 +2,14 @@
   "compilerOptions": {
     "strict": true,
     "noEmit": true,
-    "allowImportingTsExtensions": true,
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM"],
     "noUnusedLocals": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
     "skipLibCheck": true
   },
-  "include": ["index.ts", "client.ts", "generated"]
+  "include": ["index.ts", "client.ts", "ordered-cache.ts", "generated"]
 }

@@ -4,7 +4,7 @@
 // earlier rows), obey Resync barriers, and reconnect with a resume stamp.
 // Consumers render; they never re-implement protocol semantics.
 
-import { OrderedCache } from "./ordered-cache.ts";
+import { OrderedCache } from "#ordered-cache";
 import { PROTOCOL_VERSION } from "./protocol-version.mjs";
 export { PROTOCOL_VERSION } from "./protocol-version.mjs";
 import type { TimelineEntryResponse } from "./generated/TimelineEntryResponse";
@@ -111,6 +111,12 @@ function queryString(params: QueryParams): string {
   return text === "" ? "" : `?${text}`;
 }
 
+/** `RequestInit.signal` is exactly optional: an absent signal omits the key
+ * rather than setting it to `undefined`. */
+function withSignal(signal: AbortSignal | undefined): { signal?: AbortSignal } {
+  return signal === undefined ? {} : { signal };
+}
+
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 
@@ -211,12 +217,12 @@ export class RosettaClient {
   }
 
   status(signal?: AbortSignal): Promise<StatusResponse> {
-    return this.request("/api/status", { signal });
+    return this.request("/api/status", withSignal(signal));
   }
 
   /** The roll call's census — what discovery found, content-free. */
   discoveries(signal?: AbortSignal): Promise<DiscoveriesResponse> {
-    return this.request("/api/discoveries", { signal });
+    return this.request("/api/discoveries", withSignal(signal));
   }
 
   /** Consent: enroll the chosen agent kinds. Grantable exactly once, while
@@ -224,7 +230,7 @@ export class RosettaClient {
   enableRuntimes(kinds: string[], signal?: AbortSignal): Promise<EnableResponse> {
     return this.request("/api/runtimes/enable", {
       method: "POST",
-      signal,
+      ...withSignal(signal),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kinds }),
     });
@@ -236,25 +242,25 @@ export class RosettaClient {
   boost(sessionId: string, signal?: AbortSignal): Promise<BoostResponse> {
     return this.request("/api/ingest/boost", {
       method: "POST",
-      signal,
+      ...withSignal(signal),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ session_id: sessionId }),
     });
   }
 
   runtimes(signal?: AbortSignal): Promise<RuntimesResponse> {
-    return this.request("/api/runtimes", { signal });
+    return this.request("/api/runtimes", withSignal(signal));
   }
 
   projects(signal?: AbortSignal): Promise<ProjectsResponse> {
-    return this.request("/api/projects", { signal });
+    return this.request("/api/projects", withSignal(signal));
   }
 
   sessions(
     options: { project?: string; limit?: number; native_session_id?: string } = {},
     signal?: AbortSignal,
   ): Promise<SessionsResponse> {
-    return this.request(`/api/sessions${queryString(options)}`, { signal });
+    return this.request(`/api/sessions${queryString(options)}`, withSignal(signal));
   }
 
   /** Resolve canonical rows for provider-native session ids; children come
@@ -264,7 +270,7 @@ export class RosettaClient {
   }
 
   session(id: string, signal?: AbortSignal): Promise<SessionResponse> {
-    return this.request(`/api/sessions/${encodeURIComponent(id)}`, { signal });
+    return this.request(`/api/sessions/${encodeURIComponent(id)}`, withSignal(signal));
   }
 
   /**
@@ -279,14 +285,17 @@ export class RosettaClient {
   ): Promise<TimelinePage> {
     return this.request(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline${queryString(options)}`,
-      { signal },
+      withSignal(signal),
     );
   }
 
   /** Complete delivered collaboration history for one team member. The
    * response deliberately excludes private prose and tool rows. */
   collaborationTimeline(sessionId: string, signal?: AbortSignal): Promise<CollaborationTimeline> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/collaboration`, { signal });
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/collaboration`,
+      withSignal(signal),
+    );
   }
 
   /** An exact row and the generation it belongs to. */
@@ -297,7 +306,7 @@ export class RosettaClient {
   ): Promise<TimelineEntryResponse> {
     return this.request(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}`,
-      { signal },
+      withSignal(signal),
     );
   }
 
@@ -316,7 +325,7 @@ export class RosettaClient {
   ): Promise<TimelineEntry[]> {
     return this.request(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/work`,
-      { signal },
+      withSignal(signal),
     );
   }
 
@@ -325,7 +334,7 @@ export class RosettaClient {
   command(sessionId: string, timelineId: string, signal?: AbortSignal): Promise<CommandResponse> {
     return this.request(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/command`,
-      { signal },
+      withSignal(signal),
     );
   }
 
@@ -340,7 +349,7 @@ export class RosettaClient {
   ): Promise<Uint8Array> {
     const response = await this.response(
       `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/read/${targetIndex}`,
-      { signal },
+      withSignal(signal),
     );
     return new Uint8Array(await response.arrayBuffer());
   }
@@ -354,7 +363,7 @@ export class RosettaClient {
     if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== base.origin) {
       throw new Error("the stored text has an unsupported address");
     }
-    return (await this.response(`${url.pathname}${url.search}`, { signal })).text();
+    return (await this.response(`${url.pathname}${url.search}`, withSignal(signal))).text();
   }
 
   async readAsset(asset: AssetRef, signal?: AbortSignal): Promise<Uint8Array> {
@@ -364,7 +373,7 @@ export class RosettaClient {
       throw new Error("the stored asset has an unsupported address");
     }
     return new Uint8Array(
-      await (await this.response(`${url.pathname}${url.search}`, { signal })).arrayBuffer(),
+      await (await this.response(`${url.pathname}${url.search}`, withSignal(signal))).arrayBuffer(),
     );
   }
 
@@ -378,7 +387,7 @@ export class RosettaClient {
       source.type === "revision"
         ? `/api/sessions/${encodeURIComponent(sessionId)}/plans/revisions/${source.revision}`
         : `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(source.timeline_id)}/plan`;
-    const response = await this.response(path, { signal });
+    const response = await this.response(path, withSignal(signal));
     return new Uint8Array(await response.arrayBuffer());
   }
 
@@ -398,7 +407,7 @@ export class RosettaClient {
         after_ts: request.after_ts,
         before_ts: request.before_ts,
       })}`,
-      { signal },
+      withSignal(signal),
     );
   }
 
@@ -412,12 +421,15 @@ export class RosettaClient {
         since_ms: options.sinceMs,
         offset_minutes: options.offsetMinutes,
       })}`,
-      { signal },
+      withSignal(signal),
     );
   }
 
   contribution(projectId: string, signal?: AbortSignal): Promise<ContributionResponse> {
-    return this.request(`/api/projects/${encodeURIComponent(projectId)}/contribution`, { signal });
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/contribution`,
+      withSignal(signal),
+    );
   }
 
   /** The heatmap figure's decomposition over the same window: per-model days
@@ -432,7 +444,7 @@ export class RosettaClient {
         since_ms: options.sinceMs,
         offset_minutes: options.offsetMinutes,
       })}`,
-      { signal },
+      withSignal(signal),
     );
   }
 
