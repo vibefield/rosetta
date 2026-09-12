@@ -12,6 +12,15 @@
 //! roll call — consent for DISCOVERED kinds, given at start — and unlike
 //! `--agent` it never narrows the adapter registry the roll call shows.
 //!
+//! The file is AUTHORITATIVE (2026-09-12): where it is given, consent for
+//! discovered kinds is exactly `enabled_kinds` ∪ `--agent`/`--all-agents`, and
+//! the projection's `enabled` flags are a projection OF it rather than a
+//! second source. The file is the supervisor's record of what the user chose,
+//! so it has to be able to REVOKE: a union with the projection could only ever
+//! add, and a kind the user un-checked would keep being watched from a cache.
+//! A pending cold generation gives way to it the same way — see
+//! `serve::generation_consent`.
+//!
 //! Read once at start. Live mutation of the enrolled set and a rediscover
 //! without restart are deliberately out of scope: the supervisor restarts the
 //! daemon when the set changes (docs/ARCHITECTURE.md §11).

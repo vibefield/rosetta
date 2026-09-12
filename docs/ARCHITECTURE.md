@@ -1005,7 +1005,8 @@ now does too, through a start-time **enrollment file**:
   "data_root": "/abs/users/u1/agents/roots/claude-code/9a3d", "label": "Kim"}]}`.
   `enabled_kinds` is consent for DISCOVERED kinds given at start — the headless stand-in
   for the roll call, like `--agent`, but it never narrows the adapter registry the roll
-  call shows; an unknown or uninstalled kind is warned about, never fatal. `runtimes`
+  call shows; an unknown or uninstalled kind is warned about, never fatal. It is also the
+  WHOLE of that consent, so dropping a kind from it revokes (see "authoritative" below). `runtimes`
   are explicit roots: `data_root` MUST be absolute (`~` forms are refused), `kind` a
   registered adapter; a duplicate, a root nested with another enrolled root, a root equal
   to or nested with the kind's native root, and a missing or non-directory root are each
@@ -1018,14 +1019,50 @@ now does too, through a start-time **enrollment file**:
   enrolled runtime the daemon never waits in `awaiting_consent`; the roll call still
   publishes for the app. Every serve mode iterates one list of runtime **targets**
   (`{adapter, runtime, root, label, provenance}`; the census walk is the same for both
-  kinds of target), and `consented` is a set of runtime IDS: a roll-call grant or a
-  persisted `enabled` flag for a kind maps to that kind's discovered target.
-- **The file is the truth for enrolled runtimes on every start.** Consent for discovered
-  kinds still persists as `agent_runtime.enabled` on their `~`-rooted rows. An enabled
+  kinds of target), and `consented` is a set of runtime IDS: a roll-call grant, a file's
+  `enabled_kinds`, or (without a file) a persisted `enabled` flag for a kind maps to that
+  kind's discovered target.
+- **The file is the truth for enrolled runtimes on every start.** An enabled
   row with an absolute `data_root` is an enrolled runtime from an earlier start; if this
   start's file no longer names it, it is not watched and its rows stay public ("retired"
   for now). The predicate is the existing invariant that layouts never embed machine
   paths: a `~`-relative `data_root` is discovered, an absolute one is enrolled.
+  (Errata 2026-09-12: this bullet also said "consent for discovered kinds still persists
+  as `agent_runtime.enabled` on their `~`-rooted rows". That was true only without a
+  file — with one it made the flag a second consent source, which could add but never
+  revoke. Corrected by the next bullet.)
+- **The file is AUTHORITATIVE for discovered consent too (2026-09-12).** With `--enroll`
+  this start, consent for DISCOVERED kinds is exactly the file's `enabled_kinds` ∪ the
+  command line's `--agent`/`--all-agents`. The projection's `enabled` flags are NOT a
+  consent source — neither is the set carried over from an archived incomplete
+  projection — because the supervisor's file is its record of what the user chose, and a
+  union with the projection could only ever ADD: a kind un-checked in the app would be
+  written out of `enabled_kinds`, and the restarted daemon would keep watching it from
+  its own cache. Without a file, nothing changes: the persisted flags plus the one-shot
+  roll-call gate remain rosetta's own app's consent, and `ingest`/`watch` already took
+  the file and the command line only (`rebuild` is whole-projection from the ledger and
+  takes no consent at all).
+  - **The flags become a projection of the file.** At start (and again after a roll-call
+    grant) every persisted runtime row is re-derived from this start's consent: not
+    consented → `enabled = false`, consented → `enabled = true`, so `/api/discoveries`
+    and `/api/runtimes` never advertise a consent nobody is acting on, nor hide one that
+    is. Re-enabling is not symmetry for its own sake: the identity upsert deliberately
+    never resets `enabled` (re-discovery must not revoke a user's choice), so a row an
+    earlier start retired would otherwise read disabled forever while being watched.
+    Retiring touches the flag only — sessions, timelines and ledgers stay public, and an
+    explicit `rosettad rebuild` still re-enables every runtime it replays.
+  - **A pending cold generation gives way to the file, and never blocks the start.** The
+    generation is durable evidence, not standing consent. A runtime it holds that this
+    start's file no longer consents — a discovered kind un-checked mid-backfill, or a
+    persona the supervisor retired — is DROPPED from the resume, named on stdout, and the
+    daemon starts and finishes the generation for everything still consented. Its staged
+    evidence is never touched: it publishes with the ledger and `rosettad rebuild`
+    recovers it, so the drop costs rows, not bytes. This replaces the fail-closed refusal
+    for a retired enrolled runtime ("add it back, or run `rosettad rebuild`"), which
+    stranded every other runtime behind a manual step whenever the supervisor did an
+    ordinary thing. With nothing consented at all, the cold gate still applies: the roll
+    call publishes and the daemon waits in `awaiting_consent` rather than exiting or
+    publishing a projection it has no consent to build.
 - **Ledger directory per runtime, backward compatible.** A discovered runtime of kind K
   keeps `<projection>.ledger/K/`; an enrolled one uses `<projection>.ledger/K~<digest>/`,
   `<digest>` = the first 12 hex characters of blake3 over the absolute `data_root`
@@ -1458,5 +1495,5 @@ layer's design is frozen.
 | Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
-| Enrolled-set live mutation | the `--enroll` file is read once at start; the supervisor restarts the daemon when a persona is added or retired (2026-09-12) | a restart per persona change costs the app a visible reconnect, or a persona is created faster than a restart settles |
+| Enrolled-set live mutation | the `--enroll` file is read once at start; the supervisor restarts the daemon when a persona is added or retired, or when a kind is checked or UN-checked — the restart re-derives consent from the file in both directions, including out of a pending cold generation (2026-09-12) | a restart per persona change costs the app a visible reconnect, or a persona is created faster than a restart settles |
 | Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |

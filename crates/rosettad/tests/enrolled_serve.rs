@@ -151,6 +151,18 @@ impl Bench {
             .unwrap()
     }
 
+    fn has_session(&self, native_session_id: &str) -> bool {
+        rusqlite::Connection::open(&self.db)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM session WHERE native_session_id = ?1",
+                [native_session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            != 0
+    }
+
     fn session_runtime(&self, native_session_id: &str) -> String {
         rusqlite::Connection::open(&self.db)
             .unwrap()
@@ -167,6 +179,61 @@ impl Bench {
             .unwrap()
             .query_row("SELECT COUNT(*) FROM session", [], |row| row.get(0))
             .unwrap()
+    }
+
+    fn enabled(&self, runtime_id: &str) -> i64 {
+        self.runtimes()
+            .into_iter()
+            .find(|(id, _, _, _)| id == runtime_id)
+            .unwrap_or_else(|| panic!("{runtime_id} is not a persisted runtime"))
+            .3
+    }
+
+    fn staged_ledger(&self) -> PathBuf {
+        let ledger = self.db.with_extension("ledger");
+        ledger.with_file_name(format!(
+            "{}.staged",
+            ledger.file_name().unwrap().to_string_lossy()
+        ))
+    }
+
+    /// Rewind a finished serve into the state a killed one leaves behind: the
+    /// projection gone, its ledger staged, and a format-2 cold-generation
+    /// manifest naming the runtimes that start had consented. This is the
+    /// interruption the real daemon recovers from, staged deterministically
+    /// instead of racing a SIGKILL against a fixture-sized backfill.
+    fn stage_cold_generation(&self, enrolled_kim: bool) {
+        let ledger = self.db.with_extension("ledger");
+        let staged = self.staged_ledger();
+        std::fs::remove_file(&self.db).unwrap();
+        std::fs::rename(&ledger, &staged).unwrap();
+        let mut runtimes = vec![serde_json::json!({
+            "id": self.native_id(),
+            "kind": "claude-code",
+            "data_root": "~/.claude",
+            "ledger_dir": "claude-code",
+        })];
+        if enrolled_kim {
+            runtimes.push(serde_json::json!({
+                "id": self.kim_id(),
+                "kind": "claude-code",
+                "data_root": self.kim.to_string_lossy(),
+                "ledger_dir": self.kim_ledger_dir().file_name().unwrap().to_string_lossy(),
+            }));
+        }
+        let manifest = serde_json::json!({
+            "format": 2,
+            "projection": self.db.file_name().unwrap().to_string_lossy(),
+            "ledger": ledger.file_name().unwrap().to_string_lossy(),
+            "enabled_agents": ["claude-code"],
+            "runtime_roots": { "claude-code": self.home.join(".claude").to_string_lossy() },
+            "runtimes": runtimes,
+        });
+        std::fs::write(
+            staged.join(".cold-generation.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -296,18 +363,280 @@ fn an_enrolled_root_is_a_second_runtime_of_its_kind_with_its_own_ledger() {
     assert!(bench.kim_ledger_dir().join("00000000.rledger").is_file());
 }
 
+/// The roll call is published once this start's consent is settled — after
+/// the projection's `enabled` flags have been re-derived from the file — so a
+/// non-empty `/api/discoveries` is the barrier both consent routes are read
+/// behind.
+fn wait_for_roll_call(origin: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let discoveries = http_get(origin, "/api/discoveries");
+        if discoveries["discoveries"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            return discoveries;
+        }
+        assert!(Instant::now() < deadline, "roll call timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn roll_call_row<'a>(discoveries: &'a serde_json::Value, kind: &str) -> &'a serde_json::Value {
+    discoveries["discoveries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == kind)
+        .unwrap_or_else(|| panic!("{discoveries}"))
+}
+
+fn runtime_row<'a>(runtimes: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    runtimes["runtimes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap_or_else(|| panic!("{runtimes}"))
+}
+
+/// Witness (a): the file REVOKES. A start whose `enabled_kinds` no longer
+/// names a kind does not watch it, and both consent routes say so — the
+/// persisted flag is a projection of the file, never a second source that
+/// could only ever add. The rows stay public: this retires a runtime, it
+/// never purges one.
+#[test]
+fn a_kind_the_file_stops_naming_is_revoked_and_reads_disabled_on_both_routes() {
+    let bench = Bench::new();
+    bench.write_enrollment(&["claude-code"], false);
+    assert_success(&bench.serve_once(&[]));
+    assert_eq!(bench.enabled(&bench.native_id()), 1);
+    let sessions_before = bench.session_count();
+    assert!(sessions_before > 0);
+
+    // The user un-checks the kind in the app; the supervisor rewrites the file
+    // and restarts the daemon.
+    bench.write_enrollment(&[], false);
+    let (_child, origin) = spawn_serve(&bench);
+    let discoveries = wait_for_roll_call(&origin);
+    let native = roll_call_row(&discoveries, "claude-code");
+    assert_eq!(native["installed"], true);
+    assert_eq!(native["enabled"], false, "{discoveries}");
+
+    let runtimes = http_get(&origin, "/api/runtimes");
+    let row = runtime_row(&runtimes, &bench.native_id());
+    assert_eq!(row["data_root"], "~/.claude");
+    assert_eq!(row["enabled"], false, "{runtimes}");
+
+    // Nothing is watched, and the standing projection is untouched and public.
+    let status = http_get(&origin, "/api/status");
+    assert_eq!(status["daemon"]["ingest"]["phase"], "live", "{status}");
+    assert_eq!(
+        status["daemon"]["runtimes"].as_array().map(Vec::len),
+        Some(0),
+        "{status}"
+    );
+    assert_eq!(bench.session_count(), sessions_before);
+    assert_eq!(bench.enabled(&bench.native_id()), 0);
+    assert_eq!(bench.runtimes().len(), 1);
+}
+
+/// Witness (b): the same revocation with a persona present. The gate never
+/// arms (the persona is consented by construction), the persona goes live
+/// alone, and the revoked kind reads disabled on both routes.
+#[test]
+fn revoking_a_kind_beside_a_persona_leaves_the_persona_live_and_the_kind_retired() {
+    let bench = Bench::new();
+    assert_success(&bench.serve_once(&[]));
+    let sessions_before = bench.session_count();
+    assert_eq!(bench.enabled(&bench.native_id()), 1);
+    assert_eq!(bench.enabled(&bench.kim_id()), 1);
+
+    bench.write_enrollment(&[], true);
+    let (_child, origin) = spawn_serve(&bench);
+    let discoveries = wait_for_roll_call(&origin);
+    assert_eq!(
+        roll_call_row(&discoveries, "claude-code")["enabled"],
+        false,
+        "{discoveries}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        let status = http_get(&origin, "/api/status");
+        assert_ne!(
+            status["daemon"]["ingest"]["phase"], "awaiting_consent",
+            "{status}"
+        );
+        if status["daemon"]["runtimes"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "live health rows timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let health = status["daemon"]["runtimes"].as_array().unwrap();
+    assert_eq!(health.len(), 1, "only the persona is watched: {status}");
+    assert_eq!(health[0]["runtime_id"], bench.kim_id());
+    assert_eq!(health[0]["label"], "Kim");
+
+    let runtimes = http_get(&origin, "/api/runtimes");
+    assert_eq!(runtimes["runtimes"].as_array().map(Vec::len), Some(2));
+    assert_eq!(runtime_row(&runtimes, &bench.kim_id())["enabled"], true);
+    assert_eq!(
+        runtime_row(&runtimes, &bench.native_id())["enabled"],
+        false,
+        "{runtimes}"
+    );
+    assert_eq!(bench.session_count(), sessions_before);
+    assert_eq!(bench.session_runtime(NATIVE_SESSION), bench.native_id());
+}
+
+/// Witness (c), the discovered half: un-consenting mid-backfill. A pending
+/// cold generation holds the kind, and the file no longer does. The daemon
+/// STARTS — it finishes the generation without that kind instead of refusing
+/// to run until a human rebuilds — and the staged evidence is kept.
+#[test]
+fn an_unconsented_kind_is_dropped_from_a_resumed_cold_generation() {
+    let bench = Bench::new();
+    assert_success(&bench.serve_once(&[]));
+    bench.stage_cold_generation(true);
+    let staged_native_ledger = bench.staged_ledger().join("claude-code");
+    assert!(staged_native_ledger.join("00000000.rledger").is_file());
+
+    bench.write_enrollment(&[], true);
+    let stdout = assert_success(&bench.serve_once(&[]));
+    assert!(stdout.contains("resuming cold generation"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "claude-code: this start's --enroll file no longer consents it; dropped from the resumed cold generation"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("milestone: canonical-ready"), "{stdout}");
+
+    // The generation finished for the persona alone.
+    assert!(bench.db.is_file());
+    assert!(!bench.staged_ledger().exists());
+    assert!(bench.has_session(KIM_SESSION));
+    assert!(!bench.has_session(NATIVE_SESSION));
+    assert_eq!(bench.session_runtime(KIM_SESSION), bench.kim_id());
+    // The drop costs rows, not bytes: the dropped kind's raw evidence rides
+    // the publish untouched, so `rosettad rebuild` can still recover it.
+    assert!(bench.native_ledger_dir().join("00000000.rledger").is_file());
+}
+
+/// Witness (c), the enrolled half: the supervisor retires a persona while its
+/// backfill is pending. The same mechanism applies — the persona is dropped
+/// from the resume and the daemon starts — instead of the start failing
+/// closed and stranding every other runtime behind a manual rebuild.
+#[test]
+fn a_persona_the_file_stops_naming_is_dropped_from_a_resumed_cold_generation() {
+    let bench = Bench::new();
+    assert_success(&bench.serve_once(&[]));
+    bench.stage_cold_generation(true);
+    let staged_kim_ledger = bench
+        .staged_ledger()
+        .join(bench.kim_ledger_dir().file_name().unwrap());
+    assert!(staged_kim_ledger.join("00000000.rledger").is_file());
+
+    bench.write_enrollment(&["claude-code"], false);
+    let stdout = assert_success(&bench.serve_once(&[]));
+    assert!(
+        stdout.contains(&format!(
+            "claude-code ({}): this start's --enroll file no longer names it; dropped from the resumed cold generation",
+            bench.kim.to_string_lossy()
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("milestone: canonical-ready"), "{stdout}");
+
+    assert!(bench.db.is_file());
+    assert!(!bench.staged_ledger().exists());
+    assert!(bench.has_session(NATIVE_SESSION));
+    assert!(!bench.has_session(KIM_SESSION));
+    assert!(bench.kim_ledger_dir().join("00000000.rledger").is_file());
+}
+
+/// Witness (c), the gate: a pending generation, a file that consents nothing,
+/// and no persona. The daemon publishes the roll call and waits for the app —
+/// it never exits on the generation, and it never publishes a projection it
+/// has no consent to build.
+#[test]
+fn a_pending_generation_with_nothing_consented_awaits_consent_instead_of_exiting() {
+    let bench = Bench::new();
+    bench.write_enrollment(&["claude-code"], false);
+    assert_success(&bench.serve_once(&[]));
+    bench.stage_cold_generation(false);
+
+    bench.write_enrollment(&[], false);
+    let (_child, origin) = spawn_serve(&bench);
+    let discoveries = wait_for_roll_call(&origin);
+    assert_eq!(
+        roll_call_row(&discoveries, "claude-code")["enabled"],
+        false,
+        "{discoveries}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = http_get(&origin, "/api/status");
+        if status["daemon"]["ingest"]["phase"] == "awaiting_consent" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "awaiting_consent timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        bench.staged_ledger().is_dir(),
+        "the evidence is still staged"
+    );
+    assert!(!bench.db.exists());
+}
+
+/// Witness (d): re-consent. The kind is watched again, its sessions catch up,
+/// and nothing duplicates — the revoked start really did leave the projection
+/// alone.
+#[test]
+fn re_consenting_a_revoked_kind_watches_it_again_without_duplicating_rows() {
+    let bench = Bench::new();
+    bench.write_enrollment(&["claude-code"], false);
+    assert_success(&bench.serve_once(&[]));
+    let sessions_before = bench.session_count();
+
+    // Revoked — and the agent writes a new session while it is.
+    bench.write_enrollment(&[], false);
+    copy_tree(&fixture("tool-use"), &bench.home.join(".claude"));
+    assert_success(&bench.serve_once(&["--ticks", "1"]));
+    assert_eq!(bench.session_count(), sessions_before);
+    assert!(!bench.has_session(KIM_SESSION));
+    assert_eq!(bench.enabled(&bench.native_id()), 0);
+
+    bench.write_enrollment(&["claude-code"], false);
+    assert_success(&bench.serve_once(&["--ticks", "1"]));
+    assert_eq!(bench.enabled(&bench.native_id()), 1);
+    assert_eq!(bench.session_count(), sessions_before + 1);
+    assert_eq!(bench.session_runtime(KIM_SESSION), bench.native_id());
+    assert_eq!(bench.runtimes().len(), 1, "{:?}", bench.runtimes());
+
+    // A third start changes nothing: re-consent is not a second ingest.
+    assert_success(&bench.serve_once(&["--ticks", "1"]));
+    assert_eq!(bench.session_count(), sessions_before + 1);
+}
+
 /// Witnesses (b) and (d) on the wire: a second start on the same projection
-/// with the same file is live for both runtimes at once — no consent phase,
-/// no re-consent even though the file no longer names the native kind —
+/// with the same file is live for both runtimes at once — no consent phase —
 /// `/api/runtimes` carries the label and provenance for the enrolled row
 /// only, and the roll call never lists the enrolled root.
 #[test]
 fn second_start_is_live_for_both_runtimes_with_labels_and_the_roll_call_stays_native() {
     let bench = Bench::new();
     assert_success(&bench.serve_once(&[]));
-    // The native kind's consent is the projection's `enabled` flag now; the
-    // file only needs to keep naming the persona.
-    bench.write_enrollment(&[], true);
+    // The file is the authority on every start, so a second start that still
+    // wants the native kind keeps naming it. (Revocation — the same file
+    // WITHOUT the kind — is its own witness below.)
+    bench.write_enrollment(&["claude-code"], true);
 
     let (_child, origin) = spawn_serve(&bench);
     let deadline = Instant::now() + Duration::from_secs(30);

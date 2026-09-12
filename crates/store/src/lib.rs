@@ -910,6 +910,30 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// Write one runtime's consent flag directly. The identity upsert
+    /// deliberately never touches `enabled` — re-discovery must not revoke a
+    /// user's consent — so a caller whose consent authority lives OUTSIDE the
+    /// projection (the daemon's `--enroll` file, which the supervisor rewrites
+    /// whenever the user changes their mind) re-derives the flag here. The row
+    /// itself stays, with everything it owns: this retires a runtime, it never
+    /// purges one.
+    pub fn set_runtime_enabled(
+        &mut self,
+        runtime_id: &str,
+        enabled: bool,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE agent_runtime SET enabled = ?2 WHERE id = ?1 AND enabled != ?2",
+            rusqlite::params![runtime_id, enabled],
+        )?;
+        if changed != 0
+            && let Some(meta) = self.meta_effects.as_mut()
+        {
+            meta.note_runtime(runtime_id);
+        }
+        Ok(changed != 0)
+    }
+
     /// Advance the persistent rotating-audit cursor after a source completed
     /// its forced replay. Repeating an audit after a crash is harmless.
     pub fn set_audit_path(&mut self, runtime_id: &str, path: &str) -> Result<(), StoreError> {

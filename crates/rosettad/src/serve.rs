@@ -44,7 +44,7 @@ use crate::cold_stage::{ColdEnrollment, ColdGeneration, ServeColdStage};
 use crate::engine::{
     BackfillRuntime, ColdCx, ColdEngine, StreamMeter, absorb_effects, acknowledge_search, now_ms,
 };
-use crate::enroll::{RuntimeTarget, discovered_by_kind, resolve_targets};
+use crate::enroll::{Enrollment, RuntimeTarget, discovered_by_kind, resolve_targets, runtime_name};
 use crate::recovery::restart_incomplete_projection;
 use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_runtime_ledger};
 use crate::{
@@ -104,19 +104,47 @@ fn consented_targets<'a>(
 }
 
 /// Map a resumed generation's consent onto this start's targets: its
-/// discovered kinds go to those kinds' discovered targets; its enrolled
-/// runtimes must still be named by this start's file, or the generation
-/// cannot finish — its staged evidence would publish without its rows.
+/// discovered kinds go to those kinds' discovered targets, its enrolled
+/// runtimes to the file's entries of the same id.
+///
+/// A generation is durable evidence, never standing consent. With an
+/// `--enroll` file this start, one it holds that the file no longer consents
+/// is DROPPED from the resume — the daemon starts, ingests everything still
+/// consented, and says on stdout what it left behind. Un-consenting
+/// mid-backfill is an ordinary user action (and retiring a persona an ordinary
+/// supervisor one); a daemon that refuses to start until a human runs
+/// `rosettad rebuild` would strand every other runtime over one revocation.
+/// The staged evidence itself is never touched: it publishes with the ledger
+/// and `rosettad rebuild` still recovers it, so the drop costs rows, not bytes.
+///
+/// Returns the generation's ids that this start resumes, and one printable
+/// notice per dropped runtime.
 fn generation_consent(
     generation: &ColdGeneration,
     targets: &[RuntimeTarget],
-) -> Result<BTreeSet<String>, String> {
+    enrollment: Option<&Enrollment>,
+    consented: &BTreeSet<String>,
+) -> Result<(BTreeSet<String>, Vec<String>), String> {
     let by_kind = discovered_by_kind(targets);
-    let mut consented = BTreeSet::new();
+    let mut resumed = BTreeSet::new();
+    let mut dropped = Vec::new();
+    let dropped_notice = |name: String, reason: &str| {
+        format!(
+            "{name}: {reason}; dropped from the resumed cold generation — its staged evidence stays in the ledger (`rosettad rebuild` recovers it)"
+        )
+    };
     for kind in &generation.enabled_agents {
-        match by_kind.get(kind.as_str()) {
+        let target = by_kind.get(kind.as_str());
+        if enrollment.is_some() && !target.is_some_and(|target| consented.contains(target.id())) {
+            dropped.push(dropped_notice(
+                runtime_name(kind, None, None),
+                "this start's --enroll file no longer consents it",
+            ));
+            continue;
+        }
+        match target {
             Some(target) => {
-                consented.insert(target.id().to_string());
+                resumed.insert(target.id().to_string());
             }
             None => {
                 return Err(format!(
@@ -126,18 +154,50 @@ fn generation_consent(
         }
     }
     for runtime in generation.enrolled_runtimes() {
-        if !targets
-            .iter()
-            .any(|target| target.is_enrolled() && target.id() == runtime.id)
-        {
-            return Err(format!(
-                "cannot resume cold generation: it holds enrolled runtime {} {} which this start's --enroll file no longer names; add it back, or run `rosettad rebuild`",
-                runtime.kind, runtime.data_root
+        // Enrolled runtimes are consented by construction, so "consented this
+        // start" is exactly "named by this start's file".
+        if !consented.contains(&runtime.id) {
+            dropped.push(dropped_notice(
+                runtime_name(&runtime.kind, None, Some(&runtime.data_root)),
+                "this start's --enroll file no longer names it",
             ));
+            continue;
         }
-        consented.insert(runtime.id.clone());
+        resumed.insert(runtime.id.clone());
     }
-    Ok(consented)
+    Ok((resumed, dropped))
+}
+
+/// With an `--enroll` file the projection's `enabled` flags are a PROJECTION
+/// of the file, not a second consent source, so re-derive every persisted row
+/// from this start's consent — in both directions. Retiring matters because
+/// `/api/runtimes` and the roll call must not advertise consent nobody is
+/// acting on; re-enabling matters because the identity upsert deliberately
+/// never resets the flag (re-discovery must not revoke a user's choice), so a
+/// row retired by an earlier start would otherwise read disabled forever while
+/// its runtime was being watched. Rows are retired, never purged: everything
+/// under them stays public.
+fn apply_file_consent(
+    store: &mut Store,
+    hub: &Hub,
+    persisted_rows: &[rosetta_core::rows::RuntimeRow],
+    consented: &BTreeSet<String>,
+) -> Result<(), String> {
+    let mut changed = 0_usize;
+    for runtime in persisted_rows {
+        if store
+            .set_runtime_enabled(&runtime.id, consented.contains(&runtime.id))
+            .map_err(|error| format!("re-deriving consent for {}: {error:?}", runtime.id))?
+        {
+            changed += 1;
+        }
+    }
+    if changed != 0 {
+        // The mirror was warmed before consent was known; publish the diffs so
+        // the routes that read it answer from this start's truth.
+        absorb_effects(store, hub)?;
+    }
+    Ok(())
 }
 
 /// A live meter over the pipeline's always-on atomic counters: the status
@@ -435,11 +495,20 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // supervisor-enrolled runtime from an earlier start: the file is its
     // truth on every start, so one the file no longer names is not watched
     // (its rows stay public — "retired" for now).
+    //
+    // With an `--enroll` file this start, that persisted flag is NOT a consent
+    // source at all. The file is the supervisor's record of what the user
+    // chose, so it has to be able to REVOKE as well as grant: a union with the
+    // projection could only ever add, and a kind un-checked in the app would
+    // keep being watched from its own cache. The flags become a projection OF
+    // the file, re-derived below.
     let persisted_rows = rosetta_store::queries::all_runtimes(store.conn())
         .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?;
     let persisted: BTreeSet<String> = persisted_rows
         .iter()
-        .filter(|runtime| runtime.enabled && is_layout_root(&runtime.data_root))
+        .filter(|runtime| {
+            enrollment.is_none() && runtime.enabled && is_layout_root(&runtime.data_root)
+        })
         .map(|runtime| runtime.kind.clone())
         .collect();
     for retired in persisted_rows.iter().filter(|runtime| {
@@ -470,20 +539,15 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             .filter_map(|kind| installed_ids(kind))
             .collect()
     };
-    let generation_consented = match &pending_cold {
-        // The manifest is durable consent and its ledger may remain rebuildable
-        // even if discovery currently cannot see the source root. The resume
-        // branch below diagnoses an unavailable root instead of silently
-        // dropping an enrolled runtime from the generation.
-        Some(generation) => generation_consent(generation, &targets)?,
-        None => BTreeSet::new(),
-    };
-    consented.extend(generation_consented.iter().cloned());
-    consented.extend(
-        recovered_enrollment
-            .iter()
-            .filter_map(|kind| installed_ids(kind)),
-    );
+    // Consent carried over from an ARCHIVED projection is persisted consent
+    // too, so the file overrides it on the same grounds.
+    if enrollment.is_none() {
+        consented.extend(
+            recovered_enrollment
+                .iter()
+                .filter_map(|kind| installed_ids(kind)),
+        );
+    }
     // `--agent` names kinds outright and `--all-agents` says everything
     // installed — both are consent from the command line, the headless
     // stand-in for the app's roll call. So is the file's `enabled_kinds`.
@@ -504,6 +568,28 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         // Enrolled runtimes are consented by construction. They are never on
         // the roll call, never part of the one-shot gate, always ingested.
         consented.extend(enrollment.enrolled_ids());
+    }
+    // The generation is read AFTER this start's consent is settled, because
+    // with a file present it may no longer name something the generation
+    // holds — and then the generation, not the consent, is what gives way.
+    let generation_consented = match &pending_cold {
+        // The manifest is durable consent and its ledger may remain rebuildable
+        // even if discovery currently cannot see the source root. The resume
+        // branch below diagnoses an unavailable root instead of silently
+        // dropping a still-consented runtime from the generation.
+        Some(generation) => {
+            let (ids, dropped) =
+                generation_consent(generation, &targets, enrollment.as_ref(), &consented)?;
+            for notice in dropped {
+                println!("{notice}");
+            }
+            ids
+        }
+        None => BTreeSet::new(),
+    };
+    consented.extend(generation_consented.iter().cloned());
+    if enrollment.is_some() {
+        apply_file_consent(&mut store, &hub, &persisted_rows, &consented)?;
     }
     // The roll call lists native layout roots only.
     consent.publish(
@@ -534,6 +620,11 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
+        }
+        // A grant is consent arriving after the re-derivation above, so a row
+        // an earlier start retired has to be re-enabled here too.
+        if enrollment.is_some() {
+            apply_file_consent(&mut store, &hub, &persisted_rows, &consented)?;
         }
     }
     for target in consented_targets(&targets, &consented) {
@@ -1170,9 +1261,9 @@ fn run_resumed_fresh_serve(
         });
     }
 
-    // Every runtime the generation captured must have been handled above;
-    // `generation_consent` already refused an enrolled runtime the file no
-    // longer names, so a miss here is a kind the selection dropped.
+    // Every runtime this start RESUMES must have been handled above.
+    // `generation_consent` has already removed the ones an `--enroll` file
+    // no longer consents, so a miss here is a kind the selection dropped.
     let unavailable = generation_consented
         .difference(&handled)
         .filter_map(|id| targets.iter().find(|target| target.id() == id))

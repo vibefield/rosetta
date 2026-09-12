@@ -3690,3 +3690,55 @@ fn workflow_sidecar_generation_replacement_sweeps_the_old_snapshot() {
         0
     );
 }
+
+/// Consent is the one identity field the upsert never touches, so the caller
+/// whose authority lives outside the projection writes it directly — in both
+/// directions, and always as a mirror-visible change.
+#[test]
+fn runtime_consent_is_written_directly_and_never_by_re_discovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&directory.path().join("rosetta.sqlite")).unwrap();
+    store.apply(&base_batch()).unwrap();
+    store.observe_meta_effects();
+    assert!(
+        queries::runtime(store.conn(), "rt1")
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+
+    assert!(store.set_runtime_enabled("rt1", false).unwrap());
+    assert!(
+        !queries::runtime(store.conn(), "rt1")
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    let effects = store.drain_meta_effects();
+    assert!(effects.runtimes.contains("rt1"), "{effects:?}");
+
+    // Already retired: no write, and nothing for the mirror to republish.
+    assert!(!store.set_runtime_enabled("rt1", false).unwrap());
+    assert!(store.drain_meta_effects().is_empty());
+
+    // Re-discovery carries `enabled: true` and must still not resurrect it.
+    store.apply(&base_batch()).unwrap();
+    assert!(
+        !queries::runtime(store.conn(), "rt1")
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+
+    assert!(store.set_runtime_enabled("rt1", true).unwrap());
+    assert!(
+        queries::runtime(store.conn(), "rt1")
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert!(store.drain_meta_effects().runtimes.contains("rt1"));
+
+    // An id the projection does not hold is not an error, just no change.
+    assert!(!store.set_runtime_enabled("rt-absent", false).unwrap());
+}

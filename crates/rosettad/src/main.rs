@@ -119,7 +119,10 @@ fn main() -> ExitCode {
                 "  (--enroll FILE: a supervisor's JSON enrollment — {{\"format\":1,\"enabled_kinds\":[KIND...],\"runtimes\":[{{\"kind\",\"data_root\",\"label\"}}...]}};"
             );
             eprintln!(
-                "   enabled_kinds consents discovered kinds at start, runtimes adds managed absolute roots that are consented by construction)"
+                "   enabled_kinds consents discovered kinds at start, runtimes adds managed absolute roots that are consented by construction;"
+            );
+            eprintln!(
+                "   the file is authoritative: with it, consent is exactly enabled_kinds plus --agent/--all-agents, so dropping a kind REVOKES it)"
             );
             return ExitCode::from(2);
         }
@@ -631,6 +634,10 @@ fn load_enrollment(flags: &Flags) -> Result<Option<Enrollment>, String> {
 /// kinds outright; otherwise an `--enroll` file's `enabled_kinds` is the
 /// headless roll call; without either, every installed adapter (the CLI user
 /// asked). Only installed discovered targets can be consented.
+///
+/// The projection is never read here — a finite command's consent is this
+/// invocation's file and command line, which is the authoritative rule `serve`
+/// also follows wherever a file is given (2026-09-12).
 fn cli_consent(
     flags: &Flags,
     enrollment: Option<&Enrollment>,
