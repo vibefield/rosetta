@@ -223,12 +223,13 @@ pub(crate) fn meta_event(agent: &str, meta: &MetaReport) -> Value {
     })
 }
 
-const DEFERRED_INDEXES: [&str; 10] = [
+const DEFERRED_INDEXES: [&str; 11] = [
     "session_project",
     "session_runtime",
-    "session_parent",
+    "session_title_src",
     "task_session",
     "message_bucket_key",
+    "timeline_meta_message",
     "session_usage_bucket_key",
     "file_edit_session",
     "file_edit_path",

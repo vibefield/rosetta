@@ -81,31 +81,61 @@ fn hot_live() -> LiveOptions {
 #[test]
 fn rescanning_fresh_file_dates_does_not_change_recorded_conversation_activity() {
     let mut h = backfilled_harness();
-    let before: Vec<_> = queries::all_sessions(h.store.conn()).unwrap().into_iter()
-        .map(|row| (row.id, row.activity)).collect();
+    let before: Vec<_> = queries::all_sessions(h.store.conn())
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.id, row.activity))
+        .collect();
     assert!(before.iter().any(|(_, activity)| activity.is_some()));
     for source in &h.files {
         let path = h.root.join(&source.relative_path);
         let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-        file.set_times(std::fs::FileTimes::new().set_modified(
-            std::time::UNIX_EPOCH + Duration::from_secs(2_000_000_000)
-        )).unwrap();
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(2_000_000_000)),
+        )
+        .unwrap();
     }
-    meta_ingest(&ClaudeCodeAdapter, &h.runtime, &h.root, &mut h.store, &h.opts, &h.instrument).unwrap();
-    let after: Vec<_> = queries::all_sessions(h.store.conn()).unwrap().into_iter()
-        .map(|row| (row.id, row.activity)).collect();
-    assert_eq!(after, before, "file freshness must never become conversation recency");
+    meta_ingest(
+        &ClaudeCodeAdapter,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+    )
+    .unwrap();
+    let after: Vec<_> = queries::all_sessions(h.store.conn())
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.id, row.activity))
+        .collect();
+    assert_eq!(
+        after, before,
+        "file freshness must never become conversation recency"
+    );
 
     let target = h.files[0].clone();
-    append_user_line(&h.root.join(&target.relative_path), &target.native_session_id, "new activity");
+    append_user_line(
+        &h.root.join(&target.relative_path),
+        &target.native_session_id,
+        "new activity",
+    );
     let mut events = ScriptedEvents::default();
     events.push_changed(&target.relative_path);
     let mut runner = resumed_runner(&h, &ClaudeCodeAdapter, events, hot_live());
     runner.tick(&mut h.store, &h.instrument).unwrap();
     let rows = queries::timeline_page(h.store.conn(), &target.session_id, None, 10_000).unwrap();
     let message_at = rows.iter().map(|row| row.at).max().flatten().unwrap();
-    assert_eq!(queries::session(h.store.conn(), &target.session_id).unwrap().unwrap()
-        .activity.unwrap().last_at, message_at);
+    assert_eq!(
+        queries::session(h.store.conn(), &target.session_id)
+            .unwrap()
+            .unwrap()
+            .activity
+            .unwrap()
+            .last_at,
+        message_at
+    );
 }
 
 fn runner<'a>(

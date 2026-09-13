@@ -20,8 +20,8 @@ pub mod raw;
 pub mod spec;
 pub mod time;
 pub mod tool;
-mod workflow;
 mod web;
+mod workflow;
 
 pub use adapter::ClaudeCodeAdapter;
 mod media;

@@ -717,7 +717,10 @@ impl MetaMirror {
                     break;
                 }
                 result.insert(id.to_owned());
-                current = self.sessions.get(id).and_then(|row| row.parent_session_id.as_deref());
+                current = self
+                    .sessions
+                    .get(id)
+                    .and_then(|row| row.parent_session_id.as_deref());
             }
         }
         Ok(result)

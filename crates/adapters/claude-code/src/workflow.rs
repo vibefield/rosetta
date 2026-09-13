@@ -177,6 +177,7 @@ pub(crate) fn skim_run(stat: &FileStat, document: &[u8]) -> SkimResult {
     let parent = parent_session_from_path(&stat.relative_path).map(str::to_owned);
     let raw = serde_json::from_slice::<RawRun>(document).ok();
     SkimResult {
+        ledger_only: false,
         session_id: parent,
         role: Some(SessionRole::Main),
         started_at: raw.as_ref().and_then(|run| run.start_time),
@@ -191,6 +192,7 @@ pub(crate) fn skim_run(stat: &FileStat, document: &[u8]) -> SkimResult {
 
 pub(crate) fn skim_journal(stat: &FileStat) -> SkimResult {
     SkimResult {
+        ledger_only: false,
         session_id: parent_session_from_path(&stat.relative_path).map(str::to_owned),
         role: Some(SessionRole::Main),
         updated_at: Some(stat.modified_ms),
