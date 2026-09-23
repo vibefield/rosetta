@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 
 from tools.groundtruth.mock_model import (
+    USAGE_MARKER,
     _anthropic_script,
+    _anthropic_usage,
+    _gemini_usage,
+    _openai_chat_usage,
+    _openai_usage,
+    usage_numbers,
     _anthropic_sse,
     _gemini_response,
     _gemini_script,
@@ -210,6 +216,67 @@ class MockModelTests(unittest.TestCase):
         )
         self.assertEqual(script[0], "text")
         self.assertIn("Scenario complete", script[1])
+
+
+
+class UsageMarkerTests(unittest.TestCase):
+    """The `[usage]` marker's wire values, per dialect (RESEARCH_PLAN §5.13)."""
+
+    def test_every_bucket_is_distinct_and_nonzero(self) -> None:
+        for turn in (0, 1):
+            numbers = usage_numbers(turn)
+            tokens = [numbers[key] for key in ("uncached", "cache_read", "write_5m", "write_1h", "visible", "reasoning")]
+            self.assertTrue(all(value > 0 for value in tokens))
+            self.assertEqual(len(set(tokens)), len(tokens))
+        self.assertNotEqual(usage_numbers(0), usage_numbers(1))
+
+    def test_anthropic_reports_exclusive_input_and_inclusive_output(self) -> None:
+        numbers = usage_numbers(0)
+        usage = _anthropic_usage(0)
+        self.assertEqual(usage["input_tokens"], numbers["uncached"])
+        self.assertEqual(
+            usage["cache_creation_input_tokens"],
+            usage["cache_creation"]["ephemeral_5m_input_tokens"]
+            + usage["cache_creation"]["ephemeral_1h_input_tokens"],
+        )
+        self.assertEqual(usage["output_tokens"], numbers["visible"] + numbers["reasoning"])
+        self.assertEqual(usage["server_tool_use"]["web_search_requests"], 2)
+
+    def test_openai_dialects_report_inclusive_totals(self) -> None:
+        numbers = usage_numbers(1)
+        prompt = numbers["uncached"] + numbers["cache_read"] + numbers["write_5m"]
+        responses = _openai_usage(1)
+        self.assertEqual(responses["input_tokens"], prompt)
+        self.assertEqual(responses["input_tokens_details"]["cache_write_tokens"], numbers["write_5m"])
+        self.assertEqual(responses["output_tokens_details"]["reasoning_tokens"], numbers["reasoning"])
+        chat = _openai_chat_usage(128, 1)
+        self.assertEqual(chat["prompt_tokens"], prompt)
+        self.assertEqual(chat["completion_tokens"], numbers["visible"] + numbers["reasoning"])
+        self.assertEqual(chat["cost_in_usd_ticks"], numbers["cost_ticks"])
+
+    def test_gemini_reports_thoughts_beside_candidates(self) -> None:
+        numbers = usage_numbers(0)
+        usage = _gemini_usage(0)
+        self.assertEqual(usage["candidatesTokenCount"], numbers["visible"])
+        self.assertEqual(usage["thoughtsTokenCount"], numbers["reasoning"])
+
+    def test_the_marker_switches_a_chat_completion_on(self) -> None:
+        request = {"model": "mock", "messages": [{"role": "user", "content": f"hi {USAGE_MARKER}"}]}
+        script = _openai_chat_script(request)
+        completion = _openai_chat_completion(0, "mock", script, 128, 0)
+        self.assertIn("prompt_tokens_details", completion["usage"])
+        plain = _openai_chat_completion(0, "mock", script)
+        self.assertEqual(plain["usage"]["prompt_tokens"], 128)
+
+    def test_every_tool_use_scenario_has_a_usage_twin(self) -> None:
+        from tools.groundtruth.farm import SCENARIOS
+
+        for agent, scenarios in SCENARIOS.items():
+            names = [scenario["name"] for scenario in scenarios]
+            if "tool-use" in names:
+                self.assertIn("usage", names, agent)
+                twin = next(scenario for scenario in scenarios if scenario["name"] == "usage")
+                self.assertTrue(all(USAGE_MARKER in prompt for prompt in twin["prompts"]))
 
 
 if __name__ == "__main__":

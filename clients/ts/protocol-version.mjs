@@ -1,2 +1,2 @@
 // Shared wire version; checked against Rust in the wire tests.
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;

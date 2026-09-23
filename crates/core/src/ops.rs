@@ -79,8 +79,14 @@ pub enum IngestOp {
 }
 
 impl IngestOp {
-    pub fn push_message(ops: &mut Vec<Self>, row: MessageRow) {
-        ops.extend(Self::project_message(row));
+    /// Close a normalizer row into the public timeline. Returns whether it
+    /// survived as a timeline message; a row that did not cannot be the
+    /// target of a later `Usage` op (its own usage became a session sample).
+    pub fn push_message(ops: &mut Vec<Self>, row: MessageRow) -> bool {
+        let projected = Self::project_message(row);
+        let survived = projected.iter().any(|op| matches!(op, Self::Message(_)));
+        ops.extend(projected);
+        survived
     }
 
     /// Close a tool update into the same bounded projection used by opener
@@ -327,6 +333,7 @@ impl IngestOp {
             body,
             parent_tool_native_id: row.branch_tool_id,
             usage: row.usage.unwrap_or_default(),
+            cost: None,
             provenance: Provenance {
                 agent_version: row.agent_version,
                 src_cursor: row.src_cursor,
@@ -346,7 +353,7 @@ fn nonempty(value: Option<String>) -> Option<String> {
 }
 
 fn usage_only(row: &MessageRow) -> Option<IngestOp> {
-    let usage = row.usage.filter(|usage| !usage.is_empty())?;
+    let usage = row.usage.clone().filter(|usage| !usage.is_empty())?;
     Some(IngestOp::SessionUsage(SessionUsageRow {
         session_id: row.session_id.clone(),
         key: format!("timeline:{}", row.timeline_id),

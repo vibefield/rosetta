@@ -82,8 +82,24 @@ fn agent_message(ctx: &mut NormalizeCtx, ordinal: u64, text: &str) -> String {
     agent_row(ctx, ordinal, text).timeline_id
 }
 
-/// A `token_count` carrying CUMULATIVE session totals.
-fn token_count(ctx: &mut NormalizeCtx, ordinal: u64, input: i64, output: i64) -> Vec<IngestOp> {
+fn usage_value(input: i64, output: i64) -> Value {
+    json!({
+        "input_tokens": input,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": output,
+        "reasoning_output_tokens": 0,
+        "total_tokens": input + output,
+    })
+}
+
+/// A `token_count`: the running thread total plus the one request's `last`.
+fn token_count(
+    ctx: &mut NormalizeCtx,
+    ordinal: u64,
+    total: (i64, i64),
+    last: (i64, i64),
+) -> Vec<IngestOp> {
     ingest(
         ctx,
         ordinal,
@@ -91,18 +107,52 @@ fn token_count(ctx: &mut NormalizeCtx, ordinal: u64, input: i64, output: i64) ->
         json!({
             "type": "token_count",
             "info": {
-                "total_token_usage": {
-                    "input_tokens": input,
-                    "cached_input_tokens": 0,
-                    "cache_write_input_tokens": 0,
-                    "output_tokens": output,
-                    "reasoning_output_tokens": 0,
-                    "total_tokens": input + output,
-                },
+                "total_token_usage": usage_value(total.0, total.1),
+                "last_token_usage": usage_value(last.0, last.1),
             },
         }),
     )
     .ops
+}
+
+fn ingest_at(
+    ctx: &mut NormalizeCtx,
+    timestamp: &str,
+    ordinal: u64,
+    record_type: &str,
+    payload: Value,
+) -> LineOutcome {
+    let line = serde_json::to_vec(&json!({
+        "timestamp": timestamp,
+        "ordinal": ordinal,
+        "type": record_type,
+        "payload": payload,
+    }))
+    .unwrap();
+    CodexAdapter.ingest_line(ctx, "rollout", &line)
+}
+
+fn session_meta(extra: Value) -> Value {
+    let mut meta = json!({
+        "id": "01a036c5-0000-0000-0000-000000000000",
+        "timestamp": STAMP,
+        "cwd": "/workspace",
+        "originator": "codex_exec",
+        "cli_version": "0.149.1",
+        "source": "exec",
+        "model_provider": "openai",
+    });
+    meta.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    meta
+}
+
+fn sample(ops: &[IngestOp]) -> TokenSnapshot {
+    match ops {
+        [IngestOp::SessionUsage(sample)] => sample.tokens.clone(),
+        other => panic!("expected one request sample, got {other:?}"),
+    }
 }
 
 fn usage(ops: &[IngestOp]) -> (String, TokenSnapshot) {
@@ -111,7 +161,7 @@ fn usage(ops: &[IngestOp]) -> (String, TokenSnapshot) {
             IngestOp::Usage {
                 response, tokens, ..
             },
-        ] => (response.clone(), *tokens),
+        ] => (response.clone(), tokens.clone()),
         other => panic!("expected one usage op, got {other:?}"),
     }
 }
@@ -126,89 +176,204 @@ fn drifts(ops: &[IngestOp]) -> Vec<&DriftFact> {
 }
 
 #[test]
-fn repeated_token_counts_never_double_count() {
-    // A live response gets several token_count events. Each carries the running
-    // SESSION total, and each op carries the running RESPONSE total — the
-    // writer applies (new − old), so re-reading the same lines is idempotent.
+fn an_unchanged_total_is_not_a_new_request() {
+    // Rate-limit re-emits and recomputes repeat the running total without a
+    // request behind them.
     let mut ctx = context();
     let response = agent_message(&mut ctx, 1, "hello");
-
-    let (first, tokens) = usage(&token_count(&mut ctx, 2, 100, 10));
-    assert_eq!(first, response);
+    let (keyed, tokens) = usage(&token_count(&mut ctx, 2, (100, 10), (100, 10)));
+    assert_eq!(keyed, response);
     assert_eq!((tokens.input, tokens.output), (Some(100), Some(10)));
-
-    let (second, tokens) = usage(&token_count(&mut ctx, 3, 150, 20));
-    assert_eq!(second, response, "both snapshots key to the same response");
-    // The running total, NOT the 50/10 delta: the op replaces, it does not add.
-    assert_eq!((tokens.input, tokens.output), (Some(150), Some(20)));
+    assert!(token_count(&mut ctx, 3, (100, 10), (100, 10)).is_empty());
 }
 
 #[test]
-fn cumulative_counters_split_across_responses() {
-    // Two responses in one session: the second gets the DIFFERENCE, so the
-    // session's counters never land on a row twice.
+fn each_request_gets_the_difference_on_its_own_row() {
     let mut ctx = context();
     let first_response = agent_message(&mut ctx, 1, "hello");
-    let (keyed, tokens) = usage(&token_count(&mut ctx, 2, 100, 10));
+    let (keyed, tokens) = usage(&token_count(&mut ctx, 2, (100, 10), (100, 10)));
     assert_eq!(keyed, first_response);
     assert_eq!((tokens.input, tokens.output), (Some(100), Some(10)));
 
     let second_response = agent_message(&mut ctx, 3, "goodbye");
-    let (keyed, tokens) = usage(&token_count(&mut ctx, 4, 260, 35));
+    let (keyed, tokens) = usage(&token_count(&mut ctx, 4, (260, 35), (160, 25)));
     assert_eq!(keyed, second_response);
     assert_eq!((tokens.input, tokens.output), (Some(160), Some(25)));
+    assert_eq!(tokens.scope, rosetta_core::UsageScope::Request);
 }
 
 #[test]
-fn usage_reported_before_a_response_row_is_carried_forward() {
-    // The committed tool-use fixture reports tokens before the first agent
-    // message; a session that reports them before ANY response row must not
-    // lose them either.
+fn a_request_without_a_row_becomes_a_request_sample() {
+    // Poll calls return before any response row: their request is still
+    // billed, and must not ride on (or be lost with) another request's row.
     let mut ctx = context();
-    assert!(
-        token_count(&mut ctx, 1, 100, 10).is_empty(),
-        "nothing to key a snapshot to yet"
-    );
+    let tokens = sample(&token_count(&mut ctx, 1, (100, 10), (100, 10)));
+    assert_eq!((tokens.input, tokens.output), (Some(100), Some(10)));
 
     let response = agent_message(&mut ctx, 2, "hello");
-    let (keyed, tokens) = usage(&token_count(&mut ctx, 3, 150, 20));
+    let (keyed, tokens) = usage(&token_count(&mut ctx, 3, (150, 20), (50, 10)));
     assert_eq!(keyed, response);
-    // 150/20, not 50/10: the carried total is attributed, not dropped.
-    assert_eq!((tokens.input, tokens.output), (Some(150), Some(20)));
+    assert_eq!((tokens.input, tokens.output), (Some(50), Some(10)));
+}
+
+#[test]
+fn an_empty_reasoning_row_never_swallows_its_request() {
+    // The pre-2026-09-22 adapter aimed this request at the reasoning row,
+    // which projection drops for its empty summary: 13% of Codex tokens.
+    let mut ctx = context();
+    let outcome = ingest(
+        &mut ctx,
+        1,
+        "response_item",
+        json!({"type": "reasoning", "id": "rs_1", "summary": []}),
+    );
+    assert!(outcome.ops.is_empty(), "empty reasoning is ledger-only");
+    let tokens = sample(&token_count(&mut ctx, 2, (300, 30), (300, 30)));
+    assert_eq!(tokens.total_tokens(), Some(330));
+}
+
+#[test]
+fn a_seeded_first_reading_counts_only_its_own_request() {
+    // A fork or resume into a new file seeds the thread total from its
+    // parent; only `last` belongs to this file.
+    let mut ctx = context();
+    agent_message(&mut ctx, 1, "hello");
+    let (_, tokens) = usage(&token_count(&mut ctx, 2, (90_000, 9_000), (120, 12)));
+    assert_eq!((tokens.input, tokens.output), (Some(120), Some(12)));
+}
+
+#[test]
+fn a_rebased_total_counts_the_request_not_the_whole_reading() {
+    let mut ctx = context();
+    agent_message(&mut ctx, 1, "one");
+    usage(&token_count(&mut ctx, 2, (1_000, 100), (1_000, 100)));
+    agent_message(&mut ctx, 3, "two");
+    // Compaction re-based the counters: some fields dropped. The old
+    // per-component rule re-added a dipped counter's whole running total.
+    let (_, tokens) = usage(&token_count(&mut ctx, 4, (500, 150), (60, 6)));
+    assert_eq!((tokens.input, tokens.output), (Some(60), Some(6)));
+}
+
+#[test]
+fn a_forks_copied_head_burst_carries_no_usage() {
+    let mut ctx = context();
+    ingest_at(
+        &mut ctx,
+        "2026-08-25T02:35:03.100Z",
+        0,
+        "session_meta",
+        session_meta(json!({"forked_from_id": "01a036c5-parent"})),
+    );
+    // The parent's history, copied in the same append.
+    ingest_at(
+        &mut ctx,
+        "2026-08-25T02:35:03.400Z",
+        1,
+        "event_msg",
+        json!({"type": "token_count", "info": {
+            "total_token_usage": usage_value(5_000, 500),
+            "last_token_usage": usage_value(700, 70)}}),
+    );
+    // The fork's own first request, a few seconds later.
+    let own = ingest_at(
+        &mut ctx,
+        "2026-08-25T02:35:09.000Z",
+        2,
+        "event_msg",
+        json!({"type": "token_count", "info": {
+            "total_token_usage": usage_value(5_300, 530),
+            "last_token_usage": usage_value(300, 30)}}),
+    );
+    let tokens = sample(&own.ops);
+    assert_eq!((tokens.input, tokens.output), (Some(300), Some(30)));
+}
+
+#[test]
+fn a_paginated_subagent_skips_its_parents_prefix() {
+    let mut ctx = context();
+    ingest(
+        &mut ctx,
+        0,
+        "session_meta",
+        session_meta(json!({"subagent_history_start_ordinal": 5})),
+    );
+    assert!(token_count(&mut ctx, 3, (800, 80), (800, 80)).is_empty());
+    let tokens = sample(&token_count(&mut ctx, 6, (1_000, 100), (200, 20)));
+    assert_eq!((tokens.input, tokens.output), (Some(200), Some(20)));
+}
+
+#[test]
+fn tier_route_and_searches_are_facts_of_the_request() {
+    let mut ctx = context();
+    ingest(
+        &mut ctx,
+        0,
+        "session_meta",
+        session_meta(json!({"model_provider": "azure"})),
+    );
+    ingest(
+        &mut ctx,
+        1,
+        "event_msg",
+        json!({"type": "thread_settings_applied", "thread_settings": {"service_tier": "priority"}}),
+    );
+    ingest(
+        &mut ctx,
+        2,
+        "response_item",
+        json!({"type": "web_search_call", "id": "ws_1", "status": "completed",
+               "action": {"type": "search", "query": "rosetta"}}),
+    );
+    let ops = token_count(&mut ctx, 3, (100, 10), (100, 10));
+    let tokens = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::Usage { tokens, .. } => Some(tokens.clone()),
+            IngestOp::SessionUsage(sample) => Some(sample.tokens.clone()),
+            _ => None,
+        })
+        .expect("usage");
+    assert_eq!(
+        tokens.service_tier,
+        Some(rosetta_core::ServiceTier::Priority)
+    );
+    assert_eq!(tokens.route.as_deref(), Some("azure"));
+    assert_eq!(tokens.web_searches, Some(1));
 }
 
 #[test]
 fn codex_input_counter_is_split_by_subtraction() {
-    // `input_tokens` INCLUDES `cached_input_tokens`; the canonical model keeps
-    // fresh input and cache reads apart.
+    // `input_tokens` INCLUDES cached reads AND cache writes; `output_tokens`
+    // includes reasoning. The buckets are exclusive.
     let mut ctx = context();
     let response = agent_message(&mut ctx, 1, "hello");
+    let reading = json!({
+        "input_tokens": 1000,
+        "cached_input_tokens": 800,
+        "cache_write_input_tokens": 64,
+        "output_tokens": 50,
+        "reasoning_output_tokens": 30,
+        "total_tokens": 1050,
+    });
     let ops = ingest(
         &mut ctx,
         2,
         "event_msg",
         json!({
             "type": "token_count",
-            "info": {
-                "total_token_usage": {
-                    "input_tokens": 1000,
-                    "cached_input_tokens": 800,
-                    "cache_write_input_tokens": 64,
-                    "output_tokens": 50,
-                    "reasoning_output_tokens": 30,
-                    "total_tokens": 1050,
-                },
-            },
+            "info": {"total_token_usage": reading, "last_token_usage": reading},
         }),
     )
     .ops;
 
     let (keyed, tokens) = usage(&ops);
     assert_eq!(keyed, response);
-    assert_eq!(tokens.input, Some(200));
+    assert_eq!(tokens.input, Some(136));
     assert_eq!(tokens.cache_read, Some(800));
     assert_eq!(tokens.cache_write, Some(64));
+    assert_eq!(tokens.output, Some(20));
     assert_eq!(tokens.thinking, Some(30));
+    assert_eq!(tokens.total_tokens(), Some(1050));
 }
 
 #[test]

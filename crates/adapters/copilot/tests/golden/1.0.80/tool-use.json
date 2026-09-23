@@ -30,7 +30,13 @@
       "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -94,10 +100,16 @@
     "parent_tool_native_id": null,
     "usage": {
       "input": null,
-      "output": 32,
+      "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -161,10 +173,16 @@
     "parent_tool_native_id": null,
     "usage": {
       "input": null,
-      "output": 32,
+      "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -173,17 +191,23 @@
     }
   },
   {
-    "op": "usage",
+    "op": "session_usage",
     "session_id": "63db62029a1896c9f9ba1c30de46229358f85138c44da2d7b2260af1bfc9e661",
-    "response": "c134493dd36d39dee7b183d29c0e865b079707413f404d533fb3a742f8fead69",
+    "key": "1e2ef8497259d270e42dc39db36f84749397324229f65908012b7c2017700e2f",
     "ts": 1787635683186,
     "model": "mock-model",
     "tokens": {
       "input": 256,
-      "output": 32,
+      "output": 64,
       "cache_read": 0,
       "cache_write": 0,
-      "thinking": 0
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "aggregate"
     }
   }
 ]

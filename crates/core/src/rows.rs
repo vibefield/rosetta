@@ -141,21 +141,172 @@ impl TaskStatus {
     }
 }
 
-/// Per-response token snapshot. Every component is `Option`: `None` means the
-/// agent never reported it, which must never be coerced to zero.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The provider's service tier for one request (ARCHITECTURE §4.1.3). A
+/// closed vocabulary: adapters map native spellings (`default`/`auto` →
+/// standard, Claude `speed: "fast"` → fast) and leave anything else absent.
+/// Absent prices as standard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum ServiceTier {
+    Standard,
+    Priority,
+    Flex,
+    Batch,
+    Fast,
+}
+
+impl ServiceTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Priority => "priority",
+            Self::Flex => "flex",
+            Self::Batch => "batch",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Decode the canonical spelling (projection columns, wire values).
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "standard" => Self::Standard,
+            "priority" => Self::Priority,
+            "flex" => Self::Flex,
+            "batch" => Self::Batch,
+            "fast" => Self::Fast,
+            _ => return None,
+        })
+    }
+}
+
+/// The longest canonical route slug, in bytes.
+pub const ROUTE_MAX_BYTES: usize = 64;
+
+/// Normalize a serving-provider route to its canonical slug: lowercase ASCII
+/// `provider` or `provider/qualifier`, each segment `[a-z0-9._-]+`. Anything
+/// else (URLs, keys, account ids, empty text) is not a route.
+pub fn canonical_route(raw: &str) -> Option<String> {
+    let lowered = raw.trim().to_ascii_lowercase();
+    if lowered.is_empty() || lowered.len() > ROUTE_MAX_BYTES {
+        return None;
+    }
+    let mut segments = lowered.split('/');
+    let valid = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    };
+    let provider = segments.next()?;
+    let qualifier = segments.next();
+    if !valid(provider) || segments.next().is_some() || qualifier.is_some_and(|q| !valid(q)) {
+        return None;
+    }
+    Some(lowered)
+}
+
+/// One model request's usage (ARCHITECTURE §4.1.3). The six token buckets
+/// are mutually exclusive — every token is in exactly one — so any sum of
+/// them is a true total. Every component is `Option`: `None` means the agent
+/// never reported it, which must never be coerced to zero.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TokenSnapshot {
+    /// Prompt tokens neither read from nor written to a cache.
     pub input: Option<i64>,
+    /// Generated tokens, excluding reasoning.
     pub output: Option<i64>,
+    /// Prompt tokens served from a cache.
     pub cache_read: Option<i64>,
+    /// Prompt tokens written at the provider's default (≤ 5-minute) TTL.
     pub cache_write: Option<i64>,
+    /// Reasoning/thinking tokens; never also counted in `output`.
     pub thinking: Option<i64>,
+    /// Prompt tokens written to a 1-hour cache.
+    #[serde(default)]
+    pub cache_write_1h: Option<i64>,
+    /// Server-side web search requests the provider bills per call.
+    #[serde(default)]
+    pub web_searches: Option<i64>,
+    #[serde(default)]
+    pub service_tier: Option<ServiceTier>,
+    /// Serving provider when the record names one that differs from the
+    /// agent's default; a [`canonical_route`] slug.
+    #[serde(default)]
+    pub route: Option<String>,
+    /// The provider's own billed amount for this request in pico-USD
+    /// (10⁻¹² USD). Never an agent-computed estimate.
+    #[serde(default)]
+    pub billed_pico_usd: Option<i64>,
+    /// One model request, or a total the agent reports over several (a Grok
+    /// turn, a Copilot shutdown interval, a Hermes session row). Pricing
+    /// needs it: a long-context tier can only be decided per request.
+    #[serde(default)]
+    pub scope: UsageScope,
 }
 
 impl TokenSnapshot {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Sum of the six token buckets; `None` when none was reported.
+    pub fn total_tokens(&self) -> Option<i64> {
+        sum_reported([
+            self.input,
+            self.output,
+            self.cache_read,
+            self.cache_write,
+            self.cache_write_1h,
+            self.thinking,
+        ])
+    }
+
+    /// The request's prompt size — what long-context price tiers compare.
+    pub fn prompt_tokens(&self) -> Option<i64> {
+        sum_reported([
+            self.input,
+            self.cache_read,
+            self.cache_write,
+            self.cache_write_1h,
+        ])
+    }
+}
+
+fn sum_reported<const N: usize>(values: [Option<i64>; N]) -> Option<i64> {
+    values
+        .into_iter()
+        .flatten()
+        .fold(None, |sum, value| Some(sum.unwrap_or(0) + value))
+}
+
+/// Whether a usage record is one model request or a total over several.
+/// Pricing needs the difference: a long-context tier can only be decided per
+/// request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum UsageScope {
+    #[default]
+    Request,
+    Aggregate,
+}
+
+impl UsageScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Aggregate => "aggregate",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "request" => Some(Self::Request),
+            "aggregate" => Some(Self::Aggregate),
+            _ => None,
+        }
     }
 }
 

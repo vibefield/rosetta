@@ -9,7 +9,7 @@ use std::time::Instant;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::fold::{HOUR_MS, hour_bucket};
-use rosetta_core::rows::{Ms, TokenSnapshot};
+use rosetta_core::rows::{Ms, ServiceTier, TokenSnapshot};
 use rosetta_core::timeline::StatusBasis;
 use rosetta_core::{
     EvidenceOrder, IngestOp, SourceIdentity, TimelineBody, TimelineEntry, ToolFoldState,
@@ -287,42 +287,27 @@ pub(super) fn rebuild_bucket(
     model: &str,
 ) -> Result<(), StoreError> {
     let aggregate = tx
-        .prepare_cached(
-            "SELECT SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
-                    SUM(cache_w_tokens), SUM(think_tokens), SUM(message_count),
-                    SUM(tool_call_count), COUNT(*)
-             FROM (
-               SELECT in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
-                      think_tokens, 1 AS message_count,
-                      CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END AS tool_call_count
-               FROM message
-               WHERE session_id = ?1
-                 AND COALESCE(ts, 0) >= ?2 AND COALESCE(ts, 0) < ?2 + ?4
-                 AND COALESCE(model, 'unknown') = ?3
-               UNION ALL
-               SELECT in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
-                      think_tokens, 0 AS message_count, 0 AS tool_call_count
-               FROM session_usage
-               WHERE session_id = ?1
-                 AND ts >= ?2 AND ts < ?2 + ?4
-                 AND COALESCE(model, 'unknown') = ?3
-             )",
-        )?
-        .query_row(params![session_id, hour_ts, model, HOUR_MS], |row| {
+        .prepare_cached(&crate::usage_sql::REBUILD_ONE)?
+        .query_row(params![HOUR_MS, session_id, hour_ts, model], |row| {
             Ok((
-                TokenSnapshot {
+                BucketValues {
                     input: row.get(0)?,
                     output: row.get(1)?,
                     cache_read: row.get(2)?,
                     cache_write: row.get(3)?,
                     thinking: row.get(4)?,
+                    cache_write_1h: row.get(5)?,
+                    web_searches: row.get(6)?,
+                    cost_pusd: row.get(7)?,
+                    billed_pusd: row.get(8)?,
+                    unpriced_tokens: row.get(9)?,
+                    messages: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
+                    tools: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
                 },
-                row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(6)?.unwrap_or(0),
-                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(12)?,
             ))
         })?;
-    let (tokens, messages, tools, contributors) = aggregate;
+    let (values, contributors) = aggregate;
     if contributors == 0 {
         tx.prepare_cached(
             "DELETE FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
@@ -333,13 +318,19 @@ pub(super) fn rebuild_bucket(
     tx.prepare_cached(
         "INSERT INTO usage_bucket
            (session_id, hour_ts, model, in_tokens, out_tokens, cache_r_tokens,
-            cache_w_tokens, think_tokens, message_count, tool_call_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            cache_w_tokens, think_tokens, cache_w1h_tokens, web_searches, cost_pusd,
+            billed_pusd, unpriced_tokens, message_count, tool_call_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(session_id, hour_ts, model) DO UPDATE SET
            in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
            cache_r_tokens = excluded.cache_r_tokens,
            cache_w_tokens = excluded.cache_w_tokens,
            think_tokens = excluded.think_tokens,
+           cache_w1h_tokens = excluded.cache_w1h_tokens,
+           web_searches = excluded.web_searches,
+           cost_pusd = excluded.cost_pusd,
+           billed_pusd = excluded.billed_pusd,
+           unpriced_tokens = excluded.unpriced_tokens,
            message_count = excluded.message_count,
            tool_call_count = excluded.tool_call_count",
     )?
@@ -347,15 +338,37 @@ pub(super) fn rebuild_bucket(
         session_id,
         hour_ts,
         model,
-        tokens.input,
-        tokens.output,
-        tokens.cache_read,
-        tokens.cache_write,
-        tokens.thinking,
-        messages,
-        tools,
+        values.input,
+        values.output,
+        values.cache_read,
+        values.cache_write,
+        values.thinking,
+        values.cache_write_1h,
+        values.web_searches,
+        values.cost_pusd,
+        values.billed_pusd,
+        values.unpriced_tokens,
+        values.messages,
+        values.tools,
     ])?;
     Ok(())
+}
+
+/// One `usage_bucket` row's values, as [`crate::usage_sql::REBUILD_ONE`]
+/// aggregates them.
+struct BucketValues {
+    input: Option<i64>,
+    output: Option<i64>,
+    cache_read: Option<i64>,
+    cache_write: Option<i64>,
+    thinking: Option<i64>,
+    cache_write_1h: Option<i64>,
+    web_searches: Option<i64>,
+    cost_pusd: Option<i64>,
+    billed_pusd: Option<i64>,
+    unpriced_tokens: i64,
+    messages: i64,
+    tools: i64,
 }
 
 pub(super) fn touch_session(
@@ -469,7 +482,7 @@ fn apply_message_inner(
         row.at,
         row.model.as_deref(),
     );
-    let new_usage = row.usage;
+    let new_usage = &row.usage;
     let incoming_tool = match &row.body {
         TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
         _ => None,
@@ -555,6 +568,8 @@ fn apply_message_inner(
                        parent_tool_native_id = ?34, in_tokens = ?35, out_tokens = ?36,
                        cache_r_tokens = ?37, cache_w_tokens = ?38, think_tokens = ?39,
                        agent_version = ?40, src_cursor = ?41, src_offset = ?42,
+                       cache_w1h_tokens = ?45, web_searches = ?46, service_tier = ?47,
+                       route = ?48, billed_pusd = ?49, usage_scope = ?50,
                        activity_first_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
                          (SELECT MIN(value) FROM (SELECT activity_first_at AS value UNION ALL SELECT ?43)) END,
                        activity_last_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
@@ -606,6 +621,12 @@ fn apply_message_inner(
                     emitted.provenance.src_offset,
                     activity_first,
                     activity_last,
+                    new_usage.cache_write_1h,
+                    new_usage.web_searches,
+                    new_usage.service_tier.map(ServiceTier::as_str),
+                    new_usage.route,
+                    new_usage.billed_pico_usd,
+                    message_codec::message_scope_column(new_usage.scope),
                 ])?;
                 stats.messages_updated += 1;
             }
@@ -620,11 +641,13 @@ fn apply_message_inner(
                         tool_error_kind, tool_error_summary, tool_diagnostic, tool_started_at,
                         tool_completed_at, tool_duration_ms, parent_tool_native_id, in_tokens,
                         out_tokens, cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
-                        src_cursor, src_offset, activity_first_at, activity_last_at)
+                        src_cursor, src_offset, activity_first_at, activity_last_at,
+                        cache_w1h_tokens, web_searches, service_tier, route, billed_pusd,
+                        usage_scope)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                              ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
                              ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38,
-                             ?39, ?40, ?41, ?42, ?43, ?44)",
+                             ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)",
                 )?
                 .execute(params![
                     emitted.timeline_id,
@@ -671,6 +694,12 @@ fn apply_message_inner(
                     emitted.provenance.src_offset,
                     activity_first,
                     activity_last,
+                    new_usage.cache_write_1h,
+                    new_usage.web_searches,
+                    new_usage.service_tier.map(ServiceTier::as_str),
+                    new_usage.route,
+                    new_usage.billed_pico_usd,
+                    message_codec::message_scope_column(new_usage.scope),
                 ])?;
                 stats.messages_inserted += 1;
             }
@@ -683,7 +712,9 @@ fn apply_message_inner(
         touch_session(tx, &row.session_id, row.at, stats)?;
     }
     if let Some(fx) = effects {
-        fx.push(Mutation::Message(Box::new(emitted.clone())));
+        let mut live = emitted.clone();
+        live.cost = crate::pricing::usage_cost(live.model.as_deref(), live.at, &live.usage);
+        fx.push(Mutation::Message(Box::new(live)));
     }
     Ok(())
 }
@@ -844,7 +875,9 @@ pub(super) fn apply_usage(
     let written = tx
         .prepare_cached(
             "UPDATE message SET in_tokens = ?2, out_tokens = ?3, cache_r_tokens = ?4,
-                    cache_w_tokens = ?5, think_tokens = ?6, model = ?7, ts = ?8
+                    cache_w_tokens = ?5, think_tokens = ?6, model = ?7, ts = ?8,
+                    cache_w1h_tokens = ?9, web_searches = ?10, service_tier = ?11,
+                    route = ?12, billed_pusd = ?13, usage_scope = ?14
              WHERE id = ?1",
         )?
         .execute(params![
@@ -856,18 +889,26 @@ pub(super) fn apply_usage(
             tokens.thinking,
             next_model,
             next_ts,
+            tokens.cache_write_1h,
+            tokens.web_searches,
+            tokens.service_tier.map(ServiceTier::as_str),
+            tokens.route,
+            tokens.billed_pico_usd,
+            message_codec::message_scope_column(tokens.scope),
         ]);
     stats.profile.usage_write_nanos += elapsed_nanos(started);
     written?;
     touch_session(tx, session_id, Some(ts), stats)?;
     stats.usage_applied += 1;
     if let Some(fx) = effects {
+        let cost = crate::pricing::usage_cost(next_model.as_deref(), next_ts, tokens);
         fx.push(Mutation::Usage {
             session_id: session_id.to_string(),
             timeline_id: old.timeline_id,
             ts: next_ts,
             model: next_model,
-            tokens: *tokens,
+            tokens: tokens.clone(),
+            cost,
         });
     }
     Ok(true)

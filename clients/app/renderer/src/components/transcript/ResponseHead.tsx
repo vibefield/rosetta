@@ -6,9 +6,12 @@
 // and at the right the span and the reported tokens.
 //
 // Tokens are the agent's own figure and are never coerced to zero — an agent
-// that reported none says nothing here rather than claiming a total.
+// that reported none says nothing here rather than claiming a total. The cost
+// beside them is the list-price equivalent (§4.1.3), marked `+` when part of
+// the reply has no list price.
 import { AgentMark, agentLabel } from "../../lib/agents";
 import { tokenText } from "../../lib/format";
+import { usdExact, usdText } from "../../lib/spend";
 import type { ResponseHead as HeadModel } from "../../lib/transcript";
 import { spanText } from "../../lib/transcript";
 
@@ -25,6 +28,15 @@ export function ResponseHead({ head, runtimeKind, open }: ResponseHeadProps) {
     .filter((piece): piece is string => piece !== null && piece !== "")
     .join(" · ");
   const span = head.spanMs === null ? null : spanText(head.spanMs);
+  const cost = head.cost;
+  const costText = cost === null || cost.microUsd === null
+    ? null
+    : `${usdText(cost.microUsd)}${cost.partial ? "+" : ""}`;
+  const costTitle = cost === null
+    ? undefined
+    : cost.microUsd === null
+      ? "No list price for this reply's model"
+      : `${usdExact(cost.microUsd)} at API list prices${cost.partial ? " · part of this reply has no list price" : ""}`;
   return (
     <div className="tr-head">
       <span className="mark">
@@ -37,6 +49,8 @@ export function ResponseHead({ head, runtimeKind, open }: ResponseHeadProps) {
           {span !== null && (open ? `${span} → …` : span)}
           {span !== null && head.tokens !== null && " · "}
           {head.tokens !== null && <b>{tokenText(head.tokens)}</b>}
+          {head.tokens !== null && costText !== null && " · "}
+          {costText !== null && <b title={costTitle}>{costText}</b>}
         </span>
       )}
     </div>

@@ -20,11 +20,11 @@ pub use rosetta_core::rows::{
     Ms, ProjectRow, RuntimeProvenance, RuntimeRow, SessionActivity, SessionRole, SessionRow,
     StreamState, TokenSnapshot,
 };
-pub use rosetta_core::{TimelineBody, TimelineEntry};
+pub use rosetta_core::{TimelineBody, TimelineEntry, UsageCost};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{
-    ContributionRow, HeatmapDay, HourTotal, ModelDay, ResponseRuntime,
+    ContributionRow, HeatmapDay, HourTotal, ModelDay, ResponseRuntime, Spend,
 };
 pub use rosetta_store::timeline_meta::{
     TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
@@ -32,7 +32,9 @@ pub use rosetta_store::timeline_meta::{
 };
 
 /// Bumped on any breaking change to routes or frame shapes.
-pub const PROTOCOL_VERSION: u32 = 20;
+/// 21 (2026-09-22): usage facts, read-time response cost, spend beside every
+/// aggregate token figure, and `/api/pricing` (ARCHITECTURE §4.1.3).
+pub const PROTOCOL_VERSION: u32 = 21;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -423,6 +425,32 @@ pub struct HeatmapResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ContributionResponse {
     pub rows: Vec<ContributionRow>,
+}
+
+/// The price catalog behind every cost figure (ARCHITECTURE §4.1.3): one
+/// list-price-equivalent basis for every agent, the compiled pricing version
+/// (catalog plus calculator revision), and the version the projection's
+/// rollup was priced with (the daemon re-prices on open when they differ).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct PricingResponse {
+    /// Always `list_price_equivalent`: what recorded usage would cost at the
+    /// model creator's API list price. Provider-billed amounts are separate.
+    pub basis: String,
+    pub catalog_version: String,
+    pub projection_version: Option<String>,
+    pub models: u32,
+    pub sources: Vec<PricingSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct PricingSource {
+    pub name: String,
+    pub url: String,
+    pub revision: String,
+    pub sha256: String,
+    pub license: String,
 }
 
 /// What one project's heatmap figure decomposes into over the same window:

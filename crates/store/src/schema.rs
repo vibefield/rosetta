@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 21;
+pub const SCHEMA_VERSION: i64 = 22;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS projection_state (
   singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
   projection_epoch  TEXT NOT NULL,
   search_revision   INTEGER NOT NULL DEFAULT 0 CHECK (search_revision >= 0),
-  canonical_ready   INTEGER NOT NULL DEFAULT 0 CHECK (canonical_ready IN (0, 1))
+  canonical_ready   INTEGER NOT NULL DEFAULT 0 CHECK (canonical_ready IN (0, 1)),
+  -- The price catalog `usage_bucket` costs were computed with. A writer that
+  -- finds another version re-prices the rollup from stored usage facts.
+  pricing_version   TEXT
 ) WITHOUT ROWID;
 INSERT OR IGNORE INTO projection_state
   (singleton, projection_epoch, search_revision, canonical_ready)
@@ -211,6 +214,17 @@ CREATE TABLE IF NOT EXISTS message (
   cache_r_tokens INTEGER,
   cache_w_tokens INTEGER,
   think_tokens   INTEGER,
+  -- Usage facts beside the six mutually exclusive token buckets
+  -- (ARCHITECTURE §4.1.3). Costs are computed in usage_bucket, never here.
+  cache_w1h_tokens INTEGER,
+  web_searches   INTEGER,
+  service_tier   TEXT CHECK (service_tier IS NULL OR service_tier IN
+                    ('standard','priority','flex','batch','fast')),
+  route          TEXT,
+  billed_pusd    INTEGER,
+  -- NULL for one model request; 'aggregate' when the agent reported a total
+  -- over several requests on this response.
+  usage_scope    TEXT CHECK (usage_scope IS NULL OR usage_scope = 'aggregate'),
   agent_version  TEXT,
   src_cursor     INTEGER REFERENCES ingest_cursor(id),
   src_offset     INTEGER CHECK (src_offset IS NULL OR src_offset >= 0),
@@ -325,11 +339,20 @@ CREATE TABLE IF NOT EXISTS session_usage (
   sample_key     TEXT NOT NULL,
   ts             INTEGER NOT NULL,
   model          TEXT,
+  -- One model request, or a total over several: a long-context price tier
+  -- can only be decided per request.
+  scope          TEXT NOT NULL DEFAULT 'request' CHECK (scope IN ('request','aggregate')),
   in_tokens      INTEGER,
   out_tokens     INTEGER,
   cache_r_tokens INTEGER,
   cache_w_tokens INTEGER,
   think_tokens   INTEGER,
+  cache_w1h_tokens INTEGER,
+  web_searches   INTEGER,
+  service_tier   TEXT CHECK (service_tier IS NULL OR service_tier IN
+                    ('standard','priority','flex','batch','fast')),
+  route          TEXT,
+  billed_pusd    INTEGER,
   src_cursor     INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (session_id, sample_key)
 ) WITHOUT ROWID;
@@ -344,6 +367,14 @@ CREATE TABLE IF NOT EXISTS usage_bucket (
   cache_r_tokens  INTEGER,
   cache_w_tokens  INTEGER,
   think_tokens    INTEGER,
+  cache_w1h_tokens INTEGER,
+  web_searches    INTEGER,
+  -- List-price-equivalent pico-USD of the records the catalog priced (NULL
+  -- when none), provider-billed pico-USD (NULL when none reported), and the
+  -- tokens of records it could not price. Coverage follows from these.
+  cost_pusd       INTEGER,
+  billed_pusd     INTEGER,
+  unpriced_tokens INTEGER NOT NULL DEFAULT 0,
   message_count   INTEGER NOT NULL DEFAULT 0,
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, hour_ts, model)
@@ -352,6 +383,8 @@ CREATE TABLE IF NOT EXISTS usage_bucket (
 CREATE VIEW IF NOT EXISTS session_contribution AS
 SELECT r.id AS session_id, r.project_id,
        COALESCE(u.tokens, 0)  AS tokens,
+       u.cost_pusd            AS cost_pusd,
+       COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens,
        COALESCE(g.commits, 0) AS commits,
        COALESCE(f.edits, 0)   AS edits,
        COALESCE(f.loc, 0)     AS loc
@@ -359,7 +392,8 @@ FROM session r
 LEFT JOIN (SELECT s.root_session_id rid,
                   SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                       + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
-                      + COALESCE(b.think_tokens,0)) tokens
+                      + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) tokens,
+                  SUM(b.cost_pusd) cost_pusd, SUM(b.unpriced_tokens) unpriced_tokens
            FROM usage_bucket b JOIN session s ON s.id = b.session_id
            GROUP BY rid) u ON u.rid = r.id
 LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) commits
@@ -417,6 +451,7 @@ CREATE INDEX IF NOT EXISTS usage_bucket_hour ON usage_bucket(hour_ts);
 
 fn init_base(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+    crate::pricing::register(conn)?;
     conn.pragma_update(None, "foreign_keys", true)?;
 
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;

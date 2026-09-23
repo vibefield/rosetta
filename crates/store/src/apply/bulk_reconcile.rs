@@ -537,7 +537,7 @@ impl BulkReconciliationBuffer {
                 remaining_tail.push(buffered);
                 continue;
             }
-            message.usage = *tokens;
+            message.usage = tokens.clone();
             if let Some(model) = model {
                 message.model = Some(model.clone());
             }

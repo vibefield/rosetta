@@ -5,6 +5,7 @@ import type { SessionRow } from "./SessionRow";
 import type { TimelineEntry } from "./TimelineEntry";
 import type { TokenSnapshot } from "./TokenSnapshot";
 import type { ToolInteraction } from "./ToolInteraction";
+import type { UsageCost } from "./UsageCost";
 
 /**
  * One projected mutation, as written. At-least-once redelivery is safe:
@@ -12,4 +13,8 @@ import type { ToolInteraction } from "./ToolInteraction";
  * This is a wire type: the hub serializes it into WebSocket frames, tagged
  * by `type`.
  */
-export type Mutation = { "type": "message" } & TimelineEntry | { "type": "tool_updated", session_id: string, timeline_id: string, tool: ToolInteraction, at: number | null, } | { "type": "usage", session_id: string, timeline_id: string, ts: number | null, model: string | null, tokens: TokenSnapshot, } | { "type": "session_swept", session_id: string, } | { "type": "timeline_meta_changed", session_id: string, } | { "type": "session" } & SessionRow | { "type": "project" } & ProjectRow | { "type": "runtime" } & RuntimeRow;
+export type Mutation = { "type": "message" } & TimelineEntry | { "type": "tool_updated", session_id: string, timeline_id: string, tool: ToolInteraction, at: number | null, } | { "type": "usage", session_id: string, timeline_id: string, ts: number | null, model: string | null, tokens: TokenSnapshot, 
+/**
+ * Read-time list-price cost of the replaced usage.
+ */
+cost: UsageCost | null, } | { "type": "session_swept", session_id: string, } | { "type": "timeline_meta_changed", session_id: string, } | { "type": "session" } & SessionRow | { "type": "project" } & ProjectRow | { "type": "runtime" } & RuntimeRow;

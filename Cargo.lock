@@ -1293,6 +1293,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rosetta-pricing"
+version = "0.1.0"
+dependencies = [
+ "rosetta-core",
+ "serde_json",
+]
+
+[[package]]
 name = "rosetta-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1341,6 +1349,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "rosetta-core",
+ "rosetta-pricing",
  "rosetta-protocol",
  "rosetta-search",
  "rosetta-store",
@@ -1359,6 +1368,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "rosetta-core",
+ "rosetta-pricing",
  "rusqlite",
  "serde",
  "serde_json",

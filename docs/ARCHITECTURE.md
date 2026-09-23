@@ -550,8 +550,8 @@ enum CanonicalFact {
     EntryAppended(Entry),         // typed user/agent/reasoning/tool/notice/summary body,
                                   //   parent/causal-group/response linkage, timestamps
     ArtifactUpserted(Artifact),   // todos, plans, tasks, team state
-    MetricEmitted(MetricSample),  // e.g. Usage { input, output, cache_creation, cache_read }
-                                  //   keyed (session, response_key), canonical flag
+    MetricEmitted(MetricSample),  // e.g. Usage: six exclusive token buckets + pricing facts
+                                  //   keyed (session, response_key), canonical flag (§4.1.3)
     LifecycleEvent(Lifecycle),    // session start/end, compaction, subagent spawn/finish
     DriftObserved(Drift),
 }
@@ -840,6 +840,197 @@ HTTP failure for Retry, inline and externally stored long-message links, an unav
 first image and a theme switch. Opening an externally stored message reads its immutable
 text member rather than presenting the saved preview as the full message.
 
+### 4.1.3 Usage accounting and list-price USD (2026-09-22)
+
+**Status (2026-09-22): implemented on branch `usd-cost`, not yet merged.** James decided
+the four product questions that day: exclusive buckets, the five new usage fields, a
+list-price headline, and genai-prices plus an overlay. What landed: the canonical fields, the
+nine adapters' exclusive mappings and counting fixes, `crates/pricing`, projection schema 22,
+protocol v21, and the app. Still open:
+
+- native fixture captures of the mock's `[usage]` scenario;
+- the cross-file usage reconciliation for Claude copies, Grok subagent folds, Codex guardians
+  (RESEARCH_PLAN §5.13);
+- Copilot's per-call usage table.
+
+The frozen before/after pair is under **Performance budget** below. Per-agent bucket rules
+and their evidence, including a rebuild of the real 2026-09-11 ledger, are in
+[RESEARCH_PLAN.md §5.13](groundtruth/RESEARCH_PLAN.md#513-usage-accounting-audit-2026-09-22).
+The concrete DDL is in [`canonical-model.html`](canonical-model.html). This section owns the
+usage contract. The affected adapters' normalizer versions, projection schema 22, the price
+catalog, protocol v21 and the generated TypeScript types change together.
+
+**What a usage record is.** One usage record describes one model request as the agent
+recorded it. It rides on the response's timeline row, on a replacement `Usage` op for that
+row, or on a `session_usage` sample when no response row can own it. Examples of the last
+case: an invisible response, a per-session total, an extra attempt inside one response.
+Requests an agent never writes to disk, such as Claude Code's background title calls, are
+outside coverage. The product says "recorded requests", never "your bill".
+
+**Buckets are mutually exclusive.** Every token lands in exactly one bucket, so sums never
+double count and the existing `SUM` queries remain correct:
+
+| bucket | counts | priced at |
+|---|---|---|
+| `input` | prompt tokens neither read from nor written to a cache | input rate |
+| `cache_read` | prompt tokens served from a cache | cache-read rate |
+| `cache_write` | prompt tokens written at the provider's default (≤ 5-minute) cache TTL | cache-write rate |
+| `cache_write_1h` | prompt tokens written to a 1-hour cache | 1-hour cache-write rate |
+| `output` | generated tokens, excluding reasoning | output rate |
+| `thinking` | reasoning/thinking tokens | the model's reasoning rate, else its output rate |
+
+A total is the sum of the six. A request's prompt size, which selects long-context tiers, is
+`input + cache_read + cache_write + cache_write_1h`. `None` still means never reported,
+never zero. The standards report inclusive totals: OpenTelemetry GenAI and genai-prices
+put cache inside input and reasoning inside output. Langfuse and Helicone subtract at
+ingestion, and so does Rosetta: each adapter maps its native fields into the exclusive
+buckets using its rule in RESEARCH_PLAN §5.13, and a fixture proves the rule. A native subset
+larger than its total is malformed: the adapter clamps the remainder at zero and emits drift.
+
+**The five new usage fields** (iron rule 5 product decision, 2026-09-22):
+
+- `cache_write_1h`: the bucket above.
+- `web_searches`: server-side web search requests the provider bills per call.
+- `service_tier`: closed `standard | priority | flex | batch | fast`. Absent means not
+  recorded and prices as standard.
+- `route`: the serving provider when the record names one that differs from the agent's
+  default, as a short normalized slug (`openrouter`, `amazon-bedrock`), optionally with a
+  residency qualifier (`anthropic/us` for Anthropic's US-only inference). Never a URL, key,
+  or account id.
+- `billed_pico_usd`: the provider's own billed amount for this request, when the provider
+  reports one. Examples: xAI `cost_in_usd_ticks`, Copilot nano-credits, an OpenRouter
+  `usage.cost` passed through. Amounts an agent computes from its own price table
+  (OpenCode's `cost`, Pi's `cost`, Claude Code's cost state) are estimates, not billing,
+  and are never stored.
+
+Every usage record also carries `scope` (`request | aggregate`): whether it is one request
+or a total the agent reports over several. Examples of totals are a Grok turn, a Copilot
+shutdown interval, and a Hermes per-model session row. Pricing needs it because a long-context
+tier can only be decided per request. A message row stores `usage_scope` only when it is an
+aggregate, and a `session_usage` sample stores `scope`.
+
+**Counting rules for every adapter.**
+
+1. *One record per request.* Cumulative counters become per-request deltas once, in the
+   adapter. A counter that goes backwards starts a new epoch and counts its whole reading;
+   there is no per-component reset (the pre-2026-09-22 Codex fold re-added a component's
+   whole running total after any dip).
+2. *Replayed history is not usage.* A row that a child, forked or resumed file copies from
+   another session keeps its timeline role and drops its usage. This covers Codex subagent
+   rollouts before `subagent_history_start_ordinal` and Claude Code responses copied into
+   subagent transcripts.
+3. *Extra attempts are separate records.* A fallback, compaction or advisor call inside one
+   response (Claude `usage.iterations`) becomes its own `session_usage` sample with its own
+   model.
+4. *Multi-step messages sum their steps* (OpenCode step-finish parts). A message never keeps
+   only its last step's counts.
+5. *Internal sessions still cost money.* Usage from sessions hidden from the timeline, such as
+   Codex guardian reviews, attributes to the parent session as `session_usage` when the parent
+   is source-proven. Otherwise it is reported as out of coverage.
+
+**Cost is computed in the rollup, not the adapter.** Adapters extract facts only. Because
+`normalize()` never sees a price, a price update never invalidates a checkpoint or forces a
+ledger replay. The store prices each usage record inside the existing hourly rollup, in both
+the live `rebuild_bucket` and the cold set-based fold, through the deterministic SQLite scalar
+function `rosetta_list_cost(...)` backed by the `rosetta-pricing` crate. It returns pico-USD,
+or NULL when the record cannot be priced. `usage_bucket` gains five columns:
+
+- `cache_w1h_tokens` and `web_searches`, summed like the other components;
+- `cost_pusd`: the list-price-equivalent cost of the priced records, NULL when none priced;
+- `billed_pusd`: the sum of provider-billed amounts, NULL when none were reported;
+- `unpriced_tokens`: tokens in records the catalog could not price.
+
+Any aggregate's coverage follows from those columns. It is complete when `unpriced_tokens = 0`,
+partial when priced and unpriced records mix, and unavailable when `cost_pusd` is NULL with
+tokens present. The transcript's per-response cost is computed at read time from the stored
+facts, at tens of nanoseconds per row; it is never stored per message.
+
+**Money is an integer.** Inside Rosetta every amount is integer pico-USD (10⁻¹² USD; Langfuse
+stores the same unit, Helicone 10⁻⁹). Catalog rates are integer pico-USD per token, which is
+exact for any price with at most six decimals per million tokens. A record's cost is then an
+exact integer product, and sums never drift. `i64` pico-USD covers $9.2M per sum. The wire
+carries aggregates as integer micro-USD, rounded half-up once at the boundary, which
+JavaScript represents exactly up to $9 billion.
+
+**The price catalog.** `crates/pricing` compiles a static table that `tools/pricing`
+generates. The source is pydantic/genai-prices v2 data (MIT), vendored at a pinned commit
+with its license and SHA-256, plus a repo-owned overlay. The generated table is committed, so
+every price change is a reviewable diff.
+
+- *Basis:* the model creator's first-party API list price ("API-equivalent"). Reseller
+  tables (OpenRouter, Copilot, Bedrock) never feed the headline figure.
+- *Exact matching only:* the pricer removes a trailing date stamp (`-YYYYMMDD`,
+  `-YYYY-MM-DD`) and a context tag (`[1m]`), and the result must equal a catalog id or an
+  explicit alias. genai-prices' prefix rules are not used; its `starts_with: claude-opus-5`
+  would price `claude-opus-5-5` as Opus 5.
+- *Dated:* each model carries effective-dated price periods (genai-prices' `start_date` and
+  time-of-day windows). A record prices at the period in force at its own UTC timestamp:
+  `gpt-5.6-sol` is $5/$30 before 2026-08-21 and $4/$20 from then on.
+- *Long-context tiers* reprice the whole request when its prompt size exceeds the tier start.
+  The comparison is strictly greater-than, genai-prices' convention, which encodes xAI's
+  inclusive 200K boundary as 199,999.
+- *Overlay:* cited additions only. It holds service-tier rules, missing models, aliases such
+  as `k3` → `kimi-k3`, and residency premiums. A cache rate is never derived from the input
+  rate unless the provider documents the multiplier; Anthropic's 1-hour writes at 2× input
+  are cited. A model with no published list price, such as Grok Build's `grok-4.6-build`,
+  stays unpriced, and its billed amount is still shown.
+- *Multipliers scale tokens only:* service-tier and residency rules multiply the token cost,
+  as their sources cite. Per-call search fees and per-request fees stay flat.
+- *Unpriced, never zero:* the causes are an unknown model, no price period at the timestamp,
+  an unsupported tier or residency, a non-zero bucket without a rate, and an aggregate sample
+  whose prompt tokens exceed a tier start. A record without a time is ambiguous on a model whose
+  price changed. Usage ops write that "no time" as `ts = 0`, which the store never prices as
+  1970-01-01.
+- *Version:* `rosetta_pricing::CATALOG_VERSION` combines the upstream commit, the overlay's
+  hash and the generator version. `pricing_version()` adds the calculator's revision, which is
+  bumped with any change to what a record costs under an unchanged catalog.
+
+**Re-pricing never replays the ledger.** `projection_state.pricing_version` records the
+pricing version the rollup costs were computed with. A writer opening a complete projection
+compares it with the compiled one. On mismatch, one transaction recomputes the cost
+columns from the stored facts and stamps the new version; this took about 0.65 s for 327,520
+usage rows on the 2026-09-11 corpus (diagnostic). A cold fold stamps the version it used.
+
+**The headline is list-price equivalent.** The app leads with one basis across every agent:
+what the recorded usage would cost at API list prices. Most usage runs on subscriptions, so
+there is no bill to compare against. Provider-billed amounts appear as a secondary figure where
+present. Partial or unavailable coverage is always visible, and unpriced usage never reads as $0.
+
+**Protocol v21.** `TokenSnapshot` gains the new fields. Heatmap days, model days, hour totals
+and contribution rows gain `cost_micro_usd`, `billed_micro_usd` and `unpriced_tokens` beside
+`tokens`, so contribution rows can be ranked by spend. Timeline responses carry each
+response's read-time cost. `GET /api/pricing` reports the catalog version, its sources and
+coverage.
+
+**Performance budget.** Diagnostic measurements on the 2026-09-11 projection, taken on a loaded
+M1 Max: pricing costs 36–39 ns per usage row. The cold fold grows by 68–72 ms, from 545–582 ms,
+and the busiest live bucket rebuild from 217 to 260 µs.
+
+The frozen cold-ingest pair is campaign `usd-cost-abba3-2026-09-22`:
+
+- *Setup:* `main` e8d907a against this branch, both release builds. The command was
+  `rosettad ingest --agent claude-code --agent codex` at `nice 10`, run ABBA three times.
+- *Corpus:* the read-only 750-file synthetic corpus, manifest sha256 `ed8d6a521b44763f…`.
+- *Machine:* an Apple M1 Max (10 cores, 64 GiB). Other work kept the load average between 60
+  and 400 throughout.
+- *Logical counts* are equal: 315,168 messages and 2,464 buckets. The branch adds 472 usage
+  samples, and its token total is 0.26% lower because thinking is counted once.
+- *Medians:*
+  - CPU time (user + sys) went from 35.4 s to 36.4 s (+3.0%).
+  - Wall time went from 50.2 s to 49.8 s, within noise.
+  - The set-based bucket fold went from 1.10 s to 1.35 s.
+  - The projection file stayed at 672 MB.
+
+The pair also caught a cost. Claude checkpoints were keeping each response's full usage snapshot,
+which grew them by 50%. A live append rewrites the file's whole checkpoint, so that cost
+recurs at runtime. They now keep a 64-bit fingerprint instead, and end 4% smaller than before.
+
+**Prior art.** genai-prices (dated prices, the exactly-one-bucket rule), LiteLLM's Rust
+`litellm-cost` (a compiled plan with explicit prompt-convention and threshold policies, and
+Missing ≠ Null ≠ 0), Langfuse and Helicone (exclusive storage, integer money, cost stored at
+ingestion), ccusage (the Codex request rule and replay skipping) and agentsview (dated rates and
+integer microdollars priced from stored raw usage).
+
 ### 4.2 Normalization is a pure, versioned function
 
 ```rust
@@ -865,7 +1056,9 @@ Derived/calculated data (token activity time series, per-session/per-day rollups
 usage stats, activity heatmaps) are **incremental fold functions over canonical facts**,
 computed inside the same commit as ingestion (they're cheap) and stored in rollup tables
 stamped with an `analyzer_version`. Same disposability rule applies: rollups rebuild
-from canonical facts, canonical facts rebuild from the ledger.
+from canonical facts, canonical facts rebuild from the ledger. List-price cost is one such
+fold: `usage_bucket` cost columns are stamped with the price catalog's version and are
+recomputed from the stored usage facts when it changes (§4.1.3).
 
 ---
 
@@ -1496,4 +1689,7 @@ layer's design is frozen.
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
 | Enrolled-set live mutation | the `--enroll` file is read once at start; the supervisor restarts the daemon when a persona is added or retired, or when a kind is checked or UN-checked — the restart re-derives consent from the file in both directions, including out of a pending cold generation (2026-09-12) | a restart per persona change costs the app a visible reconnect, or a persona is created faster than a restart settles |
+| Usage outside transcripts | requests an agent never records (Claude Code background title/summary calls) are out of coverage and labelled so (2026-09-22) | an agent records them somewhere Rosetta already captures |
+| Aggregate samples on tiered models | an aggregate `session_usage` sample prices only when its prompt tokens cannot have crossed a tier start; otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage |
+| Residency and regional premiums | a `route` qualifier prices only through a cited overlay premium; otherwise the record is unpriced (2026-09-22) | such routes appear in real data |
 | Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |

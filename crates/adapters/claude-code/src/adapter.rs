@@ -36,7 +36,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        27
+        // 28: exclusive usage buckets with 1-hour writes, the most final
+        // streamed snapshot, iteration samples, no `<synthetic>` usage, and
+        // corrections that follow a dropped owner (§4.1.3).
+        28
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

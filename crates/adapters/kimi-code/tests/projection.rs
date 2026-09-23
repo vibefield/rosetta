@@ -305,7 +305,17 @@ fn session_scoped_usage_is_not_misattributed_to_a_response() {
         br#"{"type":"usage.record","agentId":"main","model":"mock-model","usage":{"inputOther":100,"output":20,"inputCacheRead":3,"inputCacheCreation":4},"usageScope":"session","time":1}"#,
     );
     assert_eq!(usage.status, LineStatus::Parsed);
-    assert!(usage.ops.is_empty());
+    // A non-loop request (compaction) is one billable request, counted as a
+    // sample of its own rather than dropped (RESEARCH_PLAN §5.13).
+    let [IngestOp::SessionUsage(sample)] = usage.ops.as_slice() else {
+        panic!("expected one session usage sample, got {:?}", usage.ops);
+    };
+    assert_eq!(sample.model.as_deref(), Some("mock-model"));
+    assert_eq!(sample.tokens.input, Some(100));
+    assert_eq!(sample.tokens.output, Some(20));
+    assert_eq!(sample.tokens.cache_read, Some(3));
+    assert_eq!(sample.tokens.cache_write, Some(4));
+    assert_eq!(sample.tokens.scope, rosetta_core::UsageScope::Request);
 
     let response = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -316,6 +326,30 @@ fn session_scoped_usage_is_not_misattributed_to_a_response() {
         panic!("expected one response row, got {:?}", response.ops);
     };
     assert!(row.usage.is_empty());
+}
+
+#[test]
+fn two_requests_before_one_response_accumulate_into_an_aggregate() {
+    let mut ctx = synthetic_context();
+    for time in [1, 2] {
+        let line = format!(
+            r#"{{"type":"usage.record","agentId":"main","model":"k3","usage":{{"inputOther":10,"output":5,"inputCacheRead":100,"inputCacheCreation":0}},"usageScope":"turn","time":{time}}}"#
+        );
+        let outcome = KimiCodeAdapter.ingest_line(&mut ctx, "wire", line.as_bytes());
+        assert!(outcome.ops.is_empty());
+    }
+    let response = KimiCodeAdapter.ingest_line(
+        &mut ctx,
+        "wire",
+        br#"{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","uuid":"response-1","turnId":"0","step":1,"stepUuid":"step-1","part":{"type":"text","text":"done"}},"time":3}"#,
+    );
+    let [IngestOp::Message(row)] = response.ops.as_slice() else {
+        panic!("expected one response row, got {:?}", response.ops);
+    };
+    assert_eq!(row.usage.input, Some(20));
+    assert_eq!(row.usage.cache_read, Some(200));
+    assert_eq!(row.usage.output, Some(10));
+    assert_eq!(row.usage.scope, rosetta_core::UsageScope::Aggregate);
 }
 
 #[test]

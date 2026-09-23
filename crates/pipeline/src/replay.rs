@@ -1202,7 +1202,7 @@ pub fn prepare_runtime(
                 file.source.relative_path
             )));
         }
-        let reading = *file.ctx.cumulative.last_reading();
+        let reading = file.ctx.cumulative.last_reading().clone();
         let checkpoint = PipeCheckpoint {
             v: PIPE_CHECKPOINT_VERSION,
             session_id: file.source.session_id.clone(),
@@ -1730,7 +1730,7 @@ fn flush_chunk(
     // the next ingest — wasteful, idempotent, correct; a GC'd source simply
     // reports Missing.
     let checkpoints = if checkpoint {
-        let reading = *file.ctx.cumulative.last_reading();
+        let reading = file.ctx.cumulative.last_reading().clone();
         let next = PipeCheckpoint {
             v: PIPE_CHECKPOINT_VERSION,
             session_id: file.source.session_id.clone(),

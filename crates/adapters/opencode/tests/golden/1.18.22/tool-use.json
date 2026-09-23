@@ -30,7 +30,13 @@
       "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.18.22",
@@ -93,11 +99,17 @@
     },
     "parent_tool_native_id": null,
     "usage": {
-      "input": 128,
-      "output": 32,
-      "cache_read": 0,
-      "cache_write": 0,
-      "thinking": 0
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.18.22",
@@ -133,6 +145,26 @@
     "at": 1787635539737
   },
   {
+    "op": "usage",
+    "session_id": "7991503d635ec55aa38591f391f84c9041b30bd87a894beaf7dd0c86c4d8c9fb",
+    "response": "9ff3b9aaefa72a142c96a38bb820e4b59f71d6c50b0cbbced4a867034b45fbb3",
+    "ts": 1787635539803,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request"
+    }
+  },
+  {
     "op": "message",
     "timeline_id": "2c6e44230bc91a0b06f4140ceb9778eeae9ae1f17947399ce8d5276b0f90a366",
     "session_id": "7991503d635ec55aa38591f391f84c9041b30bd87a894beaf7dd0c86c4d8c9fb",
@@ -160,16 +192,42 @@
     },
     "parent_tool_native_id": null,
     "usage": {
-      "input": 128,
-      "output": 32,
-      "cache_read": 0,
-      "cache_write": 0,
-      "thinking": 0
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.18.22",
       "src_cursor": 1,
       "src_offset": 5
+    }
+  },
+  {
+    "op": "usage",
+    "session_id": "7991503d635ec55aa38591f391f84c9041b30bd87a894beaf7dd0c86c4d8c9fb",
+    "response": "2c6e44230bc91a0b06f4140ceb9778eeae9ae1f17947399ce8d5276b0f90a366",
+    "ts": 1787635540092,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request"
     }
   }
 ]

@@ -246,6 +246,11 @@
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
       <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
+    <div class="status"><b>Usage accounting · 2026-09-22 (implemented on branch <code>usd-cost</code>).</b>
+      Usage records hold six mutually exclusive token buckets plus web searches, service tier, route
+      and the provider-billed amount. Projection schema 22 prices every record in the hourly rollup
+      through a dated, exact-match price catalog and stamps the pricing version (catalog plus
+      calculator) so a price update re-prices from stored facts, never from the ledger. See ARCHITECTURE §4.1.3.</div>
     <div class="status"><b>Implementation checkpoint · 2026-08-31.</b> All ten logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
       bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 13 includes
@@ -441,7 +446,7 @@
         <rect x="680" y="520" width="180" height="110" rx="6" fill="var(--card)" stroke="var(--line)" stroke-width="1.25"/>
         <text x="696" y="544" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">session_usage</text>
         <text x="696" y="566" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · sample_key</text>
-        <text x="696" y="584" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">ts · model · tokens</text>
+        <text x="696" y="584" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">ts · model · scope · usage</text>
         <text x="696" y="604" font-size="10.5" fill="var(--muted)" font-style="italic" font-family="'Source Sans 3',sans-serif">replace exactly; no fake message</text>
       </g>
 
@@ -450,7 +455,7 @@
         <text x="896" y="544" font-size="13" font-weight="600" fill="currentColor" font-family="'JetBrains Mono',monospace">usage_bucket</text>
         <text x="1104" y="542" font-size="9.5" font-weight="600" letter-spacing="1" text-anchor="end" style="fill:var(--teal)" font-family="'JetBrains Mono',monospace">CACHE</text>
         <text x="896" y="566" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">session_id · hour_ts · model</text>
-        <text x="896" y="584" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">in·out·cache_r·cache_w·think</text>
+        <text x="896" y="584" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">6 token buckets · cost · billed</text>
         <text x="896" y="602" font-size="11" fill="var(--muted)" font-family="'JetBrains Mono',monospace">message_count · tool_calls</text>
         <text x="896" y="622" font-size="10.5" fill="var(--muted)" font-style="italic" font-family="'Source Sans 3',sans-serif">hour grain — day/tz grouped at query time</text>
       </g>
@@ -568,7 +573,7 @@
         <span class="f cu">tool_use</span><span class="n">{correlation, native ref, evidence-backed status, action, failure, timing}; action is a closed semantic union — never native input/result/payload JSON</span>
         <span class="f">attachments[]</span><span class="n">typed image · document · audio · video · file references; inline bytes become content-addressed members</span>
         <span class="f">citations[]</span><span class="n">bounded source refs + validated prose spans; never uploaded-file attachments</span>
-        <span class="f">usage</span><span class="n">per-turn normalized deltas</span>
+        <span class="f">usage</span><span class="n">one request's usage (or a declared aggregate): six mutually exclusive token buckets (input · cache_read · cache_write · cache_write_1h · output · thinking) plus web searches, service tier, route, the provider-billed amount and scope; never a cumulative counter. A read-time <span class="f">cost</span> is computed from these facts, never stored</span>
         <span class="f">parent tool ref</span><span class="n">the tool row is an anchor candidate; a proven Delegate.child_session_id closes the edge to the embedded child thread</span>
         <span class="f">provenance</span><span class="n">agent version + raw ledger refs</span>
       </div>
@@ -585,12 +590,14 @@
       <div class="fields">
         <span class="f">session_id · sample_key</span><span class="n">stable native replacement identity within a session</span>
         <span class="f">ts · model</span><span class="n">the native sample's own attribution</span>
-        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · thinking, all nullable</span>
+        <span class="f">scope</span><span class="n">request (one model request) · aggregate (a total over several) — tiered prices need per-request prompt sizes</span>
+        <span class="f te">usage</span><span class="n">the same exclusive buckets and pricing facts as a message row, all nullable</span>
       </div>
       <div class="evidence"><b>No fabricated timeline rows:</b> some agents report a task/session/model
-      total without naming one response. Re-emitting the same sample key replaces the prior fact and
+      total without naming one response, and some responses carry extra attempts (Claude
+      <span class="f">usage.iterations</span>). Re-emitting the same sample key replaces the prior fact and
       corrects its old/new hour buckets in the same transaction. Hermes
-      <span class="f">session_model_usage</span> is the first producer.</div>
+      <span class="f">session_model_usage</span> is the first aggregate producer.</div>
       <div class="consumers-line"><span class="cchip">usage buckets</span><span class="cchip">agent-view totals</span></div>
     </div>
 
@@ -599,13 +606,17 @@
       <div class="fields">
         <span class="f">session_id · hour_ts</span><span class="n">hourly buckets, UTC — day/timezone grouping happens at query time (the GitHub-heatmap scar)</span>
         <span class="f">model</span><span class="n">per-model, like the agents' own caches</span>
-        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · thinking — kept apart and nullable (never-reported ≠ zero); cost weighting is the UI's call</span>
+        <span class="f te">tokens</span><span class="n">input · output · cache_read · cache_write · cache_write_1h · thinking — mutually exclusive, kept apart and nullable (never-reported ≠ zero); web searches summed alongside</span>
+        <span class="f te">cost · billed · unpriced</span><span class="n">list-price-equivalent pico-USD of the priced records (NULL when none) · provider-billed pico-USD · tokens the catalog could not price — coverage follows from these</span>
         <span class="f">message_count · tool_call_count</span><span class="n">&nbsp;</span>
       </div>
       <div class="evidence"><b>Session grain only:</b> project / runtime / all-time totals are query-time
       sums through <span class="f">session</span> — ownership is settled once during bounded metadata
       admission. <b>Trap:</b> codex token counters are cumulative, claude-code's are per-message —
-      normalize to deltas once, at ingest, or the cache double-counts. <b>Replacement-aware:</b> usage
+      normalize to deltas once, at ingest, or the cache double-counts. <b>Priced in the fold:</b> each
+      record is priced by <span class="f">rosetta_list_cost()</span> as the bucket is rebuilt; the
+      pricing version stamped in <span class="f">projection_state</span> triggers a re-price from stored
+      facts when prices or the calculator change. <b>Replacement-aware:</b> usage
       keys either to its response row or to a <span class="f">session_usage.sample_key</span>; a
       re-reported snapshot applies (new − old) in the same tx, so re-ingest is idempotent.
       Claude Code also caches <span class="f">modelUsage</span> by model.</div>
@@ -1449,9 +1460,17 @@ CREATE TABLE <b>message</b> (
   parent_tool_native_id TEXT,
   in_tokens        INTEGER,
   out_tokens       INTEGER,
-  cache_r_tokens   INTEGER,
-  cache_w_tokens   INTEGER,
-  think_tokens     INTEGER,
+  cache_r_tokens   INTEGER,                 <span class="c">-- six mutually exclusive buckets (§4.1.3)</span>
+  cache_w_tokens   INTEGER,                 <span class="c">-- default (≤ 5-minute) TTL writes</span>
+  cache_w1h_tokens INTEGER,                 <span class="c">-- 1-hour TTL writes</span>
+  think_tokens     INTEGER,                 <span class="c">-- reasoning; never inside out_tokens</span>
+  web_searches     INTEGER,
+  service_tier     TEXT CHECK (service_tier IS NULL OR service_tier IN
+                     ('standard','priority','flex','batch','fast')),
+  route            TEXT,                    <span class="c">-- serving provider slug, e.g. openrouter · anthropic/us</span>
+  billed_pusd      INTEGER,                 <span class="c">-- provider-billed pico-USD, only when the provider reported it</span>
+  usage_scope      TEXT CHECK (usage_scope IS NULL OR usage_scope = 'aggregate'),
+                                            <span class="c">-- NULL = one request; a turn/interval total otherwise</span>
   agent_version    TEXT,
   src_cursor       INTEGER REFERENCES ingest_cursor(id),
   src_offset       INTEGER CHECK (src_offset IS NULL OR src_offset &gt;= 0),
@@ -1492,7 +1511,10 @@ CREATE TABLE <b>message</b> (
       AND (out_tokens IS NULL OR out_tokens &gt;= 0)
       AND (cache_r_tokens IS NULL OR cache_r_tokens &gt;= 0)
       AND (cache_w_tokens IS NULL OR cache_w_tokens &gt;= 0)
-      AND (think_tokens IS NULL OR think_tokens &gt;= 0))
+      AND (cache_w1h_tokens IS NULL OR cache_w1h_tokens &gt;= 0)
+      AND (think_tokens IS NULL OR think_tokens &gt;= 0)
+      AND (web_searches IS NULL OR web_searches &gt;= 0)
+      AND (billed_pusd IS NULL OR billed_pusd &gt;= 0))
 );
 
 CREATE UNIQUE INDEX <b>message_tool_correlation</b>
@@ -1737,7 +1759,8 @@ CREATE TABLE <b>projection_state</b> (
   singleton        INTEGER PRIMARY KEY CHECK (singleton = 1),
   projection_epoch TEXT NOT NULL,             <span class="c">-- new for every disposable canonical build</span>
   search_revision  INTEGER NOT NULL DEFAULT 0,
-  canonical_ready  INTEGER NOT NULL DEFAULT 0
+  canonical_ready  INTEGER NOT NULL DEFAULT 0,
+  pricing_version  TEXT                        <span class="c">-- catalog + calculator the usage_bucket costs were computed with</span>
 ) WITHOUT ROWID;
 
 CREATE TABLE <b>search_dirty</b> (             <span class="c">-- coalesced repair set; worker-owned consumer</span>
@@ -1872,11 +1895,17 @@ CREATE TABLE <b>session_usage</b> (          <span class="c">-- canonical native
   sample_key     TEXT NOT NULL,             <span class="c">-- stable native replacement key</span>
   ts             INTEGER NOT NULL,
   model          TEXT,
+  scope          TEXT NOT NULL DEFAULT 'request' CHECK (scope IN ('request','aggregate')),
   in_tokens      INTEGER,
   out_tokens     INTEGER,
   cache_r_tokens INTEGER,
   cache_w_tokens INTEGER,
+  cache_w1h_tokens INTEGER,
   think_tokens   INTEGER,
+  web_searches   INTEGER,
+  service_tier   TEXT,                      <span class="c">-- same closed vocabulary as message</span>
+  route          TEXT,
+  billed_pusd    INTEGER,
   src_cursor     INTEGER REFERENCES ingest_cursor(id),
   PRIMARY KEY (session_id, sample_key)
 ) WITHOUT ROWID;
@@ -1893,7 +1922,12 @@ CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized ca
   out_tokens      INTEGER,
   cache_r_tokens  INTEGER,
   cache_w_tokens  INTEGER,
+  cache_w1h_tokens INTEGER,
   think_tokens    INTEGER,
+  web_searches    INTEGER,
+  cost_pusd       INTEGER,                  <span class="c">-- list-price pico-USD of priced records; NULL = none priced</span>
+  billed_pusd     INTEGER,                  <span class="c">-- provider-billed pico-USD; NULL = none reported</span>
+  unpriced_tokens INTEGER NOT NULL DEFAULT 0, <span class="c">-- tokens the catalog could not price</span>
   message_count   INTEGER NOT NULL DEFAULT 0,
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, hour_ts, model)
@@ -1907,13 +1941,16 @@ CREATE INDEX usage_bucket_hour ON usage_bucket(hour_ts);
 CREATE VIEW <b>session_contribution</b> AS    <span class="c">-- one row per ROOT session: subagent trees fold in</span>
 SELECT r.id AS session_id, r.project_id,
        COALESCE(u.tokens, 0)  AS tokens,
+       u.cost_pusd            AS cost_pusd,   <span class="c">-- NULL = nothing priced</span>
+       COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens,
        COALESCE(g.commits, 0) AS commits,
        COALESCE(f.edits, 0)   AS edits,
        COALESCE(f.loc, 0)     AS loc
 FROM session r
 LEFT JOIN (SELECT s.root_session_id rid,
-                  SUM(b.in_tokens + b.out_tokens + b.cache_r_tokens
-                      + b.cache_w_tokens + b.think_tokens) tokens
+                  SUM(b.in_tokens + b.out_tokens + b.cache_r_tokens + b.cache_w_tokens
+                      + b.cache_w1h_tokens + b.think_tokens) tokens,
+                  SUM(b.cost_pusd) cost_pusd, SUM(b.unpriced_tokens) unpriced_tokens
            FROM usage_bucket b JOIN session s ON s.id = b.session_id
            GROUP BY rid) u ON u.rid = r.id
 LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) commits
@@ -1944,8 +1981,10 @@ WHERE r.id = r.root_session_id;</pre>
       timezone at query time, which only works because the buckets are hourly. The same table answers
       hour-of-day profiles (when do you actually work?) with a different GROUP BY.</p>
       <pre class="ddl" style="font-size:11.5px">SELECT date((b.hour_ts + :utc_offset_ms) / 1000, 'unixepoch') AS day,
-       SUM(b.in_tokens + b.out_tokens + b.think_tokens
-           + b.cache_r_tokens + b.cache_w_tokens) AS tokens
+       SUM(b.in_tokens + b.out_tokens + b.think_tokens + b.cache_r_tokens
+           + b.cache_w_tokens + b.cache_w1h_tokens) AS tokens,
+       SUM(b.cost_pusd)       AS cost_pusd,        -- list-price equivalent
+       SUM(b.unpriced_tokens) AS unpriced_tokens   -- coverage marker
 FROM usage_bucket b
 JOIN session s ON s.id = b.session_id
 WHERE s.project_id = :project AND b.hour_ts >= :since
@@ -1959,7 +1998,7 @@ GROUP BY day;</pre>
       <span style="font-family:'JetBrains Mono',monospace;font-size:.9em">root_session_id</span>.</p>
       <pre class="ddl" style="font-size:11.5px">SELECT * FROM session_contribution
 WHERE project_id = :project
-ORDER BY tokens DESC;   <span class="c">-- or commits · edits · loc</span></pre>
+ORDER BY tokens DESC;   <span class="c">-- or cost_pusd · commits · edits · loc</span></pre>
     </div>
   </div>
 

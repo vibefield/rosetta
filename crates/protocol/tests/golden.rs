@@ -25,6 +25,7 @@ use rosetta_protocol::{
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
+use rosetta_protocol::{PricingResponse, PricingSource, Spend, UsageCost};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
 
@@ -179,7 +180,16 @@ fn timeline_entry() -> TimelineEntry {
             cache_read: Some(3),
             cache_write: Some(2),
             thinking: Some(1),
+            cache_write_1h: Some(4),
+            web_searches: Some(1),
+            service_tier: Some(rosetta_core::ServiceTier::Standard),
+            route: Some("openrouter".into()),
+            billed_pico_usd: Some(1_250_000),
+            scope: rosetta_core::UsageScope::Request,
         },
+        cost: Some(UsageCost::Unpriced {
+            reason: "unknown_model".into(),
+        }),
         provenance: Provenance {
             agent_version: Some("2.1.240".into()),
             src_cursor: Some(4),
@@ -212,6 +222,7 @@ fn command_output_entry() -> TimelineEntry {
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),
+        cost: None,
         provenance: Provenance {
             agent_version: Some("2.1.240".into()),
             src_cursor: Some(4),
@@ -259,6 +270,7 @@ fn collaboration_entry() -> TimelineEntry {
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),
+        cost: None,
         provenance: Provenance {
             agent_version: Some("2.1.240".into()),
             src_cursor: Some(4),
@@ -461,10 +473,12 @@ fn exemplars() -> serde_json::Value {
             tokens: TokenSnapshot {
                 input: Some(10),
                 output: Some(5),
-                cache_read: None,
-                cache_write: None,
-                thinking: None,
+                ..TokenSnapshot::default()
             },
+            cost: Some(UsageCost::Priced {
+                micro_usd: 175,
+                long_context: false,
+            }),
         },
         Mutation::SessionSwept {
             session_id: "s1".into(),
@@ -587,14 +601,44 @@ fn exemplars() -> serde_json::Value {
             ErrorCode::Internal,
         ],
         "heatmap": HeatmapResponse {
-            days: vec![HeatmapDay { day: "2026-08-26".into(), tokens: 123 }],
+            days: vec![HeatmapDay {
+                day: "2026-08-26".into(),
+                tokens: 123,
+                spend: Spend {
+                    cost_micro_usd: Some(4_210),
+                    billed_micro_usd: None,
+                    unpriced_tokens: 23,
+                },
+            }],
         },
         "usage": UsageResponse {
             models: vec![
-                ModelDay { day: "2026-08-26".into(), model: "claude-opus-5".into(), tokens: 100 },
-                ModelDay { day: "2026-08-26".into(), model: "unknown".into(), tokens: 23 },
+                ModelDay {
+                    day: "2026-08-26".into(),
+                    model: "claude-opus-5".into(),
+                    tokens: 100,
+                    spend: Spend {
+                        cost_micro_usd: Some(4_210),
+                        billed_micro_usd: None,
+                        unpriced_tokens: 0,
+                    },
+                },
+                ModelDay {
+                    day: "2026-08-26".into(),
+                    model: "unknown".into(),
+                    tokens: 23,
+                    spend: Spend {
+                        cost_micro_usd: None,
+                        billed_micro_usd: None,
+                        unpriced_tokens: 23,
+                    },
+                },
             ],
-            hours: vec![HourTotal { hour: 15, tokens: 123 }],
+            hours: vec![HourTotal {
+                hour: 15,
+                tokens: 123,
+                spend: Spend::default(),
+            }],
         },
         "ingest_phases": [
             IngestPhase::Discovering,
@@ -626,10 +670,28 @@ fn exemplars() -> serde_json::Value {
                 session_id: "s1".into(),
                 project_id: Some("p1".into()),
                 tokens: 5,
+                spend: Spend {
+                    cost_micro_usd: Some(88),
+                    billed_micro_usd: Some(12),
+                    unpriced_tokens: 0,
+                },
                 commits: 1,
                 edits: 2,
                 loc: 30,
                 messages: 41,
+            }],
+        },
+        "pricing": PricingResponse {
+            basis: "list_price_equivalent".into(),
+            catalog_version: "genai-prices@02cb80a15dce+overlay@39ab6e6b1409+gen1".into(),
+            projection_version: Some("genai-prices@02cb80a15dce+overlay@39ab6e6b1409+gen1".into()),
+            models: 400,
+            sources: vec![PricingSource {
+                name: "pydantic/genai-prices".into(),
+                url: "https://github.com/pydantic/genai-prices".into(),
+                revision: "02cb80a15dcea25ca66c76321f6cfdcc635d81fb".into(),
+                sha256: "71d66c12".into(),
+                license: "MIT".into(),
             }],
         },
         "mutations": mutations,

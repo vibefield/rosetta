@@ -7,6 +7,8 @@ import type {
   SessionRow,
 } from "@rosetta/protocol";
 import type { AgentShare } from "./agents";
+import { NO_SPEND, addSpend, spendOf, sumSpend } from "./spend.ts";
+import type { Spend } from "./spend.ts";
 import { projectTint } from "./tint.ts";
 import { sessionLastActive } from "./session-activity.ts";
 
@@ -22,8 +24,15 @@ export interface ProjectViewModel {
   readonly row: ProjectRow;
   readonly tint: string;
   /** Tokens across the project's whole life (root contributions include
-   * their subagent trees). This is the project card's primary figure. */
+   * their subagent trees). */
   readonly lifetimeTokens: number;
+  /** List-price spend across the project's whole life — the project card's
+   * primary figure and the ledger's default ranking (§4.1.3). */
+  readonly lifetimeSpend: Spend;
+  /** List-price spend over the last 30 days, the same heatmap tail. */
+  readonly spendLast30Days: Spend;
+  /** List-price spend over the 53-week window. */
+  readonly spendLast53Weeks: Spend;
   /** Tokens over the last 30 days — the ledger's stated window. */
   readonly tokensLast30Days: number;
   /** 15 two-day buckets, oldest first — the activity shape. */
@@ -171,6 +180,20 @@ export function buildProjectViewModel(
     (total, contribution) => total + contribution.tokens,
     0,
   );
+  const lifetimeSpend = sumSpend(projectStats?.contribution ?? []);
+  // Spend windows come from the same heatmap days as the token windows.
+  const thirtyDayKeys = new Set(
+    Array.from({ length: 30 }, (_, dayIndex) =>
+      getCalendarDayKey(currentTimestamp - (29 - dayIndex) * DAY_IN_MS),
+    ),
+  );
+  let spendLast30Days = NO_SPEND;
+  let spendLast53Weeks = NO_SPEND;
+  for (const day of projectStats?.heat ?? []) {
+    const spend = spendOf(day);
+    spendLast53Weeks = addSpend(spendLast53Weeks, spend);
+    if (thirtyDayKeys.has(day.day)) spendLast30Days = addSpend(spendLast30Days, spend);
+  }
   const lifetimeMessages = (projectStats?.contribution ?? []).reduce(
     (total, contribution) => total + contribution.messages,
     0,
@@ -200,6 +223,9 @@ export function buildProjectViewModel(
     row: projectRow,
     tint: projectTint(projectRow.id),
     lifetimeTokens,
+    lifetimeSpend,
+    spendLast30Days,
+    spendLast53Weeks,
     tokensLast30Days,
     recentTokenBuckets,
     dailyTokens,

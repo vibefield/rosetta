@@ -37,6 +37,7 @@ import type { TimelineEntry } from "./generated/TimelineEntry";
 import type { TimelineMeta } from "./generated/TimelineMeta";
 import type { TimelineMetaPlanSource } from "./generated/TimelineMetaPlanSource";
 import type { ToolInteraction } from "./generated/ToolInteraction";
+import type { PricingResponse } from "./generated/PricingResponse";
 import type { UsageResponse } from "./generated/UsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
@@ -448,6 +449,13 @@ export class RosettaClient {
     );
   }
 
+  /** The price catalog behind every cost figure: its basis (list-price
+   * equivalent), version, sources, and the catalog the projection's rollup
+   * was priced with. */
+  pricing(signal?: AbortSignal): Promise<PricingResponse> {
+    return this.request("/api/pricing", withSignal(signal));
+  }
+
   /** A restarted app-owned daemon may bind another port. Abort old requests
    * and reconnect existing consumers without losing the reader's selection. */
   setBaseUrl(baseUrl: string): void {
@@ -700,8 +708,13 @@ function patchRow(row: TimelineEntry | undefined, mutation: Mutation): TimelineE
             body: { ...row.body, tool: retainHydratedWorkflowRun(row.body.tool, mutation.tool) },
           }
         : row;
-    case "usage":
-      return row ? { ...row, usage: mutation.tokens, model: mutation.model, at: mutation.ts } : row;
+    case "usage": {
+      if (!row) return row;
+      // The read-time cost belongs to the replaced usage: never keep the old.
+      const { cost: _replaced, ...rest } = row;
+      const next = { ...rest, usage: mutation.tokens, model: mutation.model, at: mutation.ts };
+      return mutation.cost === null ? next : { ...next, cost: mutation.cost };
+    }
     default:
       return row;
   }

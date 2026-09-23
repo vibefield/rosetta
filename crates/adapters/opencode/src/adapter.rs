@@ -27,7 +27,9 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        7
+        // 8: usage per step-finish (one model request), route, writer-version
+        // bucket rules, and fork copies without usage (§4.1.3).
+        8
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

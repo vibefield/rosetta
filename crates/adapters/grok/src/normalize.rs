@@ -14,8 +14,8 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, PlanRow, TaskRow, TaskStatus,
-    TokenSnapshot,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, PlanRow, SessionUsageRow,
+    TaskRow, TaskStatus, TokenSnapshot, UsageScope,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis, ToolAction, ToolUpdatePatch};
 use rosetta_core::{IngestOp, fold, ids};
@@ -695,29 +695,8 @@ fn turn_completed(
         return Err(());
     }
 
-    if let (Some(usage), Some(target), Some(ts)) = (
-        update.usage.as_ref(),
-        state.responses.get(prompt_id),
-        stamp(line),
-    ) {
-        let tokens = TokenSnapshot {
-            input: number(usage, "inputTokens"),
-            output: number(usage, "outputTokens"),
-            cache_read: number(usage, "cachedReadTokens"),
-            cache_write: number(usage, "cacheCreationTokens"),
-            thinking: number(usage, "reasoningTokens"),
-        };
-        if !tokens.is_empty() {
-            ops.push(IngestOp::Usage {
-                session_id: ctx.session_id.clone(),
-                response: target.timeline_id.clone(),
-                ts,
-                model: usage_model(usage).or_else(|| state.current_model.clone()),
-                // Grok's fixture reports are per completed turn (`numTurns`
-                // resets to 1 on resume), not running session counters.
-                tokens,
-            });
-        }
+    if let (Some(usage), Some(ts)) = (update.usage.as_ref(), stamp(line)) {
+        turn_usage(ctx, state, prompt_id, usage, ts, ops);
     }
 
     if stop_reason != "end_turn" {
@@ -733,11 +712,100 @@ fn turn_completed(
     Ok(())
 }
 
-fn usage_model(usage: &Value) -> Option<String> {
-    let models = usage["modelUsage"].as_object()?;
-    (models.len() == 1)
-        .then(|| models.keys().next().cloned())
-        .flatten()
+/// One completed prompt's usage (RESEARCH_PLAN §5.13). `turn_completed`
+/// totals every main-loop model call of the prompt — per completed turn, not
+/// a running counter — with one `modelUsage` entry per served model, so each
+/// model prices at its own rate. The prompt's main model rides on its response
+/// row; any other model, or a prompt without a row, is a sample of its own.
+fn turn_usage(
+    ctx: &NormalizeCtx,
+    state: &GrokState,
+    prompt_id: &str,
+    usage: &Value,
+    ts: Ms,
+    ops: &mut Vec<IngestOp>,
+) {
+    let mut entries: Vec<(Option<String>, &Value)> = match usage["modelUsage"].as_object() {
+        Some(models) if !models.is_empty() => models
+            .iter()
+            .map(|(model, entry)| (Some(model.clone()), entry))
+            .collect(),
+        _ => vec![(state.current_model.clone(), usage)],
+    };
+    // The current model's entry first, so it is the one on the response row.
+    entries.sort_by_key(|(model, _)| model.as_deref() != state.current_model.as_deref());
+    let mut target = state
+        .responses
+        .get(prompt_id)
+        .map(|target| target.timeline_id.clone());
+    for (model, entry) in entries {
+        let (tokens, clamped) = grok_snapshot(entry);
+        if clamped {
+            ops.push(drift(
+                ctx,
+                spec::UPDATES,
+                "turn_completed",
+                "usage_subset_exceeds_total",
+                &["usage".to_owned()],
+                Some(ts),
+            ));
+        }
+        if tokens.is_empty() {
+            continue;
+        }
+        match target.take() {
+            Some(response) => ops.push(IngestOp::Usage {
+                session_id: ctx.session_id.clone(),
+                response,
+                ts,
+                model,
+                tokens,
+            }),
+            None => ops.push(IngestOp::SessionUsage(SessionUsageRow {
+                session_id: ctx.session_id.clone(),
+                key: ids::usage_id(
+                    &ctx.session_id,
+                    &format!("turn:{prompt_id}:{}", model.as_deref().unwrap_or("")),
+                ),
+                ts,
+                model,
+                tokens,
+            })),
+        }
+    }
+}
+
+/// ACP `inputTokens` is the full prompt (uncached + cache reads + cache
+/// writes) and `outputTokens` includes `reasoningTokens`. `costUsdTicks` is
+/// xAI's own charge at 10¹⁰ ticks per USD (100 pico-USD per tick); the CLI
+/// removes it when the turn's cost is partial. A turn with more than one model
+/// call is a total over several requests.
+fn grok_snapshot(usage: &Value) -> (TokenSnapshot, bool) {
+    let cache_read = number(usage, "cachedReadTokens");
+    let cache_write = number(usage, "cacheCreationTokens");
+    let (input, input_clamped) =
+        fold::exclusive_remainder(number(usage, "inputTokens"), &[cache_read, cache_write]);
+    let (output, thinking, output_clamped) = fold::split_subset(
+        number(usage, "outputTokens"),
+        number(usage, "reasoningTokens"),
+    );
+    let tokens = TokenSnapshot {
+        input,
+        output,
+        cache_read,
+        cache_write,
+        thinking,
+        billed_pico_usd: number(usage, "costUsdTicks")
+            .filter(|ticks| *ticks > 0)
+            .and_then(|ticks| ticks.checked_mul(100)),
+        scope: if number(usage, "modelCalls") == Some(1) {
+            UsageScope::Request
+        } else {
+            UsageScope::Aggregate
+        },
+        ..TokenSnapshot::default()
+    };
+    (tokens, input_clamped || output_clamped)
 }
 
 fn simple_message(

@@ -35,7 +35,10 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        15
+        // 16: one usage record per request (counter rule, replay gates, no
+        // usage aimed at dropped rows), exclusive buckets, tier, route and web
+        // searches (§4.1.3).
+        16
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

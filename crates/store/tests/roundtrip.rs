@@ -1178,6 +1178,7 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),
+        cost: None,
         provenance: rosetta_core::Provenance {
             agent_version: None,
             src_cursor: None,

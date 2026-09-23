@@ -56,7 +56,10 @@ blocks). The survey shows it needs **four wire dialects**: OpenAI Chat Completio
 `wire_api = "responses"`), **Anthropic Messages** (Claude Code, Pi), and **Gemini
 `generateContent`** (Antigravity CLI). Agents pointed at it via their base-URL override run
 with **no credentials, no cost, and deterministic outputs** — this is what makes
-fixture generation CI-able.
+fixture generation CI-able. A prompt carrying `[usage]` makes every dialect report
+distinct non-zero cache reads, 5-minute and 1-hour cache writes, reasoning, web searches
+and xAI billed ticks; each agent's `usage` scenario runs its tool loop with that marker,
+so the capture proves how the agent folds each field (§5.13).
 
 **Auth tiers.** Each agent is classified by how hermetic its runs can be:
 
@@ -736,6 +739,76 @@ The seven applicable `watch.toml` files explicitly retain the native-capture gap
 The Codex facet was regenerated with `build_canonical` from its source intermediate
 and rendered; no canonical JSON was hand-edited. Other adapters use their existing
 canonical fields. Run boundary/fixture checks whenever these packs change.
+
+### 5.13 Usage accounting audit (2026-09-22)
+
+**Implemented against pinned writer source and aggregate census counts.** The native
+fixture capture is still pending. This section owns the per-agent rules behind
+[ARCHITECTURE.md §4.1.3](../ARCHITECTURE.md#413-usage-accounting-and-list-price-usd-2026-09-22).
+Each adapter maps its native usage into the six mutually exclusive token buckets and
+the usage facts, and a subset larger than its total is clamped and reported as drift.
+
+The evidence comes from three places:
+
+- pinned writer source for open agents;
+- installed binaries and bundles for closed agents;
+- read-only census counts of James's local data (numbers only, never content).
+
+The committed fixtures were farmed against a mock that reported zero cache and
+reasoning, so they prove field shapes, not these subset rules. The mock's `[usage]`
+marker and each agent's `usage` scenario (§2) close that gap once an isolated runner
+captures them. Until then, the synthetic tests in each adapter pin the pinned grammar.
+They do not replace native captures.
+
+| Agent (pinned) | Usage record | Native inclusion | Exclusive mapping and facts | Now handled | Still open |
+|---|---|---|---|---|---|
+| Claude Code 2.1.241 | `message.usage` on every streamed block record of one response. Only the final record (non-null `stop_reason`, `speed` key) carries the response's real usage; it is the last line in 147,886 of 147,888 multi-line responses. | `input_tokens` excludes cache. `cache_creation_input_tokens` = 5-minute + 1-hour writes (212,252 of 212,257 responses). `output_tokens` includes `output_tokens_details.thinking_tokens` (0 violations). | `cache_write_1h` = min(1h, total), taken from the serving `fallback_message` entry on a fallback turn. `thinking` = min(thinking, output). `service_tier`: `speed: "fast"` gives fast, otherwise `service_tier`. `route` = `anthropic/<inference_geo>` unless the geo is `not_available`, `global` or empty. `web_searches` from `server_tool_use`. Never billed; cost-state figures are estimates. | The most final snapshot wins and a later placeholder never regresses it. `<synthetic>` error records carry no usage. Advisor and compaction `iterations` entries become samples of their own, because the top level sums only `message` entries. A correction follows an owner row that projection dropped into its `timeline:<id>` sample. | 15.7% of responses never get a final record, so their output is a 1–99-token placeholder (about 16% of recorded output). Responses copied into other transcripts (+4.0% of tokens, same `message.id`+`requestId`) need the cross-file join below. WebSearch runs in a separate request that is never recorded, so every recorded `web_search_requests` is 0. Background title and summary calls are also unrecorded. |
+| Codex 0.149.1 | `event_msg` `token_count` after each request. `total_token_usage` is the thread's running sum and `last_token_usage` is the request (`protocol/src/protocol.rs:2092-2131`; emitted at `core/src/session/turn.rs:2754-2760`). | `input_tokens` includes cached reads and cache writes (`codex-api/src/sse/responses.rs:122-161`; Codex's own test 100 = 40 + 60 at `:864-891`). `output_tokens` includes `reasoning_output_tokens`. | Per request: `cache_read` = min(cached, input), `cache_write` = min(writes, rest), `input` = the rest, `thinking` = min(reasoning, output). Tier from `thread_settings_applied` (`fast`/`priority` → priority, `flex`, `default` → standard). This is the configured value; the served tier is never persisted (`responses.rs:112-120`). `route` = `session_meta.model_provider` unless `openai`. `web_searches` = `web_search_call` items with action `search`. | Counter rule: the file's first reading counts `last`, an unchanged total counts nothing, a total that grew in every field counts the difference, otherwise `last`. Replay gates skip ordinals below `subagent_history_start_ordinal`, and the ≤ 1 s head burst of forks and legacy or migrated subagents (1.30 B copied tokens locally). Requests without a surviving row (polls, empty reasoning) become request samples; 2.43 B tokens, 13% of Codex's own totals, were previously discarded. | Guardian (`codex-auto-review`) sessions stay ledger-only, so their own usage (124.6 M locally) is not yet attributed to the parent. From 0.153 `token_usage_record` (remote compaction, about +3% in compacted files) is not parsed. `codex-auto-review` and `gpt-5.3-codex-spark` have no list price. |
+| Grok Build 1.0.5 | `updates.jsonl` `turn_completed.usage`: per prompt, all main-loop calls, with one `modelUsage` entry per served model (`xai-grok-shell/src/extensions/notification.rs:106-126`; the per-prompt ledger is cleared at `xai-chat-state/src/actor/mutations.rs:507-509`). | `inputTokens` is the full prompt: uncached + cache reads + cache writes (`notification.rs:208,218-219`). `outputTokens` includes `reasoningTokens` (`:189`, wire test `xai-grok-sampler/src/client.rs:3316-3321`; 0 of 634 local violations). | One record per `modelUsage` entry; aggregate unless `modelCalls` = 1. `billed_pico_usd` = `costUsdTicks` × 100 (10¹⁰ ticks per USD, the server's own charge, removed when partial). | Each served model prices separately. A prompt without a response row still counts, as a sample. | A parent turn folds finished children's spend in while the child sessions also record it: 6 of 17 local parents fold exactly, 9 fold nothing. A fork copies `updates.jsonl`. Both need the cross-file join. `usage.json` duplicates the ledger and is never read. `grok-*-build` has no list price, so it is billed-only. |
+| Copilot CLI 1.0.80 | `session.shutdown` `modelMetrics`, cumulative per session × model and re-reported on resume (the resume fixture goes 128 → 256). The per-call `assistant.usage` is ephemeral. | `inputTokens` includes cache reads and writes (`app.js`@6187021; locally 136,067 = 15 + 76,154 + 59,898). Reasoning is inside `outputTokens`. | One aggregate sample per model per shutdown interval. A total below the previous one starts a new epoch. `billed_pico_usd` = Δ`totalNanoAiu` × 10 (10⁹ nano-AIU per credit at $0.01, reproduced to the unit at gpt-5.6-terra list rates). | Per-message `outputTokens` is no longer usage of its own: it counted output twice and reasoning three times. | `~/.copilot/session-store.db` `assistant_usage_events` holds exact per-call usage whose source events are never written elsewhere. The ground truth marks the whole database "derived, exclude"; re-classify that table in L1 for per-request pricing. Whether compaction is inside the model totals is unverified. |
+| Kimi Code 0.38.0 | `wire.jsonl` `usage.record`, one per finished request (bundle `usageService.ts`@103838019). | Exclusive by design: `inputOther` excludes cache (`kosong/chat_provider/__init__.py:99-119`). The OpenAI-compatible providers fold cache writes into `inputOther` and never split reasoning out. | 1:1; `thinking` unreported. | `usageScope: "session"` records are billable non-loop requests (compaction), now counted as samples; they were previously dropped. Two turn records before one response accumulate. | A compaction fixture. |
+| Hermes 0.20.5 | `state.db` `session_model_usage`, a running total per session × model × provider × base URL × mode × task (`hermes_state_usage.py:52-71`). | `input_tokens` is uncached (`agent/usage_pricing.py:535-539`). `reasoning_tokens` is inside `output_tokens` (`:541-546`). | `output` − reasoning; if reasoning exceeds output, the provider reported it exclusively and both are kept (drift). Request scope when `api_call_count` = 1, otherwise aggregate. `route` = `billing_provider`. Billed only for `cost_status = 'actual'`, which 0.20.5 never writes. | Reasoning is no longer counted twice. | A multi-call row whose prompt tokens exceed a tier start stays unpriced. |
+| OpenCode 1.18.22 | `step-finish` parts: one per step, which is one model request (`session/processor.ts:446-455`). `message.tokens` is overwritten per step (`:444-445`). | From 1.3.16, `input` excludes cache and `output` excludes `reasoning` (`session/session.ts:338-405`). Earlier writers were inclusive in provider-dependent bands, bisected over tags. | Per step-finish, with the writer-version bands applied. `route` = `providerID`. Never billed; `cost` is a models.dev estimate that also absorbs Copilot's nano-AIU (`llm/ai-sdk.ts:31-43`). | Steps are summed instead of keeping the message's last step. A step-finish written after its message completed is a fork copy (`Session.fork`, `session.ts:691-732`) and carries no usage. | For Anthropic up to 1.18.25, thinking sits inside output and cannot be recovered. Summing message tokens under-counted legacy multi-step messages. |
+| Pi 0.84.3 | Assistant `usage`, one per request (`packages/ai/src/types.ts:382-403`). Tool results, compactions and branch summaries also carry usage. | `input` excludes cache on every API. `cacheWrite` includes `cacheWrite1h`. `output` includes `reasoning`. | Subsets split and clamped. `route` = `provider`. `toolResult.usage` becomes an aggregate sample whose model is unrecorded, so it is unpriced. Compaction is aggregate, because a split turn summarizes in two requests. | A forked file's entries older than its header are the parent's copies (`session-manager.ts:1413-1492,1580-1631`). They keep their rows and drop their usage; the committed `fork` fixture proves it. | `/import` byte copies keep the same header id, which needs session-level dedupe. |
+| Antigravity 1.1.20 | No usage in the captured pack. | — | — | — | Out of coverage until a capture shows a usage record. |
+
+**Cross-file usage reconciliation (not yet implemented).** Three double counts cannot
+be seen within one file:
+
+- Claude Code responses copied into other transcripts.
+- Grok parent turns that fold in child spend, and forked `updates.jsonl` files.
+- Codex guardian usage that belongs to its parent.
+
+The canonical model forbids persisting correlation candidates (iron rule 5). The fix
+therefore belongs in the RAM reconciliation that already joins cross-file tool
+fragments: a transient native usage identity per record, with the first owner kept and
+copies dropped before the canonical writer. It needs its own design pass and fixtures.
+The measured effect today is +4.0% of Claude tokens, and Grok's six exactly folded
+parent turns.
+
+**Real-ledger check (2026-09-22).** The 2026-09-11 raw ledger was rebuilt with these
+adapters, with zero hard errors. Against that ledger's earlier projection, the per-agent
+token totals moved as follows (numbers only):
+
+| agent | change | why |
+|---|---|---|
+| Grok | −48.2% | inclusive `inputTokens` no longer counts cache reads twice |
+| Copilot | −49.7% | inclusive input, per-model shutdown intervals |
+| Codex | +3.6% | net: usage aimed at dropped rows and polls now lands; replayed subagent prefixes, counter-reset overcounts and reasoning no longer count twice |
+| Kimi | +0.7% | session-scope compaction usage |
+| Claude Code | −0.04% | net, mostly thinking counted once |
+| Hermes, Pi, OpenCode | −0.7% to 0 | exclusive buckets |
+
+What stays unpriced is what the catalog cannot price:
+
+- `grok-*-build`, which is billed-only;
+- `gpt-5.3-codex-spark`, 0.18M tokens;
+- OpenCode's free `big-pickle`;
+- one Hermes aggregate above gpt-5.4's 272K tier.
+
+Claude Code and Kimi price completely. Copilot's one shutdown interval prices at exactly
+its billed nano-AIU amount ($0.1865338, gpt-5.6-terra's period from 2026-07-30). That is an
+independent check of the calculator and its dated periods against a provider's own bill.
 
 ## 6. Layer-1 exit criteria
 

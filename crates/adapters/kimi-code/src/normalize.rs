@@ -12,10 +12,10 @@ use rosetta_adapter_support::tool::{
 };
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot,
+    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TaskRow, TaskStatus, TokenSnapshot,
 };
 use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ToolAction};
-use rosetta_core::{IngestOp, ids};
+use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -762,25 +762,49 @@ fn usage_record(
     line: &UsageRecordLine,
     ops: &mut Vec<IngestOp>,
 ) -> LineStatus {
+    let known = matches!(line.usage_scope.as_str(), "turn" | "session");
+    if known && usage_snapshot(&line.usage).is_none() {
+        return hard_into(
+            ctx,
+            stream_id,
+            "usage.record",
+            "usage_out_of_range",
+            epoch_ms(line.time),
+            ops,
+        );
+    }
     match line.usage_scope.as_str() {
+        // One finished loop request; the next response row owns it. Two
+        // requests before one row accumulate into an aggregate rather than
+        // the second overwriting the first.
         "turn" => {
-            let Some(tokens) = usage_snapshot(&line.usage) else {
-                return hard_into(
-                    ctx,
-                    stream_id,
-                    "usage.record",
-                    "usage_out_of_range",
-                    epoch_ms(line.time),
-                    ops,
-                );
-            };
-            state.pending_usage = Some(tokens);
+            let tokens = usage_snapshot(&line.usage).expect("checked above");
+            state.pending_usage = Some(match state.pending_usage.take() {
+                Some(pending) => fold::bucket_apply(&pending, &tokens),
+                None => tokens,
+            });
             LineStatus::Parsed
         }
-        // The canonical observes this scope but does not establish whether it
-        // is a running counter or a terminal total. It is deliberately not
-        // projected as per-response usage.
-        "session" => LineStatus::Parsed,
+        // Every request that is not a loop step (compaction today) is also
+        // one billable request, never a running total (RESEARCH_PLAN §5.13).
+        // No response row owns it, so it is a replacement-keyed sample.
+        "session" => {
+            let tokens = usage_snapshot(&line.usage).expect("checked above");
+            let native_key = format!(
+                "usage.record:{}:{}:{}",
+                line.agent_id.as_deref().unwrap_or(""),
+                line.time,
+                line.model
+            );
+            ops.push(IngestOp::SessionUsage(SessionUsageRow {
+                session_id: ctx.session_id.clone(),
+                key: ids::usage_id(&ctx.session_id, &native_key),
+                ts: epoch_ms(line.time).unwrap_or(0),
+                model: Some(line.model.clone()),
+                tokens,
+            }));
+            LineStatus::Parsed
+        }
         other => {
             ops.push(drift(
                 ctx,
@@ -909,6 +933,10 @@ fn content_attachments(
     (attachments, assets)
 }
 
+/// Kimi's usage is exclusive by construction (`inputOther` excludes cache
+/// reads and creation; RESEARCH_PLAN §5.13). Its OpenAI-compatible providers
+/// fold any cache writes into `inputOther` and never split reasoning out of
+/// `output`, so neither can be recovered here.
 fn usage_snapshot(usage: &RecordedUsage) -> Option<TokenSnapshot> {
     Some(TokenSnapshot {
         input: Some(i64::try_from(usage.input_other).ok()?),
@@ -917,6 +945,7 @@ fn usage_snapshot(usage: &RecordedUsage) -> Option<TokenSnapshot> {
         cache_write: Some(i64::try_from(usage.input_cache_creation).ok()?),
         // Kimi's native usage shape declares no thinking-token component.
         thinking: None,
+        ..TokenSnapshot::default()
     })
 }
 

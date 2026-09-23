@@ -4,9 +4,15 @@ import type { ResponseGroup } from "./ResponseGroup";
 import type { TimelineBody } from "./TimelineBody";
 import type { TimelineGroup } from "./TimelineGroup";
 import type { TokenSnapshot } from "./TokenSnapshot";
+import type { UsageCost } from "./UsageCost";
 
 export type TimelineEntry = { timeline_id: string, session_id: string, ordinal: number, group: TimelineGroup, response: ResponseGroup | null, block_index: number | null, native_id: string | null, parent_native_id: string | null, at: number | null, model: string | null, effort: string | null, body: TimelineBody, 
 /**
  * Native tool invocation that owns a spawned child-session entry.
  */
-parent_tool_native_id: string | null, usage: TokenSnapshot, provenance: Provenance, };
+parent_tool_native_id: string | null, usage: TokenSnapshot, 
+/**
+ * Read-time cost of `usage`; absent when the row carries no usage or was
+ * not read through the store.
+ */
+cost?: UsageCost, provenance: Provenance, };

@@ -9,6 +9,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }
 rosetta-core = { path = "../core" }
+rosetta-pricing = { path = "../pricing" }
 tempfile.workspace = true
 ts-rs = { workspace = true, optional = true }
 

@@ -285,21 +285,24 @@ fn claude_split_response_survives_incremental_checkpoint_without_usage_duplicati
                 0,
                 "thinking".to_owned(),
                 Some(100),
-                Some(20)
+                // Anthropic's 20 output tokens include the 5 thinking tokens
+                // Claude Code breaks out; the buckets are exclusive.
+                Some(15)
             ),
             (response.to_owned(), 1, "agent".to_owned(), None, None),
             (response.to_owned(), 2, "tool_use".to_owned(), None, None),
         ]
     );
-    let bucket: (i64, i64) = store
+    let bucket: (i64, i64, i64) = store
         .conn()
         .query_row(
-            "SELECT SUM(in_tokens), SUM(out_tokens) FROM usage_bucket",
+            "SELECT SUM(in_tokens), SUM(out_tokens), SUM(think_tokens) FROM usage_bucket",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(bucket, (100, 20));
+    // One response's usage once: 100 in, 15 visible out, 5 thinking.
+    assert_eq!(bucket, (100, 15, 5));
 }
 
 #[test]

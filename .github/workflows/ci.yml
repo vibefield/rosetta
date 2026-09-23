@@ -50,6 +50,10 @@ jobs:
           python-version: '3.13'
       - run: python -m unittest discover -s tools/groundtruth/tests
       - run: python -m tools.groundtruth check
+      # The committed price catalog must be exactly what the vendored
+      # genai-prices data plus the cited overlay compile to.
+      - run: python -m unittest discover -s tools/pricing/tests -t .
+      - run: python -m tools.pricing generate --check
 
   quality:
     name: Rust quality

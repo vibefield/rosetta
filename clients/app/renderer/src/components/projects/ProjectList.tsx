@@ -8,7 +8,7 @@ export interface ProjectListProps {
   /** Projects in display order; sorting and filtering belong to the container. */
   readonly projects: readonly ProjectViewModel[];
   readonly selectedProjectId: string | null;
-  readonly maximumLifetimeTokens: number;
+  readonly maximumLifetimeCost: number;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
   /** A backfill is running: unfinished projects cook rather than lie. */
@@ -25,7 +25,7 @@ export interface ProjectListProps {
 export function ProjectList({
   projects,
   selectedProjectId,
-  maximumLifetimeTokens,
+  maximumLifetimeCost,
   homeDirectory,
   currentTimestamp,
   ingestActive,
@@ -42,7 +42,7 @@ export function ProjectList({
         <ProjectListItem
           key={project.row.id}
           project={project}
-          maximumLifetimeTokens={maximumLifetimeTokens}
+          maximumLifetimeCost={maximumLifetimeCost}
           isSelected={project.row.id === selectedProjectId}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}

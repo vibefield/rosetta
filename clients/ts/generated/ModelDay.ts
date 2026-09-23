@@ -8,4 +8,4 @@ day: string,
 /**
  * Model id as the agent reported it; `unknown` when it never did.
  */
-model: string, tokens: number, };
+model: string, tokens: number, cost_micro_usd: number | null, billed_micro_usd: number | null, unpriced_tokens: number, };

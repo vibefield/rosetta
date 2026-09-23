@@ -63,7 +63,13 @@ impl OpEvidence {
                             if object
                                 .get("usage")
                                 .and_then(Value::as_object)
-                                .is_some_and(|usage| usage.values().any(|value| !value.is_null()))
+                                // `scope` always serializes; usage is present
+                                // when any count or fact was reported.
+                                .is_some_and(|usage| {
+                                    usage
+                                        .iter()
+                                        .any(|(key, value)| key != "scope" && !value.is_null())
+                                })
                             {
                                 self.inline_usage += 1;
                             }
@@ -326,11 +332,13 @@ fn canonical_goldens_characterize_shared_store_work() {
         ("antigravity", false, false),
         ("claude-code", false, true),
         ("codex", true, false),
-        ("copilot", true, true),
+        // Per-model shutdown intervals are session samples (§4.1.3).
+        ("copilot", false, false),
         ("grok", true, false),
         ("hermes", false, false),
         ("kimi-code", false, true),
-        ("opencode", false, true),
+        // One Usage merge per step-finish part (§4.1.3).
+        ("opencode", true, false),
         ("pi", false, true),
     ];
 

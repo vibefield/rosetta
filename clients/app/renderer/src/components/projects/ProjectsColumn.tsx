@@ -46,9 +46,11 @@ export function ProjectsColumn({
   // The daemon's per-project fold: each cooking card draws its own byte
   // meter from this, so progress reads at the row you actually care about.
   const backfills = useMemo(() => projectBackfills(ingest), [ingest]);
-  const maximumLifetimeTokens = useMemo(
+  // "Spend" is list-price USD (§4.1.3); tokens only break ties, so wholly
+  // unpriced projects still order among themselves.
+  const maximumLifetimeCost = useMemo(
     () => projects.reduce(
-      (maximum, project) => Math.max(maximum, project.lifetimeTokens),
+      (maximum, project) => Math.max(maximum, project.lifetimeSpend.costMicroUsd ?? 0),
       0,
     ),
     [projects],
@@ -58,7 +60,8 @@ export function ProjectsColumn({
       [...projects].sort((left, right) =>
         sort === "recent"
           ? (right.lastActiveMs ?? 0) - (left.lastActiveMs ?? 0)
-          : right.lifetimeTokens - left.lifetimeTokens,
+          : (right.lifetimeSpend.costMicroUsd ?? 0) - (left.lifetimeSpend.costMicroUsd ?? 0)
+            || right.lifetimeTokens - left.lifetimeTokens,
       ),
     [projects, sort],
   );
@@ -90,7 +93,7 @@ export function ProjectsColumn({
         <ProjectList
           projects={visibleProjects}
           selectedProjectId={selectedProjectId}
-          maximumLifetimeTokens={maximumLifetimeTokens}
+          maximumLifetimeCost={maximumLifetimeCost}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}

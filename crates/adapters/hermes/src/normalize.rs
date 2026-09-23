@@ -10,7 +10,9 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
-use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot};
+use rosetta_core::rows::{
+    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, UsageScope,
+};
 use rosetta_core::{IngestOp, ids};
 use serde::Deserialize;
 use serde_json::Value;
@@ -28,6 +30,8 @@ const UNKNOWN_QUERY: &str = "unknown_query";
 const UNKNOWN_TABLE: &str = "unknown_table";
 const UNKNOWN_SUBTYPE: &str = "unknown_subtype";
 const PARSE_FAILED: &str = "parse_failed";
+/// Reasoning larger than the output that should contain it.
+const USAGE_SUBSET_EXCEEDS_TOTAL: &str = "usage_subset_exceeds_total";
 
 #[derive(Deserialize)]
 struct SnapshotRecord {
@@ -169,7 +173,7 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
             LineStatus::UnknownType
         }
         KnownRecord::SessionModelUsage(row) => {
-            project_session_usage(ctx, row, &mut ops);
+            project_session_usage(ctx, stream_id, row, &mut ops);
             LineStatus::Parsed
         }
         KnownRecord::SchemaVersion(_) | KnownRecord::StateMeta(_) => LineStatus::Parsed,
@@ -179,6 +183,7 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
 
 fn project_session_usage(
     ctx: &NormalizeCtx,
+    stream_id: &str,
     row: &crate::raw::state::SessionModelUsageRow,
     ops: &mut Vec<IngestOp>,
 ) {
@@ -198,19 +203,62 @@ fn project_session_usage(
         .or(row.first_seen)
         .and_then(seconds_ms)
         .unwrap_or(0);
+    let (tokens, exclusive_reasoning) = usage_snapshot(row);
+    if exclusive_reasoning {
+        ops.push(drift(
+            ctx,
+            stream_id,
+            "session_model_usage",
+            USAGE_SUBSET_EXCEEDS_TOTAL,
+            &["reasoning_tokens".to_owned()],
+            Some(ts),
+        ));
+    }
     ops.push(IngestOp::SessionUsage(SessionUsageRow {
         session_id: ctx.session_id.clone(),
         key: ids::usage_id(&ctx.session_id, &native_key),
         ts,
         model: Some(row.model.clone()),
-        tokens: TokenSnapshot {
-            input: Some(row.input_tokens),
-            output: Some(row.output_tokens),
-            cache_read: Some(row.cache_read_tokens),
-            cache_write: Some(row.cache_write_tokens),
-            thinking: Some(row.reasoning_tokens),
-        },
+        tokens,
     }));
+}
+
+/// Map one `session_model_usage` running total into the exclusive buckets
+/// (RESEARCH_PLAN §5.13). Hermes' `input_tokens` is already uncached and its
+/// `output_tokens` includes `reasoning_tokens` (OpenAI-style providers; the
+/// Anthropic shape reports reasoning 0). Reasoning larger than output means
+/// the provider reported it exclusively: both are kept and the record is
+/// flagged. Only a provider-reported `actual` cost is billing; estimates and
+/// subscription-included rows are not.
+fn usage_snapshot(row: &crate::raw::state::SessionModelUsageRow) -> (TokenSnapshot, bool) {
+    let exclusive_reasoning = row.reasoning_tokens > row.output_tokens;
+    let output = if exclusive_reasoning {
+        row.output_tokens
+    } else {
+        row.output_tokens - row.reasoning_tokens
+    };
+    let billed_pico_usd = (row.cost_status.as_deref() == Some("actual")
+        && row.actual_cost_usd.is_finite()
+        && row.actual_cost_usd > 0.0)
+        .then(|| (row.actual_cost_usd * 1e12).round() as i64);
+    let tokens = TokenSnapshot {
+        input: Some(row.input_tokens),
+        output: Some(output),
+        cache_read: Some(row.cache_read_tokens),
+        cache_write: Some(row.cache_write_tokens),
+        thinking: Some(row.reasoning_tokens),
+        route: rosetta_core::rows::canonical_route(&row.billing_provider),
+        billed_pico_usd,
+        // One row per session × model × billing route × task accumulates every
+        // call; only a single-call row is one request.
+        scope: if row.api_call_count == 1 {
+            UsageScope::Request
+        } else {
+            UsageScope::Aggregate
+        },
+        ..TokenSnapshot::default()
+    };
+    (tokens, exclusive_reasoning)
 }
 
 fn schema_inventory(

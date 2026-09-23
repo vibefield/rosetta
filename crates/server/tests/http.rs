@@ -348,6 +348,7 @@ async fn collaboration_history_returns_boundaries_without_private_rows() {
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),
+        cost: None,
         provenance: rosetta_core::Provenance {
             agent_version: None,
             src_cursor: None,
@@ -864,6 +865,68 @@ async fn unassigned_project_scope_reports_projectless_session_figures() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(usage["models"][0]["tokens"], 18);
     assert_eq!(usage["hours"][0]["tokens"], 18);
+}
+
+#[tokio::test]
+async fn every_token_figure_carries_its_list_price_spend() {
+    let mut h = harness();
+    let mut priced = message("priced", MessageKind::Agent, "answer");
+    priced.model = Some("claude-opus-4-8".into());
+    priced.usage = Some(rosetta_core::rows::TokenSnapshot {
+        input: Some(1_000),
+        output: Some(100),
+        ..Default::default()
+    });
+    let mut unknown = message("unknown", MessageKind::Agent, "local model");
+    unknown.ordinal = 1;
+    unknown.model = Some("big-pickle".into());
+    unknown.usage = Some(rosetta_core::rows::TokenSnapshot {
+        input: Some(40),
+        output: Some(2),
+        ..Default::default()
+    });
+    h.append(vec![priced, unknown]);
+
+    // $5/MTok in, $25/MTok out: 1,000 × 5 + 100 × 25 = 7,500 micro-USD.
+    let (status, heatmap) = h.get("/api/projects/p1/heatmap").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(heatmap["days"][0]["tokens"], 1_142);
+    assert_eq!(heatmap["days"][0]["cost_micro_usd"], 7_500);
+    assert_eq!(heatmap["days"][0]["unpriced_tokens"], 42);
+    assert!(heatmap["days"][0]["billed_micro_usd"].is_null());
+
+    let (_, contribution) = h.get("/api/projects/p1/contribution").await;
+    assert_eq!(contribution["rows"][0]["cost_micro_usd"], 7_500);
+
+    // The transcript prices each response at read time from the same facts.
+    let (_, page) = h.get("/api/sessions/s1/timeline").await;
+    let costs: Vec<&serde_json::Value> = page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| &entry["cost"])
+        .collect();
+    assert!(costs.contains(
+        &&serde_json::json!({"status": "priced", "micro_usd": 7_500, "long_context": false})
+    ));
+    assert!(costs.contains(&&serde_json::json!({"status": "unpriced", "reason": "unknown_model"})));
+}
+
+#[tokio::test]
+async fn pricing_reports_the_compiled_catalog_and_the_projections() {
+    let h = harness();
+    let (status, pricing) = h.get("/api/pricing").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pricing["basis"], "list_price_equivalent");
+    assert_eq!(
+        pricing["catalog_version"],
+        rosetta_pricing::pricing_version()
+    );
+    assert!(rosetta_pricing::pricing_version().starts_with(rosetta_pricing::CATALOG_VERSION));
+    // An opened projection is priced with the compiled catalog and calculator.
+    assert_eq!(pricing["projection_version"], pricing["catalog_version"]);
+    assert_eq!(pricing["sources"][0]["name"], "pydantic/genai-prices");
+    assert!(pricing["models"].as_u64().unwrap() > 100);
 }
 
 #[tokio::test]

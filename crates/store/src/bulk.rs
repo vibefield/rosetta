@@ -108,40 +108,7 @@ pub(crate) fn finalize(
     // The CASE implements Rust's div_euclid hour floor for pre-epoch values;
     // SQLite integer division otherwise truncates toward zero.
     let started = Instant::now();
-    tx.execute("DELETE FROM usage_bucket", [])?;
-    tx.execute(
-        "INSERT INTO usage_bucket
-           (session_id, hour_ts, model, in_tokens, out_tokens, cache_r_tokens,
-            cache_w_tokens, think_tokens, message_count, tool_call_count)
-         SELECT session_id, hour_ts, model,
-                SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
-                SUM(cache_w_tokens), SUM(think_tokens), SUM(message_count),
-                SUM(tool_call_count)
-         FROM (
-           SELECT session_id,
-                  CASE WHEN COALESCE(ts, 0) >= 0
-                    THEN (COALESCE(ts, 0) / ?1) * ?1
-                    ELSE - ((-COALESCE(ts, 0) + ?1 - 1) / ?1) * ?1
-                  END AS hour_ts,
-                  COALESCE(model, 'unknown') AS model,
-                  in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
-                  think_tokens, 1 AS message_count,
-                  CASE WHEN type = 'tool_use' THEN 1 ELSE 0 END AS tool_call_count
-           FROM message
-           UNION ALL
-           SELECT session_id,
-                  CASE WHEN ts >= 0
-                    THEN (ts / ?1) * ?1
-                    ELSE - ((-ts + ?1 - 1) / ?1) * ?1
-                  END AS hour_ts,
-                  COALESCE(model, 'unknown') AS model,
-                  in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
-                  think_tokens, 0 AS message_count, 0 AS tool_call_count
-           FROM session_usage
-         )
-         GROUP BY session_id, hour_ts, model",
-        params![HOUR_MS],
-    )?;
+    refold_usage_buckets(tx)?;
     stats.bucket_nanos = elapsed_nanos(started);
 
     let started = Instant::now();
@@ -149,6 +116,21 @@ pub(crate) fn finalize(
     tx.execute_batch("ANALYZE;")?;
     stats.index_nanos = elapsed_nanos(started);
     Ok(stats)
+}
+
+/// Replace every `usage_bucket` row from the stored usage facts in one
+/// set-based pass, pricing each record with the compiled catalog, and stamp
+/// the pricing version (catalog plus calculator). SUM's NULL behavior preserves the model's
+/// never-reported != zero invariant. Cold finalization and a price-catalog
+/// change both come through here; neither replays the ledger.
+pub(crate) fn refold_usage_buckets(tx: &Connection) -> Result<(), StoreError> {
+    tx.execute("DELETE FROM usage_bucket", [])?;
+    tx.execute(&crate::usage_sql::FOLD_ALL, params![HOUR_MS])?;
+    tx.execute(
+        "UPDATE projection_state SET pricing_version = ?1 WHERE singleton = 1",
+        params![rosetta_pricing::pricing_version()],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn validate(conn: &Connection) -> Result<(), StoreError> {

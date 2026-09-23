@@ -20,6 +20,7 @@ pub mod raw;
 pub mod spec;
 pub mod time;
 pub mod tool;
+mod usage;
 mod web;
 mod workflow;
 

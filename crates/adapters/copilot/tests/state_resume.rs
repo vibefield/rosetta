@@ -95,7 +95,7 @@ fn split_resume_matches_one_shot_ops() {
         .checkpoint_state(first_ctx.state.as_deref())
         .unwrap();
     let next_ordinal = first_ctx.next_ordinal;
-    let cumulative = *first_ctx.cumulative.last_reading();
+    let cumulative = first_ctx.cumulative.last_reading().clone();
 
     let mut resumed_ctx = context();
     resumed_ctx.state = CopilotAdapter

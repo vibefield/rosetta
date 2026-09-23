@@ -30,7 +30,13 @@
       "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -67,10 +73,16 @@
     "parent_tool_native_id": null,
     "usage": {
       "input": null,
-      "output": 32,
+      "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -79,9 +91,9 @@
     }
   },
   {
-    "op": "usage",
+    "op": "session_usage",
     "session_id": "6c7c701885f82c5dc544e4be3bdeedd20c32cfc8f9f5b0dcbd0a57b8b783f93e",
-    "response": "1e5252dcbeb21cd84c6a1bcce5e4740491c62d9f6e4c4e1cae954552b547bd50",
+    "key": "352a2cd0f4b9df2af0849628cfb0ea3de2aa3546cbc9928ec4acd9d8fd777128",
     "ts": 1787635678487,
     "model": "mock-model",
     "tokens": {
@@ -89,7 +101,13 @@
       "output": 32,
       "cache_read": 0,
       "cache_write": 0,
-      "thinking": 0
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     }
   }
 ]

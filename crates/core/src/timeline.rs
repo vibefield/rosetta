@@ -3979,6 +3979,25 @@ pub enum MessageDetail {
     },
 }
 
+/// The read-time list-price cost of one row's usage record (ARCHITECTURE
+/// §4.1.3). Never stored or normalized: the store computes it from the stored
+/// usage facts and the compiled price catalog whenever it reads or emits the
+/// row, so a price update needs no rewrite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum UsageCost {
+    /// Integer micro-USD, rounded once from the exact pico-USD figure.
+    Priced {
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        micro_usd: i64,
+        /// The prompt crossed a long-context price tier.
+        long_context: bool,
+    },
+    /// Why the catalog could not price it; never shown as $0.
+    Unpriced { reason: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TimelineEntry {
@@ -3998,6 +4017,11 @@ pub struct TimelineEntry {
     /// Native tool invocation that owns a spawned child-session entry.
     pub parent_tool_native_id: Option<String>,
     pub usage: TokenSnapshot,
+    /// Read-time cost of `usage`; absent when the row carries no usage or was
+    /// not read through the store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub cost: Option<UsageCost>,
     pub provenance: Provenance,
 }
 
@@ -4960,6 +4984,7 @@ mod tests {
             body,
             parent_tool_native_id: None,
             usage: TokenSnapshot::default(),
+            cost: None,
             provenance: Provenance {
                 agent_version: None,
                 src_cursor: None,

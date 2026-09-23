@@ -274,12 +274,15 @@ fn assistant_blocks_split_into_one_row_each() {
     // Usage is reported once per response and lands on the text row.
     assert!(rows[0].usage.is_empty());
     assert!(rows[2].usage.is_empty());
-    let tokens = rows[1].usage;
+    let tokens = &rows[1].usage;
     assert_eq!(tokens.input, Some(100));
-    assert_eq!(tokens.output, Some(20));
+    // Anthropic's output_tokens (20) includes the 5 thinking tokens Claude
+    // Code breaks out; the buckets are exclusive.
+    assert_eq!(tokens.output, Some(15));
     assert_eq!(tokens.cache_read, Some(9));
     assert_eq!(tokens.cache_write, Some(7));
     assert_eq!(tokens.thinking, Some(5));
+    assert_eq!(tokens.total_tokens(), Some(100 + 20 + 9 + 7));
 
     let tool = tool(rows[2]).expect("tool call");
     assert_eq!(tool.native.name, "Bash");
@@ -505,6 +508,102 @@ fn changed_repeated_response_usage_replaces_the_first_fact() {
     assert_eq!(target, &rows[0].timeline_id);
     assert_eq!(tokens.input, Some(11));
     assert_eq!(tokens.output, Some(3));
+}
+
+#[test]
+fn a_later_placeholder_never_regresses_the_final_usage() {
+    // Claude Code can write a streamed placeholder record after the final
+    // one; only the most final snapshot counts.
+    let mut placeholder = assistant_record(
+        "msg_final_first",
+        "11111111-1111-1111-1111-111111111302",
+        json!([{"type": "text", "text": "late block"}]),
+        Some(usage(10, 1, 0)),
+    );
+    placeholder["message"]["stop_reason"] = Value::Null;
+    let (ops, _) = run(&[
+        assistant_record(
+            "msg_final_first",
+            "11111111-1111-1111-1111-111111111301",
+            json!([{"type": "text", "text": "answer"}]),
+            Some(usage(10, 500, 100)),
+        ),
+        placeholder,
+    ]);
+    let rows = messages(&ops);
+    assert_eq!(rows[0].usage.output, Some(400));
+    assert_eq!(rows[0].usage.thinking, Some(100));
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, IngestOp::Usage { .. } | IngestOp::SessionUsage(_))),
+        "a placeholder must not replace the final usage"
+    );
+}
+
+#[test]
+fn synthetic_error_records_carry_no_usage() {
+    let mut record = assistant(
+        json!([{"type": "text", "text": "API Error"}]),
+        Some(usage(0, 0, 0)),
+    );
+    record["message"]["model"] = json!("<synthetic>");
+    let (ops, _) = run(&[record]);
+    assert!(messages(&ops).iter().all(|row| row.usage.is_empty()));
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, IngestOp::SessionUsage(_) | IngestOp::Usage { .. }))
+    );
+}
+
+#[test]
+fn advisor_iterations_are_requests_of_their_own() {
+    let mut final_usage = usage(10, 20, 0);
+    final_usage["iterations"] = json!([
+        {"type": "message", "input_tokens": 10, "output_tokens": 20,
+         "cache_read_input_tokens": 9, "cache_creation_input_tokens": 7},
+        {"type": "advisor_message", "model": "claude-opus-4-8", "input_tokens": 50,
+         "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    ]);
+    let (ops, _) = run(&[assistant(
+        json!([{"type": "text", "text": "answer"}]),
+        Some(final_usage),
+    )]);
+    let sample = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::SessionUsage(sample) => Some(sample),
+            _ => None,
+        })
+        .expect("advisor sample");
+    assert_eq!(sample.key, "response:msg_1:iteration:1");
+    assert_eq!(sample.model.as_deref(), Some("claude-opus-4-8"));
+    assert_eq!(
+        (sample.tokens.input, sample.tokens.output),
+        (Some(50), Some(5))
+    );
+    // The top level (the `message` entry) still rides on the response row.
+    assert_eq!(messages(&ops)[0].usage.input, Some(10));
+}
+
+#[test]
+fn a_fallback_turn_takes_its_serving_entrys_ttl_split() {
+    let mut served = usage(10, 20, 0);
+    served["cache_creation_input_tokens"] = json!(1_000);
+    // Stale top-level breakdown; the serving entry has the real one.
+    served["cache_creation"] =
+        json!({"ephemeral_5m_input_tokens": 1_000, "ephemeral_1h_input_tokens": 0});
+    served["iterations"] = json!([
+        {"type": "fallback_message", "input_tokens": 10, "output_tokens": 20,
+         "cache_read_input_tokens": 9, "cache_creation_input_tokens": 1_000,
+         "cache_creation": {"ephemeral_5m_input_tokens": 400, "ephemeral_1h_input_tokens": 600}}
+    ]);
+    let (ops, _) = run(&[assistant(
+        json!([{"type": "text", "text": "answer"}]),
+        Some(served),
+    )]);
+    let tokens = &messages(&ops)[0].usage;
+    assert_eq!(tokens.cache_write, Some(400));
+    assert_eq!(tokens.cache_write_1h, Some(600));
 }
 
 #[test]

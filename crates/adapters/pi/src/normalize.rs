@@ -14,10 +14,11 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionTitleRow, TitleKind, TokenSnapshot,
+    DriftFact, MessageKind, MessageRow, Ms, SessionTitleRow, SessionUsageRow, TitleKind,
+    TokenSnapshot, UsageScope,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
-use rosetta_core::{IngestOp, ids};
+use rosetta_core::{IngestOp, fold, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -46,6 +47,10 @@ pub struct PiState {
 struct HeaderState {
     cwd: String,
     started_at: Ms,
+    /// The file was forked from another session (`parentSession`): entries
+    /// older than the header are the parent's, copied usage included.
+    #[serde(default)]
+    forked: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -64,6 +69,16 @@ impl PiState {
 
     fn remember(&mut self, id: &str, context: EntryContext) {
         self.entries.insert(id.to_owned(), context);
+    }
+
+    /// A fork copies its parent's entries with their original timestamps, so
+    /// anything older than the fork's own header is inherited history: its
+    /// row stays, its usage was already counted in the parent.
+    fn inherited_copy(&self, at: Option<Ms>) -> bool {
+        match (&self.header, at) {
+            (Some(header), Some(at)) => header.forked && at < header.started_at,
+            _ => false,
+        }
     }
 }
 
@@ -178,6 +193,7 @@ fn session_header(state: &mut PiState, header: &SessionHeader) {
     state.header = Some(HeaderState {
         cwd: header.cwd.clone(),
         started_at,
+        forked: header.parent_session.is_some(),
     });
 }
 
@@ -222,6 +238,7 @@ fn message_entry(
             IngestOp::push_message(ops, row);
         }
         AgentMessage::Known(KnownMessage::Assistant(message)) => {
+            let copied = state.inherited_copy(ts);
             assistant_message(
                 ctx,
                 stream_id,
@@ -230,11 +247,29 @@ fn message_entry(
                 message,
                 &inherited,
                 ts,
+                copied,
                 ops,
             );
         }
         AgentMessage::Known(KnownMessage::ToolResult(message)) => {
             tool_result(ctx, message, ts, ops);
+            if let Some(usage) = message.usage.as_ref()
+                && !state.inherited_copy(ts)
+            {
+                // The model the tool called is not recorded, so this spend
+                // is counted but unpriced.
+                let (tokens, clamped) = usage_snapshot(usage, None, UsageScope::Aggregate);
+                if clamped {
+                    ops.push(usage_drift(ctx, stream_id, "toolResult", ts));
+                }
+                ops.push(IngestOp::SessionUsage(SessionUsageRow {
+                    session_id: ctx.session_id.clone(),
+                    key: ids::usage_id(&ctx.session_id, &format!("{}:tool-result", entry.id)),
+                    ts: ts.unwrap_or(0),
+                    model: None,
+                    tokens,
+                }));
+            }
         }
         AgentMessage::Known(KnownMessage::BashExecution(message)) => {
             bash_execution(ctx, stream_id, entry, message, ts, ops);
@@ -266,6 +301,7 @@ fn assistant_message(
     message: &AssistantMessage,
     inherited: &EntryContext,
     ts: Option<Ms>,
+    copied: bool,
     ops: &mut Vec<IngestOp>,
 ) {
     let model = message.response_model.as_deref().unwrap_or(&message.model);
@@ -362,7 +398,14 @@ fn assistant_message(
             inherited.effort.as_deref(),
         ));
     }
-    attach_usage(&mut rows, &message.usage);
+    if !copied {
+        let (tokens, clamped) =
+            usage_snapshot(&message.usage, Some(&message.provider), UsageScope::Request);
+        if clamped {
+            ops.push(usage_drift(ctx, stream_id, "message/assistant", ts));
+        }
+        attach_usage(&mut rows, tokens);
+    }
     for row in rows {
         IngestOp::push_message(ops, row);
     }
@@ -530,7 +573,15 @@ fn compaction_entry(
     );
     row.subtype = Some("compaction".to_owned());
     row.content = Some(entry.summary.clone());
-    row.usage = entry.usage.as_ref().map(usage_snapshot);
+    // A split turn summarizes in two requests recorded as one total.
+    row.usage = summary_usage(
+        ctx,
+        state,
+        entry.usage.as_ref(),
+        UsageScope::Aggregate,
+        row.ts,
+        ops,
+    );
     IngestOp::push_message(ops, row);
     state.remember(&entry.id, inherited);
 }
@@ -552,9 +603,34 @@ fn branch_summary_entry(
     );
     row.subtype = Some("branch_summary".to_owned());
     row.content = Some(entry.summary.clone());
-    row.usage = entry.usage.as_ref().map(usage_snapshot);
+    row.usage = summary_usage(
+        ctx,
+        state,
+        entry.usage.as_ref(),
+        UsageScope::Request,
+        row.ts,
+        ops,
+    );
     IngestOp::push_message(ops, row);
     state.remember(&entry.id, inherited);
+}
+
+fn summary_usage(
+    ctx: &NormalizeCtx,
+    state: &PiState,
+    usage: Option<&Usage>,
+    scope: UsageScope,
+    at: Option<Ms>,
+    ops: &mut Vec<IngestOp>,
+) -> Option<TokenSnapshot> {
+    if state.inherited_copy(at) {
+        return None;
+    }
+    let (tokens, clamped) = usage_snapshot(usage?, None, scope);
+    if clamped {
+        ops.push(usage_drift(ctx, "session", "summary", at));
+    }
+    Some(tokens)
 }
 
 fn custom_message_entry(
@@ -657,25 +733,58 @@ fn make_row(
     }
 }
 
-fn attach_usage(rows: &mut [MessageRow], usage: &Usage) {
+fn attach_usage(rows: &mut [MessageRow], usage: TokenSnapshot) {
     let target = rows
         .iter()
         .position(|row| row.kind == MessageKind::Agent)
         .or_else(|| rows.iter().position(|row| row.kind == MessageKind::ToolUse))
         .unwrap_or(0);
     if let Some(row) = rows.get_mut(target) {
-        row.usage = Some(usage_snapshot(usage));
+        row.usage = Some(usage);
     }
 }
 
-fn usage_snapshot(usage: &Usage) -> TokenSnapshot {
-    TokenSnapshot {
-        input: i64::try_from(usage.input).ok(),
-        output: i64::try_from(usage.output).ok(),
-        cache_read: i64::try_from(usage.cache_read).ok(),
-        cache_write: i64::try_from(usage.cache_write).ok(),
-        thinking: usage.reasoning.and_then(|value| i64::try_from(value).ok()),
-    }
+/// Map Pi's usage record into the exclusive buckets (RESEARCH_PLAN §5.13).
+/// `input` already excludes cache on every Pi API, `cacheWrite` includes
+/// `cacheWrite1h`, and `output` includes `reasoning`. Pi's `cost` is computed
+/// from its own price table, so it is never billing. Returns whether a subset
+/// exceeded its total (clamped, reported as drift).
+fn usage_snapshot(
+    usage: &Usage,
+    provider: Option<&str>,
+    scope: UsageScope,
+) -> (TokenSnapshot, bool) {
+    let count = |value: u64| i64::try_from(value).ok();
+    let (cache_write, cache_write_1h, write_clamped) = fold::split_subset(
+        count(usage.cache_write),
+        usage.cache_write_1h.and_then(count),
+    );
+    let (output, thinking, output_clamped) =
+        fold::split_subset(count(usage.output), usage.reasoning.and_then(count));
+    let tokens = TokenSnapshot {
+        input: count(usage.input),
+        output,
+        cache_read: count(usage.cache_read),
+        cache_write,
+        cache_write_1h,
+        thinking,
+        route: provider.and_then(rosetta_core::rows::canonical_route),
+        scope,
+        ..TokenSnapshot::default()
+    };
+    (tokens, write_clamped || output_clamped)
+}
+
+/// A usage subset (reasoning, 1-hour writes) larger than its total.
+fn usage_drift(ctx: &NormalizeCtx, stream_id: &str, record_kind: &str, at: Option<Ms>) -> IngestOp {
+    drift(
+        ctx,
+        stream_id,
+        record_kind,
+        "usage_subset_exceeds_total",
+        &["usage".to_owned()],
+        at,
+    )
 }
 
 fn user_content_text(content: &UserContent) -> Option<String> {

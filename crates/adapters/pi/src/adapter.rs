@@ -31,7 +31,9 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        7
+        // 8: exclusive usage buckets, 1-hour writes, route, tool-result
+        // usage, and fork copies without usage (§4.1.3).
+        8
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

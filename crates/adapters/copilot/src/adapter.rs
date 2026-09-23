@@ -34,7 +34,9 @@ impl AgentAdapter for CopilotAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        8
+        // 9: per-model shutdown intervals in exclusive buckets with billed
+        // nano-AIU; no per-message output usage (§4.1.3).
+        9
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

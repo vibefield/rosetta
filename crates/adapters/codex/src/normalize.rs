@@ -17,13 +17,13 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TokenSnapshot,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, ServiceTier,
 };
 use rosetta_core::timeline::{
     CorrelationDerivation, FileChangeOp, ShellOutcome, StatusBasis, ToolAction, ToolOutcomePatch,
     ToolStatus, ToolStatusFact, ToolTiming, ToolUpdatePatch,
 };
-use rosetta_core::{IngestOp, fold, ids};
+use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -35,6 +35,9 @@ use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
 use crate::time::rfc3339_ms;
 use crate::tool::TransportCall;
+use crate::usage::{
+    RawUsage, ReplayGate, begin_response, codex_service_tier, push_response, token_count,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CanonicalCall {
@@ -74,12 +77,29 @@ pub struct CodexState {
     /// Current execution cwd used only to resolve relative tool arguments.
     /// The canonical session cwd is selected independently during meta ingest.
     tool_cwd: Option<String>,
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     effort: Option<String>,
-    /// timeline_id of the most recent assistant-authored row.
-    response: Option<String>,
-    /// Running per-response total, in deltas absorbed from the session counters.
-    response_total: TokenSnapshot,
+    /// The latest surviving assistant row created since the previous token
+    /// count: the request that count reports produced it.
+    #[serde(default)]
+    pub(crate) request_row: Option<String>,
+    /// Server-side web searches the current request ran.
+    #[serde(default)]
+    pub(crate) request_searches: i64,
+    /// The last `total_token_usage` reading of THIS file.
+    #[serde(default)]
+    pub(crate) prev_total: Option<RawUsage>,
+    #[serde(default)]
+    pub(crate) replay_gate: ReplayGate,
+    /// Token counts seen in this file; the stable key of a request sample.
+    #[serde(default)]
+    pub(crate) token_counts: u64,
+    /// The configured tier from the latest `thread_settings_applied`.
+    #[serde(default)]
+    pub(crate) service_tier: Option<ServiceTier>,
+    /// `session_meta.model_provider` when it is not Codex's default `openai`.
+    #[serde(default)]
+    pub(crate) route: Option<String>,
     /// One-record-lived tool requests, plus the rare outer executor cell that
     /// yielded before its real result was ready. These maps are adapter state,
     /// never canonical data; they disappear as soon as the matching output is
@@ -169,7 +189,7 @@ fn project(
 ) -> LineStatus {
     match &record.payload {
         RolloutPayload::SessionMeta(meta) => {
-            session_meta(ctx, state, meta);
+            session_meta(ctx, state, meta, ts);
             LineStatus::Parsed
         }
         RolloutPayload::TurnContext(turn) => {
@@ -189,7 +209,9 @@ fn project(
             };
             response_item(ctx, state, stream_id, item, &discriminator, ts, ops)
         }
-        RolloutPayload::EventMsg(event) => event_msg(ctx, state, stream_id, event, ts, ops),
+        RolloutPayload::EventMsg(event) => {
+            event_msg(ctx, state, stream_id, event, record.ordinal, ts, ops)
+        }
         RolloutPayload::Compacted(item) => {
             let Some(discriminator) = record_discriminator(record, ctx) else {
                 return hard_into(
@@ -243,9 +265,18 @@ fn project(
 /// Session identity, topology, and canonical cwd are admitted from this same
 /// opening record by `CodexAdapter::skim`. Streaming retains only provenance
 /// and execution context needed to normalize later tools.
-fn session_meta(ctx: &mut NormalizeCtx, state: &mut CodexState, meta: &SessionMeta) {
+fn session_meta(
+    ctx: &mut NormalizeCtx,
+    state: &mut CodexState,
+    meta: &SessionMeta,
+    ts: Option<Ms>,
+) {
     ctx.agent_version = Some(meta.cli_version.clone());
     state.tool_cwd = Some(meta.cwd.clone());
+    state.route = (meta.model_provider != "openai")
+        .then(|| rosetta_core::rows::canonical_route(&meta.model_provider))
+        .flatten();
+    state.replay_gate = ReplayGate::for_session(meta, ts);
 }
 
 /// Per-turn execution context used to stamp rows and resolve relative tool
@@ -325,9 +356,10 @@ fn response_item(
             }
             if kind == MessageKind::Agent {
                 stamp_model(&mut row, state);
-                begin_response(state, &row.timeline_id);
+                push_response(state, row, ops);
+            } else {
+                IngestOp::push_message(ops, row);
             }
-            IngestOp::push_message(ops, row);
             LineStatus::Parsed
         }
         "reasoning" => {
@@ -336,8 +368,7 @@ fn response_item(
             row.content =
                 block_text(item.summary.as_deref()).or_else(|| block_text(item.content.as_deref()));
             stamp_model(&mut row, state);
-            begin_response(state, &row.timeline_id);
-            IngestOp::push_message(ops, row);
+            push_response(state, row, ops);
             LineStatus::Parsed
         }
         "agent_message" => {
@@ -346,8 +377,7 @@ fn response_item(
             row.subtype = Some("agent_message".to_owned());
             row.content = block_text(item.content.as_deref());
             stamp_model(&mut row, state);
-            begin_response(state, &row.timeline_id);
-            IngestOp::push_message(ops, row);
+            push_response(state, row, ops);
             LineStatus::Parsed
         }
         "function_call" | "custom_tool_call" => {
@@ -486,9 +516,8 @@ fn response_item(
             }
             // A tool call IS a response: the model produced it, and the
             // token_count that follows belongs to it.
-            begin_response(state, &row.timeline_id);
             let timeline_id = row.timeline_id.clone();
-            IngestOp::push_message(ops, row);
+            push_response(state, row, ops);
 
             for edit in file_edits {
                 ops.push(IngestOp::FileEdit(FileEditRow {
@@ -564,8 +593,7 @@ fn response_item(
                     )
                 }
             });
-            begin_response(state, &row.timeline_id);
-            IngestOp::push_message(ops, row);
+            push_response(state, row, ops);
             LineStatus::Parsed
         }
         "tool_search_output" => {
@@ -590,6 +618,18 @@ fn response_item(
             LineStatus::Parsed
         }
         "local_shell_call" | "web_search_call" | "image_generation_call" => {
+            // Only a search action is a billable call; opening or finding in
+            // a page is not counted (RESEARCH_PLAN §5.13).
+            if item.item_type == "web_search_call"
+                && item
+                    .action
+                    .as_ref()
+                    .and_then(|action| action.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("search")
+            {
+                state.request_searches += 1;
+            }
             let name = item.item_type.as_str();
             let input = item.action.clone().unwrap_or_else(|| {
                 item.revised_prompt
@@ -652,8 +692,7 @@ fn response_item(
             tool.failure = patch.failure;
             tool.timing = patch.timing;
             row.tool = Some(tool);
-            begin_response(state, &row.timeline_id);
-            IngestOp::push_message(ops, row);
+            push_response(state, row, ops);
             LineStatus::Parsed
         }
         other => undeclared(
@@ -1114,12 +1153,23 @@ fn event_msg(
     state: &mut CodexState,
     stream_id: &str,
     event: &EventMsg,
+    ordinal: Option<u64>,
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) -> LineStatus {
     match event.event_type.as_str() {
         "token_count" => {
-            token_count(ctx, state, event, ts, ops);
+            token_count(ctx, state, event, ordinal, ts, ops);
+            LineStatus::Parsed
+        }
+        "thread_settings_applied" => {
+            if let Some(tier) = event
+                .thread_settings
+                .as_ref()
+                .and_then(|settings| settings.get("service_tier"))
+            {
+                state.service_tier = codex_service_tier(tier.as_str());
+            }
             LineStatus::Parsed
         }
         "item_completed" => item_completed(ctx, stream_id, event, ts, ops),
@@ -1230,79 +1280,6 @@ fn command_duration_ms(value: &Value) -> Option<u64> {
     seconds
         .checked_mul(1_000)?
         .checked_add(nanos.saturating_add(999_999) / 1_000_000)
-}
-
-/// THE CODEX TRAP (docs/canonical-model.html, `usage_bucket`): "codex token
-/// counters are cumulative, claude-code's are per-message — normalize to deltas
-/// once, at ingest, or the cache double-counts".
-///
-/// `info.total_token_usage` is a running SESSION total, re-reported after every
-/// turn; `info.last_token_usage` is the same numbers for one turn only. The
-/// totals are the safe source — a missed line self-corrects on the next
-/// reading, where a missed delta would be lost forever — so the cumulative
-/// figures go through `ctx.cumulative`, which subtracts the previous reading
-/// (and treats a counter that walks backwards as a reset, never a negative).
-///
-/// The resulting delta accumulates into a per-response running total, and the
-/// op carries that TOTAL rather than the delta: `IngestOp::Usage` is
-/// replacement-keyed on the response row, so the writer applies (new − old) and
-/// several token_counts for one response can never double-count.
-fn token_count(
-    ctx: &mut NormalizeCtx,
-    state: &mut CodexState,
-    event: &EventMsg,
-    ts: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) {
-    let Some(totals) = event.info.as_ref().map(|info| &info["total_token_usage"]) else {
-        return;
-    };
-    let cached = number(totals, "cached_input_tokens");
-    let reading = TokenSnapshot {
-        // Codex `input_tokens` INCLUDES the cached part; the canonical model
-        // keeps fresh input and cache reads apart, so split by subtraction.
-        input: fold::split_inclusive_input(number(totals, "input_tokens"), cached),
-        output: number(totals, "output_tokens"),
-        cache_read: cached,
-        cache_write: number(totals, "cache_write_input_tokens"),
-        thinking: number(totals, "reasoning_output_tokens"),
-    };
-    if reading.is_empty() {
-        return;
-    }
-
-    let delta = ctx.cumulative.absorb(&reading);
-    state.response_total = fold::bucket_apply(&state.response_total, &delta);
-    // Nothing to key the snapshot to yet: the total is kept, not dropped, and
-    // the first response row that appears carries it (see `begin_response`).
-    let Some(response) = state.response.clone() else {
-        return;
-    };
-    ops.push(IngestOp::Usage {
-        session_id: ctx.session_id.clone(),
-        response,
-        ts: ts.unwrap_or_default(),
-        model: state.model.clone(),
-        tokens: state.response_total,
-    });
-}
-
-/// Point later `token_count` readings at a newly emitted assistant row.
-///
-/// A codex turn ends in a message OR a tool call, and the token_count lands
-/// after whichever it was — so the "response row" a usage snapshot belongs to is
-/// the most recent ASSISTANT-authored row, tool calls included. The committed
-/// tool-use fixture is exactly this case: its first token_count (ordinal 11)
-/// follows a function_call and precedes the first agent message, and keying
-/// usage to agent rows alone would drop half the session's tokens.
-///
-/// The running total resets only once something has been attributed, so a
-/// reading that arrives before any response row is carried onto the next one.
-fn begin_response(state: &mut CodexState, timeline_id: &str) {
-    if state.response.is_some() {
-        state.response_total = TokenSnapshot::default();
-    }
-    state.response = Some(timeline_id.to_owned());
 }
 
 // ————— row construction —————————————————————————————————————————————
@@ -1425,7 +1402,7 @@ fn record_discriminator(record: &RolloutLine, ctx: &NormalizeCtx) -> Option<Stri
         })
 }
 
-fn number(value: &Value, key: &str) -> Option<i64> {
+pub(crate) fn number(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
 }
 

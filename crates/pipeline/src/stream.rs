@@ -726,7 +726,7 @@ fn ingest_file(
         if let Some(progress) = &opts.progress {
             progress.source_bytes(file, payload_bytes);
         }
-        let last_reading = *ctx.cumulative.last_reading();
+        let last_reading = ctx.cumulative.last_reading().clone();
         let adapter_state = adapter
             .checkpoint_state(ctx.state.as_deref())
             .map_err(PipelineError::Config)?;

@@ -287,6 +287,13 @@ export type LedgerMember =
 
 /* ── the head ────────────────────────────────────────────────────────────── */
 
+/** A reply's list-price cost (§4.1.3). `microUsd` is null when nothing in the
+ * reply could be priced; `partial` when some of its usage could not be. */
+export interface ResponseCost {
+  readonly microUsd: number | null;
+  readonly partial: boolean;
+}
+
 export interface ResponseHead {
   /** The model the reply opened with. A mid-reply change is a `model_changed`
    * marker in the segments, never a second head (§05 draws exactly that). */
@@ -295,6 +302,8 @@ export interface ResponseHead {
   /** Reported tokens across the reply's response groups. Null means the agent
    * never reported any, which must never be coerced to zero. */
   readonly tokens: number | null;
+  /** List-price cost of the reply's usage; null when it carried none. */
+  readonly cost: ResponseCost | null;
   readonly startedAt: number | null;
   readonly endedAt: number | null;
   readonly spanMs: number | null;
@@ -356,7 +365,9 @@ function isAgentAuthored(row: TimelineEntry): boolean {
   }
 }
 
-/** Per-response snapshots, counted once each: `input + output + thinking`. */
+/** Per-response snapshots, counted once each. The six buckets are mutually
+ * exclusive (ARCHITECTURE §4.1.3), so their sum is the response's total and
+ * the heads add up to the same figure as every aggregate. */
 function reportedTokens(rows: readonly TimelineEntry[]): number | null {
   const seen = new Set<string>();
   let total = 0;
@@ -365,12 +376,35 @@ function reportedTokens(rows: readonly TimelineEntry[]): number | null {
     const id = row.response?.id ?? row.timeline_id;
     if (seen.has(id)) continue;
     seen.add(id);
-    const parts = [row.usage.input, row.usage.output, row.usage.thinking];
-    if (parts.every((value) => value === null)) continue;
+    const parts = [
+      row.usage.input,
+      row.usage.output,
+      row.usage.cache_read,
+      row.usage.cache_write,
+      row.usage.cache_write_1h,
+      row.usage.thinking,
+    ];
+    if (parts.every((value) => value === null || value === undefined)) continue;
     reported = true;
     total += parts.reduce<number>((sum, value) => sum + (value ?? 0), 0);
   }
   return reported ? total : null;
+}
+
+/** The reply's list-price cost from each row's read-time `cost`. Partial when
+ * any usage-bearing row could not be priced; null when no row carried usage. */
+function reportedCost(rows: readonly TimelineEntry[]): ResponseCost | null {
+  let microUsd: number | null = null;
+  let partial = false;
+  let reported = false;
+  for (const row of rows) {
+    const cost = row.cost;
+    if (cost === undefined || cost === null) continue;
+    reported = true;
+    if (cost.status === "priced") microUsd = (microUsd ?? 0) + cost.micro_usd;
+    else partial = true;
+  }
+  return reported ? { microUsd, partial } : null;
 }
 
 function buildPrompt(
@@ -750,6 +784,7 @@ export function documentTurns(
             model: agentRows.find((row) => row.model !== null)?.model ?? null,
             effort: agentRows.find((row) => row.effort !== null)?.effort ?? null,
             tokens: reportedTokens(agentRows),
+            cost: reportedCost(agentRows),
             startedAt: firstStamp(body),
             endedAt: lastStamp(body),
             spanMs: stampSpan(body),

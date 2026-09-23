@@ -24,9 +24,9 @@ use serde_json::json;
 use rosetta_protocol::{
     ApiError, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
     ContributionResponse, DiscoveriesResponse, EnableRequest, EnableResponse, ErrorCode,
-    HeatmapResponse, PROTOCOL_VERSION, ProjectsResponse, RuntimesResponse, SearchRequest,
-    SearchResponse, SessionResponse, SessionsResponse, StatusResponse, TimelineCursor,
-    TimelineEntryResponse, TimelinePage, UsageResponse,
+    HeatmapResponse, PROTOCOL_VERSION, PricingResponse, PricingSource, ProjectsResponse,
+    RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
+    StatusResponse, TimelineCursor, TimelineEntryResponse, TimelinePage, UsageResponse,
 };
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
@@ -251,6 +251,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/heatmap", get(heatmap))
         .route("/api/projects/{id}/usage", get(usage))
         .route("/api/projects/{id}/contribution", get(contribution))
+        .route("/api/pricing", get(pricing))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}", get(session))
         .route(
@@ -1130,6 +1131,31 @@ async fn usage(
     })
     .await?;
     Ok(Json(response))
+}
+
+/// The price catalog behind every cost figure, and the pricing version the
+/// open projection's rollup was priced with.
+async fn pricing(State(state): State<AppState>) -> Result<Json<PricingResponse>, Failure> {
+    let projection_version = with_read(state.projection.clone(), |conn| {
+        rosetta_store::pricing::stored_version(conn).map_err(store_err)
+    })
+    .await?;
+    Ok(Json(PricingResponse {
+        basis: "list_price_equivalent".to_owned(),
+        catalog_version: rosetta_pricing::pricing_version().to_owned(),
+        projection_version,
+        models: u32::try_from(rosetta_pricing::models().len()).unwrap_or(u32::MAX),
+        sources: rosetta_pricing::sources()
+            .iter()
+            .map(|source| PricingSource {
+                name: source.name.to_owned(),
+                url: source.url.to_owned(),
+                revision: source.revision.to_owned(),
+                sha256: source.sha256.to_owned(),
+                license: source.license.to_owned(),
+            })
+            .collect(),
+    }))
 }
 
 async fn contribution(

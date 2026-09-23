@@ -14,9 +14,9 @@ pub use assets::{ImageAsset, ProjectionAsset};
 pub use ops::IngestOp;
 pub use rows::{
     DriftFact, EditKind, FileEditRow, GitCommitRow, MessageKind, MessageRow, Ms, PlanRow,
-    ProjectRow, RuntimeProvenance, RuntimeRow, SessionActivity, SessionDelegation, SessionRole,
-    SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TaskRow, TaskStatus, TitleKind,
-    TokenSnapshot, ToolCall,
+    ProjectRow, RuntimeProvenance, RuntimeRow, ServiceTier, SessionActivity, SessionDelegation,
+    SessionRole, SessionRow, SessionTitleRow, SessionUsageRow, StreamState, TaskRow, TaskStatus,
+    TitleKind, TokenSnapshot, ToolCall, UsageScope,
 };
 pub use timeline::{
     CanonicalError, CanonicalText, CollaborationChannel, CollaborationEvent,
@@ -25,7 +25,7 @@ pub use timeline::{
     ResponseGroup, SearchLanes, SourceIdentity, StatusBasis, TaskSnapshot, TaskSnapshotItem,
     TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolActionKind, ToolCorrelation,
     ToolFailure, ToolFoldState, ToolInteraction, ToolOutcomePatch, ToolRequestPatch, ToolStatus,
-    ToolStatusFact, ToolTiming, ToolUpdatePatch, WorkflowAttempt, WorkflowJournalKind,
+    ToolStatusFact, ToolTiming, ToolUpdatePatch, UsageCost, WorkflowAttempt, WorkflowJournalKind,
     WorkflowJournalObservation, WorkflowPhase, WorkflowResultKind, WorkflowRun, WorkflowRunStatus,
     WorkflowUsage, WorkflowWorker, WorkflowWorkerState,
 };

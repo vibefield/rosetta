@@ -66,6 +66,8 @@ pub enum Mutation {
         ts: Option<Ms>,
         model: Option<String>,
         tokens: TokenSnapshot,
+        /// Read-time list-price cost of the replaced usage.
+        cost: Option<rosetta_core::UsageCost>,
     },
     /// The session's projection was atomically replaced (generation swap),
     /// sealed from a cold pass, or renumbered underneath its delivered rows.

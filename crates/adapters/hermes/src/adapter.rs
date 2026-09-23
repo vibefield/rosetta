@@ -25,7 +25,8 @@ impl AgentAdapter for HermesAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        6
+        // 7: exclusive usage buckets, route, single-call scope (§4.1.3).
+        7
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

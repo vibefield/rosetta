@@ -35,12 +35,15 @@ use serde_json::Value;
 
 use crate::raw::transcript::{
     AiTitleLine, AssistantContentBlock, AssistantLine, CustomTitleLine, KnownAssistantBlock,
-    KnownRecord, KnownUserBlock, RecordedUsage, SystemLine, UserContent, UserContentBlock,
-    UserLine,
+    KnownRecord, KnownUserBlock, SystemLine, UserContent, UserContentBlock, UserLine,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
 use crate::time::rfc3339_ms;
+use crate::usage::{
+    ClaudeResponseUsage, ClaudeUsageTarget, SYNTHETIC_MODEL, USAGE_SUBSET_EXCEEDS_TOTAL, UsageRank,
+    fingerprint, iteration_samples, response_usage_target, snapshot,
+};
 
 /// A record `type` the canonical does not declare — the agent changed under us.
 const UNKNOWN_TYPE: &str = "unknown_type";
@@ -490,19 +493,6 @@ struct ClaudeResponseState {
     usage: Option<ClaudeResponseUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct ClaudeResponseUsage {
-    snapshot: TokenSnapshot,
-    target: ClaudeUsageTarget,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ClaudeUsageTarget {
-    Timeline { timeline_id: String },
-    Session { sample_key: String },
-}
-
 struct ResponseProjection {
     block_indices: Vec<u32>,
     usage: Option<ClaudeResponseUsage>,
@@ -939,68 +929,109 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
         row.block_index = Some(*block_index);
     }
 
-    // Claude repeats the same final response usage on every persisted block.
-    // The first observation owns one canonical fact; an actual correction is
-    // emitted as a replacement update against that same target.
-    let mut deferred_usage = None;
-    if let Some(tokens) = line
+    // Claude repeats the response's usage on every persisted block; the most
+    // final snapshot owns one canonical fact and a real correction replaces it
+    // on the same target. `<synthetic>` error records are no request.
+    let mut deferred_usage = Vec::new();
+    let mut first_target = None;
+    let recorded = line
         .message
         .usage
         .as_ref()
-        .map(snapshot)
-        .filter(|tokens| !tokens.is_empty())
-        && response.usage.as_ref().map(|usage| usage.snapshot) != Some(tokens)
-    {
-        let target = response
-            .usage
-            .as_ref()
-            .map(|usage| usage.target.clone())
-            .unwrap_or_else(|| response_usage_target(&rows, &line.message.id));
-        match &target {
-            ClaudeUsageTarget::Timeline { timeline_id } if response.usage.is_none() => {
-                if let Some((row, _)) = rows
-                    .iter_mut()
-                    .find(|(row, _)| row.timeline_id == *timeline_id)
-                {
-                    row.usage = Some(tokens);
-                }
-            }
-            ClaudeUsageTarget::Timeline { timeline_id } => {
-                deferred_usage = Some(IngestOp::Usage {
-                    session_id: emit.session_id.clone(),
-                    response: timeline_id.clone(),
-                    ts: ts.unwrap_or(0),
-                    model: Some(line.message.model.clone()),
-                    tokens,
-                });
-            }
-            ClaudeUsageTarget::Session { sample_key } => {
-                deferred_usage = Some(IngestOp::SessionUsage(SessionUsageRow {
-                    session_id: emit.session_id.clone(),
-                    key: sample_key.clone(),
-                    ts: ts.unwrap_or(0),
-                    model: Some(line.message.model.clone()),
-                    tokens,
-                }));
-            }
-        }
-        emit.remember_response_usage(
-            &line.message.id,
-            ClaudeResponseUsage {
-                snapshot: tokens,
-                target,
-            },
+        .filter(|_| line.message.model != SYNTHETIC_MODEL)
+        .map(|usage| (usage, snapshot(usage)));
+    if let Some((_, (_, true))) = recorded {
+        emit.drift(
+            USAGE_SUBSET_EXCEEDS_TOTAL,
+            "assistant",
+            vec!["message.usage".to_owned()],
+            ts,
+            Some(&line.version),
         );
     }
+    if let Some((usage, (tokens, _))) = recorded.filter(|(_, (tokens, _))| !tokens.is_empty()) {
+        let rank = UsageRank {
+            final_record: line.message.stop_reason.is_some() || usage.speed.is_some(),
+            output: tokens.output.unwrap_or(0) + tokens.thinking.unwrap_or(0),
+        };
+        let print = fingerprint(&tokens);
+        let improves = response
+            .usage
+            .as_ref()
+            .is_none_or(|known| rank > known.rank && known.fingerprint != print);
+        if improves {
+            let target = response
+                .usage
+                .as_ref()
+                .map(|usage| usage.target.clone())
+                .unwrap_or_else(|| response_usage_target(&rows, &line.message.id));
+            match &target {
+                ClaudeUsageTarget::Timeline { timeline_id } if response.usage.is_none() => {
+                    if let Some((row, _)) = rows
+                        .iter_mut()
+                        .find(|(row, _)| row.timeline_id == *timeline_id)
+                    {
+                        row.usage = Some(tokens.clone());
+                    }
+                    first_target = Some(timeline_id.clone());
+                }
+                ClaudeUsageTarget::Timeline { timeline_id } => {
+                    deferred_usage.push(IngestOp::Usage {
+                        session_id: emit.session_id.clone(),
+                        response: timeline_id.clone(),
+                        ts: ts.unwrap_or(0),
+                        model: Some(line.message.model.clone()),
+                        tokens: tokens.clone(),
+                    });
+                }
+                ClaudeUsageTarget::Session { sample_key } => {
+                    deferred_usage.push(IngestOp::SessionUsage(SessionUsageRow {
+                        session_id: emit.session_id.clone(),
+                        key: sample_key.clone(),
+                        ts: ts.unwrap_or(0),
+                        model: Some(line.message.model.clone()),
+                        tokens: tokens.clone(),
+                    }));
+                }
+            }
+            emit.remember_response_usage(
+                &line.message.id,
+                ClaudeResponseUsage {
+                    fingerprint: print,
+                    target,
+                    rank,
+                },
+            );
+        }
+        if rank.final_record {
+            deferred_usage.extend(iteration_samples(
+                emit.session_id.clone(),
+                &line.message.id,
+                &line.message.model,
+                usage,
+                ts.unwrap_or(0),
+            ));
+        }
+    }
     for (row, edit) in rows {
-        emit.push_row(row);
+        let timeline_id = row.timeline_id.clone();
+        let survived = emit.push_row(row);
+        // Projection turned a dropped owner's usage into the sample
+        // `timeline:<id>`; later corrections must replace that sample, never
+        // aim at a row that does not exist.
+        if !survived && first_target.as_deref() == Some(timeline_id.as_str()) {
+            emit.retarget_response_usage(
+                &line.message.id,
+                ClaudeUsageTarget::Session {
+                    sample_key: format!("timeline:{timeline_id}"),
+                },
+            );
+        }
         if let Some(edit) = edit {
             emit.ops.push(IngestOp::FileEdit(edit));
         }
     }
-    if let Some(usage) = deferred_usage {
-        emit.ops.push(usage);
-    }
+    emit.ops.extend(deferred_usage);
 }
 
 fn system_line(emit: &mut Emit, line: &SystemLine) {
@@ -1079,47 +1110,6 @@ fn custom_title_line(emit: &mut Emit, line: &CustomTitleLine) {
 }
 
 // -------------------------------------------------------------------- derived
-
-/// Pick the best row already available when usage is first observed. A response
-/// split across JSONL records cannot be buffered waiting for a later text block,
-/// so the first projectable record becomes the stable replacement target.
-fn response_usage_target(
-    rows: &[(MessageRow, Option<FileEditRow>)],
-    response_id: &str,
-) -> ClaudeUsageTarget {
-    let target = rows
-        .iter()
-        .position(|(row, _)| row.kind == MessageKind::Agent)
-        .or_else(|| {
-            rows.iter()
-                .position(|(row, _)| row.kind == MessageKind::ToolUse)
-        })
-        .unwrap_or(0);
-    match rows.get(target) {
-        Some((row, _)) => ClaudeUsageTarget::Timeline {
-            timeline_id: row.timeline_id.clone(),
-        },
-        None => ClaudeUsageTarget::Session {
-            sample_key: format!("response:{response_id}"),
-        },
-    }
-}
-
-/// Anthropic's `input_tokens` already EXCLUDES the cached read, so the
-/// components map across one-to-one — no inclusive-counter split here (that is
-/// codex's rule, `fold::split_inclusive_input`).
-fn snapshot(usage: &RecordedUsage) -> TokenSnapshot {
-    TokenSnapshot {
-        input: i64::try_from(usage.input_tokens).ok(),
-        output: i64::try_from(usage.output_tokens).ok(),
-        cache_read: i64::try_from(usage.cache_read_input_tokens).ok(),
-        cache_write: i64::try_from(usage.cache_creation_input_tokens).ok(),
-        thinking: usage
-            .output_tokens_details
-            .as_ref()
-            .and_then(|details| details["thinking_tokens"].as_i64()),
-    }
-}
 
 /// Claude's three file-changing tools also feed project activity. Edit's input
 /// shape is canonical (`file_path/old_string/new_string/replace_all`); Write
@@ -1380,8 +1370,9 @@ impl<'a> Emit<'a> {
         }
     }
 
-    fn push_row(&mut self, row: MessageRow) {
-        IngestOp::push_message(&mut self.ops, row);
+    /// Returns whether the row survived projection.
+    fn push_row(&mut self, row: MessageRow) -> bool {
+        IngestOp::push_message(&mut self.ops, row)
     }
 
     fn push_collaboration(
@@ -1441,6 +1432,7 @@ impl<'a> Emit<'a> {
             },
             parent_tool_native_id: None,
             usage: TokenSnapshot::default(),
+            cost: None,
             provenance: Provenance {
                 agent_version: row.agent_version,
                 src_cursor: row.src_cursor,
@@ -1496,6 +1488,7 @@ impl<'a> Emit<'a> {
             },
             parent_tool_native_id: None,
             usage: TokenSnapshot::default(),
+            cost: None,
             provenance: Provenance {
                 agent_version: row.agent_version,
                 src_cursor: row.src_cursor,
@@ -1540,6 +1533,19 @@ impl<'a> Emit<'a> {
             .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
         {
             state.remember_usage(response_id, usage);
+        }
+    }
+
+    fn retarget_response_usage(&mut self, response_id: &str, target: ClaudeUsageTarget) {
+        if let Some(usage) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.responses.get_mut(response_id))
+            .and_then(|response| response.usage.as_mut())
+        {
+            usage.target = target;
         }
     }
 

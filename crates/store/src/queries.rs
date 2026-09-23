@@ -25,6 +25,41 @@ pub struct HeatmapDay {
     /// Date in the caller-selected timezone, `YYYY-MM-DD`.
     pub day: String,
     pub tokens: i64,
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub spend: Spend,
+}
+
+/// What a token figure cost at list prices (ARCHITECTURE §4.1.3): integer
+/// micro-USD rounded once from the exact pico-USD rollup sums, the
+/// provider-billed amount where agents record one, and the tokens the price
+/// catalog could not price. `cost_micro_usd` is `None` when nothing was
+/// priced; coverage is complete only when `unpriced_tokens` is zero.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Spend {
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub cost_micro_usd: Option<i64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub billed_micro_usd: Option<i64>,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub unpriced_tokens: i64,
+}
+
+impl Spend {
+    /// Build from three SQL columns: SUM(cost_pusd), SUM(billed_pusd),
+    /// SUM(unpriced_tokens), starting at `first`.
+    fn from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            cost_micro_usd: row
+                .get::<_, Option<i64>>(first)?
+                .map(rosetta_pricing::pico_to_micro),
+            billed_micro_usd: row
+                .get::<_, Option<i64>>(first + 1)?
+                .map(rosetta_pricing::pico_to_micro),
+            unpriced_tokens: row.get::<_, Option<i64>>(first + 2)?.unwrap_or(0),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -35,6 +70,9 @@ pub struct ModelDay {
     /// Model id as the agent reported it; `unknown` when it never did.
     pub model: String,
     pub tokens: i64,
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub spend: Spend,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -43,6 +81,9 @@ pub struct HourTotal {
     /// Hour of day 0–23 in the caller-selected timezone.
     pub hour: i64,
     pub tokens: i64,
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub spend: Spend,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -51,6 +92,9 @@ pub struct ContributionRow {
     pub session_id: String,
     pub project_id: Option<String>,
     pub tokens: i64,
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub spend: Spend,
     pub commits: i64,
     pub edits: i64,
     pub loc: i64,
@@ -1193,7 +1237,8 @@ pub fn heatmap_days_in_timezone_for_scope(
         "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
-                    + COALESCE(b.think_tokens,0)) AS tokens
+                    + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
+                SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens)
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
          WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
@@ -1203,6 +1248,7 @@ pub fn heatmap_days_in_timezone_for_scope(
         Ok(HeatmapDay {
             day: row.get(0)?,
             tokens: row.get(1)?,
+            spend: Spend::from_row(row, 2)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1235,7 +1281,8 @@ pub fn model_days_in_timezone_for_scope(
         "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day, b.model,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
-                    + COALESCE(b.think_tokens,0)) AS tokens
+                    + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
+                SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens)
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
          WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
@@ -1246,6 +1293,7 @@ pub fn model_days_in_timezone_for_scope(
             day: row.get(0)?,
             model: row.get(1)?,
             tokens: row.get(2)?,
+            spend: Spend::from_row(row, 3)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1277,7 +1325,8 @@ pub fn hour_profile_in_timezone_for_scope(
         "SELECT CAST(strftime('%H', (b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
-                    + COALESCE(b.think_tokens,0)) AS tokens
+                    + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
+                SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens)
          FROM usage_bucket b
          JOIN session s ON s.id = b.session_id
          WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
@@ -1287,6 +1336,7 @@ pub fn hour_profile_in_timezone_for_scope(
         Ok(HourTotal {
             hour: row.get(0)?,
             tokens: row.get(1)?,
+            spend: Spend::from_row(row, 2)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1328,7 +1378,9 @@ pub fn contribution_for_scope(
              SELECT t.rid,
                     SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                         + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
-                        + COALESCE(b.think_tokens,0)) AS tokens
+                        + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
+                    SUM(b.cost_pusd) AS cost_pusd, SUM(b.billed_pusd) AS billed_pusd,
+                    SUM(b.unpriced_tokens) AS unpriced_tokens
              FROM tree_sessions t JOIN usage_bucket b ON b.session_id = t.session_id
              GROUP BY t.rid
          ),
@@ -1349,7 +1401,8 @@ pub fn contribution_for_scope(
              GROUP BY t.rid
          )
          SELECT r.id, r.project_id, COALESCE(u.tokens, 0), COALESCE(c.commits, 0),
-                COALESCE(e.edits, 0), COALESCE(e.loc, 0), COALESCE(m.messages, 0)
+                COALESCE(e.edits, 0), COALESCE(e.loc, 0), COALESCE(m.messages, 0),
+                u.cost_pusd, u.billed_pusd, u.unpriced_tokens
          FROM roots r
          LEFT JOIN usage u ON u.rid = r.id
          LEFT JOIN commits c ON c.rid = r.id
@@ -1366,6 +1419,7 @@ pub fn contribution_for_scope(
             edits: row.get(4)?,
             loc: row.get(5)?,
             messages: row.get(6)?,
+            spend: Spend::from_row(row, 7)?,
         })
     })?;
     let mut out = Vec::new();

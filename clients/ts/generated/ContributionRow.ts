@@ -5,4 +5,4 @@ export type ContributionRow = { session_id: string, project_id: string | null, t
  * Message rows across the session's whole subagent tree, folded into the
  * root the same way the view folds tokens.
  */
-messages: number, };
+messages: number, cost_micro_usd: number | null, billed_micro_usd: number | null, unpriced_tokens: number, };

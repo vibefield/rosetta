@@ -272,6 +272,12 @@ pub struct ToolResultMessage {
     pub timestamp: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    /// LLM spend of the tool execution itself (an extension tool that calls a
+    /// model), outside the main loop's accounting (`ai/types.ts:449-465`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_tool_names: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

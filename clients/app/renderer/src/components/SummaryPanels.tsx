@@ -16,6 +16,8 @@ import {
 import { fmtTokens, tokenText } from "../lib/format";
 import { GitGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
 import type { ProjectViewModel } from "../lib/model";
+import { NO_SPEND, addSpend, coverage, fmtUsd, spendDescription, usdText } from "../lib/spend";
+import type { Spend } from "../lib/spend";
 
 type TintStyle = CSSProperties & { "--tint": string };
 type ProjectChart = "activity" | "models";
@@ -41,6 +43,21 @@ function TokenSummaryValue({ value, unknown = false }: { value: number; unknown?
   );
 }
 
+/** List-price spend (§4.1.3): a partial figure is a lower bound marked `+`;
+ * usage the catalog cannot price reads `n/p`, never $0. */
+function SpendSummaryValue({ spend, unknown = false }: { spend: Spend; unknown?: boolean }) {
+  if (unknown) return <b>—</b>;
+  const state = coverage(spend);
+  if (spend.costMicroUsd === null) return <b>{state === "unavailable" ? "n/p" : "—"}</b>;
+  const figure = fmtUsd(spend.costMicroUsd);
+  return (
+    <b>
+      {figure.n}
+      <small>{`${figure.u}${state === "partial" ? "+" : ""}`}</small>
+    </b>
+  );
+}
+
 /** A veiled figure that has not landed yet is a dash, never a claimed zero
  * (the design record's rule for every cooking slot). */
 function CountFigure({ value, veiled }: { readonly value: number; readonly veiled: boolean }) {
@@ -50,13 +67,14 @@ function CountFigure({ value, veiled }: { readonly value: number; readonly veile
 interface SummaryStat {
   label: string;
   value: ReactNode;
+  title?: string;
 }
 
 function SummaryStats({ stats }: { stats: readonly SummaryStat[] }) {
   return (
     <div className="ah-stats">
       {stats.map((stat) => (
-        <div className="ah-stat" key={stat.label}>
+        <div className="ah-stat" key={stat.label} title={stat.title}>
           {stat.value}
           <span>{stat.label}</span>
         </div>
@@ -221,8 +239,15 @@ export function ProjectSummaryPanel({
                 label: "tokens",
               },
               {
-                value: <CountFigure value={activityStats.activeDayCount} veiled={isVeiled} />,
-                label: "active days",
+                // The day count stays in the calendar's caption below.
+                value: (
+                  <SpendSummaryValue
+                    spend={project.spendLast53Weeks}
+                    unknown={isVeiled && project.tokensLast53Weeks === 0}
+                  />
+                ),
+                label: "list price",
+                title: `${spendDescription(project.spendLast53Weeks, tokenText)} · 53 weeks`,
               },
             ]}
           />
@@ -316,22 +341,19 @@ export function PortfolioSummaryPanel({
   const [isExpanded, setIsExpanded] = useState(true);
   const summariesPending = ingestActive || projects.some((project) => !project.statsReady);
   const summary = useMemo(() => {
-    const activeDayIndices = new Set<number>();
-    for (const project of projects) {
-      project.dailyTokens.forEach((value, dayIndex) => {
-        if (value > 0) activeDayIndices.add(dayIndex);
-      });
-    }
-
-    // Match the project list's lifetime ranking, including its stable tie order.
+    // Match the project list's lifetime spend ranking, tokens breaking ties.
     const treemapProjects = [...projects]
-      .sort((left, right) => right.lifetimeTokens - left.lifetimeTokens)
+      .filter((project) => (project.lifetimeSpend.costMicroUsd ?? 0) > 0)
+      .sort((left, right) =>
+        (right.lifetimeSpend.costMicroUsd ?? 0) - (left.lifetimeSpend.costMicroUsd ?? 0)
+          || right.lifetimeTokens - left.lifetimeTokens,
+      )
       .slice(0, MAX_TREEMAP_PROJECT_COUNT);
     const treemapData: TreemapData = {
       items: treemapProjects.map((project) => ({
         id: project.row.id,
         label: project.row.name,
-        value: project.lifetimeTokens,
+        value: project.lifetimeSpend.costMicroUsd ?? 0,
         color: project.tint,
       })),
     };
@@ -349,7 +371,10 @@ export function PortfolioSummaryPanel({
         (total, project) => total + project.lifetimeTokens,
         0,
       ),
-      activeDayCount: activeDayIndices.size,
+      spend: projects.reduce<Spend>(
+        (total, project) => addSpend(total, project.lifetimeSpend),
+        NO_SPEND,
+      ),
       treemapData,
     };
   }, [projects]);
@@ -406,26 +431,32 @@ export function PortfolioSummaryPanel({
                 label: "tokens",
               },
               {
-                value: <CountFigure value={summary.activeDayCount} veiled={summariesPending} />,
-                label: "active days",
+                value: (
+                  <SpendSummaryValue
+                    spend={summary.spend}
+                    unknown={summariesPending && summary.tokenCount === 0}
+                  />
+                ),
+                label: "list price",
+                title: `${spendDescription(summary.spend, tokenText)} · all time`,
               },
             ]}
           />
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}
-              ariaLabel="Top projects by lifetime total tokens, where area represents share among displayed projects"
-              emptyMessage="No recorded project tokens"
+              ariaLabel="Top projects by lifetime list-price spend, where area represents share among displayed projects"
+              emptyMessage="No priced project usage"
               showFooter={false}
               height={SUMMARY_CHART_CONTENT_HEIGHT}
               minimumVisibleShare={0}
               selectedItemId={selectedProjectId}
               onItemSelect={(item) => onProjectSelect(item.id)}
-              formatValue={tokenText}
+              formatValue={usdText}
               getItemAccessibleLabel={(item, context) =>
-                `${item.label} · ${tokenText(item.value)} lifetime tokens · ${(
+                `${item.label} · ${usdText(item.value)} at list prices · ${(
                   context.share * 100
-                ).toFixed(1)}% of displayed lifetime tokens`
+                ).toFixed(1)}% of displayed lifetime spend`
               }
             />
           </div>

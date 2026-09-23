@@ -3,6 +3,7 @@ import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
 import { isSessionCooking } from "../../lib/ingest";
 import { sessionLastActive } from "../../lib/session-activity";
+import { spendDescription, spendText } from "../../lib/spend";
 import { getSessionStatus, getSessionTitle } from "./session-display";
 import type { SessionFacts } from "./types";
 
@@ -43,7 +44,13 @@ export function SessionListItem({
     landedFacts !== null && landedFacts.tokens > 0
       ? `${tokenText(landedFacts.tokens)} tokens`
       : null,
+    landedFacts !== null && landedFacts.tokens > 0
+      ? spendDescription(landedFacts.spend, tokenText)
+      : null,
   ].filter((value): value is string => value !== null);
+  const spendFigure = landedFacts !== null && landedFacts.tokens > 0
+    ? spendText(landedFacts.spend)
+    : null;
 
   return (
     <button
@@ -100,6 +107,12 @@ export function SessionListItem({
           <>
             <span>·</span>
             <span>{tokenText(landedFacts.tokens)}</span>
+          </>
+        )}
+        {landedFacts !== null && spendFigure !== null && (
+          <>
+            <span>·</span>
+            <span title={spendDescription(landedFacts.spend, tokenText)}>{spendFigure}</span>
           </>
         )}
       </span>

@@ -4,4 +4,4 @@ export type HourTotal = {
 /**
  * Hour of day 0–23 in the caller-selected timezone.
  */
-hour: number, tokens: number, };
+hour: number, tokens: number, cost_micro_usd: number | null, billed_micro_usd: number | null, unpriced_tokens: number, };

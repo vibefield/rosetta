@@ -7,7 +7,7 @@ use std::error::Error;
 use rosetta_core::timeline::{AssetRef, AttachmentRef, CitationRef};
 use rosetta_core::{
     CanonicalText, GroupDerivation, GroupKind, MessageDetail, Provenance, ResponseGroup,
-    TimelineBody, TimelineEntry, TimelineGroup, TokenSnapshot,
+    ServiceTier, TimelineBody, TimelineEntry, TimelineGroup, TokenSnapshot, UsageScope,
 };
 use rusqlite::Row;
 use rusqlite::types::Type;
@@ -39,6 +39,12 @@ crate::columns::column_map! {
         cache_r_tokens: "cache_r_tokens",
         cache_w_tokens: "cache_w_tokens",
         think_tokens: "think_tokens",
+        cache_w1h_tokens: "cache_w1h_tokens",
+        web_searches: "web_searches",
+        service_tier: "service_tier",
+        route: "route",
+        billed_pusd: "billed_pusd",
+        usage_scope: "usage_scope",
         agent_version: "agent_version",
         src_cursor: "src_cursor",
         src_offset: "src_offset",
@@ -338,17 +344,50 @@ fn decode_columns<I: rusqlite::RowIndex + Copy>(
             cache_read: row.get(columns.cache_r_tokens)?,
             cache_write: row.get(columns.cache_w_tokens)?,
             thinking: row.get(columns.think_tokens)?,
+            cache_write_1h: row.get(columns.cache_w1h_tokens)?,
+            web_searches: row.get(columns.web_searches)?,
+            service_tier: decode_service_tier(row.get(columns.service_tier)?)?,
+            route: row.get(columns.route)?,
+            billed_pico_usd: row.get(columns.billed_pusd)?,
+            scope: decode_message_scope(row.get(columns.usage_scope)?)?,
         },
+        cost: None,
         provenance: Provenance {
             agent_version: row.get(columns.agent_version)?,
             src_cursor: row.get(columns.src_cursor)?,
             src_offset: row.get(columns.src_offset)?,
         },
     };
+    let mut entry = entry;
+    entry.cost = crate::pricing::usage_cost(entry.model.as_deref(), entry.at, &entry.usage);
     entry
         .validate()
         .map_err(|error| invalid(format!("invalid stored timeline entry: {error}")))?;
     Ok(entry)
+}
+
+/// Decode the closed service-tier column; the DDL CHECK admits only the
+/// canonical spellings, so anything else is a corrupt projection.
+pub(crate) fn decode_service_tier(value: Option<String>) -> rusqlite::Result<Option<ServiceTier>> {
+    value
+        .map(|value| {
+            ServiceTier::parse(&value)
+                .ok_or_else(|| invalid(format!("unknown service tier {value:?}")))
+        })
+        .transpose()
+}
+
+/// A message row stores only the exceptional scope; NULL is one request.
+pub(crate) fn message_scope_column(scope: UsageScope) -> Option<&'static str> {
+    (scope == UsageScope::Aggregate).then_some("aggregate")
+}
+
+fn decode_message_scope(value: Option<String>) -> rusqlite::Result<UsageScope> {
+    match value.as_deref() {
+        None => Ok(UsageScope::Request),
+        Some("aggregate") => Ok(UsageScope::Aggregate),
+        Some(other) => Err(invalid(format!("unknown usage scope {other:?}"))),
+    }
 }
 
 pub(crate) const fn group_kind_name(value: GroupKind) -> &'static str {

@@ -10,11 +10,13 @@ mod bulk;
 mod columns;
 pub mod hot;
 mod message_codec;
+pub mod pricing;
 pub mod queries;
 pub mod schema;
 mod search_sync;
 pub mod timeline_meta;
 mod tool_codec;
+mod usage_sql;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -185,7 +187,7 @@ enum StoreMode {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         let objects: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
             [],
@@ -204,6 +206,7 @@ impl Store {
                     .into(),
             });
         }
+        pricing::ensure_current(&mut conn)?;
         Ok(Self {
             conn,
             transient_memory: false,
@@ -220,12 +223,13 @@ impl Store {
     }
 
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        let conn = Connection::open_in_memory()?;
+        let mut conn = Connection::open_in_memory()?;
         schema::init(&conn)?;
         conn.execute(
             "UPDATE projection_state SET canonical_ready = 1 WHERE singleton = 1",
             [],
         )?;
+        pricing::ensure_current(&mut conn)?;
         Ok(Self {
             conn,
             transient_memory: true,
@@ -246,11 +250,12 @@ impl Store {
     /// interrupted one retains cold direct-first-generation behavior and is
     /// finalized only after every selected runtime completes cleanly.
     pub fn open_progressive(path: &Path) -> Result<Self, StoreError> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         schema::init_deferred(&conn)?;
         let state = queries::projection_state(&conn)?;
         if state.canonical_ready {
             conn.execute_batch(schema::BULK_CREATE_INDEXES)?;
+            pricing::ensure_current(&mut conn)?;
         } else {
             bulk::prepare_progressive(&conn)?;
         }

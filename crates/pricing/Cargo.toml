@@ -1,0 +1,10 @@
+[package]
+name = "rosetta-pricing"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rosetta-core = { path = "../core" }
+
+[dev-dependencies]
+serde_json.workspace = true

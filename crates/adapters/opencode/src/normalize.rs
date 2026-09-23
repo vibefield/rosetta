@@ -11,9 +11,7 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
-use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, SessionUsageRow, TokenSnapshot,
-};
+use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, MessageKind, MessageRow};
 use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,8 +23,15 @@ use crate::spec;
 pub struct OpenCodeState {
     #[serde(default)]
     prompts: std::collections::BTreeMap<String, crate::images::PromptParts>,
-    /// Message usage is repeated on every joined part; attach it once.
-    usage_messages: BTreeSet<String>,
+    /// Per assistant message, the first surviving response row of its
+    /// current step. One step is one model request; its step-finish part's
+    /// usage lands on that row (RESEARCH_PLAN §5.13).
+    #[serde(default)]
+    pub(crate) step_rows: std::collections::BTreeMap<String, Option<String>>,
+    /// Rows already carrying one step's usage: a later step without a row of
+    /// its own becomes a session sample instead of overwriting it.
+    #[serde(default)]
+    pub(crate) claimed_rows: BTreeSet<String>,
     /// Current execution cwd used only to resolve relative tool arguments.
     /// Session ownership was already fixed by the database metadata query.
     tool_cwd: Option<String>,
@@ -41,11 +46,11 @@ struct SnapshotEnvelope {
 }
 
 #[derive(Deserialize)]
-struct TimelineRecord {
-    message_id: String,
+pub(crate) struct TimelineRecord {
+    pub(crate) message_id: String,
     message_data: String,
-    part_id: String,
-    part_time_created: i64,
+    pub(crate) part_id: String,
+    pub(crate) part_time_created: i64,
     part_data: String,
     first_event_seq: Option<i64>,
     #[serde(flatten)]
@@ -209,8 +214,7 @@ fn project(
             };
             let mut row = timeline_row(ctx, record, message, kind);
             row.content = Some(text.text.clone());
-            attach_usage(state, &record.message_id, message, &mut row);
-            IngestOp::push_message(ops, row);
+            push_response_row(state, record, message, row, ops);
             LineStatus::Parsed
         }
         PartData::Tool(tool) => {
@@ -258,8 +262,7 @@ fn project(
                     )
                 }
             });
-            attach_usage(state, &record.message_id, message, &mut row);
-            IngestOp::push_message(ops, row);
+            push_response_row(state, record, message, row, ops);
 
             match tool.state.get("status").and_then(Value::as_str) {
                 Some("completed") => {
@@ -345,8 +348,7 @@ fn project(
                 .ok()
                 .or(Some(record.part_time_created));
             row.content = Some(reasoning.text.clone());
-            attach_usage(state, &record.message_id, message, &mut row);
-            IngestOp::push_message(ops, row);
+            push_response_row(state, record, message, row, ops);
             LineStatus::Parsed
         }
         PartData::Patch(patch) => {
@@ -377,24 +379,18 @@ fn project(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .or_else(|| serde_json::to_string(&retry.error).ok());
-            attach_usage(state, &record.message_id, message, &mut row);
-            IngestOp::push_message(ops, row);
+            push_response_row(state, record, message, row, ops);
             LineStatus::Parsed
         }
-        PartData::StepFinish(_) => {
-            // Error/empty assistant turns can end without a text, reasoning,
-            // or tool row. Preserve their exact response usage without
-            // manufacturing a visible message.
-            if let MessageData::Assistant(message) = message
-                && state.usage_messages.insert(record.message_id.clone())
-            {
-                ops.push(IngestOp::SessionUsage(SessionUsageRow {
-                    session_id: ctx.session_id.clone(),
-                    key: ids::usage_id(&ctx.session_id, &record.message_id),
-                    ts: record.part_time_created,
-                    model: Some(message.model_id.clone()),
-                    tokens: token_snapshot(&message.tokens),
-                }));
+        PartData::StepStart(_) => {
+            if matches!(message, MessageData::Assistant(_)) {
+                state.step_rows.insert(record.message_id.clone(), None);
+            }
+            LineStatus::Parsed
+        }
+        PartData::StepFinish(step) => {
+            if let MessageData::Assistant(message) = message {
+                crate::usage::step_usage(ctx, stream_id, state, record, message, step, ops);
             }
             LineStatus::Parsed
         }
@@ -404,14 +400,12 @@ fn project(
             if let Some((attachment, asset)) = crate::images::attachment(&record.part_id, file) {
                 let mut row = timeline_row(ctx, record, message, MessageKind::Agent);
                 row.attachments.push(attachment);
-                attach_usage(state, &record.message_id, message, &mut row);
                 ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
-                IngestOp::push_message(ops, row);
+                push_response_row(state, record, message, row, ops);
             }
             LineStatus::Parsed
         }
         PartData::Subtask(_)
-        | PartData::StepStart(_)
         | PartData::Snapshot(_)
         | PartData::Agent(_)
         | PartData::Compaction(_) => LineStatus::Parsed,
@@ -458,34 +452,27 @@ fn timeline_row(
     }
 }
 
-fn attach_usage(
+/// Emit a response row and, when it survives projection, make it the target
+/// of its message's current step.
+fn push_response_row(
     state: &mut OpenCodeState,
-    message_id: &str,
+    record: &TimelineRecord,
     message: &MessageData,
-    row: &mut MessageRow,
+    row: MessageRow,
+    ops: &mut Vec<IngestOp>,
 ) {
-    let MessageData::Assistant(message) = message else {
-        return;
-    };
-    if state.usage_messages.insert(message_id.to_owned()) {
-        row.usage = Some(token_snapshot(&message.tokens));
+    let timeline_id = row.timeline_id.clone();
+    let survived = IngestOp::push_message(ops, row);
+    if survived && matches!(message, MessageData::Assistant(_)) {
+        // A writer without step-start parts still gets one slot per message.
+        let slot = state
+            .step_rows
+            .entry(record.message_id.clone())
+            .or_insert(None);
+        if slot.is_none() {
+            *slot = Some(timeline_id);
+        }
     }
-}
-
-fn token_snapshot(tokens: &crate::raw::payload::Tokens) -> TokenSnapshot {
-    TokenSnapshot {
-        input: exact_i64(&tokens.input),
-        output: exact_i64(&tokens.output),
-        cache_read: exact_i64(&tokens.cache.read),
-        cache_write: exact_i64(&tokens.cache.write),
-        thinking: exact_i64(&tokens.reasoning),
-    }
-}
-
-fn exact_i64(number: &serde_json::Number) -> Option<i64> {
-    number
-        .as_i64()
-        .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok()))
 }
 
 fn remember_tool_cwd(state: &mut OpenCodeState, message: &MessageData) {
@@ -520,7 +507,7 @@ fn discriminant(json: &str, key: &str) -> String {
         .unwrap_or_else(|| "<untyped>".to_owned())
 }
 
-fn drift(
+pub(crate) fn drift(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,
@@ -678,7 +665,8 @@ mod tests {
         };
         assert_eq!(text.as_preview(), "considering the options");
         assert_eq!(message.at, Some(110));
-        assert_eq!(message.usage.thinking, Some(3));
+        // Usage comes from the step-finish part, never from `message.tokens`.
+        assert!(message.usage.is_empty());
     }
 
     #[test]

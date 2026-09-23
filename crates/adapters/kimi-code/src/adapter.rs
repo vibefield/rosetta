@@ -32,7 +32,9 @@ impl AgentAdapter for KimiCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        11
+        // 12: compaction (`usageScope: "session"`) usage counts; pending turn
+        // usage accumulates (§4.1.3).
+        12
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

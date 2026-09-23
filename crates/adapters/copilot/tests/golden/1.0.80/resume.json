@@ -30,7 +30,13 @@
       "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -67,10 +73,16 @@
     "parent_tool_native_id": null,
     "usage": {
       "input": null,
-      "output": 32,
+      "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -79,9 +91,9 @@
     }
   },
   {
-    "op": "usage",
+    "op": "session_usage",
     "session_id": "acd8f5e88984aff7ec091d6ce8ceea4cbbe374b0b27068d02f10130353a7221d",
-    "response": "6d62bcd2655e25a9ace27a614c0a67aaf563100a921153b67fa2d62a2d0f888d",
+    "key": "09d7e3bca0a3f301d0946c0ca33782c151a8e7ca3f0773f2f5b793d74d36315e",
     "ts": 1787635687351,
     "model": "mock-model",
     "tokens": {
@@ -89,7 +101,13 @@
       "output": 32,
       "cache_read": 0,
       "cache_write": 0,
-      "thinking": 0
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     }
   },
   {
@@ -123,7 +141,13 @@
       "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -160,10 +184,16 @@
     "parent_tool_native_id": null,
     "usage": {
       "input": null,
-      "output": 32,
+      "output": null,
       "cache_read": null,
       "cache_write": null,
-      "thinking": null
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -172,9 +202,9 @@
     }
   },
   {
-    "op": "usage",
+    "op": "session_usage",
     "session_id": "acd8f5e88984aff7ec091d6ce8ceea4cbbe374b0b27068d02f10130353a7221d",
-    "response": "ae90bd414f3660c2370bcb226c3b1755b042faf3119af1dc18ef7c68a75118be",
+    "key": "49380a0b0b826774cb80c2f79af4710c395464d741f5e1511531780d599ade74",
     "ts": 1787635688474,
     "model": "mock-model",
     "tokens": {
@@ -182,7 +212,13 @@
       "output": 32,
       "cache_read": 0,
       "cache_write": 0,
-      "thinking": 0
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request"
     }
   }
 ]

@@ -133,6 +133,7 @@ fn tool_entry(id: &str, ordinal: i64, at: i64, action: ToolAction) -> TimelineEn
         },
         parent_tool_native_id: None,
         usage: TokenSnapshot::default(),
+        cost: None,
         provenance: Provenance {
             agent_version: None,
             src_cursor: None,

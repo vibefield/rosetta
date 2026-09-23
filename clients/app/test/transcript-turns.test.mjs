@@ -140,7 +140,9 @@ describe("documentTurns — the anatomy of a turn", () => {
     const { head } = turns[0];
     assert.equal(head.model, "claude-opus-5");
     assert.equal(head.effort, "max");
-    assert.equal(head.tokens, 41_200); // input + output + thinking, once per response
+    // Every exclusive bucket (cache included), once per response — the same
+    // total every aggregate reports.
+    assert.equal(head.tokens, 41_218);
     assert.equal(head.startedAt, 2_000);
     assert.equal(head.endedAt, 8_000);
     assert.equal(head.spanMs, 6_000);
@@ -568,5 +570,21 @@ describe("documentTurns is honest about nothing", () => {
   it("reports null tokens when the agent never reported any", () => {
     const [turn] = documentTurns([prompt("go"), agent("done")]);
     assert.equal(turn.head.tokens, null);
+    assert.equal(turn.head.cost, null);
+  });
+
+  it("sums the reply's read-time costs and marks an unpriced part", () => {
+    const priced = agent("first", {
+      responseId: "r1",
+      usage: { input: 10, output: 5, cache_read: null, cache_write: null, thinking: null },
+    });
+    priced.cost = { status: "priced", micro_usd: 1_250, long_context: false };
+    const unpriced = agent("second", {
+      responseId: "r2",
+      usage: { input: 7, output: 1, cache_read: null, cache_write: null, thinking: null },
+    });
+    unpriced.cost = { status: "unpriced", reason: "unknown_model" };
+    const [turn] = documentTurns([prompt("go"), priced, unpriced]);
+    assert.deepEqual(turn.head.cost, { microUsd: 1_250, partial: true });
   });
 });

@@ -498,7 +498,7 @@ pub(crate) fn flush_chunk(
         SourceMode::Abandon
     };
     let checkpoints = if last {
-        let reading = *ctx.cumulative.last_reading();
+        let reading = ctx.cumulative.last_reading().clone();
         let next = PipeCheckpoint {
             v: PIPE_CHECKPOINT_VERSION,
             session_id: file.session_id.clone(),

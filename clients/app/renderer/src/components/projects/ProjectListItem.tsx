@@ -3,8 +3,10 @@ import type { ProjectBackfill, BackfillState } from "@rosetta/protocol";
 import { AgentBadges } from "../../lib/agents";
 import { progressBytes } from "../../lib/ingest-activity";
 import { projectBackfillProgress } from "../../lib/ingest";
-import { fmtTokens, lastActive, tildePath, tokenText } from "../../lib/format";
+import { lastActive, tildePath, tokenText } from "../../lib/format";
 import type { ProjectViewModel } from "../../lib/model";
+import { coverage, fmtUsd, spendDescription } from "../../lib/spend";
+import type { Spend } from "../../lib/spend";
 import { ProjectActivitySparkline } from "./ProjectActivitySparkline";
 
 type ProjectListItemStyle = CSSProperties & {
@@ -13,28 +15,39 @@ type ProjectListItemStyle = CSSProperties & {
   "--ingest-fill"?: string;
 };
 
-function TokenFigure({
-  value,
+/** The row's "how much": list-price spend (§4.1.3). A partial figure is a
+ * lower bound and says so with `+`; usage with no list price at all reads
+ * `n/p` rather than a claimed $0. */
+function SpendFigure({
+  spend,
   unknown,
+  description,
 }: {
-  readonly value: number;
+  readonly spend: Spend;
   /** No figure has landed yet — a dash in the slot, not a claimed zero.
    * Fixed-width either way, so nothing reflows when the number arrives. */
   readonly unknown: boolean;
+  readonly description: string;
 }) {
-  const formattedValue = fmtTokens(value);
+  const state = coverage(spend);
+  const figure = spend.costMicroUsd === null ? null : fmtUsd(spend.costMicroUsd);
   return (
-    <span className="ah-project-list-item__token-figure">
-      <b>{unknown ? "—" : formattedValue.n}</b>
-      <i>{unknown ? "" : formattedValue.u}</i>
+    <span
+      className="ah-project-list-item__token-figure"
+      data-coverage={state}
+      title={unknown ? undefined : description}
+    >
+      <b>{unknown ? "—" : figure === null ? (state === "unavailable" ? "n/p" : "—") : figure.n}</b>
+      <i>{unknown || figure === null ? "" : `${figure.u}${state === "partial" ? "+" : ""}`}</i>
     </span>
   );
 }
 
 export interface ProjectListItemProps {
   readonly project: ProjectViewModel;
-  /** Maximum across the complete project collection, not a filtered subset. */
-  readonly maximumLifetimeTokens: number;
+  /** Maximum lifetime list-price spend (micro-USD) across the complete
+   * project collection, not a filtered subset. */
+  readonly maximumLifetimeCost: number;
   readonly isSelected: boolean;
   readonly homeDirectory: string | null;
   readonly currentTimestamp: number;
@@ -49,7 +62,7 @@ export interface ProjectListItemProps {
 
 export function ProjectListItem({
   project,
-  maximumLifetimeTokens,
+  maximumLifetimeCost,
   isSelected,
   homeDirectory,
   currentTimestamp,
@@ -78,9 +91,11 @@ export function ProjectListItem({
             ? "Organizing conversations" : "Waiting for conversations"
       : project.readiness === "ready" ? "Preparing activity summaries" : "Waiting for conversations"
     : null;
-  const spendShare = maximumLifetimeTokens > 0
-    ? (project.lifetimeTokens / maximumLifetimeTokens) * 100
+  const lifetimeCost = project.lifetimeSpend.costMicroUsd ?? 0;
+  const spendShare = maximumLifetimeCost > 0
+    ? (lifetimeCost / maximumLifetimeCost) * 100
     : 0;
+  const spendLabel = spendDescription(project.lifetimeSpend, tokenText);
   const lastActiveLabel = project.lastActiveMs === null
     ? null
     : lastActive(project.lastActiveMs, currentTimestamp);
@@ -103,7 +118,8 @@ export function ProjectListItem({
       } as ProjectListItemStyle}
       aria-current={isSelected ? "true" : undefined}
       aria-label={`${project.row.name} · ${isCooking && project.lifetimeTokens === 0
-        ? "activity summaries pending" : `${tokenText(project.lifetimeTokens)} lifetime tokens`}${
+        ? "activity summaries pending"
+        : `${spendLabel} · ${tokenText(project.lifetimeTokens)} lifetime tokens`}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
       }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
       onClick={() => onProjectSelect(project.row.id)}
@@ -124,9 +140,10 @@ export function ProjectListItem({
           title={cookingLabel ?? undefined}
         >
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
-          <TokenFigure
-            value={project.lifetimeTokens}
+          <SpendFigure
+            spend={project.lifetimeSpend}
             unknown={isCooking && project.lifetimeTokens === 0}
+            description={`${spendLabel} · ${tokenText(project.lifetimeTokens)} tokens`}
           />
         </span>
         {lastActiveLabel !== null && (

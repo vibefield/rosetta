@@ -13,6 +13,39 @@ from typing import Any
 USAGE_IN = 128
 USAGE_OUT = 32
 HIGH_USAGE_IN = 900
+USAGE_MARKER = "[usage]"
+
+
+def usage_numbers(turn: int) -> dict[str, int]:
+    """Distinct non-zero counts for the `[usage]` scenario (RESEARCH_PLAN §5.13).
+
+    Every bucket is a different prime-ish value so a fixture shows exactly how
+    an agent folds each wire field: which subsets it subtracts, which it keeps
+    inside a total, and which it drops. `turn` (0 before a tool result, 1
+    after) shifts every value so two requests in one session stay distinct.
+    """
+    uncached = 1009 + 100 * turn
+    cache_read = 5003 + 1000 * turn
+    write_5m = 1201 + 10 * turn
+    write_1h = 809 + 10 * turn
+    visible = 197 + 10 * turn
+    reasoning = 211 + 10 * turn
+    return {
+        "uncached": uncached,
+        "cache_read": cache_read,
+        "write_5m": write_5m,
+        "write_1h": write_1h,
+        "visible": visible,
+        "reasoning": reasoning,
+        "web_searches": 2,
+        "web_fetches": 1,
+        # xAI's billed amount, 10^10 ticks per USD.
+        "cost_ticks": 1_234_500 + turn,
+    }
+
+
+def wants_usage(request: dict[str, Any]) -> bool:
+    return USAGE_MARKER in _compact(request)
 GREETING = "Hello from rosetta mockmodel. This is a deterministic scripted response."
 TOOL_DONE = "The tool ran successfully and printed: rosetta-mock. Scenario complete."
 
@@ -157,7 +190,8 @@ class MockHandler(BaseHTTPRequestHandler):
         )
         message_id = f"msg_mock_{request_id:04}"
         if stream:
-            body = _anthropic_sse(message_id, model, script).encode()
+            turn = _turn(request, script[1] == TOOL_DONE)
+            body = _anthropic_sse(message_id, model, script, turn).encode()
             self._send(200, body, "text/event-stream")
             return
         if script[0] == "text":
@@ -183,7 +217,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 "content": content,
                 "stop_reason": stop_reason,
                 "stop_sequence": None,
-                "usage": _anthropic_usage(),
+                "usage": _anthropic_usage(_turn(request, script[1] == TOOL_DONE)),
             },
         )
 
@@ -201,7 +235,9 @@ class MockHandler(BaseHTTPRequestHandler):
                 "request": request,
             }
         )
-        response, item = _openai_completed_response(request_id, model, script)
+        response, item = _openai_completed_response(
+            request_id, model, script, _turn(request, script[1] == TOOL_DONE)
+        )
         if not stream:
             self._send_json(200, response)
             return
@@ -238,11 +274,12 @@ class MockHandler(BaseHTTPRequestHandler):
                 "request": request,
             }
         )
+        turn = _turn(request, _gemini_has_function_response(request))
         if streamed:
-            body = _gemini_sse(request_id, model, script).encode()
+            body = _gemini_sse(request_id, model, script, turn).encode()
             self._send(200, body, "text/event-stream")
             return
-        self._send_json(200, _gemini_response(request_id, model, script))
+        self._send_json(200, _gemini_response(request_id, model, script, turn))
 
     def _openai_chat(self, request: dict[str, Any]) -> None:
         request_id = self.server.state.next_id()
@@ -250,6 +287,7 @@ class MockHandler(BaseHTTPRequestHandler):
         stream = bool(request.get("stream", False))
         script = _openai_chat_script(request)
         usage_in = HIGH_USAGE_IN if "[high-usage]" in _compact(request) else USAGE_IN
+        turn = _turn(request, script[1] == TOOL_DONE)
         self.server.state.log(
             {
                 "path": self.path,
@@ -260,11 +298,11 @@ class MockHandler(BaseHTTPRequestHandler):
             }
         )
         if stream:
-            body = _openai_chat_sse(request_id, model, script, usage_in).encode()
+            body = _openai_chat_sse(request_id, model, script, usage_in, turn).encode()
             self._send(200, body, "text/event-stream")
             return
         self._send_json(
-            200, _openai_chat_completion(request_id, model, script, usage_in)
+            200, _openai_chat_completion(request_id, model, script, usage_in, turn)
         )
 
 
@@ -308,20 +346,53 @@ def _anthropic_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
     )
 
 
-def _anthropic_usage() -> dict[str, int]:
+def _anthropic_usage(turn: int | None = None) -> dict[str, Any]:
+    if turn is None:
+        return {
+            "input_tokens": USAGE_IN,
+            "output_tokens": USAGE_OUT,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+    n = usage_numbers(turn)
+    # Anthropic: input excludes cache; cache creation is the 5m + 1h sum;
+    # output includes thinking.
     return {
-        "input_tokens": USAGE_IN,
-        "output_tokens": USAGE_OUT,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
+        "input_tokens": n["uncached"],
+        "cache_read_input_tokens": n["cache_read"],
+        "cache_creation_input_tokens": n["write_5m"] + n["write_1h"],
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": n["write_5m"],
+            "ephemeral_1h_input_tokens": n["write_1h"],
+        },
+        "output_tokens": n["visible"] + n["reasoning"],
+        "output_tokens_details": {"thinking_tokens": n["reasoning"]},
+        "server_tool_use": {
+            "web_search_requests": n["web_searches"],
+            "web_fetch_requests": n["web_fetches"],
+        },
+        "service_tier": "standard",
     }
+
+
+def _turn(request: dict[str, Any], after_tool: bool) -> int | None:
+    """The `[usage]` request index, or None for the ordinary scenarios."""
+    if not wants_usage(request):
+        return None
+    return 1 if after_tool else 0
 
 
 def _event(name: str, value: Any) -> str:
     return f"event: {name}\ndata: {_compact(value)}\n\n"
 
 
-def _anthropic_sse(message_id: str, model: str, script: tuple[str, Any, Any]) -> str:
+def _anthropic_sse(
+    message_id: str,
+    model: str,
+    script: tuple[str, Any, Any],
+    turn: int | None = None,
+) -> str:
+    usage = _anthropic_usage(turn)
     parts = [
         _event(
             "message_start",
@@ -335,7 +406,7 @@ def _anthropic_sse(message_id: str, model: str, script: tuple[str, Any, Any]) ->
                     "content": [],
                     "stop_reason": None,
                     "stop_sequence": None,
-                    "usage": {**_anthropic_usage(), "output_tokens": 1},
+                    "usage": {**usage, "output_tokens": 1},
                 },
             },
         )
@@ -406,7 +477,8 @@ def _anthropic_sse(message_id: str, model: str, script: tuple[str, Any, Any]) ->
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": {"output_tokens": USAGE_OUT},
+                    # The current API repeats the complete, final usage here.
+                    "usage": usage if turn is not None else {"output_tokens": USAGE_OUT},
                 },
             ),
             _event("message_stop", {"type": "message_stop"}),
@@ -465,13 +537,29 @@ def _openai_script(request: dict[str, Any]) -> tuple[str, str, str | None]:
     )
 
 
-def _openai_usage() -> dict[str, Any]:
+def _openai_usage(turn: int | None = None) -> dict[str, Any]:
+    if turn is None:
+        return {
+            "input_tokens": USAGE_IN,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": USAGE_OUT,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": USAGE_IN + USAGE_OUT,
+        }
+    n = usage_numbers(turn)
+    # OpenAI: input includes cached reads and cache writes; output includes
+    # reasoning. The Responses API has no 1-hour TTL.
+    prompt = n["uncached"] + n["cache_read"] + n["write_5m"]
+    completion = n["visible"] + n["reasoning"]
     return {
-        "input_tokens": USAGE_IN,
-        "input_tokens_details": {"cached_tokens": 0},
-        "output_tokens": USAGE_OUT,
-        "output_tokens_details": {"reasoning_tokens": 0},
-        "total_tokens": USAGE_IN + USAGE_OUT,
+        "input_tokens": prompt,
+        "input_tokens_details": {
+            "cached_tokens": n["cache_read"],
+            "cache_write_tokens": n["write_5m"],
+        },
+        "output_tokens": completion,
+        "output_tokens_details": {"reasoning_tokens": n["reasoning"]},
+        "total_tokens": prompt + completion,
     }
 
 
@@ -479,6 +567,7 @@ def _openai_completed_response(
     request_id: int,
     model: str,
     script: tuple[str, str, str | None],
+    turn: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if script[0] == "text":
         item = {
@@ -504,7 +593,7 @@ def _openai_completed_response(
         "created_at": 0,
         "model": model,
         "output": [item],
-        "usage": _openai_usage(),
+        "usage": _openai_usage(turn),
     }
     return response, item
 
@@ -764,11 +853,28 @@ def _openai_chat_script(request: dict[str, Any]) -> tuple[str, str, str | None]:
     return ("text", GREETING, None)
 
 
-def _openai_chat_usage(input_tokens: int = USAGE_IN) -> dict[str, int]:
+def _openai_chat_usage(input_tokens: int = USAGE_IN, turn: int | None = None) -> dict[str, Any]:
+    if turn is None:
+        return {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": USAGE_OUT,
+            "total_tokens": input_tokens + USAGE_OUT,
+        }
+    n = usage_numbers(turn)
+    # Chat Completions: prompt includes cached reads and writes; completion
+    # includes reasoning. `cost_in_usd_ticks` is xAI's billed extension.
+    prompt = n["uncached"] + n["cache_read"] + n["write_5m"]
+    completion = n["visible"] + n["reasoning"]
     return {
-        "prompt_tokens": input_tokens,
-        "completion_tokens": USAGE_OUT,
-        "total_tokens": input_tokens + USAGE_OUT,
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "prompt_tokens_details": {
+            "cached_tokens": n["cache_read"],
+            "cache_write_tokens": n["write_5m"],
+        },
+        "completion_tokens_details": {"reasoning_tokens": n["reasoning"]},
+        "cost_in_usd_ticks": n["cost_ticks"],
     }
 
 
@@ -777,6 +883,7 @@ def _openai_chat_completion(
     model: str,
     script: tuple[str, str, str | None],
     usage_in: int = USAGE_IN,
+    turn: int | None = None,
 ) -> dict[str, Any]:
     completion_id = f"chatcmpl-mock_{request_id:04}"
     if script[0] == "text":
@@ -810,7 +917,7 @@ def _openai_chat_completion(
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": _openai_chat_usage(usage_in),
+        "usage": _openai_chat_usage(usage_in, turn),
     }
 
 
@@ -823,6 +930,7 @@ def _openai_chat_sse(
     model: str,
     script: tuple[str, str, str | None],
     usage_in: int = USAGE_IN,
+    turn: int | None = None,
 ) -> str:
     completion_id = f"chatcmpl-mock_{request_id:04}"
 
@@ -886,7 +994,7 @@ def _openai_chat_sse(
         "created": 0,
         "model": model,
         "choices": [],
-        "usage": _openai_chat_usage(usage_in),
+        "usage": _openai_chat_usage(usage_in, turn),
     }
     parts.append(_sse_data(usage_chunk))
     parts.append("data: [DONE]\n\n")
@@ -992,11 +1100,23 @@ def _gemini_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
     return ("text", GREETING, None)
 
 
-def _gemini_usage() -> dict[str, int]:
+def _gemini_usage(turn: int | None = None) -> dict[str, int]:
+    if turn is None:
+        return {
+            "promptTokenCount": USAGE_IN,
+            "candidatesTokenCount": USAGE_OUT,
+            "totalTokenCount": USAGE_IN + USAGE_OUT,
+        }
+    n = usage_numbers(turn)
+    # Gemini: the prompt count includes cached content; thoughts are reported
+    # beside the candidates, not inside them. There are no cache writes.
+    prompt = n["uncached"] + n["cache_read"]
     return {
-        "promptTokenCount": USAGE_IN,
-        "candidatesTokenCount": USAGE_OUT,
-        "totalTokenCount": USAGE_IN + USAGE_OUT,
+        "promptTokenCount": prompt,
+        "cachedContentTokenCount": n["cache_read"],
+        "candidatesTokenCount": n["visible"],
+        "thoughtsTokenCount": n["reasoning"],
+        "totalTokenCount": prompt + n["visible"] + n["reasoning"],
     }
 
 
@@ -1013,17 +1133,19 @@ def _gemini_candidate(script: tuple[str, Any, Any]) -> dict[str, Any]:
 
 
 def _gemini_response(
-    request_id: int, model: str, script: tuple[str, Any, Any]
+    request_id: int, model: str, script: tuple[str, Any, Any], turn: int | None = None
 ) -> dict[str, Any]:
     del request_id
     return {
         "candidates": [_gemini_candidate(script)],
-        "usageMetadata": _gemini_usage(),
+        "usageMetadata": _gemini_usage(turn),
         "modelVersion": model,
     }
 
 
-def _gemini_sse(request_id: int, model: str, script: tuple[str, Any, Any]) -> str:
+def _gemini_sse(
+    request_id: int, model: str, script: tuple[str, Any, Any], turn: int | None = None
+) -> str:
     del request_id
     if script[0] == "text":
         text = script[1]
@@ -1053,7 +1175,7 @@ def _gemini_sse(request_id: int, model: str, script: tuple[str, Any, Any]) -> st
                             "index": 0,
                         }
                     ],
-                    "usageMetadata": _gemini_usage(),
+                    "usageMetadata": _gemini_usage(turn),
                     "modelVersion": model,
                 }
             )
@@ -1062,7 +1184,7 @@ def _gemini_sse(request_id: int, model: str, script: tuple[str, Any, Any]) -> st
     return _sse_data(
         {
             "candidates": [_gemini_candidate(script)],
-            "usageMetadata": _gemini_usage(),
+            "usageMetadata": _gemini_usage(turn),
             "modelVersion": model,
         }
     )

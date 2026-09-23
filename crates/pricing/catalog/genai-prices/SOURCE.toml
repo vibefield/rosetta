@@ -1,0 +1,11 @@
+# Vendored upstream price data. `python3 -m tools.pricing generate` refuses to
+# run when data.json no longer matches this hash. To re-vendor: copy
+# prices/new_data/v2/data.json from a newer upstream commit, update revision,
+# retrieved and sha256, then regenerate and review the generated.rs diff.
+name = "pydantic/genai-prices"
+url = "https://github.com/pydantic/genai-prices"
+path = "prices/new_data/v2/data.json"
+revision = "02cb80a15dcea25ca66c76321f6cfdcc635d81fb"
+retrieved = "2026-09-22"
+sha256 = "71d66c12b39c773992ba6dc4c94dadb9106ed7d7bc45e958841f770661e3464e"
+license = "MIT"

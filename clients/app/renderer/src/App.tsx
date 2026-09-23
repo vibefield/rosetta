@@ -50,6 +50,7 @@ import {
   sessionResultOf,
 } from "./lib/search-sheet";
 import type { SearchFilters } from "./lib/search-sheet";
+import { spendOf } from "./lib/spend";
 
 function useNow(refreshKey: unknown): number {
   const [tick, setTick] = useState(() => Date.now());
@@ -182,7 +183,11 @@ export default function App() {
     const out = new Map<string, SessionFacts>();
     for (const s of stats.values()) {
       for (const row of s.contribution) {
-        out.set(row.session_id, { tokens: row.tokens, messages: row.messages });
+        out.set(row.session_id, {
+          tokens: row.tokens,
+          messages: row.messages,
+          spend: spendOf(row),
+        });
       }
     }
     return out;

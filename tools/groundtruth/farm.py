@@ -19,7 +19,7 @@ from typing import Any, Iterator
 from . import FORMAT
 from .facets import extract as extract_facets
 from .json_schema import write_copilot_writer_schema
-from .mock_model import start_server
+from .mock_model import USAGE_MARKER, start_server
 from .model import (
     GroundTruthError,
     ShapeAccumulator,
@@ -199,6 +199,35 @@ SCENARIOS: dict[str, tuple[dict[str, Any], ...]] = {
         },
     ),
 }
+
+
+def _with_usage_scenarios(
+    scenarios: dict[str, tuple[dict[str, Any], ...]],
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Give every agent with a tool-use scenario a `usage` twin.
+
+    The same two-request tool loop runs with the mock's `[usage]` marker, so
+    the model reports distinct non-zero cache reads, 5-minute and 1-hour cache
+    writes, reasoning, web searches and xAI billed ticks in its wire dialect.
+    The captured transcript then proves how the agent folds each field
+    (RESEARCH_PLAN §5.13).
+    """
+    extended: dict[str, tuple[dict[str, Any], ...]] = {}
+    for agent, entries in scenarios.items():
+        twins = tuple(
+            {
+                **entry,
+                "name": "usage",
+                "prompts": tuple(f"{prompt} {USAGE_MARKER}" for prompt in entry["prompts"]),
+            }
+            for entry in entries
+            if entry["name"] == "tool-use"
+        )
+        extended[agent] = entries + twins
+    return extended
+
+
+SCENARIOS = _with_usage_scenarios(SCENARIOS)
 
 TREE_NAMES = {
     "claude-code": "claude-config",
