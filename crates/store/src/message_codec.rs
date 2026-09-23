@@ -45,6 +45,7 @@ crate::columns::column_map! {
         route: "route",
         billed_pusd: "billed_pusd",
         usage_scope: "usage_scope",
+        requests: "requests",
         agent_version: "agent_version",
         src_cursor: "src_cursor",
         src_offset: "src_offset",
@@ -350,6 +351,7 @@ fn decode_columns<I: rusqlite::RowIndex + Copy>(
             route: row.get(columns.route)?,
             billed_pico_usd: row.get(columns.billed_pusd)?,
             scope: decode_message_scope(row.get(columns.usage_scope)?)?,
+            requests: row.get(columns.requests)?,
         },
         cost: None,
         provenance: Provenance {

@@ -104,6 +104,7 @@ fn opus_usage() -> TokenSnapshot {
         route: None,
         billed_pico_usd: None,
         scope: UsageScope::Request,
+        requests: None,
     }
 }
 
@@ -135,7 +136,7 @@ fn usage_ops() -> Vec<IngestOp> {
             "grok",
             4,
             SEP_01 + 2_000,
-            "grok-4.6-build",
+            "grok-4.7-build",
             TokenSnapshot {
                 billed_pico_usd: Some(5_000_000_000),
                 ..io(1_000, 50)
@@ -155,7 +156,23 @@ fn usage_ops() -> Vec<IngestOp> {
             UsageScope::Aggregate,
             io(900_000, 1_000),
         ),
+        sample(
+            "counted",
+            SEP_01 + 5_000,
+            "gpt-5.4",
+            UsageScope::Aggregate,
+            counted_usage(),
+        ),
     ]
+}
+
+/// The same total as `huge`, counted as four requests: each averages 225K
+/// prompt tokens, below gpt-5.4's 272K tier.
+fn counted_usage() -> TokenSnapshot {
+    TokenSnapshot {
+        requests: Some(4),
+        ..io(900_000, 1_000)
+    }
 }
 
 fn expected_cost(model: &str, at_ms: i64, scope: UsageScope, usage: &TokenSnapshot) -> Option<i64> {
@@ -250,14 +267,19 @@ fn every_record_is_priced_once_and_unpriced_usage_is_never_zero() {
     .unwrap();
     let small =
         expected_cost("gpt-5.4", SEP_01, UsageScope::Aggregate, &io(75_177, 5_956)).unwrap();
+    let counted =
+        expected_cost("gpt-5.4", SEP_01, UsageScope::Aggregate, &counted_usage()).unwrap();
+    // Four equal requests below the tier: every token at the base rates.
+    assert_eq!(counted, 900_000 * 2_500_000 + 1_000 * 15_000_000);
     // The dated price change is visible per record: $5/$30 then $4/$20.
     assert_eq!(before, 100_000 * 5_000_000 + 10_000 * 30_000_000);
     assert_eq!(after, 100_000 * 4_000_000 + 10_000 * 20_000_000);
 
     let totals = totals(&store);
-    assert_eq!(totals.cost, Some(opus + before + after + small));
-    // Unknown model (110), billed-only Grok Build (1,050), and an aggregate
-    // above gpt-5.4's 272K tier (901,000) are unpriced, never $0.
+    assert_eq!(totals.cost, Some(opus + before + after + small + counted));
+    // Unknown model (110), a billed Grok Build model the catalog cannot price
+    // yet (1,050), and an uncounted aggregate above gpt-5.4's 272K tier
+    // (901,000) are unpriced, never $0.
     assert_eq!(totals.unpriced, 110 + 1_050 + 901_000);
     assert_eq!(totals.billed, Some(5_000_000_000));
     assert_eq!(totals.one_hour, Some(3_000));
@@ -382,6 +404,8 @@ fn usage_facts_round_trip_through_the_timeline() {
     usage.route = Some("anthropic/us".into());
     usage.billed_pico_usd = Some(42);
     usage.service_tier = Some(ServiceTier::Fast);
+    usage.scope = UsageScope::Aggregate;
+    usage.requests = Some(3);
     store
         .apply(&Batch {
             ops: vec![

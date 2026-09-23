@@ -65,7 +65,7 @@ pub enum Mutation {
         timeline_id: String,
         ts: Option<Ms>,
         model: Option<String>,
-        tokens: TokenSnapshot,
+        tokens: Box<TokenSnapshot>,
         /// Read-time list-price cost of the replaced usage.
         cost: Option<rosetta_core::UsageCost>,
     },

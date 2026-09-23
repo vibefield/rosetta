@@ -39,6 +39,7 @@ pub fn snapshot_delta(new: &TokenSnapshot, old: Option<&TokenSnapshot>) -> Token
         route: new.route.clone(),
         billed_pico_usd: component_delta(new.billed_pico_usd, old.billed_pico_usd),
         scope: new.scope,
+        requests: new.requests,
     }
 }
 
@@ -54,10 +55,16 @@ fn component_add(bucket: Option<i64>, delta: Option<i64>) -> Option<i64> {
 /// tier or route replaces the bucket's; an unreported one keeps it. Adding one
 /// record's tokens to another's makes the result an aggregate.
 pub fn bucket_apply(bucket: &TokenSnapshot, delta: &TokenSnapshot) -> TokenSnapshot {
-    let scope = match (bucket.total_tokens(), delta.total_tokens()) {
-        (Some(_), Some(_)) => UsageScope::Aggregate,
-        (Some(_), None) => bucket.scope,
-        _ => delta.scope,
+    let (scope, requests) = match (bucket.total_tokens(), delta.total_tokens()) {
+        (Some(_), Some(_)) => (
+            UsageScope::Aggregate,
+            bucket
+                .request_count()
+                .zip(delta.request_count())
+                .map(|(left, right)| left + right),
+        ),
+        (Some(_), None) => (bucket.scope, bucket.requests),
+        _ => (delta.scope, delta.requests),
     };
     TokenSnapshot {
         input: component_add(bucket.input, delta.input),
@@ -71,6 +78,7 @@ pub fn bucket_apply(bucket: &TokenSnapshot, delta: &TokenSnapshot) -> TokenSnaps
         route: delta.route.clone().or_else(|| bucket.route.clone()),
         billed_pico_usd: component_add(bucket.billed_pico_usd, delta.billed_pico_usd),
         scope,
+        requests,
     }
 }
 
@@ -164,6 +172,7 @@ impl CumulativeUsage {
             route: reading.route.clone(),
             billed_pico_usd: step(reading.billed_pico_usd, self.last.billed_pico_usd),
             scope: reading.scope,
+            requests: step(reading.requests, self.last.requests),
         };
         // A counter that is not reported this time keeps its last reading, so
         // a later report subtracts from the right base.
@@ -181,6 +190,7 @@ impl CumulativeUsage {
             route: reading.route.clone(),
             billed_pico_usd: keep(reading.billed_pico_usd, self.last.billed_pico_usd),
             scope: reading.scope,
+            requests: keep(reading.requests, self.last.requests),
         };
         delta
     }

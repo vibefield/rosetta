@@ -14,8 +14,8 @@ use crate::StoreError;
 use crate::usage_sql::PRICE_FN;
 
 /// Argument order: model, ts, scope, in, out, cache_r, cache_w, cache_w1h,
-/// think, web_searches, service_tier, route. NULL means unpriced.
-const ARITY: i32 = 12;
+/// think, web_searches, service_tier, route, requests. NULL means unpriced.
+const ARITY: i32 = 13;
 
 pub(crate) fn register(conn: &Connection) -> rusqlite::Result<()> {
     conn.create_scalar_function(
@@ -75,6 +75,7 @@ fn price(ctx: &Context<'_>) -> Option<i64> {
         web_searches: integer(ctx, 9).ok()?,
         service_tier,
         route: text(ctx, 11),
+        requests: integer(ctx, 12).ok()?,
     };
     list_cost(&request).ok()
 }

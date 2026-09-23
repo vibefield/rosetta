@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 22;
+pub const SCHEMA_VERSION: i64 = 23;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -225,6 +225,9 @@ CREATE TABLE IF NOT EXISTS message (
   -- NULL for one model request; 'aggregate' when the agent reported a total
   -- over several requests on this response.
   usage_scope    TEXT CHECK (usage_scope IS NULL OR usage_scope = 'aggregate'),
+  -- How many model requests an aggregate sums, when the agent says; pricing
+  -- estimates it as that many equal requests.
+  requests       INTEGER CHECK (requests IS NULL OR requests >= 1),
   agent_version  TEXT,
   src_cursor     INTEGER REFERENCES ingest_cursor(id),
   src_offset     INTEGER CHECK (src_offset IS NULL OR src_offset >= 0),
@@ -342,6 +345,8 @@ CREATE TABLE IF NOT EXISTS session_usage (
   -- One model request, or a total over several: a long-context price tier
   -- can only be decided per request.
   scope          TEXT NOT NULL DEFAULT 'request' CHECK (scope IN ('request','aggregate')),
+  -- How many model requests an aggregate sums, when the agent says.
+  requests       INTEGER CHECK (requests IS NULL OR requests >= 1),
   in_tokens      INTEGER,
   out_tokens     INTEGER,
   cache_r_tokens INTEGER,

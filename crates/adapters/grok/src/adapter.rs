@@ -41,7 +41,8 @@ impl AgentAdapter for GrokAdapter {
     fn normalizer_version(&self) -> u32 {
         // 10: exclusive usage buckets, per-model turn usage, billed ticks,
         // aggregate scope, and usage for prompts without a row (§4.1.3).
-        10
+        // 11: turns carry their `modelCalls` request count.
+        11
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

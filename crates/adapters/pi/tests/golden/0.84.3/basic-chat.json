@@ -43,7 +43,8 @@
       "service_tier": null,
       "route": null,
       "billed_pico_usd": null,
-      "scope": "request"
+      "scope": "request",
+      "requests": null
     },
     "provenance": {
       "agent_version": null,
@@ -89,7 +90,8 @@
       "service_tier": null,
       "route": "mock",
       "billed_pico_usd": null,
-      "scope": "request"
+      "scope": "request",
+      "requests": null
     },
     "provenance": {
       "agent_version": null,

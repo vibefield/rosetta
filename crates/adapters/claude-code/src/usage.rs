@@ -48,6 +48,7 @@ pub(crate) fn fingerprint(tokens: &TokenSnapshot) -> u64 {
         tokens.thinking,
         tokens.web_searches,
         tokens.billed_pico_usd,
+        tokens.requests,
     ] {
         match count {
             Some(value) => {
@@ -199,6 +200,7 @@ pub(crate) fn snapshot(usage: &RecordedUsage) -> (TokenSnapshot, bool) {
         .and_then(Value::as_i64);
     let (output, thinking, output_clamped) =
         fold::split_subset(count(usage.output_tokens), thinking);
+    let passes = message_iterations(usage);
     let tokens = TokenSnapshot {
         input: count(usage.input_tokens),
         output,
@@ -215,14 +217,14 @@ pub(crate) fn snapshot(usage: &RecordedUsage) -> (TokenSnapshot, bool) {
         service_tier: claude_service_tier(usage),
         route: usage.inference_geo.as_deref().and_then(claude_route),
         billed_pico_usd: None,
-        // The top level sums every `message` iteration; several of them are
-        // several sampling passes, whose long-context tier cannot be read
-        // from the sum.
-        scope: if message_iterations(usage) > 1 {
+        // The top level sums every `message` iteration: several of them are
+        // several sampling passes, priced as that many equal requests.
+        scope: if passes > 1 {
             UsageScope::Aggregate
         } else {
             UsageScope::Request
         },
+        requests: (passes > 1).then(|| i64::try_from(passes).ok()).flatten(),
     };
     (tokens, write_clamped || output_clamped)
 }
@@ -326,6 +328,11 @@ mod tests {
             },
             TokenSnapshot {
                 scope: UsageScope::Aggregate,
+                ..base.clone()
+            },
+            TokenSnapshot {
+                scope: UsageScope::Aggregate,
+                requests: Some(2),
                 ..base.clone()
             },
         ];

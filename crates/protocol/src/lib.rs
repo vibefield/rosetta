@@ -34,7 +34,8 @@ pub use rosetta_store::timeline_meta::{
 /// Bumped on any breaking change to routes or frame shapes.
 /// 21 (2026-09-22): usage facts, read-time response cost, spend beside every
 /// aggregate token figure, and `/api/pricing` (ARCHITECTURE §4.1.3).
-pub const PROTOCOL_VERSION: u32 = 21;
+/// 22 (2026-09-23): `TokenSnapshot.requests`, the request count of an aggregate.
+pub const PROTOCOL_VERSION: u32 = 22;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

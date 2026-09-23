@@ -779,8 +779,9 @@ fn turn_usage(
 /// writes) and `outputTokens` includes `reasoningTokens`. `costUsdTicks` is
 /// xAI's own charge at 10¹⁰ ticks per USD (100 pico-USD per tick); the CLI
 /// removes it when the turn's cost is partial. A turn with more than one model
-/// call is a total over several requests.
+/// call is a total over `modelCalls` requests.
 fn grok_snapshot(usage: &Value) -> (TokenSnapshot, bool) {
+    let calls = number(usage, "modelCalls");
     let cache_read = number(usage, "cachedReadTokens");
     let cache_write = number(usage, "cacheCreationTokens");
     let (input, input_clamped) =
@@ -798,11 +799,12 @@ fn grok_snapshot(usage: &Value) -> (TokenSnapshot, bool) {
         billed_pico_usd: number(usage, "costUsdTicks")
             .filter(|ticks| *ticks > 0)
             .and_then(|ticks| ticks.checked_mul(100)),
-        scope: if number(usage, "modelCalls") == Some(1) {
+        scope: if calls == Some(1) {
             UsageScope::Request
         } else {
             UsageScope::Aggregate
         },
+        requests: calls.filter(|calls| *calls > 1),
         ..TokenSnapshot::default()
     };
     (tokens, input_clamped || output_clamped)
@@ -1128,6 +1130,23 @@ mod tests {
         let mut ctx = NormalizeCtx::new("runtime", "session");
         ctx.native_session_id = Some("parent".into());
         ctx
+    }
+
+    #[test]
+    fn a_multi_call_turn_is_an_aggregate_of_its_model_calls() {
+        let turn = serde_json::json!({
+            "inputTokens": 900_000, "cachedReadTokens": 850_000, "cacheCreationTokens": 0,
+            "outputTokens": 3_000, "reasoningTokens": 1_000, "modelCalls": 3
+        });
+        let (tokens, clamped) = super::grok_snapshot(&turn);
+        assert!(!clamped);
+        assert_eq!(tokens.scope, rosetta_core::UsageScope::Aggregate);
+        assert_eq!(tokens.requests, Some(3));
+        let mut single = turn.clone();
+        single["modelCalls"] = serde_json::json!(1);
+        let (tokens, _) = super::grok_snapshot(&single);
+        assert_eq!(tokens.scope, rosetta_core::UsageScope::Request);
+        assert_eq!(tokens.requests, None);
     }
 
     #[test]

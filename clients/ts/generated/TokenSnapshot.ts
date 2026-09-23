@@ -52,4 +52,10 @@ billed_pico_usd: number | null,
  * turn, a Copilot shutdown interval, a Hermes session row). Pricing
  * needs it: a long-context tier can only be decided per request.
  */
-scope: UsageScope, };
+scope: UsageScope, 
+/**
+ * How many model requests an aggregate sums, when the agent reports it.
+ * Pricing estimates the aggregate as that many equal requests, so a
+ * long-context tier follows the average request. `None` on one request.
+ */
+requests: number | null, };

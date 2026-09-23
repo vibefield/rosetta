@@ -18,6 +18,27 @@ source = """Kimi Code records the Moonshot K3 model as `k3` (groundtruth/kimi-co
 observed-2026-08-26: session model = "k3"); Moonshot lists it as `kimi-k3` \
 (https://platform.kimi.ai/docs/pricing/chat-k3.md)."""
 
+[[alias]]
+alias = "grok-4.6-build"
+provider = "x-ai"
+model = "grok-4.6"
+source = """Grok Build records grok-4.6 as `grok-4.6-build`; xAI lists grok-4.6 at $2.00 / \
+$0.50 cached / $6.00 per MTok, doubling at 200K prompt tokens \
+(https://docs.x.ai/developers/pricing). xAI's own per-request charge (`cost_in_usd_ticks`) \
+equals that list price to the tick, tier included, on every single-request record through \
+2026-08-14 in James's local data; later charges are exactly 0.17x list, a Grok Build discount \
+that the list-price estimate ignores."""
+
+[[alias]]
+alias = "grok-4.5-build"
+provider = "x-ai"
+model = "grok-4.5"
+source = """Grok Build records grok-4.5 as `grok-4.5-build`; xAI lists grok-4.5 at $2.00 / \
+$0.30 cached / $6.00 per MTok, doubling at 200K prompt tokens \
+(https://docs.x.ai/developers/pricing). xAI's per-request charge equals that list price to \
+the tick on single-request records through 2026-08-09 in James's local data; later charges \
+are exactly 0.34x list."""
+
 [[tier]]
 provider = "anthropic"
 tier = "batch"

@@ -256,6 +256,7 @@ fn usage_snapshot(row: &crate::raw::state::SessionModelUsageRow) -> (TokenSnapsh
         } else {
             UsageScope::Aggregate
         },
+        requests: (row.api_call_count > 1).then_some(row.api_call_count),
         ..TokenSnapshot::default()
     };
     (tokens, exclusive_reasoning)

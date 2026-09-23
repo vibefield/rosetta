@@ -44,6 +44,7 @@
           "cache_write_1h": 0,
           "input": 128,
           "output": 32,
+          "requests": null,
           "route": null,
           "scope": "request",
           "service_tier": "standard",

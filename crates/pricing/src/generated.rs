@@ -8,11 +8,11 @@ use crate::catalog::{
     Constraint, Model, Period, Prices, Rate, RouteRule, Source, TierRule, TierStep,
 };
 
-pub(crate) const CATALOG_VERSION: &str = "genai-prices@02cb80a15dce+overlay@39ab6e6b1409+gen1";
+pub(crate) const CATALOG_VERSION: &str = "genai-prices@02cb80a15dce+overlay@0816123e473b+gen1";
 
 pub(crate) static SOURCES: &[Source] = &[
     Source { name: "pydantic/genai-prices", url: "https://github.com/pydantic/genai-prices", revision: "02cb80a15dcea25ca66c76321f6cfdcc635d81fb", sha256: "71d66c12b39c773992ba6dc4c94dadb9106ed7d7bc45e958841f770661e3464e", license: "MIT" },
-    Source { name: "rosetta overlay", url: "crates/pricing/catalog/overlay.toml", revision: "gen1", sha256: "39ab6e6b14097937fcf5cb413815323a661d40b973367ebc3af15640f7fcf1bc", license: "rosetta" },
+    Source { name: "rosetta overlay", url: "crates/pricing/catalog/overlay.toml", revision: "gen1", sha256: "0816123e473ba5748113d74596f077cb6f74c1b232d6d5d662c954209553941a", license: "rosetta" },
 ];
 
 pub(crate) static MODELS: &[Model] = &[
@@ -3308,8 +3308,10 @@ pub(crate) static ALIASES: &[(&str, u16)] = &[
     ("grok-4.3", 121),
     ("grok-4.3-latest", 121),
     ("grok-4.5", 122),
+    ("grok-4.5-build", 122),
     ("grok-4.5-latest", 122),
     ("grok-4.6", 123),
+    ("grok-4.6-build", 123),
     ("grok-4.6-latest", 123),
     ("grok-build-0.1", 124),
     ("grok-code-fast", 125),

@@ -845,8 +845,11 @@ text member rather than presenting the saved preview as the full message.
 **Status (2026-09-22): implemented on branch `usd-cost`, not yet merged.** James decided
 the four product questions that day: exclusive buckets, the five new usage fields, a
 list-price headline, and genai-prices plus an overlay. What landed: the canonical fields, the
-nine adapters' exclusive mappings and counting fixes, `crates/pricing`, projection schema 22,
-protocol v21, and the app. Still open:
+nine adapters' exclusive mappings and counting fixes, `crates/pricing`, projection schema 23,
+protocol v22, and the app. On 2026-09-23 James set the basis: the figure is an estimate at
+each model's official per-token list price, as the provider publishes it and Artificial Analysis
+and OpenRouter show it, not a reconstruction of any bill. Multi-call totals are estimated as
+equal requests, and dated prices stay. Still open:
 
 - native fixture captures of the mock's `[usage]` scenario;
 - the cross-file usage reconciliation for Claude copies, Grok subagent folds, Codex guardians
@@ -857,8 +860,8 @@ The frozen before/after pair is under **Performance budget** below. Per-agent bu
 and their evidence, including a rebuild of the real 2026-09-11 ledger, are in
 [RESEARCH_PLAN.md §5.13](groundtruth/RESEARCH_PLAN.md#513-usage-accounting-audit-2026-09-22).
 The concrete DDL is in [`canonical-model.html`](canonical-model.html). This section owns the
-usage contract. The affected adapters' normalizer versions, projection schema 22, the price
-catalog, protocol v21 and the generated TypeScript types change together.
+usage contract. The affected adapters' normalizer versions, projection schema 23, the price
+catalog, protocol v22 and the generated TypeScript types change together.
 
 **What a usage record is.** One usage record describes one model request as the agent
 recorded it. It rides on the response's timeline row, on a replacement `Usage` op for that
@@ -907,7 +910,9 @@ Every usage record also carries `scope` (`request | aggregate`): whether it is o
 or a total the agent reports over several. Examples of totals are a Grok turn, a Copilot
 shutdown interval, and a Hermes per-model session row. Pricing needs it because a long-context
 tier can only be decided per request. A message row stores `usage_scope` only when it is an
-aggregate, and a `session_usage` sample stores `scope`.
+aggregate, and a `session_usage` sample stores `scope`. An aggregate also carries `requests`,
+its request count, when the agent reports one: Grok's `modelCalls`, Copilot's interval
+`requests`, Hermes' `api_call_count`, and the number of Claude `message` passes.
 
 **Counting rules for every adapter.**
 
@@ -972,13 +977,19 @@ every price change is a reviewable diff.
 - *Overlay:* cited additions only. It holds service-tier rules, missing models, aliases such
   as `k3` → `kimi-k3`, and residency premiums. A cache rate is never derived from the input
   rate unless the provider documents the multiplier; Anthropic's 1-hour writes at 2× input
-  are cited. A model with no published list price, such as Grok Build's `grok-4.6-build`,
-  stays unpriced, and its billed amount is still shown.
+  are cited. Grok Build's `grok-4.6-build` and `grok-4.5-build` are aliases of grok-4.6 and
+  grok-4.5: xAI's per-request charge equals those list prices to the tick until a Grok Build
+  discount began in mid-August 2026. A model with no published list price, such as OpenCode's
+  free `big-pickle`, stays unpriced, and any billed amount is still shown.
 - *Multipliers scale tokens only:* service-tier and residency rules multiply the token cost,
   as their sources cite. Per-call search fees and per-request fees stay flat.
+- *Counted aggregates:* an aggregate with a request count is estimated as that many equal
+  requests. Each carries the average prompt, which selects the long-context tier, and a
+  per-request fee applies once per request. On James's Grok history this estimate is about
+  $2.3K, against $1.4K at base rates and $2.9K if the summed prompt picked the tier.
 - *Unpriced, never zero:* the causes are an unknown model, no price period at the timestamp,
-  an unsupported tier or residency, a non-zero bucket without a rate, and an aggregate sample
-  whose prompt tokens exceed a tier start. A record without a time is ambiguous on a model whose
+  an unsupported tier or residency, a non-zero bucket without a rate, and an uncounted
+  aggregate whose prompt tokens exceed a tier start. A record without a time is ambiguous on a model whose
   price changed. Usage ops write that "no time" as `ts = 0`, which the store never prices as
   1970-01-01.
 - *Version:* `rosetta_pricing::CATALOG_VERSION` combines the upstream commit, the overlay's
@@ -996,7 +1007,8 @@ what the recorded usage would cost at API list prices. Most usage runs on subscr
 there is no bill to compare against. Provider-billed amounts appear as a secondary figure where
 present. Partial or unavailable coverage is always visible, and unpriced usage never reads as $0.
 
-**Protocol v21.** `TokenSnapshot` gains the new fields. Heatmap days, model days, hour totals
+**Protocol v21, then v22.** `TokenSnapshot` gains the new fields, and v22 adds `requests`.
+Heatmap days, model days, hour totals
 and contribution rows gain `cost_micro_usd`, `billed_micro_usd` and `unpriced_tokens` beside
 `tokens`, so contribution rows can be ranked by spend. Timeline responses carry each
 response's read-time cost. `GET /api/pricing` reports the catalog version, its sources and
@@ -1690,6 +1702,6 @@ layer's design is frozen.
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
 | Enrolled-set live mutation | the `--enroll` file is read once at start; the supervisor restarts the daemon when a persona is added or retired, or when a kind is checked or UN-checked — the restart re-derives consent from the file in both directions, including out of a pending cold generation (2026-09-12) | a restart per persona change costs the app a visible reconnect, or a persona is created faster than a restart settles |
 | Usage outside transcripts | requests an agent never records (Claude Code background title/summary calls) are out of coverage and labelled so (2026-09-22) | an agent records them somewhere Rosetta already captures |
-| Aggregate samples on tiered models | an aggregate `session_usage` sample prices only when its prompt tokens cannot have crossed a tier start; otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage |
+| Aggregate samples on tiered models | a counted aggregate is estimated as equal requests at its average prompt (2026-09-23); an uncounted one prices only when its prompt tokens cannot have crossed a tier start, otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage, or an uncounted producer exposes a count |
 | Residency and regional premiums | a `route` qualifier prices only through a cited overlay premium; otherwise the record is unpriced (2026-09-22) | such routes appear in real data |
 | Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |

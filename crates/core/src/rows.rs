@@ -244,11 +244,25 @@ pub struct TokenSnapshot {
     /// needs it: a long-context tier can only be decided per request.
     #[serde(default)]
     pub scope: UsageScope,
+    /// How many model requests an aggregate sums, when the agent reports it.
+    /// Pricing estimates the aggregate as that many equal requests, so a
+    /// long-context tier follows the average request. `None` on one request.
+    #[serde(default)]
+    pub requests: Option<i64>,
 }
 
 impl TokenSnapshot {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Model requests this record covers: one for a single request, the
+    /// agent's count for an aggregate, `None` when an aggregate is uncounted.
+    pub fn request_count(&self) -> Option<i64> {
+        match self.scope {
+            UsageScope::Request => Some(1),
+            UsageScope::Aggregate => self.requests,
+        }
     }
 
     /// Sum of the six token buckets; `None` when none was reported.

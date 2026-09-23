@@ -569,7 +569,7 @@ fn apply_message_inner(
                        cache_r_tokens = ?37, cache_w_tokens = ?38, think_tokens = ?39,
                        agent_version = ?40, src_cursor = ?41, src_offset = ?42,
                        cache_w1h_tokens = ?45, web_searches = ?46, service_tier = ?47,
-                       route = ?48, billed_pusd = ?49, usage_scope = ?50,
+                       route = ?48, billed_pusd = ?49, usage_scope = ?50, requests = ?51,
                        activity_first_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
                          (SELECT MIN(value) FROM (SELECT activity_first_at AS value UNION ALL SELECT ?43)) END,
                        activity_last_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
@@ -627,6 +627,7 @@ fn apply_message_inner(
                     new_usage.route,
                     new_usage.billed_pico_usd,
                     message_codec::message_scope_column(new_usage.scope),
+                    new_usage.requests,
                 ])?;
                 stats.messages_updated += 1;
             }
@@ -643,11 +644,12 @@ fn apply_message_inner(
                         out_tokens, cache_r_tokens, cache_w_tokens, think_tokens, agent_version,
                         src_cursor, src_offset, activity_first_at, activity_last_at,
                         cache_w1h_tokens, web_searches, service_tier, route, billed_pusd,
-                        usage_scope)
+                        usage_scope, requests)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                              ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
                              ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38,
-                             ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)",
+                             ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50,
+                             ?51)",
                 )?
                 .execute(params![
                     emitted.timeline_id,
@@ -700,6 +702,7 @@ fn apply_message_inner(
                     new_usage.route,
                     new_usage.billed_pico_usd,
                     message_codec::message_scope_column(new_usage.scope),
+                    new_usage.requests,
                 ])?;
                 stats.messages_inserted += 1;
             }
@@ -877,7 +880,7 @@ pub(super) fn apply_usage(
             "UPDATE message SET in_tokens = ?2, out_tokens = ?3, cache_r_tokens = ?4,
                     cache_w_tokens = ?5, think_tokens = ?6, model = ?7, ts = ?8,
                     cache_w1h_tokens = ?9, web_searches = ?10, service_tier = ?11,
-                    route = ?12, billed_pusd = ?13, usage_scope = ?14
+                    route = ?12, billed_pusd = ?13, usage_scope = ?14, requests = ?15
              WHERE id = ?1",
         )?
         .execute(params![
@@ -895,6 +898,7 @@ pub(super) fn apply_usage(
             tokens.route,
             tokens.billed_pico_usd,
             message_codec::message_scope_column(tokens.scope),
+            tokens.requests,
         ]);
     stats.profile.usage_write_nanos += elapsed_nanos(started);
     written?;
@@ -907,7 +911,7 @@ pub(super) fn apply_usage(
             timeline_id: old.timeline_id,
             ts: next_ts,
             model: next_model,
-            tokens: tokens.clone(),
+            tokens: Box::new(tokens.clone()),
             cost,
         });
     }

@@ -586,6 +586,24 @@ fn advisor_iterations_are_requests_of_their_own() {
 }
 
 #[test]
+fn several_sampling_passes_are_a_counted_aggregate() {
+    let mut passes = usage(30, 40, 0);
+    passes["iterations"] = json!([
+        {"type": "message", "input_tokens": 10, "output_tokens": 20,
+         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+        {"type": "message", "input_tokens": 20, "output_tokens": 20,
+         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    ]);
+    let (ops, _) = run(&[assistant(
+        json!([{"type": "text", "text": "answer"}]),
+        Some(passes),
+    )]);
+    let usage = &messages(&ops)[0].usage;
+    assert_eq!(usage.scope, rosetta_core::UsageScope::Aggregate);
+    assert_eq!(usage.requests, Some(2));
+}
+
+#[test]
 fn a_fallback_turn_takes_its_serving_entrys_ttl_split() {
     let mut served = usage(10, 20, 0);
     served["cache_creation_input_tokens"] = json!(1_000);

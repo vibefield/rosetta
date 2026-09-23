@@ -36,7 +36,8 @@
       "service_tier": null,
       "route": null,
       "billed_pico_usd": null,
-      "scope": "request"
+      "scope": "request",
+      "requests": null
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -109,7 +110,8 @@
       "service_tier": null,
       "route": null,
       "billed_pico_usd": null,
-      "scope": "request"
+      "scope": "request",
+      "requests": null
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -186,7 +188,8 @@
       "service_tier": null,
       "route": null,
       "billed_pico_usd": null,
-      "scope": "request"
+      "scope": "request",
+      "requests": null
     },
     "provenance": {
       "agent_version": "1.0.80",
@@ -211,7 +214,8 @@
       "service_tier": null,
       "route": null,
       "billed_pico_usd": null,
-      "scope": "aggregate"
+      "scope": "aggregate",
+      "requests": 2
     }
   }
 ]

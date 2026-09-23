@@ -60,6 +60,7 @@
           "cache_write_1h": null,
           "input": null,
           "output": null,
+          "requests": null,
           "route": null,
           "scope": "request",
           "service_tier": null,
@@ -129,7 +130,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 21,
+      "protocol_version": 22,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -211,6 +212,7 @@
             "cache_write_1h": 4,
             "input": 10,
             "output": 5,
+            "requests": null,
             "route": "openrouter",
             "scope": "request",
             "service_tier": "standard",
@@ -271,6 +273,7 @@
             "cache_write_1h": null,
             "input": null,
             "output": null,
+            "requests": null,
             "route": null,
             "scope": "request",
             "service_tier": null,
@@ -517,6 +520,7 @@
             "cache_write_1h": null,
             "input": null,
             "output": null,
+            "requests": null,
             "route": null,
             "scope": "request",
             "service_tier": null,
@@ -710,6 +714,7 @@
         "cache_write_1h": 4,
         "input": 10,
         "output": 5,
+        "requests": null,
         "route": "openrouter",
         "scope": "request",
         "service_tier": "standard",
@@ -757,6 +762,7 @@
         "cache_write_1h": null,
         "input": null,
         "output": null,
+        "requests": null,
         "route": null,
         "scope": "request",
         "service_tier": null,
@@ -818,6 +824,7 @@
         "cache_write_1h": null,
         "input": null,
         "output": null,
+        "requests": null,
         "route": null,
         "scope": "request",
         "service_tier": null,
@@ -881,6 +888,7 @@
         "cache_write_1h": null,
         "input": 10,
         "output": 5,
+        "requests": null,
         "route": null,
         "scope": "request",
         "service_tier": null,
@@ -976,7 +984,7 @@
       }
     ]
   },
-  "protocol_version": 21,
+  "protocol_version": 22,
   "runtimes": {
     "runtimes": [
       {
@@ -1184,7 +1192,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 21,
+    "protocol_version": 22,
     "schema_version": 16,
     "search": {
       "progress": null,
@@ -1289,6 +1297,7 @@
         "cache_write_1h": 4,
         "input": 10,
         "output": 5,
+        "requests": null,
         "route": "openrouter",
         "scope": "request",
         "service_tier": "standard",
@@ -1374,6 +1383,7 @@
           "cache_write_1h": 4,
           "input": 10,
           "output": 5,
+          "requests": null,
           "route": "openrouter",
           "scope": "request",
           "service_tier": "standard",
@@ -1434,6 +1444,7 @@
           "cache_write_1h": null,
           "input": null,
           "output": null,
+          "requests": null,
           "route": null,
           "scope": "request",
           "service_tier": null,

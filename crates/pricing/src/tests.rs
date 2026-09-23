@@ -57,8 +57,38 @@ fn stamps_tags_and_vendor_prefixes_are_removed_before_the_exact_lookup() {
     );
     assert_eq!(resolve("x-ai/grok-4.6").map(|m| m.id), Some("grok-4.6"));
     assert_eq!(resolve("k3").map(|m| m.id), Some("kimi-k3"));
-    assert!(resolve("grok-4.6-build").is_none());
+    // Grok Build's spellings are cited aliases of the listed models.
+    assert_eq!(resolve("grok-4.6-build").map(|m| m.id), Some("grok-4.6"));
+    assert_eq!(resolve("grok-4.5-build").map(|m| m.id), Some("grok-4.5"));
+    assert!(resolve("grok-4.7-build").is_none());
     assert!(resolve("<synthetic>").is_none());
+}
+
+#[test]
+fn remembered_resolutions_equal_fresh_ones() {
+    let ids = [
+        "claude-opus-4-6",
+        "Claude-Opus-4-6",
+        "claude-haiku-4-5-20251001",
+        "anthropic/claude-opus-4-6[1m]",
+        "big-pickle",
+        "gpt-5.6-sol",
+        "grok-4.6-build",
+        "k3",
+        "claude-opus-5-5",
+        "x-ai/grok-4.6",
+    ];
+    // More distinct ids than the memo holds, in varying order, twice over.
+    for round in 0..3 {
+        for index in 0..ids.len() {
+            let id = ids[(index * (round + 1)) % ids.len()];
+            assert_eq!(
+                resolve(id).map(|m| m.id),
+                resolve_uncached(id).map(|m| m.id),
+                "{id}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -172,7 +202,7 @@ fn provider_routes_are_informational_but_qualifiers_need_a_premium() {
 }
 
 #[test]
-fn aggregate_samples_price_only_below_every_tier_start() {
+fn uncounted_aggregates_price_only_below_every_tier_start() {
     let mut total = request("gpt-5.4", "2026-09-01");
     total.scope = UsageScope::Aggregate;
     total.input = 75_177;
@@ -185,6 +215,30 @@ fn aggregate_samples_price_only_below_every_tier_start() {
     flat.scope = UsageScope::Aggregate;
     flat.input = 5_000_000;
     assert!(list_cost(&flat).is_ok());
+}
+
+#[test]
+fn counted_aggregates_price_as_equal_requests_at_the_average_prompt() {
+    // gpt-5.4 moves every token from $2.50 to $5.00 per MTok above 272K.
+    let mut total = request("gpt-5.4", "2026-09-01");
+    total.scope = UsageScope::Aggregate;
+    total.input = 900_000;
+    // Four requests average 225K prompt tokens: all at the base rate.
+    total.requests = 4;
+    assert_eq!(list_cost(&total), Ok(900_000 * 2_500_000));
+    assert!(!quote(&total).unwrap().long_context);
+    // Three average 300K: all above the tier.
+    total.requests = 3;
+    assert_eq!(list_cost(&total), Ok(900_000 * 5_000_000));
+    assert!(quote(&total).unwrap().long_context);
+    // The boundary is exact: 3 x 271,999 stays at the base rate.
+    total.input = 3 * 271_999;
+    assert_eq!(list_cost(&total), Ok(3 * 271_999 * 2_500_000));
+    total.input += 1;
+    assert_eq!(list_cost(&total), Ok((3 * 271_999 + 1) * 5_000_000));
+    // A negative count is malformed, never a guess.
+    total.requests = -1;
+    assert_eq!(list_cost(&total), Err(Unpriced::NegativeCount));
 }
 
 #[test]

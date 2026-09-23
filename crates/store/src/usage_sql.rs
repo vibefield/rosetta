@@ -24,7 +24,7 @@ fn record_columns(scope: &str) -> String {
          think_tokens, web_searches, billed_pusd,
          CASE WHEN {HAS_USAGE} THEN {PRICE_FN}(model, ts, {scope}, in_tokens, out_tokens,
               cache_r_tokens, cache_w_tokens, cache_w1h_tokens, think_tokens, web_searches,
-              service_tier, route) END AS cost_pusd,
+              service_tier, route, requests) END AS cost_pusd,
          CASE WHEN {HAS_USAGE} THEN COALESCE(in_tokens, 0) + COALESCE(out_tokens, 0)
               + COALESCE(cache_r_tokens, 0) + COALESCE(cache_w_tokens, 0)
               + COALESCE(cache_w1h_tokens, 0) + COALESCE(think_tokens, 0) END AS usage_tokens"

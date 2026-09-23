@@ -268,8 +268,8 @@ fn apply_session_usage(
         "INSERT INTO session_usage
            (session_id, sample_key, ts, model, in_tokens, out_tokens,
             cache_r_tokens, cache_w_tokens, think_tokens, src_cursor, scope,
-            cache_w1h_tokens, web_searches, service_tier, route, billed_pusd)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            cache_w1h_tokens, web_searches, service_tier, route, billed_pusd, requests)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(session_id, sample_key) DO UPDATE SET
            ts = excluded.ts, model = excluded.model, scope = excluded.scope,
            in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
@@ -281,6 +281,7 @@ fn apply_session_usage(
            service_tier = excluded.service_tier,
            route = excluded.route,
            billed_pusd = excluded.billed_pusd,
+           requests = excluded.requests,
            src_cursor = excluded.src_cursor",
     )?
     .execute(params![
@@ -302,6 +303,7 @@ fn apply_session_usage(
             .map(rosetta_core::ServiceTier::as_str),
         row.tokens.route,
         row.tokens.billed_pico_usd,
+        row.tokens.requests,
     ])?;
     touch_session(tx, &row.session_id, Some(row.ts), stats)?;
     stats.usage_applied += 1;

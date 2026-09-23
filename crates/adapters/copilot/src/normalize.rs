@@ -1007,6 +1007,7 @@ fn interval_snapshot(interval: ShutdownTotals) -> (TokenSnapshot, bool) {
         } else {
             UsageScope::Aggregate
         },
+        requests: (interval.requests > 1).then_some(interval.requests),
         ..TokenSnapshot::default()
     };
     (tokens, input_clamped || output_clamped)
@@ -1237,6 +1238,8 @@ mod tests {
         // $0.1865338 billed: nano-AIU / 10¹¹ USD = × 10 pico-USD.
         assert_eq!(tokens.billed_pico_usd, Some(186_533_800_000));
         assert_eq!(tokens.scope, rosetta_core::UsageScope::Aggregate);
+        // Five requests: priced as five equal requests.
+        assert_eq!(tokens.requests, Some(5));
 
         // A resume re-reports the running total: only the growth counts.
         let resumed = super::ShutdownTotals {
@@ -1247,6 +1250,11 @@ mod tests {
         let interval = resumed.since(first);
         assert_eq!(interval.input, 200);
         assert_eq!(interval.requests, 1);
+        let (one, _) = super::interval_snapshot(interval);
+        assert_eq!(
+            (one.scope, one.requests),
+            (rosetta_core::UsageScope::Request, None)
+        );
         // A total that went backwards is a new epoch, counted whole.
         assert_eq!(first.since(resumed), first);
     }

@@ -186,6 +186,7 @@ fn timeline_entry() -> TimelineEntry {
             route: Some("openrouter".into()),
             billed_pico_usd: Some(1_250_000),
             scope: rosetta_core::UsageScope::Request,
+            requests: None,
         },
         cost: Some(UsageCost::Unpriced {
             reason: "unknown_model".into(),
@@ -470,11 +471,11 @@ fn exemplars() -> serde_json::Value {
             timeline_id: "t1".into(),
             ts: Some(3_600_000),
             model: Some("claude-opus-5".into()),
-            tokens: TokenSnapshot {
+            tokens: Box::new(TokenSnapshot {
                 input: Some(10),
                 output: Some(5),
                 ..TokenSnapshot::default()
-            },
+            }),
             cost: Some(UsageCost::Priced {
                 micro_usd: 175,
                 long_context: false,
