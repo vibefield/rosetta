@@ -4,9 +4,8 @@
 //! independent entry tree: they are preserved as `uuid`/`parent_uuid` and are
 //! used to inherit branch-local settings, but they never sort rows or assign
 //! ordinals. Every emitted row takes the next ordinal directly from the replay
-//! context.
-
-use std::collections::BTreeMap;
+//! context. Cross-line state lives in [`crate::state`]; usage mapping in
+//! [`crate::usage`].
 
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
@@ -18,69 +17,23 @@ use rosetta_core::rows::{
     TokenSnapshot, UsageScope,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
-use rosetta_core::{IngestOp, fold, ids};
-use serde::{Deserialize, Serialize};
+use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
 
 use crate::raw::session::{
     AgentMessage, AssistantMessage, BashExecutionMessage, BranchSummaryEntry, BranchSummaryMessage,
     CompactionEntry, CompactionSummaryMessage, ContentBlock, CustomMessageEntry, CustomRoleMessage,
     KnownContentBlock, KnownMessage, KnownRecord, MessageEntry, SessionHeader, ToolResultMessage,
-    Usage, UserContent,
+    UserContent,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
+use crate::state::{EntryContext, EntryKind, HeaderState, PiState};
 use crate::time::rfc3339_ms;
+use crate::usage::{assistant_model, summary_usage, usage_drift, usage_entry, usage_snapshot};
 
 const INVALID_JSON: &str = "<invalid-json>";
 const NO_TYPE: &str = "<untyped>";
-
-/// Cross-line state. Entry contexts are keyed by native ids so settings follow
-/// graph ancestry even when alternate branches are interleaved in the file.
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct PiState {
-    header: Option<HeaderState>,
-    entries: BTreeMap<String, EntryContext>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HeaderState {
-    cwd: String,
-    started_at: Ms,
-    /// The file was forked from another session (`parentSession`): entries
-    /// older than the header are the parent's, copied usage included.
-    #[serde(default)]
-    forked: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct EntryContext {
-    model: Option<String>,
-    effort: Option<String>,
-}
-
-impl PiState {
-    fn inherited(&self, parent_id: Option<&str>) -> EntryContext {
-        parent_id
-            .and_then(|parent| self.entries.get(parent))
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    fn remember(&mut self, id: &str, context: EntryContext) {
-        self.entries.insert(id.to_owned(), context);
-    }
-
-    /// A fork copies its parent's entries with their original timestamps, so
-    /// anything older than the fork's own header is inherited history: its
-    /// row stays, its usage was already counted in the parent.
-    fn inherited_copy(&self, at: Option<Ms>) -> bool {
-        match (&self.header, at) {
-            (Some(header), Some(at)) => header.forked && at < header.started_at,
-            _ => false,
-        }
-    }
-}
 
 pub fn ingest_line(
     ctx: &mut NormalizeCtx,
@@ -149,6 +102,7 @@ fn project(
         KnownRecord::ModelChange(entry) => {
             let mut inherited = state.inherited(entry.parent_id.as_deref());
             inherited.model = Some(entry.model_id.clone());
+            state.observe_model(&entry.model_id);
             state.remember(&entry.id, inherited);
         }
         KnownRecord::ThinkingLevelChange(entry) => {
@@ -161,7 +115,7 @@ fn project(
             state.remember(&entry.id, inherited);
             if let Some(name) = entry.name.as_ref().filter(|name| !name.is_empty()) {
                 let at = rfc3339_ms(&entry.timestamp)
-                    .or_else(|| state.header.as_ref().map(|header| header.started_at))
+                    .or_else(|| state.header().map(|header| header.started_at))
                     .unwrap_or_default();
                 ops.push(IngestOp::SessionTitle(SessionTitleRow {
                     session_id: ctx.session_id.clone(),
@@ -172,6 +126,12 @@ fn project(
             }
         }
         KnownRecord::Message(entry) => message_entry(ctx, state, stream_id, entry, ops),
+        // Hidden from the tree, yet a real request whose usage counts.
+        KnownRecord::Usage(entry) => {
+            usage_entry(ctx, state, stream_id, entry, ops);
+            let inherited = state.inherited(entry.parent_id.as_deref());
+            state.remember(&entry.id, inherited);
+        }
         KnownRecord::Compaction(entry) => compaction_entry(ctx, state, entry, ops),
         KnownRecord::BranchSummary(entry) => branch_summary_entry(ctx, state, entry, ops),
         KnownRecord::CustomMessage(entry) => custom_message_entry(ctx, state, entry, ops),
@@ -190,7 +150,7 @@ fn project(
 
 fn session_header(state: &mut PiState, header: &SessionHeader) {
     let started_at = rfc3339_ms(&header.timestamp).unwrap_or_default();
-    state.header = Some(HeaderState {
+    state.set_header(HeaderState {
         cwd: header.cwd.clone(),
         started_at,
         forked: header.parent_session.is_some(),
@@ -206,6 +166,19 @@ fn message_entry(
 ) {
     let inherited = state.inherited(entry.parent_id.as_deref());
     let ts = rfc3339_ms(&entry.timestamp);
+    // Turn structure as Pi's compaction cut-point search sees it
+    // (`compaction.ts:388-401` at pi-mono a8ed497).
+    let kind = match &entry.message {
+        AgentMessage::Known(
+            KnownMessage::User(_)
+            | KnownMessage::BashExecution(_)
+            | KnownMessage::Custom(_)
+            | KnownMessage::BranchSummary(_)
+            | KnownMessage::CompactionSummary(_),
+        ) => EntryKind::TurnStart,
+        AgentMessage::Known(KnownMessage::Assistant(_) | KnownMessage::ToolResult(_))
+        | AgentMessage::Other(_) => EntryKind::TurnBody,
+    };
     match &entry.message {
         AgentMessage::Known(KnownMessage::User(message)) => {
             let mut row = row(ctx, entry, &entry.id, MessageKind::User, ts, None, None);
@@ -239,10 +212,13 @@ fn message_entry(
         }
         AgentMessage::Known(KnownMessage::Assistant(message)) => {
             let copied = state.inherited_copy(ts);
+            if let Some(model) = assistant_model(message) {
+                state.observe_model(model);
+            }
             assistant_message(
                 ctx,
                 stream_id,
-                state.header.as_ref().map(|header| header.cwd.as_str()),
+                state.header().map(|header| header.cwd.as_str()),
                 entry,
                 message,
                 &inherited,
@@ -255,14 +231,15 @@ fn message_entry(
             tool_result(ctx, message, ts, ops);
             if let Some(usage) = message.usage.as_ref()
                 && !state.inherited_copy(ts)
-            {
                 // The model the tool called is not recorded, so this spend
                 // is counted but unpriced.
-                let (tokens, clamped) = usage_snapshot(usage, None, UsageScope::Aggregate);
+                && let Some((tokens, clamped)) = usage_snapshot(usage, None, UsageScope::Aggregate)
+            {
                 if clamped {
                     ops.push(usage_drift(ctx, stream_id, "toolResult", ts));
                 }
                 ops.push(IngestOp::SessionUsage(SessionUsageRow {
+                    identity: None,
                     session_id: ctx.session_id.clone(),
                     key: ids::usage_id(&ctx.session_id, &format!("{}:tool-result", entry.id)),
                     ts: ts.unwrap_or(0),
@@ -287,7 +264,7 @@ fn message_entry(
         // top-level `message` record remains successfully parsed.
         AgentMessage::Other(_) => {}
     }
-    state.remember(&entry.id, inherited);
+    state.remember(&entry.id, EntryContext { kind, ..inherited });
 }
 
 // A native message needs both inherited branch context and projection output;
@@ -304,7 +281,7 @@ fn assistant_message(
     copied: bool,
     ops: &mut Vec<IngestOp>,
 ) {
-    let model = message.response_model.as_deref().unwrap_or(&message.model);
+    let model = assistant_model(message);
     let mut rows = Vec::new();
     for (index, block) in message.content.iter().enumerate() {
         let discriminator = format!("{}#{index}", entry.id);
@@ -316,7 +293,7 @@ fn assistant_message(
                     &discriminator,
                     MessageKind::Agent,
                     ts,
-                    Some(model),
+                    model,
                     inherited.effort.as_deref(),
                 );
                 row.content = Some(text.clone());
@@ -329,7 +306,7 @@ fn assistant_message(
                     &discriminator,
                     MessageKind::Thinking,
                     ts,
-                    Some(model),
+                    model,
                     inherited.effort.as_deref(),
                 );
                 row.content = Some(thinking.clone());
@@ -347,7 +324,7 @@ fn assistant_message(
                     &discriminator,
                     MessageKind::ToolUse,
                     ts,
-                    Some(model),
+                    model,
                     inherited.effort.as_deref(),
                 );
                 let projected = crate::tool::project_request(
@@ -394,13 +371,14 @@ fn assistant_message(
             &format!("{}#0", entry.id),
             MessageKind::Agent,
             ts,
-            Some(model),
+            model,
             inherited.effort.as_deref(),
         ));
     }
-    if !copied {
-        let (tokens, clamped) =
-            usage_snapshot(&message.usage, Some(&message.provider), UsageScope::Request);
+    if !copied
+        && let Some((tokens, clamped)) =
+            usage_snapshot(&message.usage, Some(&message.provider), UsageScope::Request)
+    {
         if clamped {
             ops.push(usage_drift(ctx, stream_id, "message/assistant", ts));
         }
@@ -556,6 +534,19 @@ fn compaction_summary_message(
     IngestOp::push_message(ops, row);
 }
 
+/// The model a summary ran on. Pi's own summarizer uses the session's current
+/// model (`agent-session.ts:2414-2425` for compaction, `:3675-3676` for branch
+/// summaries, at pi-mono a8ed497), which is the latest one in file order; an
+/// extension's summary (`fromHook`) ran on whatever that extension chose,
+/// which the entry does not record.
+fn summary_model(state: &PiState, from_hook: Option<bool>) -> Option<&str> {
+    if from_hook == Some(true) {
+        None
+    } else {
+        state.latest_model()
+    }
+}
+
 fn compaction_entry(
     ctx: &mut NormalizeCtx,
     state: &mut PiState,
@@ -569,21 +560,16 @@ fn compaction_entry(
         entry.parent_id.as_deref(),
         MessageKind::Summary,
         rfc3339_ms(&entry.timestamp),
-        &inherited,
+        summary_model(state, entry.from_hook),
+        inherited.effort.as_deref(),
     );
     row.subtype = Some("compaction".to_owned());
     row.content = Some(entry.summary.clone());
-    // A split turn summarizes in two requests recorded as one total.
-    row.usage = summary_usage(
-        ctx,
-        state,
-        entry.usage.as_ref(),
-        UsageScope::Aggregate,
-        row.ts,
-        ops,
-    );
+    // One summarization request, or two when the cut split a turn.
+    let requests = state.compaction_requests(entry);
+    row.usage = summary_usage(ctx, state, entry.usage.as_ref(), requests, row.ts, ops);
     IngestOp::push_message(ops, row);
-    state.remember(&entry.id, inherited);
+    state.remember_compaction(entry, inherited);
 }
 
 fn branch_summary_entry(
@@ -599,38 +585,21 @@ fn branch_summary_entry(
         entry.parent_id.as_deref(),
         MessageKind::Summary,
         rfc3339_ms(&entry.timestamp),
-        &inherited,
+        summary_model(state, entry.from_hook),
+        inherited.effort.as_deref(),
     );
     row.subtype = Some("branch_summary".to_owned());
     row.content = Some(entry.summary.clone());
-    row.usage = summary_usage(
-        ctx,
-        state,
-        entry.usage.as_ref(),
-        UsageScope::Request,
-        row.ts,
-        ops,
-    );
+    row.usage = summary_usage(ctx, state, entry.usage.as_ref(), 1, row.ts, ops);
     IngestOp::push_message(ops, row);
-    state.remember(&entry.id, inherited);
-}
-
-fn summary_usage(
-    ctx: &NormalizeCtx,
-    state: &PiState,
-    usage: Option<&Usage>,
-    scope: UsageScope,
-    at: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) -> Option<TokenSnapshot> {
-    if state.inherited_copy(at) {
-        return None;
-    }
-    let (tokens, clamped) = usage_snapshot(usage?, None, scope);
-    if clamped {
-        ops.push(usage_drift(ctx, "session", "summary", at));
-    }
-    Some(tokens)
+    // With a summary it is a branchSummary context message, which starts a turn
+    // (`session-manager.ts:458-460` at a8ed497).
+    let kind = if entry.summary.is_empty() {
+        EntryKind::Silent
+    } else {
+        EntryKind::TurnStart
+    };
+    state.remember(&entry.id, EntryContext { kind, ..inherited });
 }
 
 fn custom_message_entry(
@@ -646,12 +615,20 @@ fn custom_message_entry(
         entry.parent_id.as_deref(),
         MessageKind::System,
         rfc3339_ms(&entry.timestamp),
-        &EntryContext::default(),
+        None,
+        None,
     );
     row.subtype = Some(entry.custom_type.clone());
     row.content = user_content_text(&entry.content);
     IngestOp::push_message(ops, row);
-    state.remember(&entry.id, inherited);
+    // A custom context message starts a turn (`session-manager.ts:453-457`).
+    state.remember(
+        &entry.id,
+        EntryContext {
+            kind: EntryKind::TurnStart,
+            ..inherited
+        },
+    );
 }
 
 fn row(
@@ -675,24 +652,17 @@ fn row(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn entry_row(
     ctx: &mut NormalizeCtx,
     id: &str,
     parent_id: Option<&str>,
     kind: MessageKind,
     ts: Option<Ms>,
-    inherited: &EntryContext,
+    model: Option<&str>,
+    effort: Option<&str>,
 ) -> MessageRow {
-    make_row(
-        ctx,
-        id,
-        kind,
-        Some(id),
-        parent_id,
-        ts,
-        inherited.model.as_deref(),
-        inherited.effort.as_deref(),
-    )
+    make_row(ctx, id, kind, Some(id), parent_id, ts, model, effort)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -744,49 +714,6 @@ fn attach_usage(rows: &mut [MessageRow], usage: TokenSnapshot) {
     }
 }
 
-/// Map Pi's usage record into the exclusive buckets (RESEARCH_PLAN §5.13).
-/// `input` already excludes cache on every Pi API, `cacheWrite` includes
-/// `cacheWrite1h`, and `output` includes `reasoning`. Pi's `cost` is computed
-/// from its own price table, so it is never billing. Returns whether a subset
-/// exceeded its total (clamped, reported as drift).
-fn usage_snapshot(
-    usage: &Usage,
-    provider: Option<&str>,
-    scope: UsageScope,
-) -> (TokenSnapshot, bool) {
-    let count = |value: u64| i64::try_from(value).ok();
-    let (cache_write, cache_write_1h, write_clamped) = fold::split_subset(
-        count(usage.cache_write),
-        usage.cache_write_1h.and_then(count),
-    );
-    let (output, thinking, output_clamped) =
-        fold::split_subset(count(usage.output), usage.reasoning.and_then(count));
-    let tokens = TokenSnapshot {
-        input: count(usage.input),
-        output,
-        cache_read: count(usage.cache_read),
-        cache_write,
-        cache_write_1h,
-        thinking,
-        route: provider.and_then(rosetta_core::rows::canonical_route),
-        scope,
-        ..TokenSnapshot::default()
-    };
-    (tokens, write_clamped || output_clamped)
-}
-
-/// A usage subset (reasoning, 1-hour writes) larger than its total.
-fn usage_drift(ctx: &NormalizeCtx, stream_id: &str, record_kind: &str, at: Option<Ms>) -> IngestOp {
-    drift(
-        ctx,
-        stream_id,
-        record_kind,
-        "usage_subset_exceeds_total",
-        &["usage".to_owned()],
-        at,
-    )
-}
-
 fn user_content_text(content: &UserContent) -> Option<String> {
     match content {
         UserContent::Text(text) => Some(text.clone()),
@@ -831,6 +758,7 @@ fn record_kind(record: &KnownRecord) -> String {
         KnownRecord::ModelChange(_) => "model_change".to_owned(),
         KnownRecord::ThinkingLevelChange(_) => "thinking_level_change".to_owned(),
         KnownRecord::SessionInfo(_) => "session_info".to_owned(),
+        KnownRecord::Usage(_) => "usage".to_owned(),
         KnownRecord::Compaction(_) => "compaction".to_owned(),
         KnownRecord::BranchSummary(_) => "branch_summary".to_owned(),
         KnownRecord::Custom(_) => "custom".to_owned(),
@@ -846,6 +774,7 @@ fn record_timestamp(record: &KnownRecord) -> Option<Ms> {
         KnownRecord::ModelChange(entry) => &entry.timestamp,
         KnownRecord::ThinkingLevelChange(entry) => &entry.timestamp,
         KnownRecord::SessionInfo(entry) => &entry.timestamp,
+        KnownRecord::Usage(entry) => &entry.timestamp,
         KnownRecord::Compaction(entry) => &entry.timestamp,
         KnownRecord::BranchSummary(entry) => &entry.timestamp,
         KnownRecord::Custom(entry) => &entry.timestamp,
@@ -887,7 +816,7 @@ fn hard(
     }
 }
 
-fn drift(
+pub(crate) fn drift(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,

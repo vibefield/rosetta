@@ -6,6 +6,8 @@
 //! result kinds are their only correlation facts, so a small checkpointed queue
 //! carries the synthesized, deterministic call id across lines.
 
+use std::collections::BTreeMap;
+
 use rosetta_adapter_support::Drift;
 use rosetta_adapter_support::adapter::{LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_adapter_support::tool::{
@@ -33,11 +35,18 @@ const ORPHAN_TOOL_RESULT: &str = "orphan_tool_result";
 const NO_TYPE: &str = "<untyped>";
 const INVALID_RECORD: &str = "<invalid-json>";
 
-/// Cross-line state required to merge result records into earlier tool rows.
+/// Cross-line state. The transcript stream queues pending tool calls so
+/// result records can merge into earlier tool rows; the conversation-store
+/// stream indexes generations so each step's usage can name the model that
+/// served it (see [`crate::usage`]). Both hold identifiers only.
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AntigravityState {
     pending_tools: Vec<PendingTool>,
+    /// `steps.idx` → the served model string of the generation that wrote
+    /// that step, `None` when the generation recorded no model string.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) generations: BTreeMap<u32, Option<String>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]

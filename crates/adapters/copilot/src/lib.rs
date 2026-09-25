@@ -8,6 +8,7 @@ pub mod raw;
 pub mod spec;
 pub mod time;
 pub mod tool;
+pub mod usage;
 
 pub use adapter::CopilotAdapter;
 

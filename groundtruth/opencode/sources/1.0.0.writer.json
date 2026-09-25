@@ -1,0 +1,224 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "opencode",
+  "agent_version": "1.18.22",
+  "evidence": "writer",
+  "generator": "writer-source anomalyco/opencode@v0.10.0 and @v1.0.0 packages/opencode/src/session/message-v2.ts User and Assistant: the message shapes that rows migrated from the pre-1.2 JSON store (storage/json-migration.ts) and `opencode import` keep; user agent/model and assistant agent arrived in 1.0.100-1.0.154, assistant parentID in 1.0.0",
+  "data_root": "~/.local/share/opencode",
+  "writer_version": "v0.10.0..v1.0.0",
+  "streams": [
+    {
+      "id": "opencode-next-db",
+      "glob": "opencode-next.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "research",
+      "notes": "The pre-split 2.x preview database that the 2.x one-time V1 migration imports INTO opencode.db (packages/core/src/database/v1-migration.bun.ts nextPath/importNextDatabase). Inventory only, never driven: its sessions already live in opencode.db under the same ids, so reading both would count them twice. Listed before opencode-db because the first matching stream wins."
+    },
+    {
+      "id": "opencode-db",
+      "glob": "opencode*.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "writer",
+      "notes": "Pre-1.0.100 message.data shapes retained by migrated and imported rows.",
+      "discriminator": "table",
+      "record_types": {},
+      "facets": [
+        {
+          "id": "message-data",
+          "path": "message.data (by role)",
+          "discriminator": "role",
+          "record_types": {
+            "user": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "user": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "created": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true
+                        }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            },
+            "assistant": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "role": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "assistant": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "time": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "created": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true
+                        },
+                        "completed": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": false
+                        }
+                      }
+                    },
+                    "required": true
+                  },
+                  "error": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {}
+                    },
+                    "required": false
+                  },
+                  "system": {
+                    "shape": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "string"
+                      }
+                    },
+                    "required": true
+                  },
+                  "parentID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "modelID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "providerID": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "mode": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": true
+                  },
+                  "path": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "cwd": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "root": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        }
+                      }
+                    },
+                    "required": true
+                  },
+                  "summary": {
+                    "shape": {
+                      "kind": "boolean"
+                    },
+                    "required": false
+                  },
+                  "cost": {
+                    "shape": {
+                      "kind": "number"
+                    },
+                    "required": true
+                  },
+                  "tokens": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "input": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true
+                        },
+                        "output": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true
+                        },
+                        "reasoning": {
+                          "shape": {
+                            "kind": "number"
+                          },
+                          "required": true
+                        },
+                        "cache": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {
+                              "read": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true
+                              },
+                              "write": {
+                                "shape": {
+                                  "kind": "number"
+                                },
+                                "required": true
+                              }
+                            }
+                          },
+                          "required": true
+                        }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -32,9 +32,10 @@ pub struct HeatmapDay {
 
 /// What a token figure cost at list prices (ARCHITECTURE §4.1.3): integer
 /// micro-USD rounded once from the exact pico-USD rollup sums, the
-/// provider-billed amount where agents record one, and the tokens the price
-/// catalog could not price. `cost_micro_usd` is `None` when nothing was
-/// priced; coverage is complete only when `unpriced_tokens` is zero.
+/// provider-billed amount where agents record one, the tokens the price
+/// catalog could not price, and the records whose output was never recorded.
+/// `cost_micro_usd` is `None` when nothing was priced; coverage is complete
+/// only when `unpriced_tokens` and `unrecorded_output` are both zero.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Spend {
@@ -44,11 +45,21 @@ pub struct Spend {
     pub billed_micro_usd: Option<i64>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub unpriced_tokens: i64,
+    /// Usage records with a recorded prompt but no recorded output: the
+    /// figure is a lower bound (ARCHITECTURE §4.1.3).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[serde(default)]
+    pub unrecorded_output: i64,
 }
 
+/// The rollup sums behind a [`Spend`], in the order [`Spend::from_row`]
+/// reads them.
+pub(crate) const SPEND_SUMS: &str =
+    "SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens), SUM(b.unrecorded_output)";
+
 impl Spend {
-    /// Build from three SQL columns: SUM(cost_pusd), SUM(billed_pusd),
-    /// SUM(unpriced_tokens), starting at `first`.
+    /// Build from four SQL columns: SUM(cost_pusd), SUM(billed_pusd),
+    /// SUM(unpriced_tokens), SUM(unrecorded_output), starting at `first`.
     fn from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Self> {
         Ok(Self {
             cost_micro_usd: row
@@ -58,8 +69,42 @@ impl Spend {
                 .get::<_, Option<i64>>(first + 1)?
                 .map(rosetta_pricing::pico_to_micro),
             unpriced_tokens: row.get::<_, Option<i64>>(first + 2)?.unwrap_or(0),
+            unrecorded_output: row.get::<_, Option<i64>>(first + 3)?.unwrap_or(0),
         })
     }
+}
+
+/// The sessions an aggregate scope covers: every member of a session tree
+/// whose root belongs to the project (`?1`, `NULL` for the project-less
+/// bucket) and of which any member has been indexed. Attribution follows the
+/// root, so a subagent that resolved another cwd still counts for the project
+/// its parent ran in, and a root whose own transcript is gone still carries
+/// its indexed subagents (ARCHITECTURE §4.1.3).
+const SCOPE_SESSIONS: &str = "scope AS (
+    SELECT s.id AS session_id, r.id AS root_id, r.project_id AS project_id
+    FROM session r
+    JOIN session s ON s.root_session_id = r.id
+    WHERE r.id = r.root_session_id AND r.project_id IS ?1
+      AND EXISTS (SELECT 1 FROM session x
+                  WHERE x.root_session_id = r.id AND x.stream_state != 'pending')
+)";
+
+/// Every model with usage the catalog could not price, largest first, for
+/// the pricing coverage report.
+pub fn unpriced_models(conn: &Connection) -> Result<Vec<(String, i64, i64, i64)>, StoreError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT model, SUM(unpriced_tokens), MIN(hour_ts), MAX(hour_ts)
+         FROM usage_bucket WHERE unpriced_tokens > 0
+         GROUP BY model ORDER BY SUM(unpriced_tokens) DESC, model",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1233,17 +1278,18 @@ pub fn heatmap_days_in_timezone_for_scope(
     since_ms: Ms,
     offset_minutes: i32,
 ) -> Result<Vec<HeatmapDay>, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day,
+    let mut stmt = conn.prepare_cached(&format!(
+        "WITH {SCOPE_SESSIONS}
+         SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
                     + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
-                SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens)
+                {SPEND_SUMS}
          FROM usage_bucket b
-         JOIN session s ON s.id = b.session_id
-         WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
-         GROUP BY day ORDER BY day",
-    )?;
+         JOIN scope t ON t.session_id = b.session_id
+         WHERE b.hour_ts >= ?2
+         GROUP BY day ORDER BY day"
+    ))?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
         Ok(HeatmapDay {
             day: row.get(0)?,
@@ -1277,17 +1323,18 @@ pub fn model_days_in_timezone_for_scope(
     since_ms: Ms,
     offset_minutes: i32,
 ) -> Result<Vec<ModelDay>, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day, b.model,
+    let mut stmt = conn.prepare_cached(&format!(
+        "WITH {SCOPE_SESSIONS}
+         SELECT date((b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS day, b.model,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
                     + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
-                SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens)
+                {SPEND_SUMS}
          FROM usage_bucket b
-         JOIN session s ON s.id = b.session_id
-         WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
-         GROUP BY day, b.model ORDER BY day, b.model",
-    )?;
+         JOIN scope t ON t.session_id = b.session_id
+         WHERE b.hour_ts >= ?2
+         GROUP BY day, b.model ORDER BY day, b.model"
+    ))?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
         Ok(ModelDay {
             day: row.get(0)?,
@@ -1321,17 +1368,18 @@ pub fn hour_profile_in_timezone_for_scope(
     since_ms: Ms,
     offset_minutes: i32,
 ) -> Result<Vec<HourTotal>, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT CAST(strftime('%H', (b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
+    let mut stmt = conn.prepare_cached(&format!(
+        "WITH {SCOPE_SESSIONS}
+         SELECT CAST(strftime('%H', (b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
                 SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
                     + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
                     + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
-                SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens)
+                {SPEND_SUMS}
          FROM usage_bucket b
-         JOIN session s ON s.id = b.session_id
-         WHERE s.project_id IS ?1 AND s.stream_state != 'pending' AND b.hour_ts >= ?2
-         GROUP BY hour ORDER BY hour",
-    )?;
+         JOIN scope t ON t.session_id = b.session_id
+         WHERE b.hour_ts >= ?2
+         GROUP BY hour ORDER BY hour"
+    ))?;
     let rows = stmt.query_map(params![project_id, since_ms, offset_minutes], |row| {
         Ok(HourTotal {
             hour: row.get(0)?,
@@ -1363,16 +1411,13 @@ pub fn contribution_for_scope(
     conn: &Connection,
     project_id: Option<&str>,
 ) -> Result<Vec<ContributionRow>, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "WITH roots AS (
-             SELECT id, project_id
-             FROM session
-             WHERE project_id IS ?1 AND id = root_session_id
-               AND stream_state != 'pending'
+    let mut stmt = conn.prepare_cached(&format!(
+        "WITH {SCOPE_SESSIONS},
+         roots AS (
+             SELECT DISTINCT root_id AS id, project_id FROM scope
          ),
          tree_sessions AS (
-             SELECT s.root_session_id AS rid, s.id AS session_id
-             FROM session s JOIN roots r ON r.id = s.root_session_id
+             SELECT root_id AS rid, session_id FROM scope
          ),
          usage AS (
              SELECT t.rid,
@@ -1380,7 +1425,8 @@ pub fn contribution_for_scope(
                         + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
                         + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
                     SUM(b.cost_pusd) AS cost_pusd, SUM(b.billed_pusd) AS billed_pusd,
-                    SUM(b.unpriced_tokens) AS unpriced_tokens
+                    SUM(b.unpriced_tokens) AS unpriced_tokens,
+                    SUM(b.unrecorded_output) AS unrecorded_output
              FROM tree_sessions t JOIN usage_bucket b ON b.session_id = t.session_id
              GROUP BY t.rid
          ),
@@ -1402,14 +1448,14 @@ pub fn contribution_for_scope(
          )
          SELECT r.id, r.project_id, COALESCE(u.tokens, 0), COALESCE(c.commits, 0),
                 COALESCE(e.edits, 0), COALESCE(e.loc, 0), COALESCE(m.messages, 0),
-                u.cost_pusd, u.billed_pusd, u.unpriced_tokens
+                u.cost_pusd, u.billed_pusd, u.unpriced_tokens, u.unrecorded_output
          FROM roots r
          LEFT JOIN usage u ON u.rid = r.id
          LEFT JOIN commits c ON c.rid = r.id
          LEFT JOIN edits e ON e.rid = r.id
          LEFT JOIN messages m ON m.rid = r.id
-         ORDER BY COALESCE(u.tokens, 0) DESC",
-    )?;
+         ORDER BY COALESCE(u.tokens, 0) DESC"
+    ))?;
     let rows = stmt.query_map(params![project_id], |row| {
         Ok(ContributionRow {
             session_id: row.get(0)?,

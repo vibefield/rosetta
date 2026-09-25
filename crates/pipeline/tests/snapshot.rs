@@ -339,8 +339,8 @@ fn database_sessions_flow_end_to_end() {
         "the old body must be swept from FTS"
     );
 
-    // Session B vanishes from the database entirely: an empty activation
-    // sweeps its projection.
+    // Session B vanishes from the database entirely (the agent pruned it):
+    // its last projected generation stays, like a deleted JSONL transcript's.
     std::thread::sleep(std::time::Duration::from_millis(5));
     let conn = rusqlite::Connection::open(&h.db).unwrap();
     conn.execute_batch(
@@ -362,10 +362,10 @@ fn database_sessions_flow_end_to_end() {
     assert_eq!(meta.sessions, 1);
     assert_eq!(
         current_files.len(),
-        2,
-        "the removed session remains a tombstone"
+        1,
+        "the removed session is neither re-admitted nor tombstoned"
     );
-    let swept = stream_backfill_into(
+    let kept = stream_backfill_into(
         adapter,
         &h.runtime,
         &h.root,
@@ -376,10 +376,11 @@ fn database_sessions_flow_end_to_end() {
         None,
     )
     .unwrap();
-    assert!(swept.generations_restarted >= 1);
+    assert_eq!(kept.generations_restarted, 0);
     assert_eq!(
         queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
-        0
+        1,
+        "a pruned session keeps its rows and usage"
     );
     assert_ram_only_reconciliation(&h.store);
 }
@@ -477,7 +478,7 @@ fn live_database_hint_reenumerates_virtual_session_membership() {
 }
 
 #[test]
-fn deleted_database_sweeps_every_virtual_member() {
+fn deleted_database_keeps_every_virtual_member() {
     let adapter = &FakeDbAgent;
     let mut h = harness();
     let (_, files) = meta_ingest_into(
@@ -508,8 +509,9 @@ fn deleted_database_sweeps_every_virtual_member() {
         2
     );
 
+    // The whole store disappears: every member keeps its last generation.
     std::fs::remove_file(&h.db).unwrap();
-    let (_, tombstones) = meta_ingest_into(
+    let (_, files) = meta_ingest_into(
         adapter,
         &h.runtime,
         &h.root,
@@ -519,34 +521,24 @@ fn deleted_database_sweeps_every_virtual_member() {
         None,
     )
     .unwrap();
-    assert_eq!(tombstones.len(), 2);
-    assert!(tombstones.iter().all(|file| file.source_missing));
-    let swept = stream_backfill_into(
-        adapter,
-        &h.runtime,
-        &h.root,
-        &mut h.store,
-        &tombstones,
-        &h.opts,
-        &h.instrument,
-        None,
-    )
-    .unwrap();
-    assert!(swept.generations_restarted >= 2);
     assert!(
+        files.is_empty(),
+        "no tombstones are admitted for a vanished store"
+    );
+    assert_eq!(
         queries::search(h.store.conn(), "ometeotl", 5)
             .unwrap()
-            .is_empty()
+            .len(),
+        2
     );
-    assert!(
-        queries::search(h.store.conn(), "xolotl", 5)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
+        1
     );
 }
 
 #[test]
-fn live_database_delete_hint_reconciles_membership() {
+fn live_database_delete_hint_keeps_membership() {
     let adapter = &FakeDbAgent;
     let mut h = harness();
     let (_, files) = meta_ingest_into(
@@ -591,16 +583,18 @@ fn live_database_delete_hint_reconciles_membership() {
     std::fs::remove_file(&h.db).unwrap();
     runner.tick(&mut h.store, &h.instrument).unwrap();
 
+    // The hint was processed but nothing was admitted: every member keeps
+    // its last generation.
     assert_eq!(runner.report().admissions, 1);
-    assert!(
+    assert_eq!(
         queries::search(h.store.conn(), "ometeotl", 5)
             .unwrap()
-            .is_empty()
+            .len(),
+        2
     );
-    assert!(
-        queries::search(h.store.conn(), "xolotl", 5)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
+        1
     );
 }
 

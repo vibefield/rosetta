@@ -156,6 +156,10 @@ pub struct Store {
     /// This is intentionally process-local: raw-ledger replay, not SQLite, is
     /// the recovery path after restart.
     ram_reconciliation: apply::RamReconciliationBuffer,
+    /// Which session owns each model response's usage when copies of the
+    /// response exist in several files. Process-local like the buffer above:
+    /// a rebuild replays the raw ledger through it (ARCHITECTURE §4.1.3).
+    usage_owners: apply::UsageOwners,
     /// An abandoned generation means the private projection was built from an
     /// incomplete source. Keep accepting batches so callers can finish their
     /// diagnostic pass, but never allow that scratch file to be published.
@@ -214,6 +218,7 @@ impl Store {
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
             bulk_ordinals_precomputed: false,
             planned_batches: None,
@@ -237,6 +242,7 @@ impl Store {
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
             bulk_ordinals_precomputed: false,
             planned_batches: None,
@@ -270,6 +276,7 @@ impl Store {
             },
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
             bulk_ordinals_precomputed: false,
             planned_batches: None,
@@ -409,6 +416,7 @@ impl Store {
             mode: StoreMode::Bulk,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
             bulk_ordinals_precomputed: false,
             planned_batches: None,
@@ -479,6 +487,7 @@ impl Store {
             bulk_load,
             self.mode == StoreMode::Progressive,
             self.bulk_ordinals_precomputed,
+            &mut self.usage_owners,
             apply::Observation {
                 rows: fresh.as_mut(),
                 meta: fresh_meta.as_mut(),
@@ -535,6 +544,7 @@ impl Store {
             true,
             false,
             false,
+            &mut self.usage_owners,
             apply::Observation {
                 rows: None,
                 meta: None,
@@ -618,6 +628,7 @@ impl Store {
                 true,
                 false,
                 self.bulk_ordinals_precomputed,
+                &mut self.usage_owners,
                 apply::Observation {
                     rows: None,
                     meta: None,
@@ -667,8 +678,12 @@ impl Store {
 
         let tx = self.conn.transaction()?;
         let apply_started = Instant::now();
-        let mut stats =
-            apply::apply_bulk_reconciliation(&tx, &mut plan, self.bulk_ordinals_precomputed)?;
+        let mut stats = apply::apply_bulk_reconciliation(
+            &tx,
+            &mut plan,
+            self.bulk_ordinals_precomputed,
+            &mut self.usage_owners,
+        )?;
         stats.profile.tool_reconcile_nanos = reconcile_nanos;
         stats.canonical_apply_nanos = elapsed_nanos(apply_started);
         let commit_started = Instant::now();

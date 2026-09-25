@@ -597,6 +597,53 @@ def _write_pi_config(
     write_json(coding / "settings.json", settings)
 
 
+# Tables of Copilot's `session-store.db` that carry no transcript content and
+# that the ground truth reads: the usage record and the session keys.
+COPILOT_STORE_KEEP_TABLES = {"schema_version", "assistant_usage_events"}
+COPILOT_STORE_SESSION_KEYS = {"id", "created_at", "updated_at"}
+
+
+def _reduce_copilot_store(db_path: Path) -> None:
+    """Keep `schema_version`, `sessions(id, created_at, updated_at)` and
+    `assistant_usage_events`; empty every other table and blank every other
+    session column. The WAL is folded in first and its sidecars removed."""
+    if not db_path.is_file():
+        return
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA journal_mode = DELETE")
+        tables = [
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        for table in tables:
+            if table in COPILOT_STORE_KEEP_TABLES or table == "sessions":
+                continue
+            connection.execute(f'DELETE FROM "{table}"')
+        if "sessions" in tables:
+            assignments = []
+            for _, name, kind, not_null, default, primary in connection.execute(
+                "PRAGMA table_info(sessions)"
+            ):
+                if name in COPILOT_STORE_SESSION_KEYS or primary:
+                    continue
+                if not_null and default is None:
+                    blank = "0" if kind.upper() in ("INTEGER", "REAL", "NUMERIC") else "''"
+                else:
+                    blank = "NULL" if default is None else default
+                assignments.append(f'"{name}" = {blank}')
+            if assignments:
+                connection.execute(f"UPDATE sessions SET {', '.join(assignments)}")
+        connection.commit()
+        connection.execute("VACUUM")
+    finally:
+        connection.close()
+    for suffix in ("-wal", "-shm"):
+        (db_path.parent / (db_path.name + suffix)).unlink(missing_ok=True)
+
+
 def _strip_grok_harvest(tree: Path) -> None:
     for name in (
         "auth.json",
@@ -1299,8 +1346,10 @@ def _strip_harvest(agent: str, harvested: Path) -> None:
         _strip_grok_harvest(harvested)
         return
     if agent == "copilot":
-        for name in ("session-store.db", "session-store.db-wal", "session-store.db-shm"):
-            (harvested / name).unlink(missing_ok=True)
+        # The store's per-call usage table is the only record of exact
+        # per-request usage (RESEARCH_PLAN §5.13); keep it and the session
+        # keys, blank every derived or content table.
+        _reduce_copilot_store(harvested / "session-store.db")
         shutil.rmtree(harvested / "logs", ignore_errors=True)
         shutil.rmtree(harvested / "pkg", ignore_errors=True)
         shutil.rmtree(harvested / "installed-plugins", ignore_errors=True)

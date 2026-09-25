@@ -267,8 +267,8 @@ fn document_membership_and_whole_file_deletion_are_authoritative() {
     .unwrap();
     assert_eq!(
         files.len(),
-        3,
-        "two members plus the removed member tombstone"
+        2,
+        "the two present members; a removed member keeps its last generation"
     );
     stream_backfill_into(
         adapter,
@@ -281,10 +281,10 @@ fn document_membership_and_whole_file_deletion_are_authoritative() {
         None,
     )
     .unwrap();
-    assert!(
-        queries::search(h.store.conn(), "xolotl", 5)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
+        1,
+        "a member the agent dropped from its document keeps its rows"
     );
     assert!(
         queries::search(h.store.conn(), "reply", 5)
@@ -304,8 +304,16 @@ fn document_membership_and_whole_file_deletion_are_authoritative() {
         1
     );
 
+    // The whole document disappears: every member keeps its last generation
+    // (product decision, 2026-09-24: an agent pruning its store never erases
+    // Rosetta's history).
+    let before: i64 = h
+        .store
+        .conn()
+        .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
+        .unwrap();
     std::fs::remove_file(&h.document).unwrap();
-    let (_, tombstones) = meta_ingest_into(
+    let (_, files) = meta_ingest_into(
         adapter,
         &h.runtime,
         &h.root,
@@ -315,29 +323,17 @@ fn document_membership_and_whole_file_deletion_are_authoritative() {
         None,
     )
     .unwrap();
-    assert_eq!(tombstones.len(), 3);
-    assert!(tombstones.iter().all(|file| file.source_missing));
-    stream_backfill_into(
-        adapter,
-        &h.runtime,
-        &h.root,
-        &mut h.store,
-        &tombstones,
-        &h.opts,
-        &h.instrument,
-        None,
-    )
-    .unwrap();
+    assert!(files.is_empty(), "a vanished document admits no tombstones");
     let messages: i64 = h
         .store
         .conn()
         .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(messages, 0);
+    assert_eq!(messages, before);
 }
 
 #[test]
-fn live_document_hint_reenumerates_and_then_sweeps_a_deleted_file() {
+fn live_document_hint_reenumerates_and_keeps_a_deleted_file() {
     let adapter = &FakeDocumentAgent;
     let mut h = harness();
     backfill(&mut h);
@@ -363,10 +359,11 @@ fn live_document_hint_reenumerates_and_then_sweeps_a_deleted_file() {
 
     write_document(&h.document, changed_sessions());
     runner.tick(&mut h.store, &h.instrument).unwrap();
-    assert!(
-        queries::search(h.store.conn(), "xolotl", 5)
-            .unwrap()
-            .is_empty()
+    // The rewrite dropped one member: it keeps its rows; the changed member
+    // swapped generations.
+    assert_eq!(
+        queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
+        1
     );
     assert_eq!(
         queries::search(h.store.conn(), "tezcatlipoca", 5)
@@ -375,6 +372,12 @@ fn live_document_hint_reenumerates_and_then_sweeps_a_deleted_file() {
         1
     );
 
+    // Deleting the document keeps every member's last generation.
+    let before: i64 = h
+        .store
+        .conn()
+        .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
+        .unwrap();
     std::fs::remove_file(&h.document).unwrap();
     runner.tick(&mut h.store, &h.instrument).unwrap();
     let messages: i64 = h
@@ -382,6 +385,7 @@ fn live_document_hint_reenumerates_and_then_sweeps_a_deleted_file() {
         .conn()
         .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(messages, 0);
+    assert_eq!(messages, before);
+    // Both hints were processed; the second admitted nothing.
     assert_eq!(runner.report().admissions, 2);
 }

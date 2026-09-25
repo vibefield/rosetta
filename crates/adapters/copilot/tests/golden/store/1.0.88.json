@@ -1,0 +1,98 @@
+[
+  {
+    "op": "session_usage",
+    "session_id": "e7b6f85b4c6f4f5c6e231c083cf1c2b35e1307f6098cfc2fcf20d6cc248588ff",
+    "key": "447902fed836e3ebdc1d43a5ffc2a235a973a9598216c3aaec134c2fcab08488",
+    "ts": 1787794088091,
+    "model": "claude-opus-5.5[1m]",
+    "tokens": {
+      "input": 100,
+      "output": 60,
+      "cache_read": 600,
+      "cache_write": 1000,
+      "thinking": 40,
+      "cache_write_1h": 500,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": 70000000,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "e7b6f85b4c6f4f5c6e231c083cf1c2b35e1307f6098cfc2fcf20d6cc248588ff",
+    "key": "7f5500abb3b8965146f7cc159ca2d435e27b2b0625a77c9849b339ff47d4205e",
+    "ts": 1787794088091,
+    "model": "claude-opus-4.8",
+    "tokens": {
+      "input": 100,
+      "output": 60,
+      "cache_read": 600,
+      "cache_write": 300,
+      "thinking": 40,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": "fast",
+      "route": null,
+      "billed_pico_usd": 80000000,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "drift",
+    "runtime_id": "bf17f75aa2b713a54a2e829fceffaff24d056177d9c881e5ce2e77c56f926921",
+    "agent_version": "",
+    "stream": "session-store",
+    "record_kind": "assistant_usage_events",
+    "error_code": "usage_mixed_models",
+    "shape_hash": "16f2b99610e6e5393a6ee46d229e4762758a6c2f92ebb740264a41979199a261",
+    "at": 1787794088091,
+    "sample_cursor": 3,
+    "sample_offset": 2
+  },
+  {
+    "op": "session_usage",
+    "session_id": "e7b6f85b4c6f4f5c6e231c083cf1c2b35e1307f6098cfc2fcf20d6cc248588ff",
+    "key": "433363efa53e20da06e64d7067f45ab500e619448b975c28c2f8bf3fef2b17e6",
+    "ts": 1787794088091,
+    "model": "gpt-5.6-terra",
+    "tokens": {
+      "input": 100,
+      "output": 60,
+      "cache_read": 600,
+      "cache_write": 300,
+      "thinking": 40,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": 90000000,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "e7b6f85b4c6f4f5c6e231c083cf1c2b35e1307f6098cfc2fcf20d6cc248588ff",
+    "key": "0cbe71f5399d14e9c97866e50ca186592353c230b5499281f230dd7e15580178",
+    "ts": 1787794088000,
+    "model": "gpt-5.6-terra",
+    "tokens": {
+      "input": 100,
+      "output": 60,
+      "cache_read": 600,
+      "cache_write": 300,
+      "thinking": 40,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": 100000000,
+      "scope": "request",
+      "requests": null
+    }
+  }
+]

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rosetta_adapter_hermes::{HermesAdapter, spec};
+use rosetta_adapter_hermes::{HermesAdapter, spec, usage};
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_capture::{SnapshotOutcome, snapshot_db};
 use rosetta_core::timeline::{TimelineBody, TimelineEntry, ToolAction, ToolStatus};
@@ -25,12 +25,14 @@ fn golden_dir() -> PathBuf {
 }
 
 fn normalize_scenario(scenario: &str) -> Vec<IngestOp> {
+    normalize_store(&fixture_db(scenario), spec::STATE_DB)
+}
+
+/// Replay one session store through the adapter's plan for `stream`.
+fn normalize_store(path: &Path, stream: &str) -> Vec<IngestOp> {
     let adapter = HermesAdapter;
-    let plan = adapter
-        .snapshot_plan(spec::STATE_DB)
-        .expect("snapshot plan");
-    let path = fixture_db(scenario);
-    let SnapshotOutcome::Ready(snapshot) = snapshot_db(&path).unwrap() else {
+    let plan = adapter.snapshot_plan(stream).expect("snapshot plan");
+    let SnapshotOutcome::Ready(snapshot) = snapshot_db(path).unwrap() else {
         panic!("{} did not produce a stable snapshot", path.display());
     };
     let sessions = snapshot.query_rows(&plan.sessions_sql, None).unwrap();
@@ -55,18 +57,105 @@ fn normalize_scenario(scenario: &str) -> Vec<IngestOp> {
                 "query": &query.name,
                 "row": serde_json::from_str::<serde_json::Value>(&row).unwrap(),
             });
-            let outcome =
-                adapter.ingest_line(&mut ctx, spec::STATE_DB, record.to_string().as_bytes());
+            let outcome = adapter.ingest_line(&mut ctx, stream, record.to_string().as_bytes());
             assert_eq!(
                 outcome.status,
                 LineStatus::Parsed,
-                "{scenario}/{}: {row}",
+                "{}/{}: {row}",
+                path.display(),
                 query.name
             );
             ops.extend(outcome.ops);
         }
     }
     ops
+}
+
+/// Ingest synthetic `{"query", "row"}` records through one session context.
+fn ingest(
+    ctx: &mut NormalizeCtx,
+    records: &[serde_json::Value],
+) -> Vec<(LineStatus, Vec<IngestOp>)> {
+    records
+        .iter()
+        .map(|record| {
+            let outcome =
+                HermesAdapter.ingest_line(ctx, spec::STATE_DB, record.to_string().as_bytes());
+            (outcome.status, outcome.ops)
+        })
+        .collect()
+}
+
+fn drift_codes(ops: &[IngestOp]) -> Vec<(String, String)> {
+    ops.iter()
+        .filter_map(|op| match op {
+            IngestOp::Drift(fact) => Some((fact.record_kind.clone(), fact.error_code.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn usage_rows(ops: &[IngestOp]) -> Vec<&rosetta_core::rows::SessionUsageRow> {
+    ops.iter()
+        .filter_map(|op| match op {
+            IngestOp::SessionUsage(row) => Some(row),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A minimal `sessions` row shaped like the 0.20.5 fixture columns.
+fn session_record(id: &str, model_config: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "query": "sessions",
+        "row": {
+            "id": id,
+            "source": "cli",
+            "model": "synthetic-model",
+            "model_config": model_config,
+            "started_at": 1.0,
+            "git_metadata_generation": 0,
+            "compression_fallback_streak": 0,
+            "compression_ineffective_count": 0,
+            "rewind_count": 0,
+            "archived": 0,
+            "pinned": 0,
+            "hidden": 0
+        }
+    })
+}
+
+/// A `session_model_usage` running total with the given route and task.
+fn usage_record(
+    session: &str,
+    provider: &str,
+    mode: &str,
+    task: &str,
+    calls: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "query": "session_model_usage",
+        "row": {
+            "session_id": session,
+            "model": "synthetic-model",
+            "billing_provider": provider,
+            "billing_base_url": "",
+            "billing_mode": mode,
+            "task": task,
+            "api_call_count": calls,
+            "input_tokens": 100 * calls,
+            "output_tokens": 10 * calls,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "actual_cost_usd": 0.0,
+            "cost_status": "included",
+            "cost_source": "none",
+            "first_seen": 1.0,
+            "last_seen": 2.0
+        }
+    })
 }
 
 fn messages(ops: &[IngestOp]) -> Vec<&TimelineEntry> {
@@ -354,4 +443,192 @@ fn tool_specific_and_plain_results_keep_only_typed_lifecycle_facts() {
             .and_then(|failure| failure.diagnostic.as_deref()),
         Some("synthetic failure")
     );
+}
+
+/// HERMES-3: with `/codex-runtime` on, Hermes drives the Codex app-server,
+/// records only each turn's last request, and the app-server's own rollout
+/// lands in `~/.codex/sessions` where the Codex adapter counts every request.
+/// The session row's `model_config.codex_thread_id` names that runtime; its
+/// main-loop usage is withheld with a drift notice, Hermes-side auxiliary
+/// calls stay, and a row that names the runtime itself is withheld even
+/// without the session row.
+#[test]
+fn codex_runtime_sessions_withhold_main_loop_usage_only() {
+    let native = "20260923_120000_0123456789ab";
+    let runtime_id = ids::runtime_id("hermes", "~/.hermes");
+    let session_id = ids::session_id(&runtime_id, native);
+
+    let mut ctx = NormalizeCtx::new(runtime_id.clone(), session_id.clone());
+    let outcomes = ingest(
+        &mut ctx,
+        &[
+            session_record(native, Some(r#"{"codex_thread_id":"thr_synthetic"}"#)),
+            usage_record(native, "openai-codex", "subscription_included", "", 4),
+            usage_record(native, "openai-codex", "", "title_generation", 1),
+        ],
+    );
+    assert!(
+        outcomes
+            .iter()
+            .all(|(status, _)| *status == LineStatus::Parsed)
+    );
+    let (_, main_loop) = &outcomes[1];
+    assert!(
+        usage_rows(main_loop).is_empty(),
+        "app-server total must not be sampled"
+    );
+    assert_eq!(
+        drift_codes(main_loop),
+        vec![(
+            "session_model_usage".to_owned(),
+            usage::USAGE_RECORDED_BY_CODEX.to_owned()
+        )]
+    );
+    let (_, aux) = &outcomes[2];
+    assert_eq!(
+        usage_rows(aux).len(),
+        1,
+        "Hermes-side auxiliary call is kept"
+    );
+    assert!(drift_codes(aux).is_empty());
+
+    // An empty or cleared binding leaves the ordinary path untouched.
+    for config in [
+        None,
+        Some("{}"),
+        Some(r#"{"codex_thread_id":null}"#),
+        Some("not json"),
+    ] {
+        let mut ctx = NormalizeCtx::new(runtime_id.clone(), session_id.clone());
+        let outcomes = ingest(
+            &mut ctx,
+            &[
+                session_record(native, config),
+                usage_record(native, "openai-codex", "subscription_included", "", 4),
+            ],
+        );
+        let (_, ops) = &outcomes[1];
+        assert_eq!(usage_rows(ops).len(), 1, "{config:?}");
+        assert!(drift_codes(ops).is_empty(), "{config:?}");
+    }
+
+    // A row persisted after a `/model` switch onto the app-server names the
+    // runtime in `billing_mode` and needs no session row.
+    let mut ctx = NormalizeCtx::new(runtime_id, session_id);
+    let outcomes = ingest(
+        &mut ctx,
+        &[usage_record(native, "openai", "codex_app_server", "", 2)],
+    );
+    let (status, ops) = &outcomes[0];
+    assert_eq!(*status, LineStatus::Parsed);
+    assert!(usage_rows(ops).is_empty());
+    assert_eq!(drift_codes(ops).len(), 1);
+}
+
+/// HERMES-11: the 0.21.x tools the projector registry already maps are not
+/// unknown subtypes. Their result payloads stay soft drift until the L1
+/// re-pin captures the shapes.
+#[test]
+fn registered_tool_names_are_known_without_fixture_facets() {
+    let adapter = HermesAdapter;
+    let mut ctx = NormalizeCtx::new("runtime", "session");
+    let call = serde_json::json!({
+        "query": "messages",
+        "row": {
+            "id": 3,
+            "session_id": "session",
+            "role": "assistant",
+            "content": "",
+            "tool_calls": r#"[{"id":"call_synthetic_0003","call_id":"call_synthetic_0003","response_item_id":"fc_synthetic","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"notes.txt\"}"}}]"#,
+            "timestamp": 3.0,
+            "active": 1,
+            "compacted": 0
+        }
+    });
+    let outcome = adapter.ingest_line(&mut ctx, spec::STATE_DB, call.to_string().as_bytes());
+    assert_eq!(outcome.status, LineStatus::Parsed);
+    assert!(
+        drift_codes(&outcome.ops).is_empty(),
+        "{:?}",
+        drift_codes(&outcome.ops)
+    );
+    let tool = messages(&outcome.ops)
+        .into_iter()
+        .find_map(|row| match &row.body {
+            TimelineBody::ToolUse { tool } => Some(tool.clone()),
+            _ => None,
+        })
+        .expect("projected tool call");
+    assert_eq!(tool.native.name, "read_file");
+    assert!(matches!(tool.action, ToolAction::FileRead { .. }));
+
+    let result = serde_json::json!({
+        "query": "messages",
+        "row": {
+            "id": 4,
+            "session_id": "session",
+            "role": "tool",
+            "content": r#"{"content":"synthetic file body","file_size":19}"#,
+            "tool_call_id": "call_synthetic_0003",
+            "tool_name": "read_file",
+            "timestamp": 4.0,
+            "active": 1,
+            "compacted": 0
+        }
+    });
+    let outcome = adapter.ingest_line(&mut ctx, spec::STATE_DB, result.to_string().as_bytes());
+    // Only the unfixtured payload shape is drift; the name itself is known.
+    assert_eq!(outcome.status, LineStatus::UnknownType);
+    assert_eq!(
+        drift_codes(&outcome.ops),
+        vec![(
+            "messages/tool_result".to_owned(),
+            "unknown_subtype".to_owned()
+        )]
+    );
+
+    let unknown = serde_json::json!({
+        "query": "messages",
+        "row": {
+            "id": 5,
+            "session_id": "session",
+            "role": "tool",
+            "content": "plain synthetic output",
+            "tool_call_id": "call_synthetic_0005",
+            "tool_name": "web_search",
+            "timestamp": 5.0,
+            "active": 1,
+            "compacted": 0
+        }
+    });
+    let outcome = adapter.ingest_line(&mut ctx, spec::STATE_DB, unknown.to_string().as_bytes());
+    assert_eq!(outcome.status, LineStatus::UnknownType);
+    assert!(drift_codes(&outcome.ops).contains(&(
+        "tool_result/web_search".to_owned(),
+        "unknown_subtype".to_owned()
+    )));
+}
+
+/// HERMES-10: a named profile's store (`profiles/<name>/state.db`) replays
+/// through the same plan as the default store and yields the same canonical
+/// ops, because its session ids are unique across stores by construction.
+#[test]
+fn profile_store_replays_like_the_default_store() {
+    let scratch = std::env::temp_dir().join(format!(
+        "rosetta-hermes-profile-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let profile_dir = scratch.join("profiles").join("coder");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+    let profile_db = profile_dir.join("state.db");
+    std::fs::copy(fixture_db("tool-use"), &profile_db).unwrap();
+
+    let from_profile = normalize_store(&profile_db, spec::PROFILE_STATE_DB);
+    std::fs::remove_dir_all(&scratch).unwrap();
+    assert_eq!(from_profile, normalize_scenario("tool-use"));
+    assert!(!usage_rows(&from_profile).is_empty());
 }

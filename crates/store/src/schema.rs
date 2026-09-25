@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 23;
+pub const SCHEMA_VERSION: i64 = 24;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -380,35 +380,18 @@ CREATE TABLE IF NOT EXISTS usage_bucket (
   cost_pusd       INTEGER,
   billed_pusd     INTEGER,
   unpriced_tokens INTEGER NOT NULL DEFAULT 0,
+  -- Usage records whose prompt was recorded but whose output never was (a
+  -- streamed response that never got its final usage record): their cost is
+  -- a lower bound, so any aggregate holding one reads as partial.
+  unrecorded_output INTEGER NOT NULL DEFAULT 0,
   message_count   INTEGER NOT NULL DEFAULT 0,
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, hour_ts, model)
 ) WITHOUT ROWID;
 
-CREATE VIEW IF NOT EXISTS session_contribution AS
-SELECT r.id AS session_id, r.project_id,
-       COALESCE(u.tokens, 0)  AS tokens,
-       u.cost_pusd            AS cost_pusd,
-       COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens,
-       COALESCE(g.commits, 0) AS commits,
-       COALESCE(f.edits, 0)   AS edits,
-       COALESCE(f.loc, 0)     AS loc
-FROM session r
-LEFT JOIN (SELECT s.root_session_id rid,
-                  SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
-                      + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
-                      + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) tokens,
-                  SUM(b.cost_pusd) cost_pusd, SUM(b.unpriced_tokens) unpriced_tokens
-           FROM usage_bucket b JOIN session s ON s.id = b.session_id
-           GROUP BY rid) u ON u.rid = r.id
-LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) commits
-           FROM git_commit g JOIN session s ON s.id = g.session_id
-           GROUP BY rid) g ON g.rid = r.id
-LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
-                  SUM(COALESCE(f.lines_added, 0) + COALESCE(f.lines_removed, 0)) loc
-           FROM file_edit f JOIN session s ON s.id = f.session_id
-           GROUP BY rid) f ON f.rid = r.id
-WHERE r.id = r.root_session_id;
+-- Aggregates attribute a whole session tree to its root; readiness of any
+-- member is decided per root.
+CREATE INDEX IF NOT EXISTS session_root ON session(root_session_id);
 
 -- Keep these during cold loads: progressive metadata reads must remain bounded.
 CREATE INDEX IF NOT EXISTS message_activity_first ON message(session_id, activity_first_at);

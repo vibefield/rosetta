@@ -13,14 +13,18 @@ use serde_json::Value;
 pub const AGENT: &str = "opencode";
 pub const FIXTURE_WRITER_VERSION: &str = "1.18.22";
 pub const CURRENT_WRITER_VERSION: &str = "1.18.23";
+/// The 2.x line (`@opencode/cli`), surveyed at 2.0.14 from writer source.
+pub const V2_FIRST_WRITER_VERSION: &str = "2.0.0";
+pub const V2_SURVEYED_WRITER_VERSION: &str = "2.0.14";
 
-const fn registration(name: &'static str, action_kind: ToolActionKind) -> ProjectorRegistration {
+const fn registration_in(
+    writer_versions: VersionRange,
+    name: &'static str,
+    action_kind: ToolActionKind,
+) -> ProjectorRegistration {
     ProjectorRegistration {
         agent: AGENT,
-        writer_versions: VersionRange {
-            min_inclusive: FIXTURE_WRITER_VERSION,
-            max_inclusive: CURRENT_WRITER_VERSION,
-        },
+        writer_versions,
         accepts_unversioned: false,
         native: NativeToolSelector {
             namespace: None,
@@ -33,9 +37,36 @@ const fn registration(name: &'static str, action_kind: ToolActionKind) -> Projec
     }
 }
 
+const fn registration(name: &'static str, action_kind: ToolActionKind) -> ProjectorRegistration {
+    registration_in(
+        VersionRange {
+            min_inclusive: FIXTURE_WRITER_VERSION,
+            max_inclusive: CURRENT_WRITER_VERSION,
+        },
+        name,
+        action_kind,
+    )
+}
+
+/// 2.x renamed `bash` to `shell` (`packages/core/src/tool/plugin/shell.ts:22`,
+/// input `command`/`workdir`) and reads by `path`
+/// (`tool/plugin/read.ts:15-18`).
+const fn registration_2x(name: &'static str, action_kind: ToolActionKind) -> ProjectorRegistration {
+    registration_in(
+        VersionRange {
+            min_inclusive: V2_FIRST_WRITER_VERSION,
+            max_inclusive: V2_SURVEYED_WRITER_VERSION,
+        },
+        name,
+        action_kind,
+    )
+}
+
 pub const REGISTRATIONS: &[ProjectorRegistration] = &[
     registration("read", ToolActionKind::FileRead),
     registration("bash", ToolActionKind::Shell),
+    registration_2x("read", ToolActionKind::FileRead),
+    registration_2x("shell", ToolActionKind::Shell),
 ];
 
 pub fn project_request(
@@ -105,5 +136,41 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool.action, ToolAction::Shell { .. }));
+    }
+
+    #[test]
+    fn the_2x_writer_projects_shell_and_read() {
+        let tool = project_request(
+            Some(V2_SURVEYED_WRITER_VERSION),
+            "shell",
+            &json!({"command":"echo rosetta-mock", "workdir": "/workspace"}),
+            Some("/workspace"),
+            "call_1",
+            Some("call_1"),
+        )
+        .unwrap();
+        assert!(matches!(tool.action, ToolAction::Shell { .. }));
+        let tool = project_request(
+            Some(V2_FIRST_WRITER_VERSION),
+            "read",
+            &json!({"path": "src/lib.rs"}),
+            Some("/workspace"),
+            "call_2",
+            Some("call_2"),
+        )
+        .unwrap();
+        assert!(matches!(tool.action, ToolAction::FileRead { .. }));
+        // `bash` is a 1.x name; the 2.x range does not register it.
+        assert!(
+            project_request(
+                Some(V2_SURVEYED_WRITER_VERSION),
+                "bash",
+                &json!({"command": "true"}),
+                None,
+                "call_3",
+                None
+            )
+            .is_err()
+        );
     }
 }

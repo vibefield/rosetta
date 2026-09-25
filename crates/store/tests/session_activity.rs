@@ -327,6 +327,7 @@ fn usage_cannot_supply_activity_for_an_undated_tool_during_cold_replay() {
         let cursor_id = cursor(&mut store);
         let mut ops = IngestOp::project_message(tool_message(cursor_id, None));
         ops.push(IngestOp::Usage {
+            identity: None,
             session_id: "root".into(),
             response: "tool".into(),
             ts: 9_000_000,

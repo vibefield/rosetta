@@ -1,17 +1,34 @@
 //! The `AgentAdapter` implementation and SQLite snapshot admission plan.
 
 use std::any::Any;
+use std::collections::BTreeSet;
 
 use rosetta_adapter_support::{
     AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, SkimResult, SnapshotPlan,
-    SnapshotQuery, StreamDriver,
+    StreamDriver,
 };
 use serde_json::Value;
 
 use crate::normalize::{self, OpenCodeState};
-use crate::spec;
+use crate::{plan, spec};
 
 pub struct OpenCodeAdapter;
+
+impl OpenCodeAdapter {
+    /// The plan for a database whose table inventory is known: OpenCode 2.x
+    /// writes `session_v2`/`session_message` into the same file the 1.x
+    /// tables live in, and a plan must only name tables that exist
+    /// (`plan::plan_for_tables`). The `AgentAdapter::snapshot_plan` contract
+    /// has no inventory and returns the 1.x plan; the pipeline selects the
+    /// 2.x plans through this method once it passes the snapshot's tables.
+    pub fn plan_for_tables(
+        &self,
+        stream_id: &str,
+        tables: &BTreeSet<String>,
+    ) -> Option<SnapshotPlan> {
+        plan::plan_for_tables(stream_id, tables)
+    }
+}
 
 impl AgentAdapter for OpenCodeAdapter {
     fn kind(&self) -> &'static str {
@@ -27,19 +44,16 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        // 8: usage per step-finish (one model request), route, writer-version
-        // bucket rules, and fork copies without usage (§4.1.3).
-        8
+        // 9: fork copies by session creation time, imported step-finish
+        // usage kept and dated at completion, bucket rule per record from
+        // `tokens.total`, preview-build bands, provider-segment routes,
+        // legacy message shapes, and the 2.x `session_message` reader
+        // (2026-09-23 audit, OPENCODE-1/2/3/6/10).
+        9
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
-        (stream_id == spec::DATABASE).then(|| SnapshotPlan {
-            sessions_sql: SESSIONS_SQL.to_owned(),
-            record_queries: vec![SnapshotQuery {
-                name: spec::TIMELINE_QUERY.to_owned(),
-                sql: TIMELINE_SQL.to_owned(),
-            }],
-        })
+        (stream_id == spec::DATABASE).then(plan::v1_plan)
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -91,74 +105,9 @@ fn take_state(ctx: &mut NormalizeCtx) -> Box<OpenCodeState> {
     }
 }
 
-/// Enumerate native sessions and resolve the root of each parent chain. A
-/// missing ancestor keeps the named parent as root; the pipeline materializes
-/// a placeholder for that retained relationship.
-const SESSIONS_SQL: &str = r#"
-WITH RECURSIVE lineage(native_session_id, ancestor_id, parent_id, depth) AS (
-    SELECT id, id, parent_id, 0 FROM session
-    UNION ALL
-    SELECT lineage.native_session_id, ancestor.id, ancestor.parent_id, lineage.depth + 1
-    FROM lineage
-    JOIN session AS ancestor ON ancestor.id = lineage.parent_id
-    WHERE lineage.depth < 100
-)
-SELECT
-    session.id AS native_session_id,
-    session.title AS title,
-    session.directory AS cwd,
-    session.version AS agent_version,
-    session.time_created AS started_at,
-    session.time_updated AS updated_at,
-    session.parent_id AS parent_native_session_id,
-    CASE
-        WHEN session.parent_id IS NULL THEN session.id
-        ELSE COALESCE(
-            (SELECT ancestor_id
-             FROM lineage
-             WHERE native_session_id = session.id AND parent_id IS NULL
-             ORDER BY depth DESC
-             LIMIT 1),
-            session.parent_id
-        )
-    END AS root_native_session_id,
-    CASE WHEN session.parent_id IS NULL THEN 'main' ELSE 'subagent' END AS role
-FROM session
-ORDER BY session.id
-"#;
-
-/// Final message/part state is conversational truth. The append-only event
-/// table contributes only first-seen presentation order: repeated updates to a
-/// text or tool part never move the canonical row.
-const TIMELINE_SQL: &str = r#"
-WITH first_part_event AS (
-    SELECT json_extract(data, '$.part.id') AS part_id, MIN(seq) AS first_event_seq
-    FROM event
-    WHERE aggregate_id = ?1 AND type = 'message.part.updated.1'
-    GROUP BY json_extract(data, '$.part.id')
-)
-SELECT
-    message.id AS message_id,
-    message.data AS message_data,
-    part.id AS part_id,
-    part.time_created AS part_time_created,
-    part.data AS part_data,
-    first_part_event.first_event_seq AS first_event_seq
-FROM message
-JOIN part ON part.message_id = message.id AND part.session_id = message.session_id
-LEFT JOIN first_part_event ON first_part_event.part_id = part.id
-WHERE message.session_id = ?1
-ORDER BY
-    COALESCE(first_part_event.first_event_seq, 9223372036854775807),
-    message.time_created,
-    message.id,
-    part.time_created,
-    part.id
-"#;
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
 
     use super::OpenCodeAdapter;
     use crate::spec;
@@ -170,21 +119,39 @@ mod tests {
             OpenCodeAdapter.stream_driver(spec::DATABASE),
             Some(StreamDriver::SqliteSnapshot)
         );
-        for inventory in ["log", "snapshot", "farm:headless-stdout"] {
+        for inventory in [
+            "log",
+            "snapshot",
+            "farm:headless-stdout",
+            "opencode-next-db",
+        ] {
             assert_eq!(OpenCodeAdapter.stream_driver(inventory), None);
         }
     }
 
     #[test]
-    fn snapshot_plan_has_one_ordered_timeline_query() {
+    fn the_contract_plan_is_the_1x_plan() {
         let plan = OpenCodeAdapter
             .snapshot_plan(spec::DATABASE)
             .expect("snapshot plan");
         assert!(plan.sessions_sql.contains("native_session_id"));
         assert!(plan.sessions_sql.contains("root_native_session_id"));
+        assert!(!plan.sessions_sql.contains("session_v2"));
         assert_eq!(plan.record_queries.len(), 1);
         assert_eq!(plan.record_queries[0].name, spec::TIMELINE_QUERY);
         assert!(plan.record_queries[0].sql.contains("first_event_seq"));
+        assert!(plan.record_queries[0].sql.contains("session_time_created"));
+        assert!(OpenCodeAdapter.snapshot_plan("log").is_none());
+
+        let v1_tables: BTreeSet<String> = ["session", "message", "part", "event"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let inventory_plan = OpenCodeAdapter
+            .plan_for_tables(spec::DATABASE, &v1_tables)
+            .expect("inventory plan");
+        assert_eq!(inventory_plan.sessions_sql, plan.sessions_sql);
+        assert_eq!(inventory_plan.record_queries.len(), 1);
     }
 
     #[test]
@@ -201,59 +168,5 @@ mod tests {
         );
         assert!(result.session_id.is_none());
         assert!(result.ops.is_empty());
-    }
-
-    #[test]
-    fn sessions_query_resolves_parent_and_root_identity() {
-        let connection = rusqlite::Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE session (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    directory TEXT NOT NULL,
-                    version TEXT NOT NULL,
-                    time_created INTEGER NOT NULL,
-                    time_updated INTEGER NOT NULL,
-                    parent_id TEXT
-                 );
-                 INSERT INTO session VALUES ('root', 'Root', '/w', '1', 1, 4, NULL);
-                 INSERT INTO session VALUES ('child', 'Child', '/w', '1', 2, 4, 'root');
-                 INSERT INTO session VALUES ('grand', 'Grand', '/w', '1', 3, 4, 'child');",
-            )
-            .unwrap();
-        let plan = OpenCodeAdapter.snapshot_plan(spec::DATABASE).unwrap();
-        let mut statement = connection.prepare(&plan.sessions_sql).unwrap();
-        let rows: BTreeMap<String, (Option<String>, String, String)> = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>("native_session_id")?,
-                    (
-                        row.get::<_, Option<String>>("parent_native_session_id")?,
-                        row.get::<_, String>("root_native_session_id")?,
-                        row.get::<_, String>("role")?,
-                    ),
-                ))
-            })
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(rows["root"], (None, "root".to_owned(), "main".to_owned()));
-        assert_eq!(
-            rows["child"],
-            (
-                Some("root".to_owned()),
-                "root".to_owned(),
-                "subagent".to_owned()
-            )
-        );
-        assert_eq!(
-            rows["grand"],
-            (
-                Some("child".to_owned()),
-                "root".to_owned(),
-                "subagent".to_owned()
-            )
-        );
     }
 }

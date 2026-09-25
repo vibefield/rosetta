@@ -515,6 +515,7 @@ impl BulkReconciliationBuffer {
                 ts,
                 model,
                 tokens,
+                ..
             } = &buffered.op
             else {
                 remaining_tail.push(buffered);
@@ -809,6 +810,7 @@ pub(crate) fn apply_plan(
     tx: &Transaction,
     plan: &mut BulkReconciliationPlan,
     preserve_message_ordinals: bool,
+    owners: &mut super::UsageOwners,
 ) -> Result<ApplyStats, StoreError> {
     let mut stats = ApplyStats::default();
     stats.profile.tool_result_attempts = plan.native_updates;
@@ -872,6 +874,7 @@ pub(crate) fn apply_plan(
             ts,
             model,
             tokens,
+            identity,
         } = &tail.op
         {
             let key = UsageKey {
@@ -879,6 +882,22 @@ pub(crate) fn apply_plan(
                 response: response.clone(),
             };
             plan.usage_seen.insert(key.clone());
+            if let Some(identity) = identity
+                && !super::claim_usage(
+                    tx,
+                    owners,
+                    identity,
+                    session_id,
+                    super::OwnerTarget::Row(response.clone()),
+                    !tokens.is_empty(),
+                    &mut stats,
+                    BULK_MAINTENANCE,
+                    &mut dirty_buckets,
+                    None,
+                )?
+            {
+                continue;
+            }
             if !apply_usage(
                 tx,
                 session_id,
@@ -902,6 +921,7 @@ pub(crate) fn apply_plan(
             &mut stats,
             BULK_MAINTENANCE,
             &mut dirty_buckets,
+            owners,
             None,
         )?;
     }

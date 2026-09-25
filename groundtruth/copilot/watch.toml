@@ -5,6 +5,7 @@ status = "captured"
 known_gaps = [
   "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "The writer schema defines 53 persisted event types; hermetic fixtures currently exercise 12, and hosted-model parity is not captured.",
+  "session-store.db assistant_usage_events (per-call usage, CLI 1.0.69+) is evidenced by an observed structure census of a 1.0.80-written store and the runtime DDL; the farm still strips the database at harvest, so a hermetic capture proving the rows (BYOK and hosted) is pending.",
 ]
 
 [agent]
@@ -29,4 +30,4 @@ headless = "copilot -p <prompt> -s --allow-all"
 mock_dialect = "openai-chat"             # BYOK: COPILOT_PROVIDER_BASE_URL + COPILOT_PROVIDER_API_KEY + COPILOT_MODEL (anthropic dialect also accepted)
 home_env = "COPILOT_HOME"
 data_root = "~/.copilot"
-notes = "events.jsonl is ground truth. Writer schema is copied from the platform npm package (sources/vendor/<ver>.session-events.schema.json) and folded in as research evidence; fixtures are stronger. Harvest strips session-store.db* (derived /chronicle index), logs/, pkg/ (binaries; schemas extracted first), installed-plugins/, inuse.*.lock. Per-session session.db (todos/inbox) is kept. Farm: COPILOT_OFFLINE + BYOK Chat Completions; --output-format json; --share=share.md; --continue appends session.resume; tool-denied uses --deny-tool=shell. Keep one scheduled credentialed run to check BYOK vs hosted-model event-stream parity."
+notes = "events.jsonl is ground truth. Writer schema is copied from the platform npm package (sources/vendor/<ver>.session-events.schema.json) and folded in as research evidence; fixtures are stronger. Harvest currently strips session-store.db* (its assistant_usage_events table is per-call usage, not a derived index; a future harvest should keep it), logs/, pkg/ (binaries; schemas extracted first), installed-plugins/, inuse.*.lock. Per-session session.db (todos/inbox) is kept. Farm: COPILOT_OFFLINE + BYOK Chat Completions; --output-format json; --share=share.md; --continue appends session.resume; tool-denied uses --deny-tool=shell. Keep one scheduled credentialed run to check BYOK vs hosted-model event-stream parity."

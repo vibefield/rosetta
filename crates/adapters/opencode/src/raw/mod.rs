@@ -3,6 +3,7 @@
 //! evidence; do not add fields without one of those sources.
 
 pub mod event;
+pub mod message;
 pub mod payload;
 pub mod rows;
 

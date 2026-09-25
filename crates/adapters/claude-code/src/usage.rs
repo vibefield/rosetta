@@ -96,6 +96,141 @@ pub(crate) enum ClaudeUsageTarget {
     Session { sample_key: String },
 }
 
+/// The first writer observed to persist one record per streamed content
+/// block whose `usage` is the `message_start` placeholder: 2.1.9
+/// (2026-01-16). Writers through 2.1.7 wrote a progressive count whose last
+/// record is the response's real output (2026-09-23 census: in every
+/// multi-record response the last record carries the maximum, up to 5,198
+/// tokens, and 2.1.2 alone has 218 non-final responses at or above 100).
+/// From 2.1.9 every non-final record repeats one 1–92 token placeholder,
+/// and until 2.1.50 no final record is written at all. No 2.1.8 transcript
+/// exists locally, so the boundary is the first streaming writer seen.
+const PLACEHOLDER_OUTPUT_WRITER: (u64, u64, u64) = (2, 1, 9);
+
+/// Whether a writer's non-final records carry the `message_start` output
+/// placeholder rather than a count (RESEARCH_PLAN §5.13). Such a snapshot
+/// reports its output and thinking as unrecorded, never as the placeholder.
+/// A version that does not parse is treated as current: every writer since
+/// 2026-01-16 streams placeholders.
+pub(crate) fn streams_placeholder_output(version: &str) -> bool {
+    parse_version(version).is_none_or(|version| version >= PLACEHOLDER_OUTPUT_WRITER)
+}
+
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.trim().split('.');
+    let mut component = || -> Option<u64> {
+        let digits: String = parts
+            .next()?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().ok()
+    };
+    Some((component()?, component()?, component()?))
+}
+
+/// The transient native identity every copy of one response shares across
+/// files (ARCHITECTURE §4.1.3, counting rule 2): `<message.id>:<requestId>`,
+/// or the message id alone on the handful of pre-2.1.9 records without a
+/// request id. It rides on every usage fact of the response and is never
+/// persisted.
+pub(crate) fn response_identity(message_id: &str, request_id: Option<&str>) -> Option<String> {
+    if message_id.is_empty() {
+        return None;
+    }
+    Some(match request_id.filter(|id| !id.is_empty()) {
+        Some(request_id) => format!("{message_id}:{request_id}"),
+        None => message_id.to_owned(),
+    })
+}
+
+/// What one assistant record contributes to its response's usage: the fact
+/// to emit, the sample that fact supersedes, and the state to remember.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct UsagePlan {
+    pub(crate) target: ClaudeUsageTarget,
+    pub(crate) tokens: TokenSnapshot,
+    /// A `response:<id>` or `timeline:<id>` sample the fact moves out of,
+    /// retracted with an all-`None` snapshot (inert in the rollup).
+    pub(crate) retract: Option<String>,
+    pub(crate) remember: ClaudeResponseUsage,
+}
+
+impl UsagePlan {
+    pub(crate) fn targets_row(&self, timeline_id: &str) -> bool {
+        matches!(&self.target, ClaudeUsageTarget::Timeline { timeline_id: id } if id == timeline_id)
+    }
+
+    /// Projection dropped the owning row: the fact becomes the
+    /// `timeline:<id>` sample, and later corrections must replace that
+    /// sample rather than aim at a row that does not exist.
+    pub(crate) fn drop_owner(&mut self) {
+        let ClaudeUsageTarget::Timeline { timeline_id } = &self.target else {
+            return;
+        };
+        let sample_key = format!("timeline:{timeline_id}");
+        if self.retract.as_deref() == Some(sample_key.as_str()) {
+            self.retract = None;
+        }
+        self.target = ClaudeUsageTarget::Session { sample_key };
+        self.remember.target = self.target.clone();
+    }
+}
+
+/// Decide what a record's usage snapshot does for its response. Pure: the
+/// same inputs plan the same ops on a whole-file pass, a live append, or a
+/// checkpoint resume, because `known` is exactly the checkpointed state.
+///
+/// * The first snapshot, or a more final one with a different fingerprint,
+///   is the response's fact (an improvement).
+/// * A fact held in a session sample moves to the response's first visible
+///   row as soon as one exists and the record carries the same or a better
+///   snapshot (CC-6): reply heads read row usage only.
+/// * A replayed record (every block already projected) carrying the known
+///   snapshot re-states the fact (CC-7): a re-emitted row carries no usage,
+///   so the store's row upsert would otherwise wipe what it holds.
+/// * Anything else — a placeholder after the final record, a strictly worse
+///   snapshot, a repeated identical snapshot on a new record — changes
+///   nothing.
+pub(crate) fn plan_response_usage(
+    known: Option<&ClaudeResponseUsage>,
+    rows: &[(MessageRow, Option<FileEditRow>)],
+    response_id: &str,
+    tokens: TokenSnapshot,
+    rank: UsageRank,
+    replayed: bool,
+) -> Option<UsagePlan> {
+    let print = fingerprint(&tokens);
+    let improves = known.is_none_or(|known| rank > known.rank && known.fingerprint != print);
+    let restates = known.is_some_and(|known| known.fingerprint == print);
+    if !improves && !restates {
+        return None;
+    }
+    let visible = response_usage_target(rows, response_id);
+    let mut target = known.map_or_else(|| visible.clone(), |known| known.target.clone());
+    let mut retract = None;
+    if let ClaudeUsageTarget::Session { sample_key } = &target
+        && matches!(visible, ClaudeUsageTarget::Timeline { .. })
+    {
+        retract = Some(sample_key.clone());
+        target = visible;
+    }
+    if !(improves || retract.is_some() || replayed) {
+        return None;
+    }
+    let rank = known.map_or(rank, |known| rank.max(known.rank));
+    Some(UsagePlan {
+        target: target.clone(),
+        tokens,
+        retract,
+        remember: ClaudeResponseUsage {
+            fingerprint: print,
+            target,
+            rank,
+        },
+    })
+}
+
 /// Extra model calls inside one response are requests of their own
 /// (RESEARCH_PLAN §5.13): the top-level usage sums only `message` entries,
 /// leaving advisor and compaction calls out. A fallback's serving attempt is
@@ -106,6 +241,7 @@ pub(crate) fn iteration_samples(
     response_model: &str,
     usage: &RecordedUsage,
     ts: Ms,
+    identity: Option<&str>,
 ) -> Vec<IngestOp> {
     let Some(iterations) = usage.iterations.as_ref().and_then(Value::as_array) else {
         return Vec::new();
@@ -134,15 +270,18 @@ pub(crate) fn iteration_samples(
                             .to_owned(),
                     ),
                     tokens,
+                    identity: identity.map(str::to_owned),
                 })
             })
         })
         .collect()
 }
 
-/// Pick the best row already available when usage is first observed. A response
-/// split across JSONL records cannot be buffered waiting for a later text block,
-/// so the first projectable record becomes the stable replacement target.
+/// Pick the best row a record offers for its response's usage: the reply
+/// (agent) row, else a tool row, else any row, else the `response:<id>`
+/// session sample. A response split across JSONL records cannot be buffered
+/// waiting for a later text block, so the first record with a visible row
+/// becomes the stable replacement target ([`plan_response_usage`]).
 pub(crate) fn response_usage_target(
     rows: &[(MessageRow, Option<FileEditRow>)],
     response_id: &str,
@@ -339,5 +478,186 @@ mod tests {
         for variant in &variants {
             assert_ne!(fingerprint(variant), print, "{variant:?}");
         }
+    }
+
+    #[test]
+    fn the_placeholder_writer_boundary_is_the_first_streaming_release() {
+        for old in ["2.1.2", "2.1.7", "2.1.8", "2.0.99", "1.9.9"] {
+            assert!(!streams_placeholder_output(old), "{old}");
+        }
+        for new in [
+            "2.1.9",
+            "2.1.50",
+            "2.1.241",
+            "2.2.0",
+            "3.0.0",
+            "2.1.9-beta",
+            "",
+            "later",
+        ] {
+            assert!(streams_placeholder_output(new), "{new}");
+        }
+    }
+
+    #[test]
+    fn the_planner_decides_from_the_checkpointed_state_alone() {
+        use rosetta_core::rows::{MessageKind, MessageRow};
+        let row = |kind: MessageKind, timeline_id: &str| {
+            (
+                MessageRow {
+                    timeline_id: timeline_id.to_owned(),
+                    session_id: "s".to_owned(),
+                    ordinal: 0,
+                    kind,
+                    subtype: None,
+                    uuid: None,
+                    parent_uuid: None,
+                    ts: None,
+                    model: None,
+                    effort: None,
+                    content: None,
+                    tool: None,
+                    attachments: Vec::new(),
+                    citations: Vec::new(),
+                    group: None,
+                    response: None,
+                    block_index: None,
+                    branch_tool_id: None,
+                    usage: None,
+                    agent_version: None,
+                    src_cursor: None,
+                    src_offset: None,
+                },
+                None,
+            )
+        };
+        let placeholder = TokenSnapshot {
+            input: Some(100),
+            cache_read: Some(9),
+            ..TokenSnapshot::default()
+        };
+        let real = TokenSnapshot {
+            output: Some(161),
+            ..placeholder.clone()
+        };
+        let non_final = UsageRank {
+            final_record: false,
+            output: 1,
+        };
+        let final_rank = UsageRank {
+            final_record: true,
+            output: 161,
+        };
+        let tool_rows = [row(MessageKind::ToolUse, "tool")];
+        let sample = ClaudeUsageTarget::Session {
+            sample_key: "response:msg".to_owned(),
+        };
+        let owner = ClaudeUsageTarget::Timeline {
+            timeline_id: "tool".to_owned(),
+        };
+        let held = |target: &ClaudeUsageTarget, tokens: &TokenSnapshot, rank: UsageRank| {
+            ClaudeResponseUsage {
+                fingerprint: fingerprint(tokens),
+                target: target.clone(),
+                rank,
+            }
+        };
+
+        // First sight: the fact opens where the record allows.
+        let opened = plan_response_usage(None, &[], "msg", placeholder.clone(), non_final, false)
+            .expect("first snapshot");
+        assert_eq!(
+            (opened.target.clone(), opened.retract.clone()),
+            (sample.clone(), None)
+        );
+        assert_eq!(opened.remember, held(&sample, &placeholder, non_final));
+
+        // The same placeholder on a new record with a visible row: the fact
+        // moves to the row and the sample is retracted.
+        let known = held(&sample, &placeholder, non_final);
+        let moved = plan_response_usage(
+            Some(&known),
+            &tool_rows,
+            "msg",
+            placeholder.clone(),
+            non_final,
+            false,
+        )
+        .expect("retarget");
+        assert_eq!(moved.target, owner);
+        assert_eq!(moved.retract.as_deref(), Some("response:msg"));
+        assert_eq!(moved.remember.target, owner);
+
+        // The same snapshot on a new record without a visible row, or on a
+        // known row target, changes nothing.
+        assert!(
+            plan_response_usage(
+                Some(&known),
+                &[],
+                "msg",
+                placeholder.clone(),
+                non_final,
+                false
+            )
+            .is_none()
+        );
+        let owned = held(&owner, &real, final_rank);
+        assert!(
+            plan_response_usage(Some(&owned), &[], "msg", real.clone(), final_rank, false)
+                .is_none()
+        );
+
+        // A replayed record with the known snapshot re-states the fact on
+        // the known target; a replayed placeholder after the final does not.
+        let restated = plan_response_usage(
+            Some(&owned),
+            &tool_rows,
+            "msg",
+            real.clone(),
+            final_rank,
+            true,
+        )
+        .expect("restatement");
+        assert_eq!(
+            (restated.target.clone(), restated.retract.clone()),
+            (owner.clone(), None)
+        );
+        assert_eq!(restated.remember, owned);
+        assert!(
+            plan_response_usage(
+                Some(&owned),
+                &tool_rows,
+                "msg",
+                placeholder.clone(),
+                non_final,
+                true
+            )
+            .is_none()
+        );
+
+        // The final record corrects the placeholder on the known target, and
+        // a more final rank never regresses to a less final one.
+        let corrected =
+            plan_response_usage(Some(&known), &[], "msg", real.clone(), final_rank, false)
+                .expect("correction");
+        assert_eq!(corrected.target, sample);
+        assert_eq!(corrected.remember.rank, final_rank);
+        assert!(
+            plan_response_usage(Some(&owned), &[], "msg", placeholder, non_final, false).is_none()
+        );
+    }
+
+    #[test]
+    fn the_identity_is_the_message_and_request_id() {
+        assert_eq!(
+            response_identity("msg_01", Some("req_01")).as_deref(),
+            Some("msg_01:req_01")
+        );
+        assert_eq!(response_identity("msg_01", None).as_deref(), Some("msg_01"));
+        assert_eq!(
+            response_identity("msg_01", Some("")).as_deref(),
+            Some("msg_01")
+        );
+        assert_eq!(response_identity("", Some("req_01")), None);
     }
 }

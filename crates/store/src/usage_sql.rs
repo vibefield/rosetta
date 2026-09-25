@@ -15,6 +15,11 @@ pub(crate) const PRICE_FN: &str = "rosetta_list_cost";
 const HAS_USAGE: &str = "COALESCE(in_tokens, out_tokens, cache_r_tokens, cache_w_tokens, \
      cache_w1h_tokens, think_tokens, web_searches) IS NOT NULL";
 
+/// A record whose prompt was recorded but whose output never was: its price
+/// is a lower bound (ARCHITECTURE §4.1.3, `unrecorded_output`).
+const OUTPUT_UNRECORDED: &str = "COALESCE(in_tokens, cache_r_tokens, cache_w_tokens, cache_w1h_tokens) IS NOT NULL \
+     AND out_tokens IS NULL";
+
 /// Per-record value columns shared by message and `session_usage` rows.
 /// `cost_pusd` is evaluated once per record: SQLite never flattens a compound
 /// (UNION ALL) subquery beneath an aggregate, so each row prices once.
@@ -27,7 +32,8 @@ fn record_columns(scope: &str) -> String {
               service_tier, route, requests) END AS cost_pusd,
          CASE WHEN {HAS_USAGE} THEN COALESCE(in_tokens, 0) + COALESCE(out_tokens, 0)
               + COALESCE(cache_r_tokens, 0) + COALESCE(cache_w_tokens, 0)
-              + COALESCE(cache_w1h_tokens, 0) + COALESCE(think_tokens, 0) END AS usage_tokens"
+              + COALESCE(cache_w1h_tokens, 0) + COALESCE(think_tokens, 0) END AS usage_tokens,
+         CASE WHEN {OUTPUT_UNRECORDED} THEN 1 ELSE 0 END AS unrecorded_output"
     )
 }
 
@@ -37,12 +43,13 @@ const BUCKET_SUMS: &str = "SUM(in_tokens), SUM(out_tokens), SUM(cache_r_tokens),
     SUM(cache_w_tokens), SUM(think_tokens), SUM(cache_w1h_tokens), SUM(web_searches),
     SUM(cost_pusd), SUM(billed_pusd),
     COALESCE(SUM(CASE WHEN cost_pusd IS NULL THEN usage_tokens ELSE 0 END), 0),
+    COALESCE(SUM(unrecorded_output), 0),
     SUM(message_count), SUM(tool_call_count)";
 
 /// `usage_bucket` value columns, matching [`BUCKET_SUMS`].
 pub(crate) const BUCKET_COLUMNS: &str = "in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
     think_tokens, cache_w1h_tokens, web_searches, cost_pusd, billed_pusd, unpriced_tokens,
-    message_count, tool_call_count";
+    unrecorded_output, message_count, tool_call_count";
 
 /// Hour floor matching Rust's `div_euclid` for pre-epoch values; SQLite
 /// integer division otherwise truncates toward zero. `?1` is `HOUR_MS`.

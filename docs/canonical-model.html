@@ -246,11 +246,14 @@
 
     <div class="pipeline">append-only raw ledger&nbsp;&nbsp;→&nbsp;&nbsp;<b>normalize()</b>&nbsp;
       <span class="cu">split blocks · fold tools · discard native payload noise · cumulative→delta</span>&nbsp;&nbsp;→&nbsp;&nbsp;<b>canonical projection</b> (these 10 entities)&nbsp;&nbsp;→&nbsp;&nbsp;agent-view · detached FTS</div>
-    <div class="status"><b>Usage accounting · 2026-09-22 (implemented on branch <code>usd-cost</code>).</b>
-      Usage records hold six mutually exclusive token buckets plus web searches, service tier, route
-      and the provider-billed amount. Projection schema 23 prices every record in the hourly rollup
-      through a dated, exact-match price catalog and stamps the pricing version (catalog plus
-      calculator) so a price update re-prices from stored facts, never from the ledger. See ARCHITECTURE §4.1.3.</div>
+    <div class="status"><b>Usage accounting · 2026-09-24 (schema 24, protocol v23).</b>
+      Usage records hold six mutually exclusive token buckets plus web searches, service tier, route,
+      the provider-billed amount and an aggregate's request count. The hourly rollup prices every record
+      through a dated, exact-match price catalog, counts the records whose output was never recorded
+      (<code>unrecorded_output</code>, a lower-bound marker), and stamps the pricing version (catalog plus
+      calculator) so a price update re-prices from stored facts, never from the ledger. A response copied
+      into another transcript counts once, for the earliest-started session, through a process-local owner
+      index — nothing about copies persists. See ARCHITECTURE §4.1.3.</div>
     <div class="status"><b>Implementation checkpoint · 2026-08-31.</b> All ten logical entities
       are implemented across nine captured-agent adapters. The runtime drives adapter-selected JSONL,
       bounded rewrite-in-place document snapshots, and SQLite snapshots. Projection schema 13 includes
@@ -1931,39 +1934,18 @@ CREATE TABLE <b>usage_bucket</b> (            <span class="c">-- materialized ca
   cost_pusd       INTEGER,                  <span class="c">-- list-price pico-USD of priced records; NULL = none priced</span>
   billed_pusd     INTEGER,                  <span class="c">-- provider-billed pico-USD; NULL = none reported</span>
   unpriced_tokens INTEGER NOT NULL DEFAULT 0, <span class="c">-- tokens the catalog could not price</span>
+  unrecorded_output INTEGER NOT NULL DEFAULT 0, <span class="c">-- records with a prompt but no recorded output: a lower bound</span>
   message_count   INTEGER NOT NULL DEFAULT 0,
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, hour_ts, model)
 ) WITHOUT ROWID;
 CREATE INDEX usage_bucket_hour ON usage_bucket(hour_ts);
+CREATE INDEX session_root ON session(root_session_id); <span class="c">-- aggregates scope a whole tree by its root</span>
 <span class="c">-- session grain ONLY: project / runtime / all-time totals are query-time sums
--- through the session's metadata-settled ownership.
+-- (heatmap, per-model days, hour profile, lifetime contribution) that scope every member of a
+-- session tree by its ROOT's project, provided any member of the tree is indexed.
 -- replacement-aware: usage keys to its response row or session_usage.sample_key; a re-reported snapshot
--- applies (new − old) to the bucket in the same tx as the row update</span>
-
-CREATE VIEW <b>session_contribution</b> AS    <span class="c">-- one row per ROOT session: subagent trees fold in</span>
-SELECT r.id AS session_id, r.project_id,
-       COALESCE(u.tokens, 0)  AS tokens,
-       u.cost_pusd            AS cost_pusd,   <span class="c">-- NULL = nothing priced</span>
-       COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens,
-       COALESCE(g.commits, 0) AS commits,
-       COALESCE(f.edits, 0)   AS edits,
-       COALESCE(f.loc, 0)     AS loc
-FROM session r
-LEFT JOIN (SELECT s.root_session_id rid,
-                  SUM(b.in_tokens + b.out_tokens + b.cache_r_tokens + b.cache_w_tokens
-                      + b.cache_w1h_tokens + b.think_tokens) tokens,
-                  SUM(b.cost_pusd) cost_pusd, SUM(b.unpriced_tokens) unpriced_tokens
-           FROM usage_bucket b JOIN session s ON s.id = b.session_id
-           GROUP BY rid) u ON u.rid = r.id
-LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) commits
-           FROM git_commit g JOIN session s ON s.id = g.session_id
-           GROUP BY rid) g ON g.rid = r.id
-LEFT JOIN (SELECT s.root_session_id rid, COUNT(*) edits,
-                  SUM(COALESCE(f.lines_added, 0) + COALESCE(f.lines_removed, 0)) loc
-           FROM file_edit f JOIN session s ON s.id = f.session_id
-           GROUP BY rid) f ON f.rid = r.id
-WHERE r.id = r.root_session_id;</pre>
+-- applies (new − old) to the bucket in the same tx as the row update</span></pre>
 
   <p class="h2-note" style="margin-top:14px">Every canonical table has a named correctness or product
   consumer; the detached search schema has one worker and one query backend. Live-lane updates touch

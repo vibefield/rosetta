@@ -39,6 +39,27 @@
         "timeline_id": "f7da0904354cf07e61a9427f8010bec401d84eb611156f6a9c48fc8e5ca66eca",
         "usage": {
           "billed_pico_usd": null,
+          "cache_read": null,
+          "cache_write": null,
+          "cache_write_1h": null,
+          "input": null,
+          "output": null,
+          "requests": null,
+          "route": null,
+          "scope": "request",
+          "service_tier": null,
+          "thinking": null,
+          "web_searches": null
+        }
+      },
+      {
+        "identity": "msg_mock_0000",
+        "model": "claude-opus-5",
+        "op": "usage",
+        "response": "f7da0904354cf07e61a9427f8010bec401d84eb611156f6a9c48fc8e5ca66eca",
+        "session_id": "c7f92295c3519e80a816923d75a2268c74a6202ad9e126a70a65de1efad38ce5",
+        "tokens": {
+          "billed_pico_usd": null,
           "cache_read": 0,
           "cache_write": 0,
           "cache_write_1h": 0,
@@ -50,7 +71,8 @@
           "service_tier": "standard",
           "thinking": 0,
           "web_searches": 0
-        }
+        },
+        "ts": 1787625318686
       }
     ],
     "transcript": "projects/-private-tmp-rosetta-farm-basic-chat-project/665e3e71-7c12-4810-925a-e8b92cb6f29d.jsonl"

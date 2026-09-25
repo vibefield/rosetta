@@ -146,11 +146,12 @@ export function Treemap({
                 isMinimumSized,
                 isLabelVisible: canShowLabel,
               };
+              const valueText = `${formatValue(item.value)}${item.partial ? "+" : ""}`;
               const accessibleLabel = getItemAccessibleLabel
                 ? getItemAccessibleLabel(item, context)
-                : `${item.label} · ${formatValue(item.value)} · ${(share * 100).toFixed(1)}% of total${
-                    isMinimumSized ? " · shown at the minimum visible size" : ""
-                  }`;
+                : `${item.label} · ${valueText} · ${(share * 100).toFixed(1)}% of total${
+                    item.partial ? " · a lower bound" : ""
+                  }${isMinimumSized ? " · shown at the minimum visible size" : ""}`;
               const isSelected = item.id === selectedItemId;
               const className = `ah-treemap__item${isSelected ? " is-selected" : ""}`;
               const itemStyle = {
@@ -165,7 +166,7 @@ export function Treemap({
                   {canShowLabel && (
                     <>
                       <b>{item.label}</b>
-                      <em>{formatValue(item.value)}</em>
+                      <em>{valueText}</em>
                     </>
                   )}
                 </span>

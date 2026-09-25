@@ -27,7 +27,10 @@ UPSTREAM_SOURCE = CATALOG / "genai-prices" / "SOURCE.toml"
 OVERLAY = CATALOG / "overlay.toml"
 GENERATED = ROOT / "crates" / "pricing" / "src" / "generated.rs"
 
-GENERATOR_VERSION = 1
+# Bumped with any change to how the tables are derived. The catalog version
+# also carries a digest of the rendered tables, so a derivation change that
+# alters them re-prices projections even if this constant is forgotten.
+GENERATOR_VERSION = 2
 
 # First-party model creators whose list prices define "API-equivalent" cost,
 # in precedence order. A reseller table (OpenRouter, Copilot, Bedrock, Azure,
@@ -43,6 +46,26 @@ FIRST_PARTY: tuple[tuple[str, tuple[str, ...] | None], ...] = (
     ("mistral", None),
     ("zai", None),
     ("minimax", None),
+)
+
+# Upstream entries that are not the creator's list price and would otherwise
+# price a record wrongly. They become `unknown_model` (unpriced, never wrong).
+EXCLUDED_UPSTREAM: frozenset[tuple[str, str]] = frozenset(
+    {
+        # OpenAI publishes no API price for its open-weight models; genai-prices'
+        # rows are "Imported from OpenRouter pricing" (its own price_comments).
+        ("openai", "gpt-oss-120b"),
+        ("openai", "gpt-oss-20b"),
+        ("openai", "gpt-oss-safeguard-20b"),
+        # OpenRouter's rate with no cache-hit price; Moonshot's own K2 previews
+        # are `kimi-k2-0711-preview` / `kimi-k2-0905-preview`, and the overlay
+        # aliases the bare id to the latter.
+        ("moonshotai", "kimi-k2"),
+        # Upstream's `mistral-small-latest` is Mistral Small 3.2's price; the
+        # name has served Small 4 (`mistral-small-2603`) since 2026-03-16, and
+        # the overlay aliases it there.
+        ("mistral", "mistral-small-latest"),
+    }
 )
 
 MTOK = Decimal(1_000_000)  # $/MTok -> pico-USD/token
@@ -146,12 +169,31 @@ def _seconds_of_day(value: str, where: str) -> int:
     return (int(hours) * 3600 + int(minutes) * 60 + int(seconds) - offset) % 86_400
 
 
+def _day(value: Any, where: str) -> int:
+    """An ISO date (TOML date or string) as days since 1970-01-01, UTC."""
+    if isinstance(value, date):
+        day = value
+    elif isinstance(value, str):
+        day = date.fromisoformat(value)
+    else:
+        raise PricingError(f"{where}: expected an ISO date, got {value!r}")
+    return (day - date(1970, 1, 1)).days
+
+
+def _rule_window(entry: dict[str, Any], where: str) -> tuple[int | None, int | None]:
+    """An overlay rule's `from` (inclusive) and `until` (exclusive) days."""
+    start = _day(entry["from"], f"{where}.from") if "from" in entry else None
+    end = _day(entry["until"], f"{where}.until") if "until" in entry else None
+    if start is not None and end is not None and end <= start:
+        raise PricingError(f"{where}: `until` must be after `from`")
+    return start, end
+
+
 def _constraint(raw: dict[str, Any] | None, where: str) -> tuple[str, Any]:
     if not raw:
         return ("always", None)
     if set(raw) == {"start_date"}:
-        day = date.fromisoformat(raw["start_date"])
-        return ("from_day", (day - date(1970, 1, 1)).days)
+        return ("from_day", _day(raw["start_date"], where))
     if set(raw) == {"start_time", "end_time"}:
         return (
             "time_of_day",
@@ -238,7 +280,7 @@ def load() -> Catalog:
         for raw in provider["models"]:
             if prefixes is not None and not raw["id"].startswith(prefixes):
                 continue
-            if not is_plain_id(raw["id"]):
+            if not is_plain_id(raw["id"]) or (provider_id, raw["id"]) in EXCLUDED_UPSTREAM:
                 continue
             where = f"{provider_id}/{raw['id']}"
             periods = _periods(raw["prices"], where)
@@ -251,9 +293,16 @@ def load() -> Catalog:
                 Model(provider_id, raw["id"], raw.get("name") or raw["id"], periods, aliases)
             )
 
+    upstream_keys = {(model.provider, model.id) for model in models}
     for index, entry in enumerate(overlay.get("model", [])):
         where = f"overlay model[{index}]"
         _require_source(entry, where)
+        if (entry["provider"], entry["id"]) in upstream_keys:
+            # A same-id model would be appended after upstream's and never
+            # resolved; rate corrections go through [[patch]].
+            raise PricingError(
+                f"{where}: {entry['provider']}/{entry['id']} is an upstream model; use [[patch]]"
+            )
         models.append(
             Model(
                 entry["provider"],
@@ -263,6 +312,26 @@ def load() -> Catalog:
                 [entry["id"], *entry.get("aliases", [])],
             )
         )
+
+    by_key = {(model.provider, model.id): index for index, model in enumerate(models)}
+    for index, entry in enumerate(overlay.get("patch", [])):
+        # A cited correction of an upstream model's rates. A table of units
+        # replaces (or adds) those units in every price period; a list of
+        # dated periods replaces the model's price history outright.
+        where = f"overlay patch[{index}]"
+        _require_source(entry, where)
+        target = by_key.get((entry["provider"], entry["model"]))
+        if target is None:
+            raise PricingError(f"{where}: no catalog model {entry['provider']}/{entry['model']}")
+        prices = _decimal_tree(entry["prices"])
+        if isinstance(prices, list):
+            models[target].periods = _periods(prices, where)
+            continue
+        rates = _prices(prices, where)
+        if not rates:
+            raise PricingError(f"{where}: a patch names at least one price")
+        for period in models[target].periods:
+            period.prices.update(rates)
 
     aliases: dict[str, int] = {}
     for index, model in enumerate(models):
@@ -274,7 +343,7 @@ def load() -> Catalog:
             # FIRST_PARTY order is the precedence between creators.
             aliases.setdefault(alias, index)
 
-    by_key = {(model.provider, model.id): index for index, model in enumerate(models)}
+    overlay_aliases: set[str] = set()
     for index, entry in enumerate(overlay.get("alias", [])):
         where = f"overlay alias[{index}]"
         _require_source(entry, where)
@@ -286,28 +355,41 @@ def load() -> Catalog:
             raise PricingError(f"{where}: alias {alias!r} is not a plain model id")
         if alias in aliases and aliases[alias] != target:
             existing = models[aliases[alias]]
-            raise PricingError(f"{where}: {alias!r} already names {existing.provider}/{existing.id}")
+            # Re-pointing an upstream spelling is allowed only when the entry
+            # names what it displaces, so the correction is deliberate.
+            displaced = f"{existing.provider}/{existing.id}"
+            if alias in overlay_aliases or entry.get("replaces") != displaced:
+                raise PricingError(f"{where}: {alias!r} already names {displaced}")
         aliases[alias] = target
+        overlay_aliases.add(alias)
 
     tier_rules = []
     for index, entry in enumerate(overlay.get("tier", [])):
         where = f"overlay tier[{index}]"
         cited = _require_source(entry, where)
-        if entry["tier"] not in TIERS or entry["tier"] == "standard":
-            raise PricingError(f"{where}: tier must be one of {TIERS[1:]}")
+        # `tier = "fast"` or `tiers = ["priority", "fast"]` for spellings a
+        # provider accepts interchangeably.
+        tiers = entry["tiers"] if "tiers" in entry else [entry["tier"]]
+        for tier in tiers:
+            if tier not in TIERS or tier == "standard":
+                raise PricingError(f"{where}: tier must be one of {TIERS[1:]}")
         if "model" in entry and (entry["provider"], entry["model"]) not in by_key:
             raise PricingError(f"{where}: no catalog model {entry['provider']}/{entry['model']}")
         multiplier = _fraction(entry["multiplier"], where)
-        tier_rules.append(
-            {
-                "provider": entry["provider"],
-                "model": entry.get("model"),
-                "tier": entry["tier"],
-                "numerator": multiplier.numerator,
-                "denominator": multiplier.denominator,
-                "source": cited,
-            }
-        )
+        from_day, until_day = _rule_window(entry, where)
+        for tier in tiers:
+            tier_rules.append(
+                {
+                    "provider": entry["provider"],
+                    "model": entry.get("model"),
+                    "tier": tier,
+                    "numerator": multiplier.numerator,
+                    "denominator": multiplier.denominator,
+                    "from_day": from_day,
+                    "until_day": until_day,
+                    "source": cited,
+                }
+            )
 
     route_rules = []
     for index, entry in enumerate(overlay.get("route", [])):
@@ -319,6 +401,7 @@ def load() -> Catalog:
             if (entry["provider"], model_id) not in by_key:
                 raise PricingError(f"{where}: no catalog model {entry['provider']}/{model_id}")
         multiplier = _fraction(entry["multiplier"], where)
+        from_day, until_day = _rule_window(entry, where)
         route_rules.append(
             {
                 "route": entry["route"],
@@ -326,6 +409,8 @@ def load() -> Catalog:
                 "models": list(entry.get("models", [])),
                 "numerator": multiplier.numerator,
                 "denominator": multiplier.denominator,
+                "from_day": from_day,
+                "until_day": until_day,
                 "source": cited,
             }
         )
@@ -347,7 +432,12 @@ def load() -> Catalog:
             "license": "rosetta",
         },
     ]
-    version = f"genai-prices@{source['revision'][:12]}+overlay@{overlay_sha[:12]}+gen{GENERATOR_VERSION}"
+    # The tables' own digest is appended by `build`, so the version changes
+    # whenever anything a stored cost depends on changes.
+    version = (
+        f"genai-prices@{source['revision'][:12]}+data@{source['sha256'][:12]}"
+        f"+overlay@{overlay_sha[:12]}+gen{GENERATOR_VERSION}"
+    )
     if len(models) > 65_535:
         raise PricingError("too many models for a u16 alias index")
     return Catalog(models, aliases, tier_rules, route_rules, sources, version)
@@ -395,8 +485,17 @@ def _rust_money(value: int | None) -> str:
     return "None" if value is None else f"Some({_int(value)})"
 
 
+def _rust_day(value: int | None) -> str:
+    return "None" if value is None else f"Some({value})"
+
+
 def render(catalog: Catalog) -> str:
-    out = [
+    """The generated module. The version line is rendered last: it carries a
+    digest of every table below it."""
+    tables = render_tables(catalog)
+    digest = hashlib.sha256(tables.encode()).hexdigest()[:12]
+    version = f"{catalog.version}+tables@{digest}"
+    head = [
         "// @generated by `python3 -m tools.pricing generate` from",
         "// crates/pricing/catalog/ (vendored genai-prices data + the Rosetta overlay).",
         "// Do not edit by hand; edit the overlay or re-vendor upstream and regenerate.",
@@ -407,8 +506,14 @@ def render(catalog: Catalog) -> str:
         "    Constraint, Model, Period, Prices, Rate, RouteRule, Source, TierRule, TierStep,",
         "};",
         "",
-        f"pub(crate) const CATALOG_VERSION: &str = {_str(catalog.version)};",
+        f"pub(crate) const CATALOG_VERSION: &str = {_str(version)};",
         "",
+    ]
+    return "\n".join(head) + tables
+
+
+def render_tables(catalog: Catalog) -> str:
+    out = [
         "pub(crate) static SOURCES: &[Source] = &[",
     ]
     for source in catalog.sources:
@@ -443,7 +548,8 @@ def render(catalog: Catalog) -> str:
         out.append(
             f"    TierRule {{ provider: {_str(rule['provider'])}, model: {model}, "
             f"tier: ServiceTier::{rule['tier'].capitalize()}, numerator: {rule['numerator']}, "
-            f"denominator: {rule['denominator']}, source: {_str(rule['source'])} }},"
+            f"denominator: {rule['denominator']}, from_day: {_rust_day(rule['from_day'])}, "
+            f"until_day: {_rust_day(rule['until_day'])}, source: {_str(rule['source'])} }},"
         )
     out += ["];", "", "pub(crate) static ROUTE_RULES: &[RouteRule] = &["]
     for rule in catalog.route_rules:
@@ -451,7 +557,8 @@ def render(catalog: Catalog) -> str:
         out.append(
             f"    RouteRule {{ route: {_str(rule['route'])}, provider: {_str(rule['provider'])}, "
             f"models: &[{models}], numerator: {rule['numerator']}, "
-            f"denominator: {rule['denominator']}, source: {_str(rule['source'])} }},"
+            f"denominator: {rule['denominator']}, from_day: {_rust_day(rule['from_day'])}, "
+            f"until_day: {_rust_day(rule['until_day'])}, source: {_str(rule['source'])} }},"
         )
     out += ["];", ""]
     return "\n".join(out)

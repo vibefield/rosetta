@@ -18,7 +18,16 @@
       "agent_version": "1.0.80",
       "evidence": "fixture",
       "path": "sources/1.0.80.fixtures.json",
-      "sha256": "d2a32e24c52b9c8e3d20a8800f83b53554e66e2a9d2872f2046eb5c008c9c98f"
+      "sha256": "a6e350daf9dc7726423504ec37492d25c71859106f3c0c80dc5d282c2b4d34d5"
+    },
+    {
+      "generator": "tools.groundtruth census 2",
+      "agent_version": "1.0.80",
+      "evidence": "observed",
+      "path": "sources/observed-2026-09-24.json",
+      "sha256": "d36f1f6cb1539f834b5a9383f88354c930738f8e5b6038707bdbbdeeb7429d23",
+      "captured_at": "2026-09-24",
+      "writer_version": "1.0.80"
     }
   ],
   "streams": [
@@ -9856,7 +9865,7 @@
       "file_format": "sqlite",
       "discipline": "database",
       "evidence": "fixture",
-      "notes": "Per-session SQLite (todos, todo_deps, inbox_entries). Distinct from the derived session-store.db index. The agent documents this as the default 'session' SQL database in system.message.",
+      "notes": "Per-session SQLite (todos, todo_deps, inbox_entries). Distinct from the global session-store.db store. The agent documents this as the default 'session' SQL database in system.message.",
       "discriminator": "table",
       "record_types": {
         "session.db:inbox_entries": {
@@ -10060,8 +10069,833 @@
       "glob": "session-store.db*",
       "file_format": "sqlite",
       "discipline": "database",
-      "evidence": "research",
-      "notes": "Derived, rebuildable SQLite index (`/chronicle reindex`). EXCLUDE from harvest and from parsers — events.jsonl is the source of truth."
+      "evidence": "observed",
+      "notes": "Global WAL-mode SQLite store (+ -wal/-shm) written by the native runtime; mixed provenance. sessions, turns, checkpoints, session_files, session_refs, search_index* and dynamic_context_items are derived from events.jsonl (rebuilt by `/chronicle reindex`) and repeat transcript content: MUST-NOT-PARSE. assistant_usage_events (since CLI 1.0.69, changelog 'Show exact local assistant usage in Chronicle and session SQL') is NOT derived: one row per model request, written live by the runtime's usage processor from the ephemeral assistant.usage event that events.jsonl never persists, never updated or deleted (the runtime's DELETE statements touch only search_index, dynamic_context_items and inbox_entries). Columns: id, session_id, turn_index, agent_id, parent_tool_call_id, model, input_tokens (includes cache reads and writes), output_tokens (includes reasoning), cache_read_tokens, cache_write_tokens (1.0.88: 5-minute plus 1-hour writes), reasoning_tokens, total_nano_aiu (10^9 nano-AIU per AI credit, one credit = $0.01; 0 or NULL when GitHub did not meter the call, e.g. BYOK), request_multiplier, duration/latency columns, initiator, api_endpoint, reasoning_effort, finish_reason, content_filter_triggered, token_details_json (the CAPI copilot_usage tokenDetails array: tokenType in input | cache_read | cache_write | cache_write_1h | output with exclusive tokenCount, batchSize, costPerBatch; 1.0.88 entries may carry a model), created_at (ISO 8601 UTC text). The 1.0.88 runtime migrates in copilot_usage_model (the billing model) and output_ttft_ms. The adapter's snapshot plan reads ONLY this table. Evidence: structure-only observed census of a 1.0.80-written store (schema_version 6) plus the runtime DDL for 1.0.80 and 1.0.88; the farm still strips this database at harvest, so a hermetic capture that keeps it is pending.",
+      "record_types": {
+        "session-store.db:assistant_usage_events": {
+          "observed": 5,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "agent_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "api_endpoint": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cache_read_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "cache_write_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "content_filter_triggered": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "duration_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "finish_reason": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "initiator": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "input_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "inter_token_latency_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "output_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "parent_tool_call_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning_effort": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "reasoning_tokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "request_multiplier": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time_to_first_token_ms": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "token_details_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "total_nano_aiu": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "turn_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:checkpoints": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "checkpoint_number": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "history": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "important_files": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "next_steps": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "overview": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "technical_details": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "work_done": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:dynamic_context_items": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "branch": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "content": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "description": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "read_count": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "repository": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "src": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:forge_skill_proposals": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "branch_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "failure_reason": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "fingerprint": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "git_root_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "manifest_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "repo_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "repo_owner": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "status": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "summary_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "superseded_by": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "trigger_mode": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "workspace_before_json": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:forge_trajectory_events": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "command": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "event_key": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "event_type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "event_value": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "exit_code": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "output": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "tool_call_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "turn_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:schema_version": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:search_index": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "content": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "source_id": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "source_type": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:search_index_config": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "k": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "v": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:search_index_content": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "c0": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "c1": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "c2": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "c3": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:search_index_data": {
+          "observed": 3,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "block": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:search_index_docsize": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "sz": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:search_index_idx": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "pgno": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": false
+              },
+              "segid": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              },
+              "term": {
+                "shape": {
+                  "kind": "unknown"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:session_files": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "file_path": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "first_seen_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "tool_name": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "turn_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:session_refs": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "ref_type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ref_value": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "turn_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:sessions": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "branch": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "created_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "host_type": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "repository": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "summary": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "updated_at": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        },
+        "session-store.db:turns": {
+          "observed": 1,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "assistant_response": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "id": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "session_id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "turn_index": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "user_message": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              }
+            }
+          },
+          "evidence": "observed"
+        }
+      },
+      "discriminator": "table"
     },
     {
       "id": "settings",

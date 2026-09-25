@@ -755,6 +755,7 @@ fn turn_usage(
         }
         match target.take() {
             Some(response) => ops.push(IngestOp::Usage {
+                identity: None,
                 session_id: ctx.session_id.clone(),
                 response,
                 ts,
@@ -762,6 +763,7 @@ fn turn_usage(
                 tokens,
             }),
             None => ops.push(IngestOp::SessionUsage(SessionUsageRow {
+                identity: None,
                 session_id: ctx.session_id.clone(),
                 key: ids::usage_id(
                     &ctx.session_id,

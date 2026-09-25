@@ -8,7 +8,7 @@ glob = "session-state/*/events.jsonl"
 file_format = "jsonl"
 discipline = "append_only"
 evidence = "fixture"
-notes = "Primary session event log. Envelope: id, timestamp, parentId, type, data; optional agentId/ephemeral. Writer JSON Schema (npm copilot-*/schemas/session-events.schema.json) lists ~53 persisted types and ~63 ephemeral streaming types that are NOT written to disk. Fixtures prove the subset the CLI actually persists. session-store.db is a derived rebuildable index and is stripped at harvest."
+notes = "Primary session event log. Envelope: id, timestamp, parentId, type, data; optional agentId/ephemeral. Writer JSON Schema (npm copilot-*/schemas/session-events.schema.json) lists ~53 persisted types and ~63 ephemeral streaming types that are NOT written to disk. Fixtures prove the subset the CLI actually persists. session-store.db is stripped at harvest; its one non-derived table is described on the session-store stream."
 
 [[streams]]
 id = "session-plans"
@@ -56,7 +56,7 @@ glob = "session-state/*/session.db*"
 file_format = "sqlite"
 discipline = "database"
 evidence = "fixture"
-notes = "Per-session SQLite (todos, todo_deps, inbox_entries). Distinct from the derived session-store.db index. The agent documents this as the default 'session' SQL database in system.message."
+notes = "Per-session SQLite (todos, todo_deps, inbox_entries). Distinct from the global session-store.db store. The agent documents this as the default 'session' SQL database in system.message."
 
 [[streams]]
 id = "rewind-snapshots"
@@ -79,8 +79,8 @@ id = "session-store"
 glob = "session-store.db*"
 file_format = "sqlite"
 discipline = "database"
-evidence = "research"
-notes = "Derived, rebuildable SQLite index (`/chronicle reindex`). EXCLUDE from harvest and from parsers — events.jsonl is the source of truth."
+evidence = "observed"
+notes = "Global WAL-mode SQLite store (+ -wal/-shm) written by the native runtime; mixed provenance. sessions, turns, checkpoints, session_files, session_refs, search_index* and dynamic_context_items are derived from events.jsonl (rebuilt by `/chronicle reindex`) and repeat transcript content: MUST-NOT-PARSE. assistant_usage_events (since CLI 1.0.69, changelog 'Show exact local assistant usage in Chronicle and session SQL') is NOT derived: one row per model request, written live by the runtime's usage processor from the ephemeral assistant.usage event that events.jsonl never persists, never updated or deleted (the runtime's DELETE statements touch only search_index, dynamic_context_items and inbox_entries). Columns: id, session_id, turn_index, agent_id, parent_tool_call_id, model, input_tokens (includes cache reads and writes), output_tokens (includes reasoning), cache_read_tokens, cache_write_tokens (1.0.88: 5-minute plus 1-hour writes), reasoning_tokens, total_nano_aiu (10^9 nano-AIU per AI credit, one credit = $0.01; 0 or NULL when GitHub did not meter the call, e.g. BYOK), request_multiplier, duration/latency columns, initiator, api_endpoint, reasoning_effort, finish_reason, content_filter_triggered, token_details_json (the CAPI copilot_usage tokenDetails array: tokenType in input | cache_read | cache_write | cache_write_1h | output with exclusive tokenCount, batchSize, costPerBatch; 1.0.88 entries may carry a model), created_at (ISO 8601 UTC text). The 1.0.88 runtime migrates in copilot_usage_model (the billing model) and output_ttft_ms. The adapter's snapshot plan reads ONLY this table. Evidence: structure-only observed census of a 1.0.80-written store (schema_version 6) plus the runtime DDL for 1.0.80 and 1.0.88; the farm still strips this database at harvest, so a hermetic capture that keeps it is pending."
 
 [[streams]]
 id = "settings"

@@ -24,9 +24,10 @@ use rosetta_core::{ServiceTier, TokenSnapshot, UsageScope};
 /// generator version.
 pub const CATALOG_VERSION: &str = generated::CATALOG_VERSION;
 
-/// Revision of [`quote`]'s arithmetic. Bump it with any change to what a
-/// record costs under an unchanged catalog.
-const CALCULATOR_REVISION: u32 = 2;
+/// Revision of [`quote`]'s arithmetic and of [`resolve`]'s spelling rules.
+/// Bump it with any change to what a record costs under an unchanged
+/// catalog: 3 dated tier and route rules, Bedrock and `@`-prefixed ids.
+const CALCULATOR_REVISION: u32 = 3;
 
 /// Everything a stored cost depends on: the catalog and the calculator. The
 /// projection stamps the version its rollup costs were computed with and
@@ -119,7 +120,8 @@ pub enum Unpriced {
     /// No catalog id or explicit alias equals the model after removing a
     /// date stamp, context tag or vendor prefix.
     UnknownModel,
-    /// The record has no timestamp and the model's price changed over time.
+    /// The record has no timestamp and the model's price, or the tier or
+    /// route rule it needs, changed over time.
     AmbiguousTime,
     /// A non-standard service tier without a cited overlay rule.
     UnsupportedTier(ServiceTier),
@@ -232,11 +234,12 @@ pub fn quote(request: &Request<'_>) -> Result<Quote, Unpriced> {
 
     // Tier and route rules scale token rates only, as their overlay sources
     // cite; per-call search fees and per-request fees stay flat.
+    let at_day = request.at_ms.map(|at_ms| at_ms.div_euclid(DAY_MS));
     let (mut numerator, mut denominator) = (1_i128, 1_i128);
     match request.service_tier {
         None | Some(ServiceTier::Standard) => {}
         Some(tier) => {
-            let rule = tier_rule(model, tier).ok_or(Unpriced::UnsupportedTier(tier))?;
+            let rule = tier_rule(model, tier, at_day)?.ok_or(Unpriced::UnsupportedTier(tier))?;
             numerator *= i128::from(rule.numerator);
             denominator *= i128::from(rule.denominator);
         }
@@ -244,7 +247,7 @@ pub fn quote(request: &Request<'_>) -> Result<Quote, Unpriced> {
     if let Some(route) = request.route
         && route.contains('/')
     {
-        let rule = route_rule(model, route).ok_or(Unpriced::UnsupportedRoute)?;
+        let rule = route_rule(model, route, at_day)?.ok_or(Unpriced::UnsupportedRoute)?;
         numerator *= i128::from(rule.numerator);
         denominator *= i128::from(rule.denominator);
     }
@@ -347,26 +350,64 @@ fn lowest_tier_start(prices: &Prices) -> Option<i64> {
     .min()
 }
 
-fn tier_rule(model: &Model, tier: ServiceTier) -> Option<&'static TierRule> {
-    let rules = generated::TIER_RULES;
-    rules
-        .iter()
-        .find(|rule| {
-            rule.provider == model.provider && rule.tier == tier && rule.model == Some(model.id)
-        })
-        .or_else(|| {
-            rules.iter().find(|rule| {
-                rule.provider == model.provider && rule.tier == tier && rule.model.is_none()
-            })
-        })
+/// The tier rule in force: a model-specific rule beats a provider-wide one;
+/// at one level the first rule whose date window holds wins. A dated rule
+/// needs the record's timestamp, so an undated record is ambiguous when only
+/// dated rules could apply.
+fn tier_rule(
+    model: &Model,
+    tier: ServiceTier,
+    at_day: Option<i64>,
+) -> Result<Option<&'static TierRule>, Unpriced> {
+    for specific in [true, false] {
+        let candidates = generated::TIER_RULES.iter().filter(|rule| {
+            rule.provider == model.provider
+                && rule.tier == tier
+                && if specific {
+                    rule.model == Some(model.id)
+                } else {
+                    rule.model.is_none()
+                }
+        });
+        if let Some(rule) = pick_dated(candidates, at_day, TierRule::dated, TierRule::active)? {
+            return Ok(Some(rule));
+        }
+    }
+    Ok(None)
 }
 
-fn route_rule(model: &Model, route: &str) -> Option<&'static RouteRule> {
-    generated::ROUTE_RULES.iter().find(|rule| {
+fn route_rule(
+    model: &Model,
+    route: &str,
+    at_day: Option<i64>,
+) -> Result<Option<&'static RouteRule>, Unpriced> {
+    let candidates = generated::ROUTE_RULES.iter().filter(|rule| {
         rule.route == route
             && rule.provider == model.provider
             && (rule.models.is_empty() || rule.models.contains(&model.id))
-    })
+    });
+    pick_dated(candidates, at_day, RouteRule::dated, RouteRule::active)
+}
+
+fn pick_dated<'a, R>(
+    candidates: impl Iterator<Item = &'a R>,
+    at_day: Option<i64>,
+    dated: fn(&R) -> bool,
+    active: fn(&R, i64) -> bool,
+) -> Result<Option<&'a R>, Unpriced> {
+    let mut needs_time = false;
+    for rule in candidates {
+        match at_day {
+            Some(day) if active(rule, day) => return Ok(Some(rule)),
+            Some(_) => {}
+            None if dated(rule) => needs_time = true,
+            None => return Ok(Some(rule)),
+        }
+    }
+    if needs_time {
+        return Err(Unpriced::AmbiguousTime);
+    }
+    Ok(None)
 }
 
 /// Distinct native model ids remembered per thread. A rollup fold or a
@@ -381,7 +422,8 @@ thread_local! {
 
 /// Exact model resolution. The native id must equal a catalog id or an
 /// explicit alias once a context tag (`[1m]`), a version suffix (`@…`), a
-/// vendor prefix (`anthropic/`) and a trailing date stamp (`-YYYYMMDD`,
+/// vendor prefix (`anthropic/`), Amazon Bedrock's inference-profile grammar
+/// (`us.anthropic.…-v1:0`) and a trailing date stamp (`-YYYYMMDD`,
 /// `-YYYY-MM-DD`) are removed. Prefix matching is never used: it would price
 /// `claude-opus-5-5` as `claude-opus-5`.
 pub fn resolve(model: &str) -> Option<&'static Model> {
@@ -413,12 +455,15 @@ fn resolve_uncached(model: &str) -> Option<&'static Model> {
     };
     let tagless = strip_version_suffix(strip_context_tag(base));
     let vendorless = strip_vendor(tagless);
+    let bedrock = strip_bedrock(vendorless);
     let candidates = [
         base,
         tagless,
         vendorless,
+        bedrock,
         strip_date(tagless),
         strip_date(vendorless),
+        strip_date(bedrock),
     ];
     // Every candidate is a slice of `base`; an unchanged one was already
     // looked up.
@@ -448,12 +493,78 @@ fn strip_context_tag(model: &str) -> &str {
     }
 }
 
+/// Vertex's `@20250514` and `@default` suffixes name a version of the same
+/// model. A leading `@` (Cloudflare's `@cf/<vendor>/<model>`) is a prefix,
+/// not a suffix.
 fn strip_version_suffix(model: &str) -> &str {
-    model.split_once('@').map_or(model, |(head, _)| head)
+    match model.split_once('@') {
+        Some((head, _)) if !head.is_empty() => head,
+        _ => model,
+    }
 }
 
 fn strip_vendor(model: &str) -> &str {
     model.rsplit_once('/').map_or(model, |(_, tail)| tail)
+}
+
+/// Amazon Bedrock names the creator's model behind an optional region or
+/// `global` prefix, a vendor segment and a `-vN[:M]` version suffix:
+/// `us.anthropic.claude-opus-4-6-v1:0` is `claude-opus-4-6`
+/// (https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html).
+/// Plain ids with dots (`gemini-2.5-flash`) have no vendor segment and pass
+/// through unchanged.
+fn strip_bedrock(model: &str) -> &str {
+    const REGIONS: [&str; 9] = [
+        "us", "eu", "apac", "au", "jp", "ca", "in", "us-gov", "global",
+    ];
+    const VENDORS: [&str; 20] = [
+        "anthropic",
+        "openai",
+        "meta",
+        "amazon",
+        "mistral",
+        "deepseek",
+        "qwen",
+        "cohere",
+        "ai21",
+        "google",
+        "writer",
+        "stability",
+        "minimax",
+        "moonshot",
+        "moonshotai",
+        "xai",
+        "x-ai",
+        "zai",
+        "nvidia",
+        "twelvelabs",
+    ];
+    let mut rest = model;
+    if let Some((head, tail)) = rest.split_once('.')
+        && REGIONS.contains(&head)
+    {
+        rest = tail;
+    }
+    let Some((vendor, tail)) = rest.split_once('.') else {
+        return model;
+    };
+    if !VENDORS.contains(&vendor) {
+        return model;
+    }
+    strip_bedrock_version(tail)
+}
+
+/// `…-v1`, `…-v1:0`, `…-v2:1` → the id before `-v`.
+fn strip_bedrock_version(model: &str) -> &str {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let head = match model.rsplit_once(':') {
+        Some((head, minor)) if digits(minor) => head,
+        _ => model,
+    };
+    match head.rsplit_once("-v") {
+        Some((stem, major)) if digits(major) => stem,
+        _ => head,
+    }
 }
 
 fn strip_date(model: &str) -> &str {

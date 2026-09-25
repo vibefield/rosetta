@@ -37,6 +37,17 @@ pub const REGISTRATIONS: &[ProjectorRegistration] = &[
     registration("skill_view", ToolActionKind::Skill),
 ];
 
+/// Whether the closed registry maps `name` onto the fixed semantic
+/// vocabulary. The L1 `tool-calls` facet is the fixture-proven subset
+/// (0.20.5: `terminal`); the registry also names the 0.21.x tools observed
+/// in James's store (`read_file`, `search_files`, `execute_code`,
+/// `skill_view`) until the L1 re-pin captures them natively.
+pub fn is_registered(name: &str) -> bool {
+    REGISTRATIONS
+        .iter()
+        .any(|registration| registration.native.name == name)
+}
+
 pub fn project_request(
     writer_version: Option<&str>,
     name: &str,
@@ -143,5 +154,19 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool.action, ToolAction::Shell { .. }));
+    }
+
+    #[test]
+    fn every_fixture_declared_tool_is_registered() {
+        for name in crate::spec::declared_tool_names() {
+            assert!(
+                is_registered(name),
+                "{name} is declared by L1 but not registered"
+            );
+        }
+        for name in ["read_file", "search_files", "execute_code", "skill_view"] {
+            assert!(is_registered(name));
+        }
+        assert!(!is_registered("web_search"));
     }
 }

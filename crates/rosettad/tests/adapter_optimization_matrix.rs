@@ -182,12 +182,15 @@ fn op_evidence(kind: &str) -> OpEvidence {
 #[test]
 fn every_driver_matches_its_declared_storage_contract() {
     let expected = [
-        ("antigravity", 1, 0, 1),
+        // The summary database and the per-conversation database.
+        ("antigravity", 1, 0, 2),
         ("claude-code", 3, 2, 0),
         ("codex", 1, 0, 1),
-        ("copilot", 1, 1, 0),
+        // The session-store database carries the per-request usage.
+        ("copilot", 1, 1, 1),
         ("grok", 1, 2, 0),
-        ("hermes", 0, 0, 1),
+        // The session database and the state database.
+        ("hermes", 0, 0, 2),
         ("kimi-code", 1, 1, 0),
         ("opencode", 0, 0, 1),
         ("pi", 1, 0, 0),
@@ -330,7 +333,9 @@ fn canonical_goldens_characterize_shared_store_work() {
     // and absent fixture usage still travel through Message application.
     let expected = [
         ("antigravity", false, false),
-        ("claude-code", false, true),
+        // Response usage rides a `Usage` op behind its row so copies across
+        // files dedupe by identity (§4.1.3, counting rule 2).
+        ("claude-code", true, false),
         ("codex", true, false),
         // Per-model shutdown intervals are session samples (§4.1.3).
         ("copilot", false, false),

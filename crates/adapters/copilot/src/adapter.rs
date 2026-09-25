@@ -5,14 +5,17 @@ use std::any::Any;
 
 use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
-    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
+    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, SnapshotPlan, SnapshotQuery,
+    StreamDriver,
 };
 use rosetta_core::rows::{SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, CopilotState};
+use crate::raw::store::USAGE_EVENTS;
 use crate::spec;
 use crate::time::rfc3339_ms;
+use crate::usage;
 
 pub struct CopilotAdapter;
 
@@ -29,6 +32,7 @@ impl AgentAdapter for CopilotAdapter {
         match stream_id {
             spec::EVENTS => Some(StreamDriver::JsonLines),
             spec::SESSION_WORKSPACE => Some(StreamDriver::DocumentSnapshot),
+            spec::SESSION_STORE => Some(StreamDriver::SqliteSnapshot),
             _ => None,
         }
     }
@@ -37,7 +41,44 @@ impl AgentAdapter for CopilotAdapter {
         // 9: per-model shutdown intervals in exclusive buckets with billed
         // nano-AIU; no per-message output usage (§4.1.3).
         // 10: intervals carry their request count.
-        10
+        // 11: metered calls come from the session store's per-call rows
+        // (1-hour writes split, `-1m`/`-fast` model spellings), shutdown
+        // intervals keep only unmetered usage and reset on required counters
+        // alone, and float nano-AIU/premium counts no longer fail the line.
+        11
+    }
+
+    /// The store's per-call usage rows. `SELECT *` is compatibility
+    /// machinery: 1.0.88 adds columns that the raw row type reads when
+    /// present, without version-dependent SQL.
+    fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
+        (stream_id == spec::SESSION_STORE).then(|| SnapshotPlan {
+            sessions_sql: USAGE_SESSIONS_SQL.to_owned(),
+            record_queries: vec![SnapshotQuery {
+                name: USAGE_EVENTS.to_owned(),
+                sql: USAGE_ROWS_SQL.to_owned(),
+            }],
+        })
+    }
+
+    /// A store session is identified by the usage rows' own session id and
+    /// dated by its first and last metered request. It proves no cwd, title
+    /// or role: those belong to the session's events.jsonl and workspace.yaml.
+    fn snapshot_session(&self, stream_id: &str, row: &Value) -> SkimResult {
+        if stream_id != spec::SESSION_STORE {
+            return SkimResult::default();
+        }
+        let stamp = |key: &str| row.get(key).and_then(Value::as_str).and_then(rfc3339_ms);
+        SkimResult {
+            session_id: row
+                .get("native_session_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .and_then(nonempty),
+            started_at: stamp("first_at"),
+            updated_at: stamp("last_at"),
+            ..SkimResult::default()
+        }
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -136,6 +177,9 @@ impl AgentAdapter for CopilotAdapter {
     }
 
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
+        if stream_id == spec::SESSION_STORE {
+            return usage::calls::ingest_line(ctx, stream_id, line);
+        }
         if stream_id != spec::EVENTS {
             return LineOutcome::parsed(Vec::new());
         }
@@ -145,6 +189,23 @@ impl AgentAdapter for CopilotAdapter {
         outcome
     }
 }
+
+/// Only GitHub-metered sessions are listed: an unmetered (BYOK) session's
+/// usage is accounted from its shutdown intervals (`crate::usage`), and a
+/// session without a metered row would otherwise be an empty virtual source.
+const USAGE_SESSIONS_SQL: &str = "\
+    SELECT session_id AS native_session_id, \
+           MIN(created_at) AS first_at, \
+           MAX(created_at) AS last_at \
+    FROM assistant_usage_events \
+    WHERE total_nano_aiu > 0 \
+    GROUP BY session_id \
+    ORDER BY session_id";
+
+/// Every row of the session, metered or not, so the raw ledger stays
+/// lossless; the normalizer decides which ones are canonical usage.
+const USAGE_ROWS_SQL: &str =
+    "SELECT * FROM assistant_usage_events WHERE session_id = ?1 ORDER BY id";
 
 #[derive(Default)]
 struct Workspace {
@@ -343,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn events_and_workspace_have_separate_drivers() {
+    fn events_workspace_and_store_have_separate_drivers() {
         assert_eq!(
             CopilotAdapter.stream_driver(spec::EVENTS),
             Some(StreamDriver::JsonLines)
@@ -353,21 +414,73 @@ mod tests {
             Some(StreamDriver::DocumentSnapshot)
         );
         assert_eq!(
+            CopilotAdapter.stream_driver(spec::SESSION_STORE),
+            Some(StreamDriver::SqliteSnapshot)
+        );
+        assert_eq!(
             CopilotAdapter.document_size_limit(spec::SESSION_WORKSPACE, usize::MAX),
             64 * 1024
         );
-        for inventory in [
-            "session-db",
-            "session-plans",
-            "session-checkpoints",
-            "session-store",
-        ] {
+        for inventory in ["session-db", "session-plans", "session-checkpoints", "logs"] {
             assert_eq!(
                 CopilotAdapter.stream_driver(inventory),
                 None,
                 "{inventory} must remain inventory"
             );
         }
+    }
+
+    #[test]
+    fn store_plan_reads_only_the_usage_table() {
+        let plan = CopilotAdapter
+            .snapshot_plan(spec::SESSION_STORE)
+            .expect("store plan");
+        assert!(CopilotAdapter.snapshot_plan(spec::EVENTS).is_none());
+        let sql = std::iter::once(plan.sessions_sql.as_str())
+            .chain(plan.record_queries.iter().map(|query| query.sql.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for table in [
+            "sessions",
+            "turns",
+            "checkpoints",
+            "session_files",
+            "session_refs",
+            "search_index",
+            "dynamic_context_items",
+            "forge_",
+        ] {
+            assert!(
+                !sql.contains(&format!("FROM {table}")) && !sql.contains(&format!("JOIN {table}")),
+                "{table} is transcript-derived and must never be queried"
+            );
+        }
+        assert_eq!(plan.record_queries.len(), 1);
+        assert_eq!(plan.record_queries[0].name, "assistant_usage_events");
+        assert!(plan.record_queries[0].sql.contains("ORDER BY id"));
+    }
+
+    #[test]
+    fn store_session_facts_come_from_the_usage_rows() {
+        let row = serde_json::json!({
+            "native_session_id": "from-store",
+            "first_at": "2026-08-27T01:28:08.091Z",
+            "last_at": "2026-08-27 03:05:22",
+        });
+        let result = CopilotAdapter.snapshot_session(spec::SESSION_STORE, &row);
+        assert_eq!(result.session_id.as_deref(), Some("from-store"));
+        assert_eq!(result.started_at, Some(1_787_794_088_091));
+        assert_eq!(result.updated_at, Some(1_787_799_922_000));
+        assert!(result.cwd.is_none());
+        assert!(result.role.is_none());
+        assert!(result.title.is_none());
+        let other = CopilotAdapter.snapshot_session(spec::EVENTS, &row);
+        assert!(other.session_id.is_none());
+        let blank = CopilotAdapter.snapshot_session(
+            spec::SESSION_STORE,
+            &serde_json::json!({"native_session_id": ""}),
+        );
+        assert!(blank.session_id.is_none());
     }
 
     #[test]

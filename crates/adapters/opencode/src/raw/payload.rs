@@ -90,10 +90,15 @@ impl Drift for MessageData {
     }
 }
 
+/// `agent` and `model` arrived in 1.0.100; rows migrated from the pre-1.2
+/// JSON store (`storage/json-migration.ts`) keep their older shape, so both
+/// are optional and their absence is reported as `legacy_message_shape` drift.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UserMessage {
-    pub agent: String,
-    pub model: UserModel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<UserModel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<UserSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,7 +115,9 @@ pub struct UserMessage {
 impl Drift for UserMessage {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
-        note_unknown(&self.model.unknown, &format!("{prefix}.model"), out);
+        if let Some(model) = &self.model {
+            note_unknown(&model.unknown, &format!("{prefix}.model"), out);
+        }
         if let Some(summary) = &self.summary {
             note_unknown(&summary.unknown, &format!("{prefix}.summary"), out);
         }
@@ -148,17 +155,23 @@ pub struct CreatedTime {
     pub unknown: Unknown,
 }
 
+/// `parentID` arrived in 1.0.0, `agent` in 1.0.154, and `mode` was the
+/// pre-agent field; `system` was an array on pre-1.0 assistants. Rows imported
+/// from older stores keep their shape, so those fields are optional here and
+/// reported as `legacy_message_shape` drift instead of failing the record.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AssistantMessage {
-    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     pub cost: serde_json::Number,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
-    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     #[serde(rename = "modelID")]
     pub model_id: String,
-    #[serde(rename = "parentID")]
-    pub parent_id: String,
+    #[serde(rename = "parentID", default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
     pub path: AssistantPath,
     #[serde(rename = "providerID")]
     pub provider_id: String,
@@ -172,8 +185,37 @@ pub struct AssistantMessage {
     pub structured: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
+}
+
+impl AssistantMessage {
+    /// Fields the pinned writer always stores but older imported rows lack.
+    pub fn legacy_missing_fields(&self) -> Vec<&'static str> {
+        [
+            ("agent", self.agent.is_none()),
+            ("parentID", self.parent_id.is_none()),
+            ("mode", self.mode.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(name, missing)| missing.then_some(name))
+        .collect()
+    }
+}
+
+impl UserMessage {
+    /// Fields the pinned writer always stores but older imported rows lack.
+    pub fn legacy_missing_fields(&self) -> Vec<&'static str> {
+        [
+            ("agent", self.agent.is_none()),
+            ("model", self.model.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(name, missing)| missing.then_some(name))
+        .collect()
+    }
 }
 
 impl Drift for AssistantMessage {

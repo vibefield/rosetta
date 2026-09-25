@@ -63,6 +63,9 @@ export interface TreemapItemData {
   readonly value: number;
   /** Any valid CSS color value. */
   readonly color: string;
+  /** The value is a lower bound (part of it could not be measured); the
+   * chart marks it rather than presenting it as exact. */
+  readonly partial?: boolean;
 }
 
 export interface TreemapData {

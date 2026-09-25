@@ -14,19 +14,25 @@ import {
   usdText,
 } from "../renderer/src/lib/spend.ts";
 
-const row = (cost, billed, unpriced) => ({
+const row = (cost, billed, unpriced, unrecorded = 0) => ({
   cost_micro_usd: cost,
   billed_micro_usd: billed,
   unpriced_tokens: unpriced,
+  unrecorded_output: unrecorded,
 });
 
 describe("spend", () => {
   it("adds nullable amounts without inventing zeroes", () => {
-    const total = sumSpend([row(null, null, 40), row(1_500_000, null, 0), row(null, 508_000_000, 10)]);
+    const total = sumSpend([
+      row(null, null, 40),
+      row(1_500_000, null, 0, 2),
+      row(null, 508_000_000, 10, 1),
+    ]);
     assert.deepEqual(total, {
       costMicroUsd: 1_500_000,
       billedMicroUsd: 508_000_000,
       unpricedTokens: 50,
+      unrecordedOutput: 3,
     });
     assert.deepEqual(addSpend(NO_SPEND, NO_SPEND), NO_SPEND);
   });
@@ -34,6 +40,10 @@ describe("spend", () => {
   it("names coverage from the columns alone", () => {
     assert.equal(coverage(spendOf(row(10, null, 0))), "complete");
     assert.equal(coverage(spendOf(row(10, null, 5))), "partial");
+    // A reply whose output was never recorded makes the figure a lower bound.
+    assert.equal(coverage(spendOf(row(10, null, 0, 1))), "partial");
+    assert.equal(spendText(spendOf(row(10_000_000, null, 0, 1))), "$10.00+");
+    assert.match(spendDescription(spendOf(row(10, null, 0, 2)), (n) => `${n}`), /2 replies with unrecorded output/);
     assert.equal(coverage(spendOf(row(null, null, 5))), "unavailable");
     assert.equal(coverage(NO_SPEND), "none");
   });

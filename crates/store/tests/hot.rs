@@ -217,6 +217,7 @@ fn append_mode_emits_rows_with_apply_time_ordinals_and_merge_patches() {
                 message_op(call),
                 succeeded_update("toolu_1"),
                 IngestOp::Usage {
+                    identity: None,
                     session_id: "s1".into(),
                     response: "m-user".into(),
                     ts: 3_600_000,

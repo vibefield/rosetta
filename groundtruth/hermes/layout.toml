@@ -11,6 +11,14 @@ evidence = "fixture"
 notes = "Primary session store (WAL mode). 0.20.5 schema_version=26. sessions has 56 named columns (NOT collapsed). Tables with fixture rows: sessions, messages, session_model_usage, schema_version, state_meta, system_prompts. Empty-but-present: gateway_routing, async_delegations, compression_locks, session_turn_leases, gateway_hygiene_state, plus FTS5 virtual tables. messages.tool_calls is TEXT holding a JSON array of OpenAI-style function calls (facet: tool-calls/terminal). Tool-role messages.content is TEXT holding JSON {output, exit_code, error} (facet: tool-result/terminal). CLI-only farm does not populate gateway tables. WAL/SHM siblings are absent after a clean close. Schema dump: sources/<version>.sqlite-schema.sql."
 
 [[streams]]
+id = "profile-state-db"
+glob = "profiles/*/state.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "research"
+notes = "Session store of a NAMED profile: every state.db belongs to exactly one profile — <root>/state.db to `default`, <root>/profiles/<name>/state.db to <name> (0.21.4 hermes_state_profile_repair.py:1-21; hermes_constants.py:228-262 recognises <root>/profiles/<name> as a profile home; profile names are lowercase path components, hermes_cli/profiles.py:240). Same schema and writer as state-db (hermes_state_usage.py:52-71), so the adapter drives it with the same snapshot plan. Session ids are unique across stores by construction: `<YYYYMMDD_HHMMSS>_<uuid4 hex>` (hermes_state_ids.py:24-28), and `hermes sessions repair-profiles` moves a crossed row between stores under the same id. `hermes profile create --clone-all` never copies state.db (hermes_cli/profiles.py:60-67). Tombstones live one level deeper (profiles/.deleted/<name>/state.db) and are not matched. Research evidence from the pinned 0.21.4 source; native capture pending (the 0.20.5 CLI farm runs the default profile only)."
+
+[[streams]]
 id = "config"
 glob = "config.yaml"
 file_format = "text"
@@ -113,3 +121,11 @@ file_format = "text"
 discipline = "rewrite_in_place"
 evidence = "research"
 notes = "Updater stamp written on first run. Volatile; stripped at harvest."
+
+[[streams]]
+id = "profile-home"
+glob = "profiles/**/*"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "research"
+notes = "Every other file of a named profile's HOME (0.21.4 hermes_constants.py:281 identity markers: config.yaml, .env, SOUL.md, profile.yaml, auth.json): the per-profile config, persona, memories, skills, cron, logs, and credentials (.env, auth.json — MUST-NOT-PARSE, exactly like the root streams). Inventory only; no driver. Listed after profile-state-db so the session store keeps its own stream."

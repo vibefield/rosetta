@@ -4,4 +4,9 @@ export type HeatmapDay = {
 /**
  * Date in the caller-selected timezone, `YYYY-MM-DD`.
  */
-day: string, tokens: number, cost_micro_usd: number | null, billed_micro_usd: number | null, unpriced_tokens: number, };
+day: string, tokens: number, cost_micro_usd: number | null, billed_micro_usd: number | null, unpriced_tokens: number, 
+/**
+ * Usage records with a recorded prompt but no recorded output: the
+ * figure is a lower bound (ARCHITECTURE §4.1.3).
+ */
+unrecorded_output: number, };

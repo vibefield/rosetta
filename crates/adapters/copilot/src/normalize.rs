@@ -3,7 +3,8 @@
 //! Assistant messages can contain reasoning, visible text, and one or more
 //! tool requests, so they split into flat rows. Tool completions merge into
 //! the request row by native `toolCallId`. Session shutdown metrics are real
-//! running counters and therefore pass through `NormalizeCtx::cumulative`.
+//! running counters; `crate::usage` turns them into per-model intervals and
+//! owns the per-call session-store rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,21 +14,21 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_core::rows::{
-    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, SessionUsageRow, TaskRow,
-    TaskStatus, TokenSnapshot, ToolCall, UsageScope,
+    DriftFact, EditKind, FileEditRow, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, ToolCall,
 };
 use rosetta_core::timeline::{CorrelationDerivation, StatusBasis};
-use rosetta_core::{IngestOp, fold, ids};
+use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::events::{
-    AssistantMessage, EventLine, EventPayload, SessionNotice, SessionShutdown, SubagentCompleted,
-    SubagentFailed, SubagentStarted, ToolExecutionComplete, ToolRequest,
+    AssistantMessage, EventLine, EventPayload, SessionNotice, SubagentCompleted, SubagentFailed,
+    SubagentStarted, ToolExecutionComplete, ToolRequest,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
 use crate::time::rfc3339_ms;
+use crate::usage::{self, ShutdownTotals};
 
 const UNKNOWN_TYPE: &str = "unknown_type";
 const UNKNOWN_FIELDS: &str = "unknown_fields";
@@ -53,56 +54,7 @@ pub struct CopilotState {
     /// re-report running session totals (resume ⇒ 128 → 256), so each one
     /// contributes only its interval's delta (RESEARCH_PLAN §5.13).
     #[serde(default)]
-    model_totals: BTreeMap<String, ShutdownTotals>,
-}
-
-/// One model's native cumulative counters as a shutdown reports them:
-/// `input` includes cache reads and writes, `output` includes reasoning.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct ShutdownTotals {
-    input: i64,
-    output: i64,
-    cache_read: i64,
-    cache_write: i64,
-    reasoning: i64,
-    requests: i64,
-    nano_aiu: i64,
-}
-
-impl ShutdownTotals {
-    fn fields(self) -> [i64; 7] {
-        [
-            self.input,
-            self.output,
-            self.cache_read,
-            self.cache_write,
-            self.reasoning,
-            self.requests,
-            self.nano_aiu,
-        ]
-    }
-
-    /// The interval since `last`. A reading below the last one started a new
-    /// epoch (a crash lost the old totals): the whole reading is the interval.
-    fn since(self, last: Self) -> Self {
-        if self
-            .fields()
-            .iter()
-            .zip(last.fields())
-            .any(|(now, then)| *now < then)
-        {
-            return self;
-        }
-        Self {
-            input: self.input - last.input,
-            output: self.output - last.output,
-            cache_read: self.cache_read - last.cache_read,
-            cache_write: self.cache_write - last.cache_write,
-            reasoning: self.reasoning - last.reasoning,
-            requests: self.requests - last.requests,
-            nano_aiu: self.nano_aiu - last.nano_aiu,
-        }
-    }
+    pub(crate) model_totals: BTreeMap<String, ShutdownTotals>,
 }
 
 pub fn ingest_line(
@@ -329,7 +281,7 @@ fn project(
             if let Some(model) = &shutdown.current_model {
                 state.model = Some(model.clone());
             }
-            shutdown_usage(ctx, state, &record.id, shutdown, ts, ops);
+            usage::shutdown_usage(ctx, state, &record.id, shutdown, ts, ops);
         }
         EventPayload::SessionContextChanged(context) => remember_tool_cwd(state, &context.cwd),
         EventPayload::SessionContextCleared(cleared) => {
@@ -922,97 +874,6 @@ fn tool_result(
     });
 }
 
-/// A shutdown's `modelMetrics` are cumulative per session × model and are
-/// re-reported on every resume. Each model's interval since the previous
-/// shutdown becomes one aggregate sample (RESEARCH_PLAN §5.13): `inputTokens`
-/// includes cache reads and writes, `outputTokens` includes reasoning, and
-/// `totalNanoAiu` is GitHub's metered charge (10⁹ nano-AIU per AI credit, one
-/// credit = $0.01, so one nano-AIU is 10 pico-USD). BYOK sessions report 0.
-fn shutdown_usage(
-    ctx: &mut NormalizeCtx,
-    state: &mut CopilotState,
-    event_id: &str,
-    shutdown: &SessionShutdown,
-    ts: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) {
-    let Some(metrics) = shutdown.model_metrics.as_object() else {
-        return;
-    };
-    for (model, metric) in metrics {
-        let Some(usage) = metric.get("usage").and_then(Value::as_object) else {
-            continue;
-        };
-        let count = |key: &str| usage.get(key).and_then(Value::as_i64).unwrap_or(0);
-        let reading = ShutdownTotals {
-            input: count("inputTokens"),
-            output: count("outputTokens"),
-            cache_read: count("cacheReadTokens"),
-            cache_write: count("cacheWriteTokens"),
-            reasoning: count("reasoningTokens"),
-            requests: metric
-                .pointer("/requests/count")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
-            nano_aiu: metric
-                .get("totalNanoAiu")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
-        };
-        let last = state.model_totals.get(model).copied().unwrap_or_default();
-        state.model_totals.insert(model.clone(), reading);
-        let interval = reading.since(last);
-        if interval.fields()[..5].iter().all(|value| *value == 0) {
-            continue;
-        }
-        let (tokens, clamped) = interval_snapshot(interval);
-        if clamped {
-            ops.push(drift(
-                ctx,
-                crate::spec::EVENTS,
-                "session.shutdown",
-                "usage_subset_exceeds_total",
-                &[format!("modelMetrics.{model}.usage")],
-                ts,
-            ));
-        }
-        ops.push(IngestOp::SessionUsage(SessionUsageRow {
-            session_id: ctx.session_id.clone(),
-            key: ids::usage_id(&ctx.session_id, &format!("shutdown:{event_id}:{model}")),
-            ts: ts.unwrap_or_default(),
-            model: Some(model.clone()),
-            tokens,
-        }));
-    }
-}
-
-fn interval_snapshot(interval: ShutdownTotals) -> (TokenSnapshot, bool) {
-    let cache_read = Some(interval.cache_read);
-    let cache_write = Some(interval.cache_write);
-    let (input, input_clamped) =
-        fold::exclusive_remainder(Some(interval.input), &[cache_read, cache_write]);
-    let (output, thinking, output_clamped) =
-        fold::split_subset(Some(interval.output), Some(interval.reasoning));
-    let tokens = TokenSnapshot {
-        input,
-        output,
-        cache_read,
-        cache_write,
-        thinking,
-        billed_pico_usd: (interval.nano_aiu > 0)
-            .then(|| interval.nano_aiu.checked_mul(10))
-            .flatten(),
-        scope: if interval.requests == 1 {
-            UsageScope::Request
-        } else {
-            UsageScope::Aggregate
-        },
-        requests: (interval.requests > 1).then_some(interval.requests),
-        ..TokenSnapshot::default()
-    };
-    (tokens, input_clamped || output_clamped)
-}
-
 fn display_text(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => Some(text.clone()),
@@ -1147,7 +1008,7 @@ fn hard_error(
     }
 }
 
-fn drift(
+pub(crate) fn drift(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,
@@ -1181,7 +1042,7 @@ fn record_ts(value: &Value) -> Option<Ms> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CopilotState, display_text, ingest_line, interval_snapshot};
+    use super::{CopilotState, display_text, ingest_line};
     use rosetta_adapter_support::adapter::{LineStatus, NormalizeCtx};
     use rosetta_core::rows::TaskStatus;
     use rosetta_core::{IngestOp, TimelineBody};
@@ -1189,21 +1050,6 @@ mod tests {
 
     fn context() -> NormalizeCtx {
         NormalizeCtx::new("runtime", "session")
-    }
-
-    #[test]
-    fn shutdown_intervals_preserve_reported_zeroes() {
-        let (tokens, _) = interval_snapshot(super::ShutdownTotals {
-            input: 128,
-            output: 32,
-            requests: 1,
-            ..Default::default()
-        });
-        assert_eq!(tokens.input, Some(128));
-        assert_eq!(tokens.cache_read, Some(0));
-        assert_eq!(tokens.thinking, Some(0));
-        assert_eq!(tokens.billed_pico_usd, None);
-        assert_eq!(tokens.scope, rosetta_core::UsageScope::Request);
     }
 
     #[test]
@@ -1216,47 +1062,6 @@ mod tests {
             display_text(&json!({"message": "denied", "code": "denied"})),
             Some("denied".to_owned())
         );
-    }
-
-    #[test]
-    fn shutdown_intervals_are_per_model_deltas_in_exclusive_buckets() {
-        let first = super::ShutdownTotals {
-            input: 136_067,
-            output: 1_794,
-            cache_read: 76_154,
-            cache_write: 59_898,
-            reasoning: 362,
-            requests: 5,
-            nano_aiu: 18_653_380_000,
-        };
-        let (tokens, clamped) = super::interval_snapshot(first.since(Default::default()));
-        assert!(!clamped);
-        // Copilot's inclusive input: 15 + 76,154 + 59,898 = 136,067.
-        assert_eq!(tokens.input, Some(15));
-        assert_eq!((tokens.output, tokens.thinking), (Some(1_432), Some(362)));
-        assert_eq!(tokens.total_tokens(), Some(136_067 + 1_794));
-        // $0.1865338 billed: nano-AIU / 10¹¹ USD = × 10 pico-USD.
-        assert_eq!(tokens.billed_pico_usd, Some(186_533_800_000));
-        assert_eq!(tokens.scope, rosetta_core::UsageScope::Aggregate);
-        // Five requests: priced as five equal requests.
-        assert_eq!(tokens.requests, Some(5));
-
-        // A resume re-reports the running total: only the growth counts.
-        let resumed = super::ShutdownTotals {
-            input: first.input + 200,
-            requests: first.requests + 1,
-            ..first
-        };
-        let interval = resumed.since(first);
-        assert_eq!(interval.input, 200);
-        assert_eq!(interval.requests, 1);
-        let (one, _) = super::interval_snapshot(interval);
-        assert_eq!(
-            (one.scope, one.requests),
-            (rosetta_core::UsageScope::Request, None)
-        );
-        // A total that went backwards is a new epoch, counted whole.
-        assert_eq!(first.since(resumed), first);
     }
 
     #[test]

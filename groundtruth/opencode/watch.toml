@@ -5,6 +5,8 @@ status = "captured"
 known_gaps = [
   "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "The current SQLite store is fixture-backed; legacy JSON generations and external tool-output bodies remain research-only.",
+  "The 2.x store (session_v2/session_message, npm @opencode/cli 2.0.x) is declared from writer source only (sources/2.0.14.writer.json); a native 2.x capture (basic-chat, tool-use, fork, compaction, title usage) is pending.",
+  "Pre-1.0.100 message shapes (no user agent/model, no assistant agent/parentID) are declared from writer history (sources/1.0.0.writer.json) because migrated stores keep them; no imported-store fixture exists.",
 ]
 
 [agent]
@@ -16,8 +18,8 @@ tier = "A"
 [release]
 channel = "npm"                          # near-daily releases — batch into weekly roll-up PRs
 id = "opencode-ai"
-surveyed = "1.18.23"                     # 2026-08-28
-pinned = "1.18.22"                       # fixtures; 1.18.23 writer schema also merged
+surveyed = "1.18.23"                     # 2026-08-28; the 1.x line (opencode-ai). The 2.x line ships as npm @opencode/cli (2.0.14 surveyed 2026-09-24 from writer source, opt-in)
+pinned = "1.18.22"                       # fixtures; 1.18.23 and 2.0.14 writer schemas also merged
 changelog = "https://github.com/anomalyco/opencode/releases"
 
 [source]

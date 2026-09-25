@@ -25,7 +25,7 @@ use rosetta_protocol::{
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
-use rosetta_protocol::{PricingResponse, PricingSource, Spend, UsageCost};
+use rosetta_protocol::{PricingResponse, PricingSource, Spend, UnpricedModel, UsageCost};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
 
@@ -609,6 +609,8 @@ fn exemplars() -> serde_json::Value {
                     cost_micro_usd: Some(4_210),
                     billed_micro_usd: None,
                     unpriced_tokens: 23,
+
+                    unrecorded_output: 0,
                 },
             }],
         },
@@ -622,6 +624,8 @@ fn exemplars() -> serde_json::Value {
                         cost_micro_usd: Some(4_210),
                         billed_micro_usd: None,
                         unpriced_tokens: 0,
+
+                        unrecorded_output: 0,
                     },
                 },
                 ModelDay {
@@ -632,6 +636,8 @@ fn exemplars() -> serde_json::Value {
                         cost_micro_usd: None,
                         billed_micro_usd: None,
                         unpriced_tokens: 23,
+
+                        unrecorded_output: 0,
                     },
                 },
             ],
@@ -675,6 +681,8 @@ fn exemplars() -> serde_json::Value {
                     cost_micro_usd: Some(88),
                     billed_micro_usd: Some(12),
                     unpriced_tokens: 0,
+
+                    unrecorded_output: 0,
                 },
                 commits: 1,
                 edits: 2,
@@ -693,6 +701,13 @@ fn exemplars() -> serde_json::Value {
                 revision: "02cb80a15dcea25ca66c76321f6cfdcc635d81fb".into(),
                 sha256: "71d66c12".into(),
                 license: "MIT".into(),
+            }],
+            unpriced: vec![UnpricedModel {
+                model: "claude-opus-5-5".into(),
+                reason: "unknown_model".into(),
+                tokens: 3_488_371_239,
+                first_hour_ms: 1_790_096_400_000,
+                last_hour_ms: 1_790_190_000_000,
             }],
         },
         "mutations": mutations,

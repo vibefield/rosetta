@@ -365,17 +365,15 @@ function isAgentAuthored(row: TimelineEntry): boolean {
   }
 }
 
-/** Per-response snapshots, counted once each. The six buckets are mutually
- * exclusive (ARCHITECTURE §4.1.3), so their sum is the response's total and
- * the heads add up to the same figure as every aggregate. */
+/** Every usage record in the reply, summed. A record sits on exactly one row
+ * (a response's usage on its first projectable row, a multi-step message's
+ * steps each on their own), and the six buckets are mutually exclusive
+ * (ARCHITECTURE §4.1.3), so the sum is the reply's total and the heads add up
+ * to the same figure as every aggregate. */
 function reportedTokens(rows: readonly TimelineEntry[]): number | null {
-  const seen = new Set<string>();
   let total = 0;
   let reported = false;
   for (const row of rows) {
-    const id = row.response?.id ?? row.timeline_id;
-    if (seen.has(id)) continue;
-    seen.add(id);
     const parts = [
       row.usage.input,
       row.usage.output,
@@ -391,8 +389,18 @@ function reportedTokens(rows: readonly TimelineEntry[]): number | null {
   return reported ? total : null;
 }
 
+/** A record whose prompt was recorded but whose output never was: its price
+ * is a lower bound (a streamed reply that never got its final usage record). */
+function outputUnrecorded(row: TimelineEntry): boolean {
+  const usage = row.usage;
+  const prompt = [usage.input, usage.cache_read, usage.cache_write, usage.cache_write_1h];
+  return prompt.some((value) => value !== null && value !== undefined)
+    && (usage.output === null || usage.output === undefined);
+}
+
 /** The reply's list-price cost from each row's read-time `cost`. Partial when
- * any usage-bearing row could not be priced; null when no row carried usage. */
+ * any usage-bearing row could not be priced or its output was never recorded;
+ * null when no row carried usage. */
 function reportedCost(rows: readonly TimelineEntry[]): ResponseCost | null {
   let microUsd: number | null = null;
   let partial = false;
@@ -401,8 +409,10 @@ function reportedCost(rows: readonly TimelineEntry[]): ResponseCost | null {
     const cost = row.cost;
     if (cost === undefined || cost === null) continue;
     reported = true;
-    if (cost.status === "priced") microUsd = (microUsd ?? 0) + cost.micro_usd;
-    else partial = true;
+    if (cost.status === "priced") {
+      microUsd = (microUsd ?? 0) + cost.micro_usd;
+      if (outputUnrecorded(row)) partial = true;
+    } else partial = true;
   }
   return reported ? { microUsd, partial } : null;
 }

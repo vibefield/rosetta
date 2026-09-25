@@ -10,7 +10,14 @@ export type TimelineEntry = { timeline_id: string, session_id: string, ordinal: 
 /**
  * Native tool invocation that owns a spawned child-session entry.
  */
-parent_tool_native_id: string | null, usage: TokenSnapshot, 
+parent_tool_native_id: string | null, 
+/**
+ * Usage the row states for itself. An all-`None` snapshot makes no
+ * statement: the store keeps whatever a `Usage` op set on the row, so
+ * re-emitting a row never wipes its usage; only an all-`None` `Usage`
+ * op retracts it.
+ */
+usage: TokenSnapshot, 
 /**
  * Read-time cost of `usage`; absent when the row carries no usage or was
  * not read through the store.

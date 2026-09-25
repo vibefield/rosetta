@@ -3,12 +3,20 @@ agent = "opencode"
 data_root = "~/.local/share/opencode"
 
 [[streams]]
+id = "opencode-next-db"
+glob = "opencode-next.db*"
+file_format = "sqlite"
+discipline = "database"
+evidence = "research"
+notes = "The pre-split 2.x preview database that the 2.x one-time V1 migration imports INTO opencode.db (packages/core/src/database/v1-migration.bun.ts nextPath/importNextDatabase). Inventory only, never driven: its sessions already live in opencode.db under the same ids, so reading both would count them twice. Listed before opencode-db because the first matching stream wins."
+
+[[streams]]
 id = "opencode-db"
-glob = "opencode.db*"
+glob = "opencode*.db*"
 file_format = "sqlite"
 discipline = "database"
 evidence = "fixture"
-notes = "Current (v1.2+) session store: Drizzle/SQLite WAL at opencode.db (+ -wal/-shm). Fixtures 1.18.22 keep journal_mode=WAL; redaction checkpoints into the main file so the committed db is complete. basic-chat uses the non-git `global` project; tool-use/resume init a git worktree so project.id is a hash and vcs=`git`. Conversational truth is message.data (role) and part.data (type); the event table is an append-only streaming log (session.created.1 / session.updated.1 / message.updated.1 / message.part.updated.1). credential/account tables exist and MUST-NOT-PARSE. Schema dump: sources/<version>.sqlite-schema.sql."
+notes = "Current (v1.2+) session store: Drizzle/SQLite WAL at opencode.db (+ -wal/-shm). Fixtures 1.18.22 keep journal_mode=WAL; redaction checkpoints into the main file so the committed db is complete. basic-chat uses the non-git `global` project; tool-use/resume init a git worktree so project.id is a hash and vcs=`git`. 1.x conversational truth is message.data (role) and part.data (type); the event table is an append-only streaming log (session.created.1 / session.updated.1 / message.updated.1 / message.part.updated.1). 2.x (2.0.0, 2026-09-11, npm @opencode/cli; writer evidence sources/2.0.14.writer.json, native capture pending) writes the SAME file: sessions in session_v2 (fork_session_id/fork_boundary) and one session_message row per message with its type column as discriminant (user/assistant/compaction/synthetic/system/skill/shell/idle/agent-switched/model-switched/location-switched); each assistant row is one step with exclusive tokens; title/compaction requests land as durable session.usage.recorded.1 events. The 1.x tables stay beside the 2.x ones and each 1.x session is imported once under its own id (v1-migration.bun.ts), except a pre-split 2.x lineage where session is renamed to session_v2 (migration 20260804233008_loose_psylocke). Non-default channels write opencode-<channel>.db beside opencode.db (packages/core/src/database/path.ts), hence the glob. credential/account tables exist and MUST-NOT-PARSE. Schema dump: sources/<version>.sqlite-schema.sql."
 
 [[streams]]
 id = "auth"

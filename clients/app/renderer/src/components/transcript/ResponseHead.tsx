@@ -28,15 +28,19 @@ export function ResponseHead({ head, runtimeKind, open }: ResponseHeadProps) {
     .filter((piece): piece is string => piece !== null && piece !== "")
     .join(" · ");
   const span = head.spanMs === null ? null : spanText(head.spanMs);
+  // A reply with usage but no priced part still says so (`n/p`), never
+  // nothing: an unpriced model must not read as free.
   const cost = head.cost;
-  const costText = cost === null || cost.microUsd === null
+  const costText = cost === null
     ? null
-    : `${usdText(cost.microUsd)}${cost.partial ? "+" : ""}`;
+    : cost.microUsd === null
+      ? "n/p"
+      : `${usdText(cost.microUsd)}${cost.partial ? "+" : ""}`;
   const costTitle = cost === null
     ? undefined
     : cost.microUsd === null
       ? "No list price for this reply's model"
-      : `${usdExact(cost.microUsd)} at API list prices${cost.partial ? " · part of this reply has no list price" : ""}`;
+      : `${usdExact(cost.microUsd)} at API list prices${cost.partial ? " · a lower bound: part of this reply has no list price or no recorded output" : ""}`;
   return (
     <div className="tr-head">
       <span className="mark">

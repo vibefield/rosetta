@@ -6,7 +6,7 @@
 //! Envelope: {timestamp, ordinal?, type, payload}. Top-level types observed:
 //! session_meta, event_msg, response_item, inter_agent_communication,
 //! inter_agent_communication_metadata, compacted, turn_context, world_state,
-//! security_risk_score, and realtime_item.
+//! security_risk_score, realtime_item, and (from 0.153) token_usage_record.
 //!
 //! Parsing policy (CLAUDE.md): permissive on fields — flatten-unknown maps
 //! everywhere, non-empty = drift. Strict on envelope structure. Payload
@@ -47,6 +47,7 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "world_state"
                 | "security_risk_score"
                 | "realtime_item"
+                | "token_usage_record"
         )
     );
     if known {
@@ -104,6 +105,8 @@ pub enum RolloutPayload {
     SecurityRiskScore(SecurityRiskScore),
     #[serde(rename = "realtime_item")]
     RealtimeItem(RealtimeItem),
+    #[serde(rename = "token_usage_record")]
+    TokenUsageRecord(TokenUsageRecord),
 }
 
 impl Drift for RolloutPayload {
@@ -121,6 +124,7 @@ impl Drift for RolloutPayload {
             RolloutPayload::WorldState(p) => note_unknown(&p.unknown, prefix, out),
             RolloutPayload::SecurityRiskScore(p) => note_unknown(&p.unknown, prefix, out),
             RolloutPayload::RealtimeItem(p) => note_unknown(&p.unknown, prefix, out),
+            RolloutPayload::TokenUsageRecord(p) => note_unknown(&p.unknown, prefix, out),
         }
     }
 }
@@ -542,6 +546,31 @@ pub struct RealtimeItem {
     pub presentation: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// Per-response usage, written from 0.153 for every completed response just
+/// before that response's `token_count` event, and alone for a remote
+/// compaction, which emits no `token_count` (writer source
+/// openai/codex@e7bbc79 `protocol/src/protocol.rs:2249-2260`,
+/// `core/src/session/mod.rs:4645-4675`, `core/src/compact_remote_v2.rs:462-477`).
+/// `thread_id` names the owning thread: copied history keeps the original
+/// owner's records.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TokenUsageRecord {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub session_id: String,
+    pub root_turn_id: String,
+    pub response_id: String,
+    /// Native inclusive counters (`TokenUsage`), kept raw like the event's
+    /// `info`: `input_tokens` contains cached reads and cache writes,
+    /// `output_tokens` contains reasoning.
+    pub usage: Value,
+    /// Running sums over the turn and the thread — telemetry, never counted.
+    pub turn_token_usage: Value,
+    pub thread_token_usage: Value,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

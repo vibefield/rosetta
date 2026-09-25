@@ -10,7 +10,15 @@ use serde::de::IgnoredAny;
 const CANONICAL: &str = include_str!("../../../../groundtruth/hermes/groundtruth.json");
 
 pub const STATE_DB: &str = "state-db";
+/// A named profile's own `state.db` (`profiles/<name>/state.db`): the same
+/// schema and writer as the default store, so the same snapshot plan.
+pub const PROFILE_STATE_DB: &str = "profile-state-db";
 pub const SCHEMA_VERSION: i64 = 26;
+
+/// Streams that are Hermes session stores.
+pub fn is_state_stream(stream_id: &str) -> bool {
+    stream_id == STATE_DB || stream_id == PROFILE_STATE_DB
+}
 
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
@@ -77,7 +85,10 @@ struct FacetView {
 
 #[cfg(test)]
 mod tests {
-    use super::{STATE_DB, declared_tables, declared_tool_names, doc};
+    use super::{
+        PROFILE_STATE_DB, STATE_DB, declared_tables, declared_tool_names, doc, is_state_stream,
+    };
+    use rosetta_adapter_support::{Evidence, FileFormat};
 
     #[test]
     fn embedded_canonical_describes_hermes_state() {
@@ -85,6 +96,36 @@ mod tests {
         assert_eq!(doc().data_root, "~/.hermes");
         let stream = doc().stream(STATE_DB).expect("state-db stream");
         assert_eq!(stream.glob, "state.db*");
+    }
+
+    #[test]
+    fn named_profile_stores_have_their_own_stream() {
+        let stream = doc().stream(PROFILE_STATE_DB).expect("profile stream");
+        assert_eq!(stream.glob, "profiles/*/state.db*");
+        assert_eq!(stream.file_format, FileFormat::Sqlite);
+        assert_eq!(stream.evidence, Evidence::Research);
+        assert!(is_state_stream(STATE_DB) && is_state_stream(PROFILE_STATE_DB));
+        assert!(!is_state_stream("profile-home"));
+
+        let stream_of = |path: &str| doc().matching_stream(path).map(|stream| stream.id.as_str());
+        assert_eq!(stream_of("state.db"), Some(STATE_DB));
+        assert_eq!(stream_of("state.db-wal"), Some(STATE_DB));
+        assert_eq!(stream_of("profiles/coder/state.db"), Some(PROFILE_STATE_DB));
+        assert_eq!(
+            stream_of("profiles/coder/state.db-wal"),
+            Some(PROFILE_STATE_DB)
+        );
+        // The rest of a profile home is inventory without a driver, like the root.
+        assert_eq!(
+            stream_of("profiles/coder/config.yaml"),
+            Some("profile-home")
+        );
+        assert_eq!(stream_of("profiles/coder/.env"), Some("profile-home"));
+        // Tombstoned profiles sit one level deeper and are never a session store.
+        assert_eq!(
+            stream_of("profiles/.deleted/coder/state.db"),
+            Some("profile-home")
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@
       "agent_version": "0.20.5",
       "evidence": "fixture",
       "path": "sources/0.20.5.fixtures.json",
-      "sha256": "3cf5e3bfb38dfe33b2883c065722e58aa3ac000691fce2ea2a2ced26d54e0616"
+      "sha256": "68c5264d0b322cf1e217c17f756a775184a7a8ec8733bac6a8e7a5a1b5af5a06"
     }
   ],
   "streams": [
@@ -1548,6 +1548,14 @@
       ]
     },
     {
+      "id": "profile-state-db",
+      "glob": "profiles/*/state.db*",
+      "file_format": "sqlite",
+      "discipline": "database",
+      "evidence": "research",
+      "notes": "Session store of a NAMED profile: every state.db belongs to exactly one profile — <root>/state.db to `default`, <root>/profiles/<name>/state.db to <name> (0.21.4 hermes_state_profile_repair.py:1-21; hermes_constants.py:228-262 recognises <root>/profiles/<name> as a profile home; profile names are lowercase path components, hermes_cli/profiles.py:240). Same schema and writer as state-db (hermes_state_usage.py:52-71), so the adapter drives it with the same snapshot plan. Session ids are unique across stores by construction: `<YYYYMMDD_HHMMSS>_<uuid4 hex>` (hermes_state_ids.py:24-28), and `hermes sessions repair-profiles` moves a crossed row between stores under the same id. `hermes profile create --clone-all` never copies state.db (hermes_cli/profiles.py:60-67). Tombstones live one level deeper (profiles/.deleted/<name>/state.db) and are not matched. Research evidence from the pinned 0.21.4 source; native capture pending (the 0.20.5 CLI farm runs the default profile only)."
+    },
+    {
       "id": "config",
       "glob": "config.yaml",
       "file_format": "text",
@@ -1650,6 +1658,14 @@
       "discipline": "rewrite_in_place",
       "evidence": "research",
       "notes": "Updater stamp written on first run. Volatile; stripped at harvest."
+    },
+    {
+      "id": "profile-home",
+      "glob": "profiles/**/*",
+      "file_format": "text",
+      "discipline": "rewrite_in_place",
+      "evidence": "research",
+      "notes": "Every other file of a named profile's HOME (0.21.4 hermes_constants.py:281 identity markers: config.yaml, .env, SOUL.md, profile.yaml, auth.json): the per-profile config, persona, memories, skills, cron, logs, and credentials (.env, auth.json — MUST-NOT-PARSE, exactly like the root streams). Inventory only; no driver. Listed after profile-state-db so the session store keeps its own stream."
     },
     {
       "id": "farm:messages",

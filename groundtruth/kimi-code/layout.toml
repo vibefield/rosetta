@@ -12,7 +12,7 @@ data_root = "~/.kimi-code"
 # subset (often omitting `agentId` even though the zod payload requires it).
 # Types listed here as research have not been seen in fixtures or organic
 # census and MUST stay UnknownType until bytes exist:
-#   context.clear, context.undo, cron.add/cursor/delete, forked, goal.clear/
+#   context.clear, context.undo, cron.add/cursor/delete, goal.clear/
 #   create/update, full_compaction.cancel, interruptionReminder.recorded,
 #   mcp.tools_discovered, permission.rules.add, plan.revision, plan_mode.*,
 #   staleGuard.*, swarm_mode.*, task.notified/started/terminated/
@@ -23,6 +23,9 @@ data_root = "~/.kimi-code"
 # `task.terminated`. Non-durable Event2 types (assistant.delta, tool.progress,
 # subagent.spawned, session.meta.updated, …) are in-memory/UI only and are
 # not journaled.
+# `forked` is declared from the installed 2.0.2 bundle (sources/2.0.2.writer.json):
+# /fork copies the source session's wires, usage.record lines included, and
+# appends {type: forked, agentId, time} at the copy boundary. No fixture yet.
 
 [[streams]]
 id = "wire"
@@ -30,7 +33,7 @@ glob = "sessions/*/*/agents/*/wire.jsonl"
 file_format = "jsonl"
 discipline = "append_only"
 evidence = "fixture"
-notes = "Main + sub-agent complete wire event records. Main lives at agents/main/wire.jsonl; sub-agents at agents/agent-N/wire.jsonl (Agent tool, profiles coder/explore/plan — 0.38.0 subagent fixture writes agents/agent-0 with profileName=explore; origin.kind=system_trigger origin.name=subagent). Cold rebuild source of truth (packages/transcript). 0.38.0 hermetic types: metadata, runtime.set_binding, profile.bind, permission.set_mode, turn.prompt, context.append_message, plugin.session_start, context.append_loop_event (step.begin/end, content.part, tool.call, tool.result), llm.tools_snapshot, llm.request, usage.record, token_counting.measured, turn.ended (reason completed|failed; error payload on failed), token_counting.turn_recorded. Organic protocol-1.5 extras: prompt.accepted, tools.update_store, interaction.request/resolved, permission.record_approval_result, full_compaction.begin/complete, context.apply_compaction, config.update. Large media offloaded to blobs (blobref:<mime>;<sha256>). Tool results may spill to tool-results/."
+notes = "Main + sub-agent complete wire event records. Main lives at agents/main/wire.jsonl; sub-agents at agents/agent-N/wire.jsonl (Agent tool, profiles coder/explore/plan — 0.38.0 subagent fixture writes agents/agent-0 with profileName=explore; origin.kind=system_trigger origin.name=subagent). Cold rebuild source of truth (packages/transcript). 0.38.0 hermetic types: metadata, runtime.set_binding, profile.bind, permission.set_mode, turn.prompt, context.append_message, plugin.session_start, context.append_loop_event (step.begin/end, content.part, tool.call, tool.result), llm.tools_snapshot, llm.request, usage.record, token_counting.measured, turn.ended (reason completed|failed; error payload on failed), token_counting.turn_recorded. Organic protocol-1.5 extras: prompt.accepted, tools.update_store, interaction.request/resolved, permission.record_approval_result, full_compaction.begin/complete, context.apply_compaction, config.update. Writer-declared at 2.0.2 (installed bundle, no fixture): forked — the marker /fork appends to every copied agent wire after the source's records, usage.record lines included; llm.request modelAlias/thinkingEffort/thinkingKeep/maxTokens optional; usage.record usageScope optional in the schema and inputOther unclamped. Large media offloaded to blobs (blobref:<mime>;<sha256>). Tool results may spill to tool-results/."
 
 [[streams]]
 id = "session-state"
@@ -38,7 +41,7 @@ glob = "sessions/*/*/state.json"
 file_format = "json"
 discipline = "rewrite_in_place"
 evidence = "fixture"
-notes = "Session metadata. Fixture fields: id, version, cwd, createdAt/updatedAt, archived, agents.<id>.{homedir,type}, custom, lastTurnReason (completed|failed), isCustomTitle. Sub-agent entries add parentAgentId and labels. Organic also writes title, lastPrompt, titleKind. Docs list forkedFrom (unseen in fixtures and organic census)."
+notes = "Session metadata. Fixture fields: id, version, cwd, createdAt/updatedAt, archived, agents.<id>.{homedir,type}, custom, lastTurnReason (completed|failed), isCustomTitle. Sub-agent entries add parentAgentId and labels. Organic also writes title, lastPrompt, titleKind. Writer-declared at 2.0.2 (installed bundle, no fixture): forkedFrom = the source session id on a fork, whose createdAt is the fork instant (stamped after every copied wire was marked) and whose custom/lastTurnReason may be absent; version, cwd and agents optional in the schema."
 
 [[streams]]
 id = "session-index"

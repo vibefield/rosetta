@@ -40,12 +40,51 @@ class GenerateTests(unittest.TestCase):
         catalog = generate.load()
         by_alias = {alias: catalog.models[index] for alias, index in catalog.aliases.items()}
         self.assertEqual(by_alias["claude-opus-5"].id, "claude-opus-5")
-        self.assertNotIn("claude-opus-5-5", by_alias)
+        # Exact matching: Opus 5.5 is its own upstream model, never Opus 5.
+        self.assertEqual(by_alias["claude-opus-5-5"].id, "claude-opus-5-5")
+        self.assertEqual(by_alias["claude-opus-5.5"].id, "claude-opus-5-5")
         self.assertEqual(by_alias["k3"].id, "kimi-k3")
+        self.assertEqual(by_alias["grok-4.7-build"].id, "grok-4.7")
         # Vertex's partner-model Claude entries never shadow Anthropic's own.
         self.assertEqual(by_alias["claude-opus-4-6"].provider, "anthropic")
         self.assertTrue(all(rule["source"] for rule in catalog.tier_rules))
         self.assertTrue(catalog.version.startswith("genai-prices@"))
+        self.assertIn("+data@", catalog.version)
+        # A [[patch]] completes an upstream model's rates in every period.
+        kimi = by_alias["kimi-k3"]
+        for period in kimi.periods:
+            self.assertEqual(period.prices["cache_write_1h"], generate.Rate(6_000_000))
+            self.assertEqual(period.prices["input"], generate.Rate(3_000_000))
+        # `tiers = [...]` expands to one rule per spelling, dates carried along.
+        fast = [rule for rule in catalog.tier_rules if rule["model"] == "gpt-5.5"]
+        self.assertEqual({rule["tier"] for rule in fast}, {"priority", "fast"})
+        self.assertTrue(all(rule["numerator"] == 5 and rule["denominator"] == 2 for rule in fast))
+        dated = next(rule for rule in catalog.tier_rules if rule["model"] == "claude-opus-4-6")
+        self.assertEqual(dated["from_day"], generate._day("2026-05-29", "t"))
+        self.assertIsNone(dated["until_day"])
+        route = next(rule for rule in catalog.route_rules if rule["route"] == "anthropic/us")
+        self.assertIn("claude-opus-5-5", route["models"])
+        self.assertNotIn("claude-haiku-4-5", route["models"])
+
+    def test_rendered_version_digests_the_tables(self) -> None:
+        rendered = generate.build()
+        version = next(line for line in rendered.splitlines() if "CATALOG_VERSION" in line)
+        self.assertRegex(version, r"\+tables@[0-9a-f]{12}\"")
+        # Any change to the tables changes the digest, so the projection re-prices.
+        catalog = generate.load()
+        catalog.tier_rules.pop()
+        other = next(
+            line for line in generate.render(catalog).splitlines() if "CATALOG_VERSION" in line
+        )
+        self.assertNotEqual(version, other)
+
+    def test_rule_windows_and_days(self) -> None:
+        self.assertEqual(generate._day("1970-01-11", "t"), 10)
+        self.assertEqual(generate._rule_window({"from": "2026-05-29"}, "t"), (20_602, None))
+        with self.assertRaises(generate.PricingError):
+            generate._rule_window({"from": "2026-05-29", "until": "2026-05-29"}, "t")
+        with self.assertRaises(generate.PricingError):
+            generate._day(20_602, "t")
 
 
 if __name__ == "__main__":

@@ -34,9 +34,74 @@ fn exact_matching_never_uses_a_prefix() {
         resolve("claude-opus-5").map(|m| m.id),
         Some("claude-opus-5")
     );
-    // genai-prices' `starts_with: claude-opus-5` would price this as Opus 5.
-    assert!(resolve("claude-opus-5-5").is_none());
+    // genai-prices' old `starts_with: claude-opus-5` would have priced this
+    // as Opus 5 (2.06x too high); it is its own catalog model.
+    assert_eq!(
+        resolve("claude-opus-5-5").map(|m| m.id),
+        Some("claude-opus-5-5")
+    );
     assert!(resolve("gpt-5.6-sol-pro").is_none());
+    assert!(resolve("claude-opus-5-6").is_none());
+}
+
+#[test]
+fn reseller_spellings_resolve_only_through_cited_aliases() {
+    // Copilot, OpenRouter and Hermes spell Claude versions with a dot.
+    assert_eq!(
+        resolve("claude-fable-5.1").map(|m| m.id),
+        Some("claude-fable-5-1")
+    );
+    assert_eq!(
+        resolve("anthropic/claude-opus-5.5").map(|m| m.id),
+        Some("claude-opus-5-5")
+    );
+    // Kimi Code plan ids.
+    assert_eq!(resolve("k3-256k").map(|m| m.id), Some("kimi-k3"));
+    assert_eq!(
+        resolve("kimi-code/kimi-for-coding-highspeed").map(|m| m.id),
+        Some("kimi-k2.7-code-highspeed")
+    );
+    // Grok Build's spellings of the listed models, including 4.7's Fast serving.
+    assert_eq!(resolve("grok-4.7-build").map(|m| m.id), Some("grok-4.7"));
+    assert_eq!(
+        resolve("grok-4.7-build-fast").map(|m| m.id),
+        Some("grok-4.7-fast")
+    );
+    assert!(resolve("grok-4.8-build").is_none());
+}
+
+#[test]
+fn bedrock_and_cloudflare_ids_name_the_creators_models() {
+    for (bedrock, expected) in [
+        ("us.anthropic.claude-opus-4-6-v1", "claude-opus-4-6"),
+        (
+            "global.anthropic.claude-opus-4-5-20251101-v1:0",
+            "claude-opus-4-5",
+        ),
+        (
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "claude-haiku-4-5",
+        ),
+        ("eu.anthropic.claude-sonnet-4-6-v1:0", "claude-sonnet-4-6"),
+        ("openai.gpt-6-sol-v1", "gpt-6-sol"),
+    ] {
+        assert_eq!(resolve(bedrock).map(|m| m.id), Some(expected), "{bedrock}");
+    }
+    // Dots inside a plain id are not a vendor segment.
+    assert_eq!(
+        resolve("gemini-2.5-flash").map(|m| m.id),
+        Some("gemini-2.5-flash")
+    );
+    assert!(resolve("us.unknownvendor.claude-opus-4-6-v1").is_none());
+    // A leading `@` (Cloudflare Workers AI) is a prefix, not a version suffix.
+    assert_eq!(
+        resolve("@cf/moonshotai/kimi-k3").map(|m| m.id),
+        Some("kimi-k3")
+    );
+    assert_eq!(
+        resolve("claude-opus-4-6@20260301").map(|m| m.id),
+        Some("claude-opus-4-6")
+    );
 }
 
 #[test]
@@ -60,7 +125,6 @@ fn stamps_tags_and_vendor_prefixes_are_removed_before_the_exact_lookup() {
     // Grok Build's spellings are cited aliases of the listed models.
     assert_eq!(resolve("grok-4.6-build").map(|m| m.id), Some("grok-4.6"));
     assert_eq!(resolve("grok-4.5-build").map(|m| m.id), Some("grok-4.5"));
-    assert!(resolve("grok-4.7-build").is_none());
     assert!(resolve("<synthetic>").is_none());
 }
 
@@ -163,9 +227,15 @@ fn service_tiers_price_only_through_a_cited_rule() {
     assert_eq!(list_cost(&usage), Ok(1_250_000_000_000));
     usage.service_tier = Some(ServiceTier::Flex);
     assert_eq!(list_cost(&usage), Ok(250_000_000_000));
+    // OpenAI renamed Priority to Fast on 2026-07-30 and accepts both.
     usage.service_tier = Some(ServiceTier::Fast);
+    assert_eq!(list_cost(&usage), Ok(1_250_000_000_000));
+    // A model the Fast table does not list stays unpriced at that tier.
+    let mut old = request("o3", "2026-09-01");
+    old.input = 1_000;
+    old.service_tier = Some(ServiceTier::Fast);
     assert_eq!(
-        list_cost(&usage),
+        list_cost(&old),
         Err(Unpriced::UnsupportedTier(ServiceTier::Fast))
     );
     let mut claude = request("claude-opus-4-8", "2026-09-01");
@@ -175,6 +245,48 @@ fn service_tiers_price_only_through_a_cited_rule() {
         list_cost(&claude),
         Err(Unpriced::UnsupportedTier(ServiceTier::Priority))
     );
+    // Anthropic fast mode doubles every token category.
+    claude.service_tier = Some(ServiceTier::Fast);
+    claude.cache_read = 10_000;
+    assert_eq!(
+        list_cost(&claude),
+        Ok(2 * (1_000 * 5_000_000 + 10_000 * 500_000))
+    );
+    // Google's tiers are provider-wide multipliers (100K prompt: base tier).
+    let mut gemini = request("gemini-3.1-pro-preview", "2026-09-01");
+    gemini.input = 100_000;
+    gemini.service_tier = Some(ServiceTier::Priority);
+    assert_eq!(list_cost(&gemini), Ok(100_000 * 2_000_000 * 9 / 5));
+    gemini.service_tier = Some(ServiceTier::Batch);
+    assert_eq!(list_cost(&gemini), Ok(100_000 * 2_000_000 / 2));
+}
+
+#[test]
+fn dated_tier_rules_follow_the_record_day_and_need_a_timestamp() {
+    // Opus 4.6 fast runs at standard rates from 2026-05-29; the earlier
+    // research-preview premium is uncited, so those records stay unpriced.
+    let mut usage = request("claude-opus-4-6", "2026-06-01");
+    usage.input = 1_000;
+    usage.service_tier = Some(ServiceTier::Fast);
+    assert_eq!(list_cost(&usage), Ok(1_000 * 5_000_000));
+    usage.at_ms = at("2026-05-28");
+    assert_eq!(
+        list_cost(&usage),
+        Err(Unpriced::UnsupportedTier(ServiceTier::Fast))
+    );
+    // Opus 5.5 fast is dated too: an undated record cannot pick a rule.
+    let mut dated = request("claude-opus-5-5", "2026-09-23");
+    dated.input = 1_000;
+    dated.service_tier = Some(ServiceTier::Fast);
+    assert_eq!(list_cost(&dated), Ok(2 * 1_000 * 4_000_000));
+    dated.at_ms = None;
+    assert_eq!(list_cost(&dated), Err(Unpriced::AmbiguousTime));
+    // An undated rule needs no timestamp (Opus 5 fast is undated, single period).
+    let mut opus5 = request("claude-opus-5", "2026-09-01");
+    opus5.input = 1_000;
+    opus5.service_tier = Some(ServiceTier::Fast);
+    opus5.at_ms = None;
+    assert_eq!(list_cost(&opus5), Ok(2 * 1_000 * 5_000_000));
 }
 
 #[test]
@@ -197,8 +309,52 @@ fn provider_routes_are_informational_but_qualifiers_need_a_premium() {
     usage.input = 1_000;
     usage.route = Some("openrouter");
     assert_eq!(list_cost(&usage), Ok(1_000 * 5_000_000));
+    // US-only inference is 1.1x on every token category for Claude 4.6+.
     usage.route = Some("anthropic/us");
+    usage.cache_read = 10_000;
+    usage.web_searches = 1;
+    let tokens = 1_000 * 5_000_000 + 10_000 * 500_000;
+    assert_eq!(
+        list_cost(&usage),
+        Ok((tokens * 11 + 5) / 10 + 10_000_000_000)
+    );
+    // Earlier models reject the parameter, so no premium is cited for them.
+    let mut haiku = request("claude-haiku-4-5", "2026-09-01");
+    haiku.input = 1_000;
+    haiku.route = Some("anthropic/us");
+    assert_eq!(list_cost(&haiku), Err(Unpriced::UnsupportedRoute));
+    usage.route = Some("anthropic/eu");
     assert_eq!(list_cost(&usage), Err(Unpriced::UnsupportedRoute));
+}
+
+#[test]
+fn patched_upstream_rates_and_new_models_price_from_the_overlay() {
+    // kimi-k3's 1-hour writes are $6/MTok, twice the 5-minute $3 (patch).
+    let mut kimi = request("k3", "2026-09-01");
+    kimi.cache_write = 1_000;
+    kimi.cache_write_1h = 1_000;
+    assert_eq!(list_cost(&kimi), Ok(1_000 * 3_000_000 + 1_000 * 6_000_000));
+    // grok-4.7 doubles at 200K prompt tokens, like grok-4.6; its Fast
+    // serving is a separate price table.
+    let mut grok = request("grok-4.7-build", "2026-09-23");
+    grok.input = 199_999;
+    assert_eq!(list_cost(&grok), Ok(199_999 * 2_000_000));
+    grok.input = 200_000;
+    assert_eq!(list_cost(&grok), Ok(200_000 * 4_000_000));
+    let mut fast = request("grok-4.7-build-fast", "2026-09-23");
+    fast.input = 1_000;
+    fast.output = 100;
+    assert_eq!(list_cost(&fast), Ok(1_000 * 4_000_000 + 100 * 12_000_000));
+}
+
+#[test]
+fn a_future_price_period_starts_on_its_day() {
+    // Gemini 3.7 Flash doubles on 2027-01-01 (announced in advance).
+    let mut usage = request("gemini-3.7-flash", "2026-12-31");
+    usage.input = 1_000_000;
+    assert_eq!(list_cost(&usage), Ok(1_000_000 * 750_000));
+    usage.at_ms = at("2027-01-01");
+    assert_eq!(list_cost(&usage), Ok(1_000_000 * 1_500_000));
 }
 
 #[test]

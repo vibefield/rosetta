@@ -355,10 +355,18 @@ export function PortfolioSummaryPanel({
         label: project.row.name,
         value: project.lifetimeSpend.costMicroUsd ?? 0,
         color: project.tint,
+        // A lower bound when part of the project's usage has no list price or
+        // no recorded output (§4.1.3: partial coverage is always visible).
+        partial: coverage(project.lifetimeSpend) === "partial",
       })),
     };
+    // Projects the treemap cannot size: usage, none of it priced.
+    const unpricedOnlyProjects = projects.filter(
+      (project) => coverage(project.lifetimeSpend) === "unavailable",
+    ).length;
 
     return {
+      unpricedOnlyProjects,
       sessionCount: projects.reduce(
         (total, project) => total + project.rootSessionCount,
         0,
@@ -454,11 +462,18 @@ export function PortfolioSummaryPanel({
               onItemSelect={(item) => onProjectSelect(item.id)}
               formatValue={usdText}
               getItemAccessibleLabel={(item, context) =>
-                `${item.label} · ${usdText(item.value)} at list prices · ${(
-                  context.share * 100
-                ).toFixed(1)}% of displayed lifetime spend`
+                `${item.label} · ${usdText(item.value)}${item.partial ? "+" : ""} at list prices${
+                  item.partial ? " (a lower bound)" : ""
+                } · ${(context.share * 100).toFixed(1)}% of displayed lifetime spend`
               }
             />
+            {summary.unpricedOnlyProjects > 0 && (
+              <p className="ah-treemap__empty">
+                {summary.unpricedOnlyProjects === 1
+                  ? "1 project has usage with no list price and is not shown"
+                  : `${summary.unpricedOnlyProjects} projects have usage with no list price and are not shown`}
+              </p>
+            )}
           </div>
         </div>
       )}

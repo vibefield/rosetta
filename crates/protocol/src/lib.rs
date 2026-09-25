@@ -35,7 +35,9 @@ pub use rosetta_store::timeline_meta::{
 /// 21 (2026-09-22): usage facts, read-time response cost, spend beside every
 /// aggregate token figure, and `/api/pricing` (ARCHITECTURE §4.1.3).
 /// 22 (2026-09-23): `TokenSnapshot.requests`, the request count of an aggregate.
-pub const PROTOCOL_VERSION: u32 = 22;
+/// 23 (2026-09-24): `unrecorded_output` beside every spend figure, and the
+/// unpriced-model coverage report on `/api/pricing`.
+pub const PROTOCOL_VERSION: u32 = 23;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -442,6 +444,28 @@ pub struct PricingResponse {
     pub projection_version: Option<String>,
     pub models: u32,
     pub sources: Vec<PricingSource>,
+    /// Coverage: every model in the open projection with usage the catalog
+    /// could not price, largest first. A new model shows up here the day it
+    /// is first used, before anyone notices a low figure.
+    pub unpriced: Vec<UnpricedModel>,
+}
+
+/// One model's unpriced usage in the open projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct UnpricedModel {
+    /// The model id as the agent recorded it.
+    pub model: String,
+    /// `unknown_model` when no catalog id or alias matches it; otherwise
+    /// `unpriced` (a tier, route, missing rate or uncounted aggregate).
+    pub reason: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub tokens: i64,
+    /// First and last hour buckets holding unpriced usage, UTC ms.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub first_hour_ms: i64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub last_hour_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

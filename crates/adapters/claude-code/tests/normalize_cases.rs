@@ -8,7 +8,9 @@
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
-use rosetta_core::rows::{DriftFact, EditKind, FileEditRow, TitleKind};
+use rosetta_core::rows::{
+    DriftFact, EditKind, FileEditRow, ServiceTier, SessionUsageRow, TitleKind, TokenSnapshot,
+};
 use rosetta_core::timeline::{
     AttachmentKind, CollaborationChannel, CollaborationEventKind, CollaborationOp,
     CollaborationStatus, Notice, ParticipantColor, SummaryPurpose, TimelineBody, TimelineEntry,
@@ -25,12 +27,14 @@ fn run(lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
 }
 
 fn run_stream(stream_id: &str, lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
+    run_in("session-under-test", stream_id, lines)
+}
+
+/// Replay `lines` as one file of the native session `native`.
+fn run_in(native: &str, stream_id: &str, lines: &[Value]) -> (Vec<IngestOp>, Vec<LineStatus>) {
     let adapter = ClaudeCodeAdapter;
     let runtime_id = ids::runtime_id(adapter.kind(), &adapter.layout().data_root);
-    let mut ctx = NormalizeCtx::new(
-        &runtime_id,
-        ids::session_id(&runtime_id, "session-under-test"),
-    );
+    let mut ctx = NormalizeCtx::new(&runtime_id, ids::session_id(&runtime_id, native));
     ctx.state = adapter.init_state();
 
     let mut ops = Vec::new();
@@ -230,6 +234,50 @@ fn drift(ops: &[IngestOp]) -> Vec<&DriftFact> {
         .collect()
 }
 
+/// Every response usage fact aimed at a row: (row timeline id, snapshot,
+/// identity), in emission order.
+fn usage_ops(ops: &[IngestOp]) -> Vec<(&str, &TokenSnapshot, Option<&str>)> {
+    ops.iter()
+        .filter_map(|op| match op {
+            IngestOp::Usage {
+                response,
+                tokens,
+                identity,
+                ..
+            } => Some((response.as_str(), tokens, identity.as_deref())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The usage the store ends up holding for a row: its last `Usage` op.
+fn row_usage<'a>(ops: &'a [IngestOp], timeline_id: &str) -> Option<&'a TokenSnapshot> {
+    usage_ops(ops)
+        .into_iter()
+        .rev()
+        .find(|(response, _, _)| *response == timeline_id)
+        .map(|(_, tokens, _)| tokens)
+}
+
+fn samples(ops: &[IngestOp]) -> Vec<&SessionUsageRow> {
+    ops.iter()
+        .filter_map(|op| match op {
+            IngestOp::SessionUsage(sample) => Some(sample),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A streamed, non-final record: `stop_reason` null and no `speed` key.
+fn streamed(mut record: Value) -> Value {
+    record["message"]["stop_reason"] = Value::Null;
+    record
+}
+
+fn tool_use(id: &str) -> Value {
+    json!([{"type": "tool_use", "id": id, "name": "Bash", "input": {"command": "ls"}}])
+}
+
 #[test]
 fn assistant_blocks_split_into_one_row_each() {
     let (ops, _) = run(&[assistant(
@@ -271,10 +319,19 @@ fn assistant_blocks_split_into_one_row_each() {
             .all(|row| row.provenance.agent_version.as_deref() == Some("2.1.241"))
     );
 
-    // Usage is reported once per response and lands on the text row.
-    assert!(rows[0].usage.is_empty());
-    assert!(rows[2].usage.is_empty());
-    let tokens = &rows[1].usage;
+    // Usage is reported once per response, as one `Usage` op behind the
+    // text row; the rows themselves carry none, so every copy of the
+    // response can share the fact's transient identity.
+    assert!(rows.iter().all(|row| row.usage.is_empty()));
+    let facts = usage_ops(&ops);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].0, rows[1].timeline_id);
+    assert_eq!(
+        facts[0].2,
+        Some("msg_1"),
+        "no requestId: the message id alone"
+    );
+    let tokens = facts[0].1;
     assert_eq!(tokens.input, Some(100));
     // Anthropic's output_tokens (20) includes the 5 thinking tokens Claude
     // Code breaks out; the buckets are exclusive.
@@ -332,16 +389,19 @@ fn assistant_records_share_response_block_space_across_checkpoint_resume() {
             .as_ref()
             .is_some_and(|response| response.id == "msg_split")
     }));
+    assert!(rows.iter().all(|row| row.usage.is_empty()));
+    let facts = usage_ops(&one_shot);
     assert_eq!(
-        rows.iter().filter(|row| !row.usage.is_empty()).count(),
+        facts.len(),
         1,
         "repeated native response usage must become one canonical fact"
     );
-    assert_eq!(rows[0].usage.input, Some(100));
+    assert_eq!(facts[0].0, rows[0].timeline_id);
+    assert_eq!(facts[0].1.input, Some(100));
     assert!(
         !one_shot
             .iter()
-            .any(|op| { matches!(op, IngestOp::Usage { .. } | IngestOp::SessionUsage(_)) })
+            .any(|op| matches!(op, IngestOp::SessionUsage(_)))
     );
 
     let adapter = ClaudeCodeAdapter;
@@ -468,16 +528,21 @@ fn blank_leading_block_keeps_usage_once_without_consuming_a_block_index() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].block_index, Some(0));
     assert!(rows[0].usage.is_empty());
-    let samples = ops
-        .iter()
-        .filter_map(|op| match op {
-            IngestOp::SessionUsage(sample) => Some(sample),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(samples.len(), 1);
+    // The empty record could own nothing, so its usage opened as the
+    // `response:` sample. The visible text row then takes the fact over and
+    // the sample is retracted with an all-None snapshot (CC-6): reply heads
+    // read row usage only.
+    let samples = samples(&ops);
+    assert_eq!(samples.len(), 2);
     assert_eq!(samples[0].key, "response:msg_blank_first");
     assert_eq!(samples[0].tokens.input, Some(10));
+    assert_eq!(samples[1].key, "response:msg_blank_first");
+    assert!(samples[1].tokens.is_empty(), "retraction");
+    assert_eq!(samples[1].identity.as_deref(), Some("msg_blank_first"));
+    let facts = usage_ops(&ops);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].0, rows[0].timeline_id);
+    assert_eq!(facts[0].1.input, Some(10));
 }
 
 #[test]
@@ -497,17 +562,15 @@ fn changed_repeated_response_usage_replaces_the_first_fact() {
         ),
     ]);
     let rows = messages(&ops);
-    assert_eq!(rows[0].usage.input, Some(10));
-    let correction = ops.iter().find_map(|op| match op {
-        IngestOp::Usage {
-            response, tokens, ..
-        } => Some((response, tokens)),
-        _ => None,
-    });
-    let (target, tokens) = correction.expect("usage correction");
-    assert_eq!(target, &rows[0].timeline_id);
-    assert_eq!(tokens.input, Some(11));
-    assert_eq!(tokens.output, Some(3));
+    let facts = usage_ops(&ops);
+    assert_eq!(facts.len(), 2);
+    assert!(
+        facts
+            .iter()
+            .all(|(target, _, _)| *target == rows[0].timeline_id)
+    );
+    assert_eq!(facts[0].1.input, Some(10));
+    assert_eq!((facts[1].1.input, facts[1].1.output), (Some(11), Some(3)));
 }
 
 #[test]
@@ -531,13 +594,18 @@ fn a_later_placeholder_never_regresses_the_final_usage() {
         placeholder,
     ]);
     let rows = messages(&ops);
-    assert_eq!(rows[0].usage.output, Some(400));
-    assert_eq!(rows[0].usage.thinking, Some(100));
-    assert!(
-        !ops.iter()
-            .any(|op| matches!(op, IngestOp::Usage { .. } | IngestOp::SessionUsage(_))),
+    let facts = usage_ops(&ops);
+    assert_eq!(
+        facts.len(),
+        1,
         "a placeholder must not replace the final usage"
     );
+    assert_eq!(facts[0].0, rows[0].timeline_id);
+    assert_eq!(
+        (facts[0].1.output, facts[0].1.thinking),
+        (Some(400), Some(100))
+    );
+    assert!(!ops.iter().any(|op| matches!(op, IngestOp::SessionUsage(_))));
 }
 
 #[test]
@@ -581,8 +649,13 @@ fn advisor_iterations_are_requests_of_their_own() {
         (sample.tokens.input, sample.tokens.output),
         (Some(50), Some(5))
     );
-    // The top level (the `message` entry) still rides on the response row.
-    assert_eq!(messages(&ops)[0].usage.input, Some(10));
+    assert_eq!(sample.identity.as_deref(), Some("msg_1"));
+    // The top level (the `message` entry) still belongs to the response row.
+    let rows = messages(&ops);
+    assert_eq!(
+        row_usage(&ops, &rows[0].timeline_id).unwrap().input,
+        Some(10)
+    );
 }
 
 #[test]
@@ -598,7 +671,8 @@ fn several_sampling_passes_are_a_counted_aggregate() {
         json!([{"type": "text", "text": "answer"}]),
         Some(passes),
     )]);
-    let usage = &messages(&ops)[0].usage;
+    let rows = messages(&ops);
+    let usage = row_usage(&ops, &rows[0].timeline_id).unwrap();
     assert_eq!(usage.scope, rosetta_core::UsageScope::Aggregate);
     assert_eq!(usage.requests, Some(2));
 }
@@ -619,7 +693,8 @@ fn a_fallback_turn_takes_its_serving_entrys_ttl_split() {
         json!([{"type": "text", "text": "answer"}]),
         Some(served),
     )]);
-    let tokens = &messages(&ops)[0].usage;
+    let rows = messages(&ops);
+    let tokens = row_usage(&ops, &rows[0].timeline_id).unwrap();
     assert_eq!(tokens.cache_write, Some(400));
     assert_eq!(tokens.cache_write_1h, Some(600));
 }
@@ -630,7 +705,8 @@ fn usage_falls_back_to_the_tool_row_then_to_any_row() {
         json!([{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]),
         Some(usage(10, 2, 0)),
     )]);
-    assert!(!messages(&ops)[0].usage.is_empty());
+    let rows = messages(&ops);
+    assert!(row_usage(&ops, &rows[0].timeline_id).is_some());
 
     // An API-error record carries no content at all; its usage must not vanish
     // with the response.
@@ -639,6 +715,409 @@ fn usage_falls_back_to_the_tool_row_then_to_any_row() {
     assert_eq!(statuses, [LineStatus::Parsed]);
     assert!(rows.is_empty(), "an empty response is not visible prose");
     assert!(ops.iter().any(|op| matches!(op, IngestOp::SessionUsage(_))));
+}
+
+// ---------------------------------------------------------------- 2026-09-23 audit
+// CC-2 (cross-file copies), CC-3 (placeholder output), CC-6 (sample-held
+// usage), CC-7 (in-file replays) and CC-8 (facts the fixture corpus never
+// reached). Synthetic shapes from the writer census; native captures pending.
+
+#[test]
+fn a_placeholder_only_response_reports_no_output() {
+    // Writers from 2.1.9 stream one record per block, and every non-final
+    // record's output is the `message_start` placeholder (1–99 tokens). The
+    // input side is final from the first record and stays.
+    let (ops, _) = run(&[streamed(assistant(
+        json!([{"type": "text", "text": "partial"}]),
+        Some(usage(100, 3, 0)),
+    ))]);
+    let rows = messages(&ops);
+    let tokens = row_usage(&ops, &rows[0].timeline_id).expect("usage on the row");
+    assert_eq!((tokens.output, tokens.thinking), (None, None));
+    assert_eq!(
+        (tokens.input, tokens.cache_read, tokens.cache_write),
+        (Some(100), Some(9), Some(7))
+    );
+    assert_eq!(tokens.total_tokens(), Some(116));
+}
+
+#[test]
+fn the_final_record_replaces_the_placeholder_with_the_real_output() {
+    let (ops, _) = run(&[
+        streamed(assistant_record(
+            "msg_stream",
+            "11111111-1111-1111-1111-111111111401",
+            json!([{"type": "text", "text": "partial"}]),
+            Some(usage(100, 3, 0)),
+        )),
+        // A grown placeholder (3 → 8) is the same unrecorded fact: no op.
+        streamed(assistant_record(
+            "msg_stream",
+            "11111111-1111-1111-1111-111111111402",
+            tool_use("toolu_stream_a"),
+            Some(usage(100, 8, 0)),
+        )),
+        assistant_record(
+            "msg_stream",
+            "11111111-1111-1111-1111-111111111403",
+            tool_use("toolu_stream_b"),
+            Some(usage(100, 640, 120)),
+        ),
+    ]);
+    let rows = messages(&ops);
+    let facts = usage_ops(&ops);
+    assert_eq!(facts.len(), 2, "a grown placeholder is not a correction");
+    assert!(
+        facts
+            .iter()
+            .all(|(target, _, _)| *target == rows[0].timeline_id)
+    );
+    assert_eq!(facts[0].1.output, None);
+    assert_eq!(
+        (facts[1].1.output, facts[1].1.thinking),
+        (Some(520), Some(120))
+    );
+}
+
+#[test]
+fn an_old_writer_keeps_its_recorded_output() {
+    // Through 2.1.7 the writer wrote a progressive count whose last record is
+    // the real output, with `stop_reason` null on every record.
+    let mut first = streamed(assistant_record(
+        "msg_old",
+        "11111111-1111-1111-1111-111111111411",
+        json!([{"type": "text", "text": "answer"}]),
+        Some(usage(100, 40, 0)),
+    ));
+    first["version"] = json!("2.1.7");
+    let mut last = streamed(assistant_record(
+        "msg_old",
+        "11111111-1111-1111-1111-111111111412",
+        tool_use("toolu_old"),
+        Some(usage(100, 250, 0)),
+    ));
+    last["version"] = json!("2.1.7");
+    let (ops, _) = run(&[first, last]);
+    let rows = messages(&ops);
+    let facts = usage_ops(&ops);
+    assert_eq!(facts.len(), 2);
+    assert!(
+        facts
+            .iter()
+            .all(|(target, _, _)| *target == rows[0].timeline_id)
+    );
+    assert_eq!(facts[0].1.output, Some(40));
+    assert_eq!(facts[1].1.output, Some(250));
+}
+
+#[test]
+fn sample_held_usage_moves_to_the_first_visible_row() {
+    // The first record's block is empty, so nothing can own its usage; the
+    // tool record repeats the placeholder; the final record has the output.
+    let lines = vec![
+        streamed(assistant_record(
+            "msg_move",
+            "11111111-1111-1111-1111-111111111421",
+            json!([{"type": "thinking", "thinking": "", "signature": "sig"}]),
+            Some(usage(100, 2, 0)),
+        )),
+        streamed(assistant_record(
+            "msg_move",
+            "11111111-1111-1111-1111-111111111422",
+            tool_use("toolu_move"),
+            Some(usage(100, 2, 0)),
+        )),
+        assistant_record(
+            "msg_move",
+            "11111111-1111-1111-1111-111111111423",
+            json!([{"type": "text", "text": "done"}]),
+            Some(usage(100, 300, 50)),
+        ),
+    ];
+    let (ops, _) = run(&lines);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 2);
+    let tool_row = rows[0].timeline_id.as_str();
+    let samples = samples(&ops);
+    assert_eq!(samples.len(), 2);
+    assert_eq!(samples[0].key, "response:msg_move");
+    assert_eq!(
+        (samples[0].tokens.input, samples[0].tokens.output),
+        (Some(100), None)
+    );
+    assert_eq!(samples[1].key, "response:msg_move");
+    assert!(samples[1].tokens.is_empty(), "the sample is retracted");
+    let facts = usage_ops(&ops);
+    assert_eq!(facts.len(), 2);
+    assert!(facts.iter().all(|(target, _, _)| *target == tool_row));
+    assert_eq!(facts[0].1.output, None);
+    assert_eq!(
+        (facts[1].1.output, facts[1].1.thinking),
+        (Some(250), Some(50))
+    );
+    // The retraction follows the row fact it moved out of.
+    let retraction = ops
+        .iter()
+        .position(|op| matches!(op, IngestOp::SessionUsage(sample) if sample.tokens.is_empty()))
+        .unwrap();
+    let moved = ops
+        .iter()
+        .position(|op| matches!(op, IngestOp::Usage { .. }))
+        .unwrap();
+    assert!(moved < retraction);
+    // Live append (a checkpoint at every split) and a whole-file pass plan
+    // the same ops, and replaying the file is idempotent.
+    for split in 0..=lines.len() {
+        assert_eq!(run_with_checkpoint(&lines, split), ops, "split {split}");
+    }
+    assert_eq!(run(&lines).0, ops);
+}
+
+#[test]
+fn an_in_file_replay_of_the_owner_record_restates_its_usage() {
+    // Two subagent transcripts (writers 2.1.104 and 2.1.113) repeated whole
+    // response records 100–290 lines later with the same uuid and
+    // parentUuid. A re-emitted row carries no usage, so the replayed record
+    // must re-state the fact the store already holds, or the row loses it.
+    let placeholder = || {
+        streamed(assistant_record(
+            "msg_replay",
+            "11111111-1111-1111-1111-111111111431",
+            json!([{"type": "text", "text": "partial"}]),
+            Some(usage(100, 1, 0)),
+        ))
+    };
+    let fin = || {
+        assistant_record(
+            "msg_replay",
+            "11111111-1111-1111-1111-111111111432",
+            tool_use("toolu_replay"),
+            Some(usage(100, 161, 0)),
+        )
+    };
+    let single = || {
+        assistant_record(
+            "msg_single",
+            "11111111-1111-1111-1111-111111111433",
+            tool_use("toolu_single"),
+            Some(usage(50, 201, 0)),
+        )
+    };
+    let other = assistant_record(
+        "msg_other",
+        "11111111-1111-1111-1111-111111111434",
+        json!([{"type": "text", "text": "between"}]),
+        Some(usage(1, 2, 0)),
+    );
+    let lines = vec![
+        placeholder(),
+        fin(),
+        single(),
+        other,
+        placeholder(),
+        fin(),
+        single(),
+    ];
+    let (ops, _) = run(&lines);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 7);
+    let text_row = rows[0].timeline_id.as_str();
+    let single_row = rows[2].timeline_id.as_str();
+    let facts = usage_ops(&ops);
+    // msg_replay: the placeholder fact, the final correction, then the
+    // replayed final record re-states it. The replayed placeholder is a
+    // worse snapshot and emits nothing.
+    let replay: Vec<_> = facts
+        .iter()
+        .filter(|(target, _, _)| *target == text_row)
+        .collect();
+    assert_eq!(replay.len(), 3);
+    assert_eq!(replay[0].1.output, None);
+    assert_eq!(replay[1].1.output, Some(161));
+    assert_eq!(replay[2].1, replay[1].1);
+    // msg_single: the replayed record re-emits the owning row itself.
+    let single: Vec<_> = facts
+        .iter()
+        .filter(|(target, _, _)| *target == single_row)
+        .collect();
+    assert_eq!(single.len(), 2);
+    assert_eq!(single[0].1, single[1].1);
+    assert_eq!(single[0].1.output, Some(201));
+    // The re-statement follows the re-emitted row, as the store applies it.
+    let row_at = ops
+        .iter()
+        .rposition(|op| matches!(op, IngestOp::Message(row) if row.timeline_id == single_row))
+        .unwrap();
+    let fact_at = ops
+        .iter()
+        .rposition(|op| matches!(op, IngestOp::Usage { response, .. } if response == single_row))
+        .unwrap();
+    assert!(fact_at > row_at);
+    for split in 0..=lines.len() {
+        assert_eq!(run_with_checkpoint(&lines, split), ops, "split {split}");
+    }
+}
+
+#[test]
+fn every_usage_fact_of_a_response_carries_its_native_identity() {
+    let with_request = |mut record: Value| {
+        record["requestId"] = json!("req_ident");
+        record
+    };
+    let mut final_usage = usage(10, 20, 0);
+    final_usage["iterations"] = json!([
+        {"type": "message", "input_tokens": 10, "output_tokens": 20,
+         "cache_read_input_tokens": 9, "cache_creation_input_tokens": 7},
+        {"type": "advisor_message", "model": "claude-opus-4-8", "input_tokens": 50,
+         "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    ]);
+    let lines = vec![
+        with_request(streamed(assistant_record(
+            "msg_ident",
+            "11111111-1111-1111-1111-111111111441",
+            json!([{"type": "thinking", "thinking": "", "signature": "sig"}]),
+            Some(usage(10, 1, 0)),
+        ))),
+        with_request(assistant_record(
+            "msg_ident",
+            "11111111-1111-1111-1111-111111111442",
+            json!([{"type": "text", "text": "answer"}]),
+            Some(final_usage),
+        )),
+    ];
+    let (ops, _) = run(&lines);
+    // The opening sample, the row fact, the retraction and the advisor
+    // sample all name the response.
+    let identities: Vec<Option<&str>> = ops
+        .iter()
+        .filter_map(|op| match op {
+            IngestOp::Usage { identity, .. } => Some(identity.as_deref()),
+            IngestOp::SessionUsage(sample) => Some(sample.identity.as_deref()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(identities.len(), 4);
+    assert!(
+        identities
+            .iter()
+            .all(|identity| *identity == Some("msg_ident:req_ident"))
+    );
+
+    // A copy of the response in another file — a subagent transcript opened
+    // by a `fork-context-ref` on current writers — carries the same
+    // identity under its own session, which is the store's dedupe key.
+    let fork = json!({
+        "type": "fork-context-ref",
+        "agentId": "a1b2c3d",
+        "contextLength": 2,
+        "parentLastUuid": "11111111-1111-1111-1111-111111111442",
+        "parentSessionId": "session-under-test",
+    });
+    let mut copy = vec![fork];
+    copy.extend(lines.iter().cloned());
+    let (copied, statuses) = run_in("copied-session", "subagent-transcript", &copy);
+    assert!(statuses.iter().all(|status| *status == LineStatus::Parsed));
+    assert!(drift(&copied).is_empty());
+    let (main_fact, main_session) = ops
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::Usage {
+                session_id,
+                identity,
+                ..
+            } => Some((identity.clone(), session_id.clone())),
+            _ => None,
+        })
+        .unwrap();
+    let (copy_fact, copy_session) = copied
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::Usage {
+                session_id,
+                identity,
+                ..
+            } => Some((identity.clone(), session_id.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(main_fact, copy_fact);
+    assert_ne!(main_session, copy_session);
+}
+
+#[test]
+fn fast_mode_residency_and_web_searches_are_usage_facts() {
+    let mut fast = usage(10, 20, 0);
+    fast["speed"] = json!("fast");
+    fast["inference_geo"] = json!("us");
+    fast["server_tool_use"] = json!({"web_search_requests": 3, "web_fetch_requests": 2});
+    // `stop_reason` null: the `speed` key alone marks the final record.
+    let (ops, _) = run(&[streamed(assistant(
+        json!([{"type": "text", "text": "answer"}]),
+        Some(fast),
+    ))]);
+    let rows = messages(&ops);
+    let tokens = row_usage(&ops, &rows[0].timeline_id).unwrap();
+    assert_eq!(tokens.service_tier, Some(ServiceTier::Fast));
+    assert_eq!(tokens.route.as_deref(), Some("anthropic/us"));
+    assert_eq!(tokens.web_searches, Some(3));
+    assert_eq!(tokens.output, Some(20));
+
+    for (geo, tier, route, service_tier) in [
+        (
+            json!("global"),
+            json!("standard"),
+            None,
+            Some(ServiceTier::Standard),
+        ),
+        (
+            json!("not_available"),
+            json!("priority"),
+            None,
+            Some(ServiceTier::Priority),
+        ),
+        (json!(null), json!("auto"), None, None),
+        (
+            json!("eu"),
+            json!("batch"),
+            Some("anthropic/eu"),
+            Some(ServiceTier::Batch),
+        ),
+    ] {
+        let mut recorded = usage(10, 20, 0);
+        recorded["inference_geo"] = geo;
+        recorded["service_tier"] = tier;
+        let (ops, _) = run(&[assistant(
+            json!([{"type": "text", "text": "answer"}]),
+            Some(recorded),
+        )]);
+        let rows = messages(&ops);
+        let tokens = row_usage(&ops, &rows[0].timeline_id).unwrap();
+        assert_eq!(tokens.route.as_deref(), route);
+        assert_eq!(tokens.service_tier, service_tier);
+    }
+}
+
+#[test]
+fn oversized_thinking_and_one_hour_subsets_clamp_and_report_drift() {
+    let mut malformed = usage(10, 20, 30);
+    malformed["cache_creation_input_tokens"] = json!(100);
+    malformed["cache_creation"] =
+        json!({"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 150});
+    let (ops, _) = run(&[assistant(
+        json!([{"type": "text", "text": "answer"}]),
+        Some(malformed),
+    )]);
+    let rows = messages(&ops);
+    let tokens = row_usage(&ops, &rows[0].timeline_id).unwrap();
+    assert_eq!((tokens.output, tokens.thinking), (Some(0), Some(20)));
+    assert_eq!(
+        (tokens.cache_write, tokens.cache_write_1h),
+        (Some(0), Some(100))
+    );
+    let drift = drift(&ops);
+    assert_eq!(drift.len(), 1);
+    assert_eq!(drift[0].error_code, "usage_subset_exceeds_total");
+    assert_eq!(drift[0].record_kind, "assistant");
 }
 
 #[test]

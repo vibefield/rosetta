@@ -1170,6 +1170,7 @@ mod tests {
         h.store
             .apply(&Batch {
                 ops: vec![IngestOp::Usage {
+                    identity: None,
                     session_id: "s1".into(),
                     response: "private-live".into(),
                     ts: 3_600_100,

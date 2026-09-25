@@ -40,7 +40,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // streamed snapshot, iteration samples, no `<synthetic>` usage, and
         // corrections that follow a dropped owner (§4.1.3).
         // 29: multi-pass responses carry their request count.
-        29
+        // 30: usage is a `Usage` op behind its row carrying the response's
+        // transient identity, streaming writers' placeholder output is
+        // unrecorded, sample-held usage moves to the first visible row, and
+        // a replayed owner record re-states its fact (2026-09-23 audit).
+        30
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

@@ -52,9 +52,20 @@ fn session() -> SessionRow {
 }
 
 fn agent(timeline_id: &str, ordinal: i64, ts: i64, model: &str, usage: TokenSnapshot) -> IngestOp {
+    agent_in("s1", timeline_id, ordinal, ts, model, usage)
+}
+
+fn agent_in(
+    session_id: &str,
+    timeline_id: &str,
+    ordinal: i64,
+    ts: i64,
+    model: &str,
+    usage: TokenSnapshot,
+) -> IngestOp {
     let row = MessageRow {
         timeline_id: timeline_id.into(),
-        session_id: "s1".into(),
+        session_id: session_id.into(),
         ordinal,
         kind: MessageKind::Agent,
         subtype: None,
@@ -83,6 +94,7 @@ fn agent(timeline_id: &str, ordinal: i64, ts: i64, model: &str, usage: TokenSnap
 
 fn sample(key: &str, ts: i64, model: &str, scope: UsageScope, tokens: TokenSnapshot) -> IngestOp {
     IngestOp::SessionUsage(SessionUsageRow {
+        identity: None,
         session_id: "s1".into(),
         key: key.into(),
         ts,
@@ -136,7 +148,7 @@ fn usage_ops() -> Vec<IngestOp> {
             "grok",
             4,
             SEP_01 + 2_000,
-            "grok-4.7-build",
+            "grok-4.9-build",
             TokenSnapshot {
                 billed_pico_usd: Some(5_000_000_000),
                 ..io(1_000, 50)
@@ -219,19 +231,193 @@ fn bucket_rows(store: &Store) -> Vec<Vec<Option<i64>>> {
         .prepare(
             "SELECT hour_ts, in_tokens, out_tokens, cache_r_tokens, cache_w_tokens,
                     think_tokens, cache_w1h_tokens, web_searches, cost_pusd, billed_pusd,
-                    unpriced_tokens, message_count, tool_call_count
+                    unpriced_tokens, unrecorded_output, message_count, tool_call_count
              FROM usage_bucket ORDER BY session_id, hour_ts, model",
         )
         .unwrap();
     statement
         .query_map([], |row| {
-            (0..13)
+            (0..14)
                 .map(|index| row.get::<_, Option<i64>>(index))
                 .collect()
         })
         .unwrap()
         .map(Result::unwrap)
         .collect()
+}
+
+/// A second session in the same tree, started later than `s1`.
+fn subagent(id: &str, started_at: i64) -> SessionRow {
+    SessionRow {
+        id: id.into(),
+        native_session_id: format!("native-{id}"),
+        parent_session_id: Some("s1".into()),
+        role: SessionRole::Subagent,
+        started_at,
+        updated_at: started_at,
+        ..session()
+    }
+}
+
+fn usage_with_identity(session_id: &str, response: &str, ts: i64, input: i64) -> IngestOp {
+    IngestOp::Usage {
+        session_id: session_id.into(),
+        response: response.into(),
+        ts,
+        model: Some("claude-opus-4-8".into()),
+        tokens: io(input, 10),
+        identity: Some("msg_01:req_01".into()),
+    }
+}
+
+fn row_usage(store: &Store, timeline_id: &str) -> (Option<i64>, Option<i64>) {
+    store
+        .conn()
+        .query_row(
+            "SELECT in_tokens, out_tokens FROM message WHERE timeline_id = ?1",
+            [timeline_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn a_response_copied_into_another_transcript_counts_once_for_the_earliest_session() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut ops = vec![
+        IngestOp::Runtime(runtime()),
+        IngestOp::Project(ProjectRow {
+            id: "p1".into(),
+            name: "rosetta".into(),
+            root_paths: vec!["/w/rosetta".into()],
+            git_repo: None,
+        }),
+        IngestOp::SessionMeta(session()),
+        IngestOp::SessionMeta(subagent("s2", 20_000)),
+        IngestOp::SessionMeta(subagent("s3", 30_000)),
+    ];
+    // Rows without usage in every session; the usage arrives as ops.
+    ops.push(agent(
+        "orig",
+        0,
+        SEP_01,
+        "claude-opus-4-8",
+        TokenSnapshot::default(),
+    ));
+    ops.push(agent_in(
+        "s2",
+        "copy",
+        0,
+        SEP_01,
+        "claude-opus-4-8",
+        TokenSnapshot::default(),
+    ));
+    ops.push(agent_in(
+        "s3",
+        "copy3",
+        0,
+        SEP_01,
+        "claude-opus-4-8",
+        TokenSnapshot::default(),
+    ));
+    // The subagent's copy lands first, then the origin displaces it, then a
+    // later copy is dropped on arrival.
+    ops.push(usage_with_identity("s2", "copy", SEP_01, 500));
+    ops.push(usage_with_identity("s1", "orig", SEP_01, 500));
+    ops.push(usage_with_identity("s3", "copy3", SEP_01, 500));
+    let stats = store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(stats.usage_copies_dropped, 2);
+    assert_eq!(row_usage(&store, "orig"), (Some(500), Some(10)));
+    assert_eq!(row_usage(&store, "copy"), (None, None));
+    assert_eq!(row_usage(&store, "copy3"), (None, None));
+    let one = expected_cost("claude-opus-4-8", SEP_01, UsageScope::Request, &io(500, 10)).unwrap();
+    assert_eq!(totals(&store).cost, Some(one));
+    // A correction from the owner still applies; a copy's sample is inert.
+    let mut ops = vec![usage_with_identity("s1", "orig", SEP_01, 700)];
+    ops.push(IngestOp::SessionUsage(SessionUsageRow {
+        session_id: "s2".into(),
+        key: "response:msg_01".into(),
+        ts: SEP_01,
+        model: Some("claude-opus-4-8".into()),
+        tokens: io(700, 10),
+        identity: Some("msg_01:req_01".into()),
+    }));
+    store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(row_usage(&store, "orig"), (Some(700), Some(10)));
+    let one = expected_cost("claude-opus-4-8", SEP_01, UsageScope::Request, &io(700, 10)).unwrap();
+    assert_eq!(totals(&store).cost, Some(one));
+    let samples: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM session_usage WHERE in_tokens IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(samples, 0);
+}
+
+#[test]
+fn unrecorded_output_is_counted_and_never_priced_as_zero() {
+    let mut store = Store::open_in_memory().unwrap();
+    let placeholder = TokenSnapshot {
+        input: Some(200),
+        cache_read: Some(10_000),
+        ..TokenSnapshot::default()
+    };
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::Runtime(runtime()),
+                IngestOp::Project(ProjectRow {
+                    id: "p1".into(),
+                    name: "rosetta".into(),
+                    root_paths: vec!["/w/rosetta".into()],
+                    git_repo: None,
+                }),
+                IngestOp::SessionMeta(session()),
+                agent(
+                    "streamed",
+                    0,
+                    SEP_01,
+                    "claude-opus-4-8",
+                    placeholder.clone(),
+                ),
+                agent("final", 1, SEP_01 + 1, "claude-opus-4-8", io(200, 50)),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+    let rows = bucket_rows(&store);
+    assert_eq!(rows.len(), 1);
+    // The prompt side is priced; the missing output counts as one unrecorded
+    // record, so the bucket reads as a lower bound.
+    let prompt_only =
+        expected_cost("claude-opus-4-8", SEP_01, UsageScope::Request, &placeholder).unwrap();
+    let complete =
+        expected_cost("claude-opus-4-8", SEP_01, UsageScope::Request, &io(200, 50)).unwrap();
+    assert_eq!(rows[0][8], Some(prompt_only + complete));
+    assert_eq!(rows[0][10], Some(0), "unpriced tokens");
+    assert_eq!(rows[0][11], Some(1), "unrecorded output");
+    let entry = queries::timeline_entry(store.conn(), "s1", "streamed")
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.usage.output, None);
+    assert!(matches!(entry.cost, Some(UsageCost::Priced { .. })));
+    // A web-search-only record has no prompt, so it is not "unrecorded output".
+    let contribution = queries::contribution_for_scope(store.conn(), Some("p1")).unwrap();
+    assert_eq!(contribution.len(), 1);
+    assert_eq!(contribution[0].spend.unrecorded_output, 1);
 }
 
 #[test]
@@ -277,8 +463,8 @@ fn every_record_is_priced_once_and_unpriced_usage_is_never_zero() {
 
     let totals = totals(&store);
     assert_eq!(totals.cost, Some(opus + before + after + small + counted));
-    // Unknown model (110), a billed Grok Build model the catalog cannot price
-    // yet (1,050), and an uncounted aggregate above gpt-5.4's 272K tier
+    // Unknown model (110), a billed Grok Build model the catalog does not
+    // list (1,050), and an uncounted aggregate above gpt-5.4's 272K tier
     // (901,000) are unpriced, never $0.
     assert_eq!(totals.unpriced, 110 + 1_050 + 901_000);
     assert_eq!(totals.billed, Some(5_000_000_000));
@@ -426,8 +612,83 @@ fn usage_facts_round_trip_through_the_timeline() {
         .unwrap()
         .expect("stored row");
     assert_eq!(entry.usage, usage);
-    // Fast mode and a residency qualifier have no cited price: the record's
-    // tokens are unpriced rather than guessed.
-    assert_eq!(totals(&store).cost, None);
-    assert_eq!(totals(&store).unpriced, usage.total_tokens().unwrap());
+    // Fast mode (2x) and US-only inference (1.1x) on Opus 4.8 both have a
+    // cited rule, so the record prices through them, counted as 3 requests.
+    let priced = expected_cost("claude-opus-4-8", SEP_01, UsageScope::Aggregate, &usage)
+        .expect("cited fast and residency rules");
+    assert_eq!(totals(&store).cost, Some(priced));
+    assert_eq!(totals(&store).unpriced, 0);
+    // A residency without a cited premium stays unpriced rather than guessed.
+    let mut uncited = usage.clone();
+    uncited.route = Some("anthropic/eu".into());
+    store
+        .apply(&Batch {
+            ops: vec![agent(
+                "opus-eu",
+                1,
+                SEP_01 + 1,
+                "claude-opus-4-8",
+                uncited.clone(),
+            )],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(totals(&store).cost, Some(priced));
+    assert_eq!(totals(&store).unpriced, uncited.total_tokens().unwrap());
+}
+
+#[test]
+fn a_re_emitted_row_without_usage_keeps_the_usage_it_already_has() {
+    // Claude Code streams a response's usage as a `Usage` op behind its row;
+    // a replayed record re-emits the row with no usage of its own.
+    let mut store = Store::open_in_memory().unwrap();
+    let base = vec![
+        IngestOp::Runtime(runtime()),
+        IngestOp::Project(ProjectRow {
+            id: "p1".into(),
+            name: "rosetta".into(),
+            root_paths: vec!["/w/rosetta".into()],
+            git_repo: None,
+        }),
+        IngestOp::SessionMeta(session()),
+        agent(
+            "opus",
+            0,
+            SEP_01,
+            "claude-opus-4-8",
+            TokenSnapshot::default(),
+        ),
+        usage_with_identity("s1", "opus", SEP_01, 300),
+    ];
+    store
+        .apply(&Batch {
+            ops: base.clone(),
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(row_usage(&store, "opus"), (Some(300), Some(10)));
+    // The same row again, without usage: nothing is wiped.
+    store
+        .apply(&Batch {
+            ops: vec![agent(
+                "opus",
+                0,
+                SEP_01,
+                "claude-opus-4-8",
+                TokenSnapshot::default(),
+            )],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(row_usage(&store, "opus"), (Some(300), Some(10)));
+    let one = expected_cost("claude-opus-4-8", SEP_01, UsageScope::Request, &io(300, 10)).unwrap();
+    assert_eq!(totals(&store).cost, Some(one));
+    // A row that does carry usage still replaces it.
+    store
+        .apply(&Batch {
+            ops: vec![agent("opus", 0, SEP_01, "claude-opus-4-8", io(500, 20))],
+            ..Batch::default()
+        })
+        .unwrap();
+    assert_eq!(row_usage(&store, "opus"), (Some(500), Some(20)));
 }

@@ -35,6 +35,16 @@ pub const TRANSCRIPT_FULL_CHUNKS: &str = "transcript-full-chunks";
 /// keeps sessions whose transcript has not been retained discoverable.
 pub const CONVERSATION_SUMMARIES: &str = "conversation-summaries";
 
+/// The per-conversation store. Its `trajectory_meta.cascade_id` is the same
+/// native conversation UUID the transcript path carries, so it enriches the
+/// transcript's session rather than creating one; it owns the usage records
+/// the transcript never writes.
+pub const CONVERSATION_DB: &str = "conversation-db";
+
+/// The `conversation-db` facet that declares, per protobuf message, the
+/// field numbers the writer's descriptor set carries.
+pub const PROTOBUF_FACET: &str = "protobuf";
+
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
     DOC.get_or_init(|| {
@@ -56,6 +66,42 @@ pub fn declared_transcript_types() -> &'static BTreeSet<String> {
     })
 }
 
+/// Field numbers the canonical declares for one conversation-store protobuf
+/// message, read from the `protobuf` facet where every field key is spelled
+/// `<name>#<number>`. `None` when the canonical does not declare the message.
+pub fn declared_protobuf_fields(message: &str) -> Option<BTreeSet<u32>> {
+    static FACET: OnceLock<BTreeMap<String, BTreeSet<u32>>> = OnceLock::new();
+    FACET
+        .get_or_init(|| {
+            let view: FacetView =
+                serde_json::from_str(CANONICAL).expect("embedded groundtruth.json is valid");
+            view.streams
+                .into_iter()
+                .find(|stream| stream.id == CONVERSATION_DB)
+                .into_iter()
+                .flat_map(|stream| stream.facets)
+                .find(|facet| facet.id == PROTOBUF_FACET)
+                .map(|facet| {
+                    facet
+                        .record_types
+                        .into_iter()
+                        .map(|(name, record)| {
+                            let numbers = record
+                                .shape
+                                .fields
+                                .keys()
+                                .filter_map(|key| key.rsplit_once('#')?.1.parse().ok())
+                                .collect();
+                            (name, numbers)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .get(message)
+        .cloned()
+}
+
 #[derive(Deserialize)]
 struct RecordTypesView {
     streams: Vec<StreamRecordTypes>,
@@ -68,11 +114,46 @@ struct StreamRecordTypes {
     record_types: BTreeMap<String, IgnoredAny>,
 }
 
+#[derive(Deserialize)]
+struct FacetView {
+    streams: Vec<StreamFacets>,
+}
+
+#[derive(Deserialize)]
+struct StreamFacets {
+    id: String,
+    #[serde(default)]
+    facets: Vec<Facet>,
+}
+
+#[derive(Deserialize)]
+struct Facet {
+    id: String,
+    #[serde(default)]
+    record_types: BTreeMap<String, FacetRecord>,
+}
+
+#[derive(Deserialize)]
+struct FacetRecord {
+    shape: FacetShape,
+}
+
+#[derive(Deserialize)]
+struct FacetShape {
+    #[serde(default)]
+    fields: BTreeMap<String, IgnoredAny>,
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{
-        CONVERSATION_SUMMARIES, TRANSCRIPT, TRANSCRIPT_CHUNKS, TRANSCRIPT_FULL,
-        TRANSCRIPT_FULL_CHUNKS, declared_transcript_types, doc,
+        CONVERSATION_DB, CONVERSATION_SUMMARIES, TRANSCRIPT, TRANSCRIPT_CHUNKS, TRANSCRIPT_FULL,
+        TRANSCRIPT_FULL_CHUNKS, declared_protobuf_fields, declared_transcript_types, doc,
+    };
+    use crate::raw::cortex::{
+        ChatModelMetadata, GeneratorMetadata, ModelUsageStats, RetryInfo, StepMetadata, Timestamp,
     };
 
     #[test]
@@ -87,6 +168,36 @@ mod tests {
             assert!(doc().stream(stream).is_some(), "missing {stream}");
         }
         assert!(doc().stream(CONVERSATION_SUMMARIES).is_some());
+        assert_eq!(
+            doc()
+                .stream(CONVERSATION_DB)
+                .expect("conversation store")
+                .glob,
+            "conversations/*.db*"
+        );
+    }
+
+    /// The decoders' declared field numbers ARE the canonical's: a writer
+    /// release that adds a field lands in the ground truth first, and this
+    /// test is what tells the parser to follow.
+    #[test]
+    fn protobuf_decoders_declare_exactly_the_canonical_fields() {
+        let declared = |name: &str, fields: &[u32]| {
+            let canonical = declared_protobuf_fields(name)
+                .unwrap_or_else(|| panic!("{name} missing from the protobuf facet"));
+            let parser: BTreeSet<u32> = fields.iter().copied().collect();
+            assert_eq!(parser, canonical, "{name}");
+        };
+        declared(StepMetadata::NAME, StepMetadata::FIELDS);
+        declared(ModelUsageStats::NAME, ModelUsageStats::FIELDS);
+        declared(RetryInfo::NAME, RetryInfo::FIELDS);
+        declared(GeneratorMetadata::NAME, GeneratorMetadata::FIELDS);
+        declared(ChatModelMetadata::NAME, ChatModelMetadata::FIELDS);
+        declared(Timestamp::NAME, Timestamp::FIELDS);
+        assert_eq!(
+            declared_protobuf_fields("exa.cortex_pb.NoSuchMessage"),
+            None
+        );
     }
 
     #[test]

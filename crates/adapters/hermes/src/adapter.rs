@@ -1,5 +1,8 @@
 //! The `AgentAdapter` implementation. Hermes contributes SQL declarations;
-//! capture owns SQLite snapshotting and row serialization.
+//! capture owns SQLite snapshotting and row serialization. The default
+//! store and every named profile's store share one plan.
+
+use std::any::Any;
 
 use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
@@ -7,6 +10,7 @@ use rosetta_adapter_support::adapter::{
     StreamDriver,
 };
 
+use crate::state::HermesState;
 use crate::{normalize, spec};
 
 pub struct HermesAdapter;
@@ -21,17 +25,48 @@ impl AgentAdapter for HermesAdapter {
     }
 
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
-        (stream_id == spec::STATE_DB).then_some(StreamDriver::SqliteSnapshot)
+        spec::is_state_stream(stream_id).then_some(StreamDriver::SqliteSnapshot)
     }
 
     fn normalizer_version(&self) -> u32 {
         // 7: exclusive usage buckets, route, single-call scope (§4.1.3).
         // 8: per-model rows carry their API call count.
-        8
+        // 9: Codex app-server rows withheld, thinking unreported on Anthropic
+        //    and Gemini-native wires, billed only when a single call proves
+        //    it, registered 0.21.x tool names, named-profile stores.
+        9
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
-        (stream_id == spec::STATE_DB).then(snapshot_plan)
+        spec::is_state_stream(stream_id).then(snapshot_plan)
+    }
+
+    fn init_state(&self) -> Option<Box<dyn Any + Send>> {
+        Some(Box::new(HermesState::default()))
+    }
+
+    fn checkpoint_state(
+        &self,
+        state: Option<&(dyn Any + Send)>,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let state = state
+            .and_then(|state| state.downcast_ref::<HermesState>())
+            .ok_or_else(|| "hermes checkpoint state has the wrong type".to_owned())?;
+        serde_json::to_value(state)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_state(
+        &self,
+        checkpoint: Option<&serde_json::Value>,
+    ) -> Result<Option<Box<dyn Any + Send>>, String> {
+        match checkpoint {
+            None => Ok(self.init_state()),
+            Some(value) => serde_json::from_value::<HermesState>(value.clone())
+                .map(|state| Some(Box::new(state) as Box<dyn Any + Send>))
+                .map_err(|error| error.to_string()),
+        }
     }
 
     /// SQLite-session metadata comes from `SnapshotPlan::sessions_sql`; the
@@ -141,16 +176,27 @@ fn snapshot_plan() -> SnapshotPlan {
 mod tests {
     use super::HermesAdapter;
     use crate::spec;
+    use crate::state::HermesState;
     use rosetta_adapter_support::adapter::{AgentAdapter, StreamDriver};
 
     #[test]
-    fn only_state_db_is_admitted_as_a_snapshot() {
-        assert_eq!(
-            HermesAdapter.stream_driver(spec::STATE_DB),
-            Some(StreamDriver::SqliteSnapshot)
-        );
-        for inventory in ["config", "soul", "sessions-legacy", "farm:messages"] {
+    fn only_session_stores_are_admitted_as_snapshots() {
+        for stream in [spec::STATE_DB, spec::PROFILE_STATE_DB] {
+            assert_eq!(
+                HermesAdapter.stream_driver(stream),
+                Some(StreamDriver::SqliteSnapshot)
+            );
+            assert!(HermesAdapter.snapshot_plan(stream).is_some());
+        }
+        for inventory in [
+            "config",
+            "soul",
+            "sessions-legacy",
+            "profile-home",
+            "farm:messages",
+        ] {
             assert_eq!(HermesAdapter.stream_driver(inventory), None);
+            assert!(HermesAdapter.snapshot_plan(inventory).is_none());
         }
         let plan = HermesAdapter
             .snapshot_plan(spec::STATE_DB)
@@ -165,6 +211,34 @@ mod tests {
             plan.record_queries
                 .iter()
                 .any(|query| query.name == "state_meta")
+        );
+    }
+
+    #[test]
+    fn adapter_state_round_trips_through_the_checkpoint() {
+        let adapter = HermesAdapter;
+        let fresh = adapter.restore_state(None).unwrap().expect("initial state");
+        assert_eq!(
+            fresh.downcast_ref::<HermesState>(),
+            Some(&HermesState::default())
+        );
+        let state = HermesState {
+            codex_runtime: true,
+        };
+        let checkpoint = adapter
+            .checkpoint_state(Some(&state))
+            .unwrap()
+            .expect("serialized state");
+        let restored = adapter
+            .restore_state(Some(&checkpoint))
+            .unwrap()
+            .expect("restored state");
+        assert_eq!(restored.downcast_ref::<HermesState>(), Some(&state));
+        assert!(adapter.checkpoint_state(Some(&7u8)).is_err());
+        assert!(
+            adapter
+                .restore_state(Some(&serde_json::json!("not a state")))
+                .is_err()
         );
     }
 

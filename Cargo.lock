@@ -1161,9 +1161,12 @@ name = "rosetta-adapter-copilot"
 version = "0.1.0"
 dependencies = [
  "rosetta-adapter-support",
+ "rosetta-capture",
  "rosetta-core",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "walkdir",
 ]
 

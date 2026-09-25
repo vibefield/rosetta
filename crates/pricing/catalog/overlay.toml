@@ -3,12 +3,25 @@
 # `python3 -m tools.pricing generate`. Every entry names its source. Never
 # derive a rate from another rate unless the provider documents the multiplier.
 #
-#   [[alias]]  an exact extra spelling of a catalog model
-#   [[tier]]   a service-tier multiplier on the standard cost (model-specific
-#              rules win over provider-wide ones; a tier without a rule is
-#              unpriced)
-#   [[route]]  a residency/regional premium for a qualified route
-#   [[model]]  a model genai-prices does not list; prices are decimal strings
+#   [[alias]]  an exact extra spelling of a catalog model (`replaces =
+#              "provider/model"` re-points an upstream spelling deliberately)
+#   [[model]]  a model genai-prices does not list; prices are decimal strings,
+#              optionally dated like upstream's (`[{ constraint = { start_date
+#              = … }, prices = … }]`); `aliases` lists its other spellings
+#   [[patch]]  a correction or completion of an upstream model's rates: the
+#              named units replace or join the existing ones in every period
+#   [[tier]]   a service-tier multiplier on the standard token cost
+#              (model-specific rules win over provider-wide ones; a tier
+#              without a rule is unpriced; `tiers = [...]` covers spellings a
+#              provider accepts interchangeably; `from`/`until` date a rule)
+#   [[route]]  a residency/regional premium for a qualified route, dated the
+#              same way
+#
+# Free or discounted servings of a listed model (Grok Build, OpenCode Zen
+# `*-free`) alias the listed model: the figure is what the usage would cost
+# at the creator's list price (product decision, 2026-09-24).
+
+# ── Aliases ────────────────────────────────────────────────────────────────
 
 [[alias]]
 alias = "k3"
@@ -17,6 +30,23 @@ model = "kimi-k3"
 source = """Kimi Code records the Moonshot K3 model as `k3` (groundtruth/kimi-code census \
 observed-2026-08-26: session model = "k3"); Moonshot lists it as `kimi-k3` \
 (https://platform.kimi.ai/docs/pricing/chat-k3.md)."""
+
+[[alias]]
+alias = "k3-256k"
+provider = "moonshotai"
+model = "kimi-k3"
+source = """Kimi Code's plan model `k3-256k` is the same K3 model served with a fixed 256K context \
+and a smaller quota (https://www.kimi.com/code/docs/en/kimi-code/models.html, 2026-09-23); Moonshot \
+lists one K3 price (https://platform.kimi.ai/docs/pricing/chat-k3.md)."""
+
+[[alias]]
+alias = "kimi-for-coding-highspeed"
+provider = "moonshotai"
+model = "kimi-k2.7-code-highspeed"
+source = """Kimi Code's plan model `kimi-for-coding-highspeed` is K2.7 Code HighSpeed \
+(https://www.kimi.com/code/docs/en/kimi-code/models.html, 2026-09-23), listed by Moonshot as \
+`kimi-k2.7-code-highspeed` at $1.90 / $0.38 cache hit / $8.00 per MTok \
+(https://platform.kimi.ai/docs/pricing/chat-k27-code.md)."""
 
 [[alias]]
 alias = "grok-4.6-build"
@@ -39,6 +69,73 @@ $0.30 cached / $6.00 per MTok, doubling at 200K prompt tokens \
 the tick on single-request records through 2026-08-09 in James's local data; later charges \
 are exactly 0.34x list."""
 
+[[alias]]
+alias = "claude-fable-5.1"
+provider = "anthropic"
+model = "claude-fable-5-1"
+source = """GitHub Copilot, OpenRouter and Hermes spell Claude Fable 5.1 with a dot; Anthropic's \
+API id is `claude-fable-5-1`, listed at $10 / $12.50 5-minute write / $20 1-hour write / $0.25 \
+cache hit / $50 per MTok (https://platform.claude.com/docs/en/about-claude/pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "claude-opus-5.5"
+provider = "anthropic"
+model = "claude-opus-5-5"
+source = """GitHub Copilot, OpenRouter and Hermes spell Claude Opus 5.5 with a dot; Anthropic's \
+API id is `claude-opus-5-5`, listed at $4 / $5 5-minute write / $8 1-hour write / $0.20 cache hit / \
+$20 per MTok (https://platform.claude.com/docs/en/about-claude/pricing, 2026-09-24)."""
+
+# ── Models genai-prices does not list ──────────────────────────────────────
+
+[[model]]
+provider = "x-ai"
+id = "grok-4.7"
+name = "Grok 4.7"
+aliases = ["grok-4.7-build"]
+source = """xAI lists grok-4.7 at $2.00 input / $0.50 cached / $6.00 output per MTok below 200K \
+prompt tokens and $4.00 / $1.00 / $12.00 at or above it, "requests whose prompt reaches the listed \
+token threshold are billed at the higher rate for all tokens in the request" \
+(https://docs.x.ai/developers/pricing, 2026-09-24). Grok Build records it as `grok-4.7-build`; \
+its `costUsdTicks` on 2026-09-23 is a Grok Build discount off this list, which the estimate ignores \
+like grok-4.6-build's."""
+
+[model.prices]
+input_mtok = { base = "2", tiers = [{ start = 199999, price = "4" }] }
+cache_read_mtok = { base = "0.5", tiers = [{ start = 199999, price = "1" }] }
+output_mtok = { base = "6", tiers = [{ start = 199999, price = "12" }] }
+# "Web Search | web_search | $5" per 1,000 calls (https://docs.x.ai/developers/pricing).
+web_searches_kcount = "5"
+
+[[model]]
+provider = "x-ai"
+id = "grok-4.7-fast"
+name = "Grok 4.7 Fast"
+aliases = ["grok-4.7-build-fast"]
+source = """"Grok 4.7 Fast is the same Grok 4.7 model served on faster infrastructure, at twice the \
+standard token rates": $4.00 input / $1.00 cached / $12.00 output per MTok below 200K prompt \
+tokens and $6.00 / $1.50 / $18.00 above; "available only through Cursor and Grok Build" \
+(https://docs.x.ai/developers/pricing, 2026-09-24). Grok Build records it as `grok-4.7-build-fast`."""
+
+[model.prices]
+input_mtok = { base = "4", tiers = [{ start = 199999, price = "6" }] }
+cache_read_mtok = { base = "1", tiers = [{ start = 199999, price = "1.5" }] }
+output_mtok = { base = "12", tiers = [{ start = 199999, price = "18" }] }
+# "Web Search | web_search | $5" per 1,000 calls (https://docs.x.ai/developers/pricing).
+web_searches_kcount = "5"
+
+# ── Patches to upstream rates ──────────────────────────────────────────────
+
+[[patch]]
+provider = "moonshotai"
+model = "kimi-k3"
+prices = { cache_write_mtok = "3", cache_write_1h_mtok = "6" }
+source = """Moonshot lists K3 cache writes at $3.00 per MTok for the 5-minute cache and $6.00 for \
+the 1-hour cache, beside $3.00 input / $0.30 cache hit / $15.00 output \
+(https://platform.kimi.ai/docs/pricing/chat-k3.md, 2026-09-23); genai-prices carries no write rates, \
+which priced 1-hour writes at the input rate."""
+
+# ── Service tiers ──────────────────────────────────────────────────────────
+
 [[tier]]
 provider = "anthropic"
 tier = "batch"
@@ -47,56 +144,685 @@ source = """Anthropic Message Batches are billed at 50% of standard prices \
 (https://platform.claude.com/docs/en/build-with-claude/batch-processing#pricing)."""
 
 [[tier]]
+provider = "anthropic"
+model = "claude-opus-5-5"
+tier = "fast"
+multiplier = "2"
+from = 2026-09-22
+source = """Fast mode on Claude Opus 5.5 is $8 input / $40 output per MTok against $4 / $20 \
+standard, "across the full context window"; prompt-caching and data-residency multipliers stack on \
+top (https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing, 2026-09-24). \
+Available from the model's 2026-09-22 release \
+(https://platform.claude.com/docs/en/release-notes/overview)."""
+
+[[tier]]
+provider = "anthropic"
+model = "claude-opus-5"
+tier = "fast"
+multiplier = "2"
+source = """Fast mode on Claude Opus 5 is $10 input / $50 output per MTok against $5 / $25 \
+standard (https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing, 2026-09-24)."""
+
+[[tier]]
+provider = "anthropic"
+model = "claude-opus-4-8"
+tier = "fast"
+multiplier = "2"
+from = 2026-05-28
+source = """Fast mode on Claude Opus 4.8 is $10 input / $50 output per MTok against $5 / $25 \
+standard (https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing, 2026-09-24); \
+available since 2026-05-28 (https://platform.claude.com/docs/en/release-notes/overview)."""
+
+[[tier]]
+provider = "anthropic"
+model = "claude-opus-4-6"
+tier = "fast"
+multiplier = "1"
+from = 2026-05-29
+source = """Since 2026-05-29 requests with `speed: "fast"` on Claude Opus 4.6 "run at standard speed \
+and are billed at standard rates" (https://platform.claude.com/docs/en/release-notes/overview; \
+https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing). The research-preview \
+premium before that date is not on a first-party page, so earlier fast records stay unpriced."""
+
+[[tier]]
 provider = "openai"
 tier = "batch"
 multiplier = "1/2"
 source = """OpenAI Batch API requests are billed at 50% of standard prices \
-(https://developers.openai.com/api/docs/pricing); LiteLLM 58a05a9e *_batches rates agree."""
+(https://developers.openai.com/api/docs/pricing)."""
 
 [[tier]]
 provider = "openai"
 tier = "flex"
 multiplier = "1/2"
 source = """OpenAI Flex processing is billed at Batch API rates \
-(https://developers.openai.com/api/docs/guides/flex-processing); LiteLLM 58a05a9e *_flex rates \
-are 0.5x standard for gpt-5.4, gpt-5.5, gpt-5.6-sol, gpt-5.6-terra and gpt-6-astra."""
+(https://developers.openai.com/api/docs/guides/flex-processing)."""
 
-[[tier]]
-provider = "openai"
-model = "gpt-5.4"
-tier = "priority"
-multiplier = "2"
-source = """LiteLLM 58a05a9e model_prices_and_context_window.json: gpt-5.4 *_priority rates are \
-2x standard for input, cached input and output (https://developers.openai.com/api/docs/pricing)."""
-
-[[tier]]
-provider = "openai"
-model = "gpt-5.5"
-tier = "priority"
-multiplier = "5/2"
-source = """LiteLLM 58a05a9e model_prices_and_context_window.json: gpt-5.5 *_priority rates are \
-2.5x standard for input, cached input and output (https://developers.openai.com/api/docs/pricing)."""
-
-[[tier]]
-provider = "openai"
-model = "gpt-5.6-sol"
-tier = "priority"
-multiplier = "2"
-source = """LiteLLM 58a05a9e model_prices_and_context_window.json: gpt-5.6-sol *_priority rates are \
-2x standard for every unit, including the >272K tier (https://developers.openai.com/api/docs/pricing)."""
-
-[[tier]]
-provider = "openai"
-model = "gpt-5.6-terra"
-tier = "priority"
-multiplier = "2"
-source = """LiteLLM 58a05a9e model_prices_and_context_window.json: gpt-5.6-terra *_priority rates are \
-2x standard for every unit, including the >272K tier (https://developers.openai.com/api/docs/pricing)."""
+# OpenAI Fast mode, formerly Priority processing: "Priority processing was
+# renamed Fast mode on July 30, 2026. You can use either service_tier:
+# "priority" or service_tier: "fast"" — one rule per listed model, both
+# spellings (https://developers.openai.com/api/docs/pricing?latest-pricing=fast,
+# 2026-09-24). Only the listed models have a Fast price; the others stay
+# unpriced at that tier.
 
 [[tier]]
 provider = "openai"
 model = "gpt-6-astra"
-tier = "priority"
+tiers = ["priority", "fast"]
 multiplier = "2"
-source = """LiteLLM 58a05a9e model_prices_and_context_window.json: gpt-6-astra *_priority rates are \
-2x standard for every unit, including the >272K tier (https://developers.openai.com/api/docs/pricing)."""
+source = """OpenAI Fast mode gpt-6-astra: $20 input / $2 cached / $100 output, long context $40 / \
+$150, against $10 / $1 / $50 and $20 / $75 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-6-sol"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-6-sol: $4 input / $0.40 cached / $20 output, long context $8 / $30, \
+against $2 / $0.20 / $10 and $4 / $15 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-6-luna"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-6-luna: $0.20 input / $0.02 cached / $1.00 output, long context \
+$0.40 / $1.50, against $0.10 / $0.01 / $0.50 and $0.20 / $0.75 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.6-sol"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.6-sol: $8 input / $0.80 cached / $40 output, long context $16 / \
+$60, against $4 / $0.40 / $20 and $8 / $30 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.6-terra"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.6-terra: $4 input / $0.40 cached / $24 output, long context $8 / \
+$36, twice the standard rates \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.6-luna"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.6-luna: $0.40 input / $0.04 cached / $2.40 output, long context \
+$0.80 / $3.60, twice the standard rates \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.5"
+tiers = ["priority", "fast"]
+multiplier = "5/2"
+source = """OpenAI Fast mode gpt-5.5: $12.50 input / $1.25 cached / $75 output against $5 / $0.50 / \
+$30 standard; no long-context Fast rate is listed \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.4"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.4: $5 input / $0.50 cached / $30 output against $2.50 / $0.25 / \
+$15 standard; no long-context Fast rate is listed \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.4-mini"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.4-mini: $1.50 input / $0.15 cached / $9 output against $0.75 / \
+$0.075 / $4.50 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.2"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.2: $3.50 input / $0.35 cached / $28 output against $1.75 / \
+$0.175 / $14 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "openai"
+model = "gpt-5.3-codex"
+tiers = ["priority", "fast"]
+multiplier = "2"
+source = """OpenAI Fast mode gpt-5.3-codex (specialized models): $3.50 input / $0.35 cached / $28 \
+output against $1.75 / $0.175 / $14 standard \
+(https://developers.openai.com/api/docs/pricing?latest-pricing=fast, 2026-09-24)."""
+
+[[tier]]
+provider = "google"
+tier = "priority"
+multiplier = "9/5"
+source = """Gemini API Priority tier "costs 1.8x Standard rates" across the Gemini model family \
+(https://ai.google.dev/gemini-api/docs/pricing, 2026-09-24)."""
+
+[[tier]]
+provider = "google"
+tiers = ["batch", "flex"]
+multiplier = "1/2"
+source = """Gemini API Batch offers a "50% cost reduction" against Standard and Flex inference \
+"matches Batch pricing" (https://ai.google.dev/gemini-api/docs/pricing, 2026-09-24)."""
+
+# ── Routes ─────────────────────────────────────────────────────────────────
+
+[[route]]
+route = "anthropic/us"
+provider = "anthropic"
+models = [
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-5-5",
+    "claude-fable-5",
+    "claude-fable-5-1",
+]
+multiplier = "11/10"
+from = 2026-02-05
+source = """"For Claude 4.6 and later models, specifying US-only inference through the \
+inference_geo parameter incurs a 1.1x multiplier on all token pricing categories, including input \
+tokens, output tokens, cache writes, and cache reads" \
+(https://platform.claude.com/docs/en/about-claude/pricing#data-residency-pricing, 2026-09-24); \
+data residency controls shipped 2026-02-05 \
+(https://platform.claude.com/docs/en/release-notes/overview). Earlier models reject the parameter."""
+
+# ── Long-tail entries verified 2026-09-24 (see docs/ARCHITECTURE.md §4.1.3) ──
+
+[[alias]]
+alias = "kimi-k2"
+provider = "moonshotai"
+model = "kimi-k2-0905-preview"
+source = """genai-prices' `kimi-k2` entry holds OpenRouter's $0.57 input / $2.30 output with no cache-hit rate (vendored 02cb80a1 has no first-party price_comments for it), so cached steps were charged at the input rate. Moonshot's list price for the K2 previews is $0.60 cache-miss input / $0.15 cache-hit input / $2.50 output per MTok (genai-prices moonshotai `kimi-k2-0711-preview` and `kimi-k2-0905-preview`, Moonshot-sourced entries). FLAG: Moonshot's current pricing page (https://platform.kimi.ai/docs/pricing/chat.md, 2026-09-24) lists only kimi-k3, kimi-k2.7-code, kimi-k2.7-code-highspeed and kimi-k2.6; the K2 previews are retired and their row cannot be re-fetched today (web.archive.org is unreachable from this sandbox)."""
+
+[[alias]]
+alias = "kimi-k2-0905"
+provider = "moonshotai"
+model = "kimi-k2-0905-preview"
+source = """OpenRouter serves Moonshot's K2-0905 as `moonshotai/kimi-k2-0905` (models.dev openrouter: "Kimi K2 0905", release 2025-09-04); Moonshot's id is `kimi-k2-0905-preview` at $0.60 / $0.15 cache hit / $2.50 per MTok (genai-prices moonshotai entry; see the FLAG on `kimi-k2`)."""
+
+[[alias]]
+alias = "zai-glm-5-2"
+provider = "zai"
+model = "GLM-5.2"
+source = """Mistral's platform lists Z.AI's GLM-5.2 as `zai-glm-5-2` (models.dev mistral provider; mistralai/platform-docs-public src/schema/models/models/zai-glm-5-2.ts). Z.AI lists GLM-5.2 at $1.4 / $0.26 cached / $4.4 per MTok (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24)."""
+
+[[alias]]
+alias = "zai-glm-5-3"
+provider = "zai"
+model = "GLM-5.3"
+source = """Mistral's platform lists Z.AI's GLM-5.3 as `zai-glm-5-3` (models.dev mistral provider; mistralai/platform-docs-public src/schema/models/models/zai-glm-5-3.ts). Z.AI lists GLM-5.3 at $1.4 / $0.26 cached / $4.4 per MTok (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24)."""
+
+[[alias]]
+alias = "mistral-large-latest"
+provider = "mistral"
+model = "mistral-large-2512"
+replaces = "mistral/mistral-large"
+source = """Mistral's model schema mistral-large-3-25-12.ts: `identifiers: { apiNames: ['mistral-large-2512', 'mistral-large-latest'] }`, `releaseDate: '2025-12-02'`, input 0.5 / output 1.5 "/M Tokens" — present since the file's first commit 4975b095 (2025-12-02); mistral-large-2-1-24-11.ts lists only `['mistral-large-2411']` at every commit from 6de6e30f (2025-12-04) on. https://mistral.ai/pricing/api (2026-09-24): "Mistral Large 3 … $0.5 /M tokens in and $1.5 /M tokens out". Before 2025-12-02 the name served Large 2.1 at $2 / $6 (same schema file); no usage in James's data predates it, so a dated model is not needed today."""
+
+[[alias]]
+alias = "mistral-small-latest"
+provider = "mistral"
+model = "mistral-small-2603"
+source = """Mistral's model schema mistral-small-4-0-26-03.ts: `apiNames: ['mistral-small-2603', 'mistral-small-latest']`, `releaseDate: '2026-03-16'`, input 0.15 / output 0.6 "/M Tokens" (first commit 94bd65f1, 2026-03-16); mistral-small-3-2-25-06.ts still listed 'mistral-small-latest' at 80018126 (2026-02-03) and dropped it at b4dfbad8 (2026-04-30), status Deprecated, retirement 2026-07-31. https://mistral.ai/pricing/api (2026-09-24): "Mistral Small 4 $0.15 / $0.6". genai-prices mistral-small-2603 carries $0.15 / $0.015 cached / $0.6."""
+
+[[alias]]
+alias = "gemini-3-pro"
+provider = "google"
+model = "gemini-3-pro-preview"
+source = """OpenCode Zen serves Gemini 3 Pro as `gemini-3-pro` (models.dev opencode: "Gemini 3 Pro", release 2025-11-18, $2 / $12 / $0.2 cached). Google lists only `gemini-3-pro-preview`: "$2.00, prompts <= 200k tokens", "$4.00, prompts > 200k tokens" input; "$12.00 / $18.00" output; "$0.20 / $0.40" context caching (https://ai.google.dev/gemini-api/docs/pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "gemini-3.1-pro"
+provider = "google"
+model = "gemini-3.1-pro-preview"
+source = """OpenCode Zen serves Gemini 3.1 Pro Preview as `gemini-3.1-pro` (models.dev opencode: "Gemini 3.1 Pro Preview", release 2026-02-19). Google lists `gemini-3.1-pro-preview` at the Gemini 3 Pro rates: $2.00 / $4.00 input (<= / > 200k), $12.00 / $18.00 output, $0.20 / $0.40 caching (https://ai.google.dev/gemini-api/docs/pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "gemini-3-flash"
+provider = "google"
+model = "gemini-3-flash-preview"
+source = """OpenCode Zen serves Gemini 3 Flash as `gemini-3-flash` (models.dev opencode: "Gemini 3 Flash", release 2025-12-17, $0.5 / $3 / $0.05). Google lists `gemini-3-flash-preview`: "$0.50 (text / image / video)" input, "$3.00" output, "$0.05" context caching (https://ai.google.dev/gemini-api/docs/pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "gemini-3.1-pro-preview-customtools"
+provider = "google"
+model = "gemini-3.1-pro-preview"
+source = """Google Cloud model page (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro, 2026-09-24): "Gemini 3.1 Pro supports an additional endpoint: gemini-3.1-pro-preview-customtools … Pricing for gemini-3.1-pro-preview-customtools is identical to Gemini 3.1 Pro"; versions table "gemini-3.1-pro-preview-customtools* Launch stage: Public preview Release date: February 23, 2026". Gemini 3.1 Pro: $2.00 / $4.00 input, $12.00 / $18.00 output, $0.20 / $0.40 caching (https://ai.google.dev/gemini-api/docs/pricing)."""
+
+[[alias]]
+alias = "grok-code"
+provider = "x-ai"
+model = "grok-code-fast-1"
+source = """OpenCode Zen serves xAI's Grok Code Fast 1 as `grok-code` (models.dev opencode: "Grok Code Fast 1", release 2025-08-20, free on Zen). xAI's id is `grok-code-fast-1` (aliases grok-code-fast, grok-code-fast-1-0825), $0.20 input / $0.02 cached / $1.50 output per MTok until its 2026-05-15 retirement (https://docs.x.ai/developers/migration/may-15-retirement)."""
+
+[[alias]]
+alias = "grok-4.1-fast"
+provider = "x-ai"
+model = "grok-4-1-fast-reasoning"
+source = """OpenRouter lists Grok 4.1 Fast as `x-ai/grok-4.1-fast`; xAI's ids are `grok-4-1-fast-reasoning` / `grok-4-1-fast-non-reasoning`, both "Input tokens: $0.20 / 1M tokens", "Cached input tokens: $0.05 / 1M tokens", "Output tokens: $0.5 / 1M tokens" (https://x.ai/news/grok-4-1-fast, 2025-11-19; genai-prices `grok-4-1-fast` → reasoning)."""
+
+[[alias]]
+alias = "grok-4.1-fast-reasoning"
+provider = "x-ai"
+model = "grok-4-1-fast-reasoning"
+source = """Vertex AI partner id `xai/grok-4.1-fast-reasoning` (models.dev google-vertex: "Grok 4.1 Fast (Reasoning)", $0.2 / $0.5 / $0.05 cached); xAI's id is `grok-4-1-fast-reasoning` at "$0.20 / $0.05 / $0.5 per 1M tokens" (https://x.ai/news/grok-4-1-fast)."""
+
+[[alias]]
+alias = "grok-4.1-fast-non-reasoning"
+provider = "x-ai"
+model = "grok-4-1-fast-non-reasoning"
+source = """Vertex AI partner id `xai/grok-4.1-fast-non-reasoning` (models.dev google-vertex: "Grok 4.1 Fast", $0.2 / $0.5 / $0.05 cached); xAI's id is `grok-4-1-fast-non-reasoning` at the same rates as the reasoning variant (https://x.ai/news/grok-4-1-fast)."""
+
+[[alias]]
+alias = "claude-mythos-5-1"
+provider = "anthropic"
+model = "claude-fable-5-1"
+source = """https://platform.claude.com/docs/en/models/mythos-5-1/overview (2026-09-24): "Model ID: claude-mythos-5-1", "the same model as Claude Fable 5.1, offered by invitation only through Project Glasswing", "It shares Claude Fable 5.1's specifications and pricing": Input $10 / MTok, Output $50 / MTok, 5m cache write $12.50, 1h cache write $20, Cache read $0.25, Batch 50% off; Bedrock id `anthropic.claude-mythos-5-1`. Pricing table (https://platform.claude.com/docs/en/about-claude/pricing): "Claude Mythos 5.1 (limited availability) | $10 / MTok | $12.50 / MTok | $20 / MTok | $0.25 / MTok | $50 / MTok"."""
+
+[[alias]]
+alias = "claude-mythos-5.1"
+provider = "anthropic"
+model = "claude-fable-5-1"
+source = """GitHub Copilot / Hermes dotted spelling of Claude Mythos 5.1 (COPILOT-1); Anthropic's id is `claude-mythos-5-1`, priced as Claude Fable 5.1 ($10 / $12.50 / $20 / $0.25 / $50 per MTok, https://platform.claude.com/docs/en/models/mythos-5-1/overview, 2026-09-24)."""
+
+[[alias]]
+alias = "claude-mythos-5"
+provider = "anthropic"
+model = "claude-fable-5"
+source = """https://platform.claude.com/docs/en/models/mythos-5/overview (2026-09-24): "Model ID: claude-mythos-5", "the same model as Claude Fable 5, offered by invitation only through Project Glasswing", "It shares Claude Fable 5's specifications and pricing": Input $10 / MTok, Output $50 / MTok, 5m cache write $12.50, 1h cache write $20, Cache read $1 / MTok; released June 9, 2026; Bedrock id `anthropic.claude-mythos-5`. Pricing table: "Claude Mythos 5 (limited availability) | $10 / MTok | $12.50 / MTok | $20 / MTok | $1 / MTok | $50 / MTok"."""
+
+[[alias]]
+alias = "gpt-5.4-900k"
+provider = "openai"
+model = "gpt-5.4"
+source = """Hermes picker-only id: hermes_cli/codex_models.py:74-78 "``<slug>-900k`` large-context picker variants … The suffix is Hermes-side only — stripped before the id hits the wire"; eligible base `gpt-5.4` (agent/model_metadata.py:1752). OpenAI prices the wire model gpt-5.4 (https://developers.openai.com/api/docs/pricing)."""
+
+[[alias]]
+alias = "gpt-5.6-sol-900k"
+provider = "openai"
+model = "gpt-5.6-sol"
+source = """Hermes picker-only id (hermes_cli/codex_models.py:74-78; eligible base `gpt-5.6-sol`, agent/model_metadata.py:1751); the wire model is gpt-5.6-sol, "$4.00 input / $0.40 cached / $20.00 output, long context $8.00 / $0.80 / $30.00" (https://developers.openai.com/api/docs/pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "gpt-5.6-terra-900k"
+provider = "openai"
+model = "gpt-5.6-terra"
+source = """Hermes picker-only id (hermes_cli/codex_models.py:74-78; eligible base `gpt-5.6-terra`, agent/model_metadata.py:1751); the wire model is gpt-5.6-terra (https://developers.openai.com/api/docs/pricing)."""
+
+[[alias]]
+alias = "gpt-5.6-luna-900k"
+provider = "openai"
+model = "gpt-5.6-luna"
+source = """Hermes picker-only id (hermes_cli/codex_models.py:74-78; eligible base `gpt-5.6-luna`, agent/model_metadata.py:1751); the wire model is gpt-5.6-luna (https://developers.openai.com/api/docs/pricing)."""
+
+[[alias]]
+alias = "gpt-6-astra-900k"
+provider = "openai"
+model = "gpt-6-astra"
+source = """Hermes picker-only id (hermes_cli/codex_models.py:74-78; eligible base `gpt-6-astra`, agent/model_metadata.py:1752 "advertised 272K; 920,043 input OK"); the wire model is gpt-6-astra, "$10.00 / $1.00 cached / $50.00, long context $20.00 / $2.00 / $75.00" (https://developers.openai.com/api/docs/pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "gpt-6-sol-900k"
+provider = "openai"
+model = "gpt-6-sol"
+source = """Hermes picker-only id (hermes_cli/codex_models.py:74-78; eligible base `gpt-6-sol`, agent/model_metadata.py:1751); the wire model is gpt-6-sol, "$2.00 / $0.20 cached / $10.00, long context $4.00 / $0.40 / $15.00" (https://developers.openai.com/api/docs/pricing, 2026-09-24). Requires the re-vendored gpt-6-sol."""
+
+[[alias]]
+alias = "gpt-6-luna-900k"
+provider = "openai"
+model = "gpt-6-luna"
+source = """Hermes picker-only id (hermes_cli/codex_models.py:74-78; eligible base `gpt-6-luna`, agent/model_metadata.py:1751); the wire model is gpt-6-luna, "$0.10 / $0.01 cached / $0.50, long context $0.20 / $0.02 / $0.75" (https://developers.openai.com/api/docs/pricing, 2026-09-24). Requires the re-vendored gpt-6-luna."""
+
+[[alias]]
+alias = "kimi-k2.5-free"
+provider = "moonshotai"
+model = "kimi-k2.5"
+source = """OpenCode Zen `kimi-k2.5-free` = "Kimi K2.5 Free" (models.dev opencode, release 2026-01-27, $0 on Zen). Moonshot's kimi-k2.5 list price in the catalog is $0.60 / $0.10 cache hit / $3.00 per MTok (genai-prices moonshotai kimi-k2.5). FLAG: kimi-k2.5 is no longer on Moonshot's current pricing page (https://platform.kimi.ai/docs/pricing/chat.md, 2026-09-24)."""
+
+[[alias]]
+alias = "glm-4.7-free"
+provider = "zai"
+model = "GLM-4.7"
+source = """OpenCode Zen `glm-4.7-free` = "GLM-4.7 Free" (models.dev opencode, release 2025-12-22). Z.AI lists GLM-4.7 at $0.6 / $0.11 cached / $2.2 per MTok (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24)."""
+
+[[alias]]
+alias = "glm-5-free"
+provider = "zai"
+model = "GLM-5"
+source = """OpenCode Zen `glm-5-free` = "GLM-5 Free" (models.dev opencode, release 2026-02-11). Z.AI lists GLM-5 at $1 / $0.2 cached / $3.2 per MTok (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24)."""
+
+[[alias]]
+alias = "minimax-m2.5-free"
+provider = "minimax"
+model = "MiniMax-M2"
+source = """OpenCode Zen `minimax-m2.5-free` = "MiniMax-M2.5 Free" (models.dev opencode, release 2026-02-12). MiniMax pay-as-you-go (https://platform.minimax.io/docs/guides/pricing-paygo.md, 2026-09-24), legacy models: "MiniMax-M2.5 … $0.3" input, "$1.2" output, "$0.03" cache read, "$0.375" cache write per M tokens — the catalog's MiniMax-M2 entry, whose upstream match already covers `MiniMax-M2.5` / `minimax-m2.5`."""
+
+[[alias]]
+alias = "minimax-m2.1-free"
+provider = "minimax"
+model = "MiniMax-M2"
+source = """OpenCode Zen `minimax-m2.1-free` = "MiniMax-M2.1 Free" (models.dev opencode, release 2025-12-23). MiniMax pay-as-you-go (https://platform.minimax.io/docs/guides/pricing-paygo.md, 2026-09-24): "MiniMax-M2.1, M2.1-highspeed, & M2: Same pricing structure as M2.5 variants" ($0.3 / $1.2 / $0.03 cache read / $0.375 cache write) — the catalog's MiniMax-M2 entry."""
+
+[[alias]]
+alias = "minimax-m3-free"
+provider = "minimax"
+model = "minimax-m3"
+source = """OpenCode Zen `minimax-m3-free` = "MiniMax-M3 Free" (models.dev opencode, release 2026-05-31). MiniMax pay-as-you-go (https://platform.minimax.io/docs/guides/pricing-paygo.md, 2026-09-24): "MiniMax-M3 (≤512k tokens): $0.30 / M tokens input, $1.20 / M tokens output, $0.06 / M tokens prompt cache read; (>512k tokens): $0.60 / $2.40 / $0.12" — equal to the catalog entry."""
+
+[[alias]]
+alias = "qwen3.6-plus-free"
+provider = "alibaba"
+model = "qwen3.6-plus"
+source = """OpenCode Zen `qwen3.6-plus-free` = "Qwen3.6 Plus Free" (models.dev opencode, release 2026-04-02). Alibaba Cloud Model Studio lists qwen3.6-plus (International) at $0.5 / $3 per 1M tokens up to 256K input and $2 / $6 above (https://www.alibabacloud.com/help/en/model-studio/model-pricing, 2026-09-24)."""
+
+[[alias]]
+alias = "deepseek-v4-flash-free"
+provider = "deepseek"
+model = "deepseek-v4-flash"
+source = """OpenCode Zen `deepseek-v4-flash-free` = "DeepSeek V4 Flash Free" (models.dev opencode, release 2026-07-31, family deepseek-flash). DeepSeek's `deepseek-v4-flash` name is the catalog model (now routed to V4.1 Flash, https://api-docs.deepseek.com/quick_start/pricing, 2026-09-24)."""
+
+[[model]]
+provider = "moonshotai"
+id = "kimi-for-coding"
+name = "Kimi For Coding (Kimi Code plan alias)"
+source = """Kimi Code changelog (https://www.kimi.com/code/docs/en/kimi-code/whats-new.html, 2026-09-24): "K2.7 Code — June 12, 2026: Kimi K2.7 Code, our latest coding model, is now released and open-sourced — and available in Kimi For Coding"; "K2.8 Preview — September 11, 2026: K2.8 Preview is now fully rolled out in Kimi Code! The Model ID is unchanged — still `kimi-for-coding`". Kimi Code model configuration (https://www.kimi.com/code/docs/en/kimi-code/models.html, 2026-09-24): `kimi-for-coding` = "K2.8 Preview", 1M context. Moonshot list prices (https://platform.kimi.ai/docs/pricing/chat-k27-code.md, 2026-09-24): kimi-k2.7-code $0.95 cache miss / $0.19 cache hit / $4.00 output; kimi-k2.6 $0.95 / $0.16 / $4.00. K2.8 Preview has no per-token price on platform.kimi.ai (pricing page lists K3, K2.7 Code, K2.6 only), so the alias is unpriceable at list from 2026-09-11 — encoded as an empty period. Before 2026-06-12 the alias's model is not first-party dated, so that period is unpriced."""
+prices = [
+    { prices = {  } },
+    { constraint = { start_date = "2026-06-12" }, prices = { input_mtok = "0.95", cache_read_mtok = "0.19", output_mtok = "4" } },
+    { constraint = { start_date = "2026-09-11" }, prices = {  } },
+]
+
+[[model]]
+provider = "zai"
+id = "GLM-4.5"
+name = "GLM-4.5"
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Text Models: "GLM-4.5 | $0.6 | $0.11 | Limited-time Free | $2.2" (Input / Cached Input / Cached Input Storage / Output per 1M tokens)."""
+prices = { input_mtok = "0.6", cache_read_mtok = "0.11", output_mtok = "2.2" }
+
+[[model]]
+provider = "zai"
+id = "GLM-4.5-Air"
+name = "GLM-4.5-Air"
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Text Models: "GLM-4.5-Air | $0.2 | $0.03 | Limited-time Free | $1.1"."""
+prices = { input_mtok = "0.2", cache_read_mtok = "0.03", output_mtok = "1.1" }
+
+[[model]]
+provider = "zai"
+id = "GLM-4.6"
+name = "GLM-4.6"
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Text Models: "GLM-4.6 | $0.6 | $0.11 | Limited-time Free | $2.2". OpenCode Zen, GitHub Copilot and OpenRouter (`z-ai/glm-4.6`) spell it the same way."""
+prices = { input_mtok = "0.6", cache_read_mtok = "0.11", output_mtok = "2.2" }
+
+[[model]]
+provider = "zai"
+id = "GLM-4.7"
+name = "GLM-4.7"
+aliases = ["glm-4.7-maas"]
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Text Models: "GLM-4.7 | $0.6 | $0.11 | Limited-time Free | $2.2". Vertex AI serves it as `zai-org/glm-4.7-maas` (models.dev google-vertex), which the resolver reduces to `glm-4.7-maas`."""
+prices = { input_mtok = "0.6", cache_read_mtok = "0.11", output_mtok = "2.2" }
+
+[[model]]
+provider = "zai"
+id = "GLM-5"
+name = "GLM-5"
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Text Models: "GLM-5 | $1 | $0.2 | Limited-time Free | $3.2"."""
+prices = { input_mtok = "1", cache_read_mtok = "0.2", output_mtok = "3.2" }
+
+[[model]]
+provider = "zai"
+id = "GLM-5.1"
+name = "GLM-5.1"
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Text Models: "GLM-5.1 | $1.4 | $0.26 | Limited-time Free | $4.4"."""
+prices = { input_mtok = "1.4", cache_read_mtok = "0.26", output_mtok = "4.4" }
+
+[[model]]
+provider = "deepseek"
+id = "deepseek-flash"
+name = "DeepSeek V4.1 Flash"
+aliases = ["deepseek-v4.1-flash"]
+source = """https://api-docs.deepseek.com/quick_start/pricing (2026-09-24): deepseek-flash (DeepSeek-V4.1-Flash), per 1M tokens: "Input (Cache Hit) Off-peak $0.003 / Peak $0.006", "Input (Cache Miss) Off-peak $0.15 / Peak $0.3", "Output Off-peak $0.6 / Peak $1.2"; "Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public holidays". https://www.deepseek.com/en/news/deepseek-v4-1-flash/ (2026-09-10): "Set your model to deepseek-flash", "New pricing takes effect at 04:00 UTC on Sept 10, 2026", "Off-peak rates are 50% of peak rates". OpenCode Zen and OpenRouter spell it `deepseek-v4.1-flash` (models.dev; DeepSeek's API name is `deepseek-flash`)."""
+prices = [
+    { prices = { input_mtok = "0.15", cache_read_mtok = "0.003", output_mtok = "0.6" } },
+    { constraint = { start_time = "01:00:00Z", end_time = "04:00:00Z" }, prices = { input_mtok = "0.3", cache_read_mtok = "0.006", output_mtok = "1.2" } },
+    { constraint = { start_time = "06:00:00Z", end_time = "10:00:00Z" }, prices = { input_mtok = "0.3", cache_read_mtok = "0.006", output_mtok = "1.2" } },
+]
+
+[[model]]
+provider = "alibaba"
+id = "qwen3-coder-plus"
+name = "Qwen3 Coder Plus"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3-coder-plus Currently equivalent to qwen3-coder-plus-2025-09-23 … 0<Token≤32K $1 $5 | 32K<Token≤128K $1.8 $9 | 128K<Token≤256K $3 $15 | 256K<Token≤1M $6 $60" (input, output per 1 million tokens). Cache: implicit hit 20% / explicit creation 125% of the input price (https://www.alibabacloud.com/help/en/model-studio/context-cache)."""
+prices = { input_mtok = { base = "1", tiers = [{ start = 32000, price = "1.8" }, { start = 128000, price = "3" }, { start = 256000, price = "6" }] }, output_mtok = { base = "5", tiers = [{ start = 32000, price = "9" }, { start = 128000, price = "15" }, { start = 256000, price = "60" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 32000, price = "0.36" }, { start = 128000, price = "0.6" }, { start = 256000, price = "1.2" }] }, cache_write_mtok = { base = "1.25", tiers = [{ start = 32000, price = "2.25" }, { start = 128000, price = "3.75" }, { start = 256000, price = "7.5" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3-coder-flash"
+name = "Qwen3 Coder Flash"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3-coder-flash Currently equivalent to qwen3-coder-flash-2025-07-28 … 0<Token≤32K $0.3 $1.5 | 32K<Token≤128K $0.5 $2.5 | 128K<Token≤256K $0.8 $4 | 256K<Token≤1M $1.6 $9.6". Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = { base = "0.3", tiers = [{ start = 32000, price = "0.5" }, { start = 128000, price = "0.8" }, { start = 256000, price = "1.6" }] }, output_mtok = { base = "1.5", tiers = [{ start = 32000, price = "2.5" }, { start = 128000, price = "4" }, { start = 256000, price = "9.6" }] }, cache_read_mtok = { base = "0.06", tiers = [{ start = 32000, price = "0.1" }, { start = 128000, price = "0.16" }, { start = 256000, price = "0.32" }] }, cache_write_mtok = { base = "0.375", tiers = [{ start = 32000, price = "0.625" }, { start = 128000, price = "1" }, { start = 256000, price = "2" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.5-plus"
+name = "Qwen3.5 Plus"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.5-plus Currently equivalent to qwen3.5-plus-2026-02-15 … 0<Token≤256K $0.4 $2.4 $2.4 | 256K<Token≤1M $0.5 $3 $3" (input, output non-thinking, output thinking). Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = { base = "0.4", tiers = [{ start = 256000, price = "0.5" }] }, output_mtok = { base = "2.4", tiers = [{ start = 256000, price = "3" }] }, cache_read_mtok = { base = "0.08", tiers = [{ start = 256000, price = "0.1" }] }, cache_write_mtok = { base = "0.5", tiers = [{ start = 256000, price = "0.625" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.6-plus"
+name = "Qwen3.6 Plus"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.6-plus Currently equivalent to qwen3.6-plus-2026-04-02 … 0<Token≤256K $0.5 $3 $3 | 256K<Token≤1M $2 $6 $6". Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = { base = "0.5", tiers = [{ start = 256000, price = "2" }] }, output_mtok = { base = "3", tiers = [{ start = 256000, price = "6" }] }, cache_read_mtok = { base = "0.1", tiers = [{ start = 256000, price = "0.4" }] }, cache_write_mtok = { base = "0.625", tiers = [{ start = 256000, price = "2.5" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.7-plus"
+name = "Qwen3.7 Plus"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.7-plus Currently equivalent to qwen3.7-plus-2026-05-26 … 0<Token≤256K List price $0.4 (Limited-time 20% off) | List price $1.6 (Limited-time 20% off) | 256K<Token≤1M List price $1.2 (Limited-time 20% off) | List price $4.8 (Limited-time 20% off)". Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = { base = "0.4", tiers = [{ start = 256000, price = "1.2" }] }, output_mtok = { base = "1.6", tiers = [{ start = 256000, price = "4.8" }] }, cache_read_mtok = { base = "0.08", tiers = [{ start = 256000, price = "0.24" }] }, cache_write_mtok = { base = "0.5", tiers = [{ start = 256000, price = "1.5" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.6-flash"
+name = "Qwen3.6 Flash"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.6-flash Currently equivalent to qwen3.6-flash-2026-04-16 … 0<Token≤256K $0.25 $1.5 | 256K<Token≤1M $1 $4". Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = { base = "0.25", tiers = [{ start = 256000, price = "1" }] }, output_mtok = { base = "1.5", tiers = [{ start = 256000, price = "4" }] }, cache_read_mtok = { base = "0.05", tiers = [{ start = 256000, price = "0.2" }] }, cache_write_mtok = { base = "0.3125", tiers = [{ start = 256000, price = "1.25" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.7-flash"
+name = "Qwen3.7 Flash"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.7-flash Currently equivalent to qwen3.7-flash-2026-07-15 … 0<Token≤32K $0.030 $0.130 | 32K<Token≤256K $0.100 $0.400 | 256K<Token≤1M $0.200 $0.800". Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = { base = "0.03", tiers = [{ start = 32000, price = "0.1" }, { start = 256000, price = "0.2" }] }, output_mtok = { base = "0.13", tiers = [{ start = 32000, price = "0.4" }, { start = 256000, price = "0.8" }] }, cache_read_mtok = { base = "0.006", tiers = [{ start = 32000, price = "0.02" }, { start = 256000, price = "0.04" }] }, cache_write_mtok = { base = "0.0375", tiers = [{ start = 32000, price = "0.125" }, { start = 256000, price = "0.25" }] } }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.8-flash"
+name = "Qwen3.8 Flash"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.8-flash … 0<Token≤1M $0.15 $0.47" (one tier). Cache rate not public (https://www.alibabacloud.com/help/en/model-studio/context-cache: "qwen3.8-max, qwen3.8-max-0902, qwen3.8-flash, qwen3.8-2.4t-a95b: The unit price of cached_token is not 20% of the input_token unit price. For specific pricing, see the Model Studio console")."""
+prices = { input_mtok = "0.15", output_mtok = "0.47" }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.7-max"
+name = "Qwen3.7 Max"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.7-max Currently equivalent to qwen3.7-max-2026-05-20 … Non-Thinking and Thinking modes 0<Token≤1M $2.5 $7.5". Cache: implicit hit 20% / explicit creation 125% of the input price."""
+prices = { input_mtok = "2.5", output_mtok = "7.5", cache_read_mtok = "0.5", cache_write_mtok = "3.125" }
+
+[[model]]
+provider = "alibaba"
+id = "qwen3.8-max"
+name = "Qwen3.8 Max"
+source = """https://www.alibabacloud.com/help/en/model-studio/model-pricing (2026-09-24), International: "qwen3.8-max … Non-Thinking and Thinking modes 0<Token≤1M $2 $6"; "qwen3.8-max-0902" identical. Cache rate not public (context-cache page exception list)."""
+prices = { input_mtok = "2", output_mtok = "6" }
+
+[[patch]]
+provider = "zai"
+model = "GLM-5.3-Flash"
+prices = [
+    { prices = { input_mtok = "0.075", cache_read_mtok = "0.015", output_mtok = "0.25" } },
+    { constraint = { start_date = "2026-09-10" }, prices = { input_mtok = "0.15", cache_read_mtok = "0.03", output_mtok = "0.5" } },
+]
+source = """Z.AI pricing (https://docs.z.ai/guides/overview/pricing.md, 2026-09-24), Latest Models: "GLM-5.3-Flash | $0.15 | $0.03 | Limited-time Free | $0.50". genai-prices 02cb80a1 carries $0.075 / $0.015 / $0.25 with price_comments "Standard API rates reflect the 50% launch promotion ending at 24:00 on September 9, 2026 (UTC+8): list prices are $0.15 input, $0.03 cached input, and $0.50 output per million tokens" — the promotion ended 2026-09-09T16:00Z, so the list rates apply from 2026-09-10 (UTC-day granularity; 8 hours late)."""
+
+[[patch]]
+provider = "mistral"
+model = "mistral-large"
+prices = { cache_read_mtok = "0.2" }
+source = """https://mistral.ai/pricing/api (2026-09-24): "Cached input tokens: -90% on input token", "cutting input costs by 90%"; Mistral Large 2 / 2.1 (`mistral-large-2407`, `mistral-large-2411`) input $2 per MTok (schema mistral-large-2-1-24-11.ts: input 2.0 "/M Tokens") — 10% is $0.20."""
+
+[[patch]]
+provider = "mistral"
+model = "magistral-medium"
+prices = { cache_read_mtok = "0.2" }
+source = """https://mistral.ai/pricing/api (2026-09-24): "Cached input tokens: -90% on input token"; Magistral Medium input $2.0 "/M Tokens" (schema magistral-medium-1-2-25-09.ts, apiNames ['magistral-medium-2509', 'magistral-medium-latest']) — 10% is $0.20."""
+
+[[patch]]
+provider = "mistral"
+model = "magistral-small"
+prices = { cache_read_mtok = "0.05" }
+source = """https://mistral.ai/pricing/api (2026-09-24): "Cached input tokens: -90% on input token"; genai-prices magistral-small input $0.5 per MTok — 10% is $0.05."""
+
+[[patch]]
+provider = "mistral"
+model = "codestral"
+prices = { cache_read_mtok = "0.03" }
+source = """https://mistral.ai/pricing/api (2026-09-24): "Cached input tokens: -90% on input token"; Codestral 25.08 input 0.3 "/M Tokens" (schema codestral-25-08.ts, apiNames ['codestral-2508', 'codestral-latest']) — 10% is $0.03, the rate upstream already gives `codestral-2508`."""
+
+[[patch]]
+provider = "mistral"
+model = "devstral-small"
+prices = { cache_read_mtok = "0.01" }
+source = """https://mistral.ai/pricing/api (2026-09-24): "Cached input tokens: -90% on input token"; genai-prices devstral-small input $0.1 per MTok — 10% is $0.01."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-code-fast-1"
+prices = [
+    { prices = { input_mtok = "0.2", cache_read_mtok = "0.02", output_mtok = "1.5" } },
+    { constraint = { start_date = "2026-05-15" }, prices = { input_mtok = { base = "1.25", tiers = [{ start = 199999, price = "2.5" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 199999, price = "0.4" }] }, output_mtok = { base = "2.5", tiers = [{ start = 199999, price = "5" }] } } },
+]
+source = """https://docs.x.ai/developers/migration/may-15-retirement (2026-09-24): retired models include `grok-code-fast-1`; "After May 15, 2026 at 12:00 PM PT, requests to the retired model slugs above will automatically redirect to grok-4.3" and "you will be billed at grok-4.3 pricing of $1.25 per 1M input tokens and $2.50 per 1M output tokens"; recommended replacement `grok-build-0.1`. grok-4.3 cached $0.20 and 2x at >= 200K prompt tokens (https://docs.x.ai/developers/pricing). Before retirement: $0.20 / $0.02 cached / $1.50 (genai-prices x-ai grok-code-fast-1; xAI's launch price). FLAG: xAI's current grok-build-0.1 model page (https://docs.x.ai/developers/models/grok-build-0.1, 2026-09-24) lists `grok-code-fast-1`, `grok-code-fast` and `grok-code-fast-1-0825` among grok-build-0.1's aliases at $1.00 / $0.20 / $2.00 (2x at 200k+) — a second, contradictory first-party routing. The retirement page carries the explicit billing sentence, so it is encoded; the lead should pick."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-1-fast-reasoning"
+prices = [
+    { prices = { input_mtok = "0.2", cache_read_mtok = "0.05", output_mtok = "0.5" } },
+    { constraint = { start_date = "2026-05-15" }, prices = { input_mtok = { base = "1.25", tiers = [{ start = 199999, price = "2.5" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 199999, price = "0.4" }] }, output_mtok = { base = "2.5", tiers = [{ start = 199999, price = "5" }] } } },
+]
+source = """https://docs.x.ai/developers/migration/may-15-retirement (2026-09-24): `grok-4-1-fast-reasoning` retired 2026-05-15 12:00 PM PT, "requests … will automatically redirect to grok-4.3" ("Reasoning models → grok-4.3 with low reasoning effort") and "you will be billed at grok-4.3 pricing of $1.25 per 1M input tokens and $2.50 per 1M output tokens". Before: $0.20 / $0.05 cached / $0.5 (https://x.ai/news/grok-4-1-fast)."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-1-fast-non-reasoning"
+prices = [
+    { prices = { input_mtok = "0.2", cache_read_mtok = "0.05", output_mtok = "0.5" } },
+    { constraint = { start_date = "2026-05-15" }, prices = { input_mtok = { base = "1.25", tiers = [{ start = 199999, price = "2.5" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 199999, price = "0.4" }] }, output_mtok = { base = "2.5", tiers = [{ start = 199999, price = "5" }] } } },
+]
+source = """https://docs.x.ai/developers/migration/may-15-retirement (2026-09-24): `grok-4-1-fast-non-reasoning` retired 2026-05-15 12:00 PM PT, redirected to "grok-4.3 with none reasoning effort" and "billed at grok-4.3 pricing of $1.25 per 1M input tokens and $2.50 per 1M output tokens". Before: $0.20 / $0.05 cached / $0.5 (https://x.ai/news/grok-4-1-fast)."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-fast-reasoning"
+prices = [
+    { prices = { input_mtok = "0.2", cache_read_mtok = "0.05", output_mtok = "0.5" } },
+    { constraint = { start_date = "2026-05-15" }, prices = { input_mtok = { base = "1.25", tiers = [{ start = 199999, price = "2.5" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 199999, price = "0.4" }] }, output_mtok = { base = "2.5", tiers = [{ start = 199999, price = "5" }] } } },
+]
+source = """https://docs.x.ai/developers/migration/may-15-retirement (2026-09-24): `grok-4-fast-reasoning` retired 2026-05-15 12:00 PM PT, redirected to grok-4.3 and "billed at grok-4.3 pricing of $1.25 per 1M input tokens and $2.50 per 1M output tokens". Before: genai-prices x-ai grok-4-fast-reasoning $0.2 / $0.05 cached / $0.5."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-fast-non-reasoning"
+prices = [
+    { prices = { input_mtok = "0.2", cache_read_mtok = "0.05", output_mtok = "0.5" } },
+    { constraint = { start_date = "2026-05-15" }, prices = { input_mtok = { base = "1.25", tiers = [{ start = 199999, price = "2.5" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 199999, price = "0.4" }] }, output_mtok = { base = "2.5", tiers = [{ start = 199999, price = "5" }] } } },
+]
+source = """https://docs.x.ai/developers/migration/may-15-retirement (2026-09-24): `grok-4-fast-non-reasoning` retired 2026-05-15 12:00 PM PT, redirected to "grok-4.3 with none reasoning effort" at grok-4.3 pricing ($1.25 / $2.50 per 1M). Before: genai-prices x-ai grok-4-fast-non-reasoning $0.2 / $0.05 cached / $0.5."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-0709"
+prices = [
+    { prices = { input_mtok = "3", cache_read_mtok = "0.75", output_mtok = "15" } },
+    { constraint = { start_date = "2026-05-15" }, prices = { input_mtok = { base = "1.25", tiers = [{ start = 199999, price = "2.5" }] }, cache_read_mtok = { base = "0.2", tiers = [{ start = 199999, price = "0.4" }] }, output_mtok = { base = "2.5", tiers = [{ start = 199999, price = "5" }] } } },
+]
+source = """https://docs.x.ai/developers/migration/may-15-retirement (2026-09-24): `grok-4-0709` retired 2026-05-15 12:00 PM PT, redirected to grok-4.3 at grok-4.3 pricing ($1.25 / $2.50 per 1M). Before: genai-prices x-ai grok-4-0709 $3 / $0.75 cached / $15."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4.6"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24), agentic tools: "Web Search | web_search | $5" per 1,000 calls (Code Execution $5, X Search "$5 / 1k posts, $10 / 1k profiles"); a record that counts web searches without a fee is otherwise wholly unpriced (CORE-8)."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4.5"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24), agentic tools: "Web Search | web_search | $5" per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4.3"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24), agentic tools: "Web Search | web_search | $5" per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4.20"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24), agentic tools: "Web Search | web_search | $5" per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4.20-multi-agent"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24), agentic tools: "Web Search | web_search | $5" per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-1-fast-reasoning"
+prices = { web_searches_kcount = "5" }
+source = """https://x.ai/news/grok-4-1-fast (2025-11-19): Agent Tools API "Tool calls: From $5 / 1000 successful invocations"; https://docs.x.ai/developers/pricing (2026-09-24): "Web Search | web_search | $5" per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-1-fast-non-reasoning"
+prices = { web_searches_kcount = "5" }
+source = """https://x.ai/news/grok-4-1-fast (2025-11-19): "Tool calls: From $5 / 1000 successful invocations"; https://docs.x.ai/developers/pricing (2026-09-24): web_search $5 per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-fast-reasoning"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24): "Web Search | web_search | $5" per 1,000 calls (server-side tools ship with the grok-4 line; xAI does not enumerate per-model support)."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-fast-non-reasoning"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24): "Web Search | web_search | $5" per 1,000 calls."""
+
+[[patch]]
+provider = "x-ai"
+model = "grok-4-0709"
+prices = { web_searches_kcount = "5" }
+source = """https://docs.x.ai/developers/pricing (2026-09-24): "Web Search | web_search | $5" per 1,000 calls."""

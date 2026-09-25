@@ -162,7 +162,6 @@ pub fn meta_ingest_inventory_into(
                     adapter,
                     runtime,
                     root,
-                    store,
                     stream,
                     driver,
                     &file.relative_path,
@@ -205,7 +204,6 @@ pub fn meta_ingest_inventory_into(
                     adapter,
                     runtime,
                     root,
-                    store,
                     stream,
                     driver,
                     &file.relative_path,
@@ -326,59 +324,10 @@ pub fn meta_ingest_inventory_into(
         );
     }
 
-    // Snapshot membership is authoritative even when the whole physical
-    // source disappears. The walk cannot call `admit_document/database` for a
-    // missing path, so retain its existing virtual cursors as explicit empty
-    // tombstones for one generation. JSONL files keep their ordinary missing
-    // semantics and are never swept here.
-    let present: std::collections::BTreeSet<&str> = inventory
-        .iter()
-        .map(|file| file.relative_path.as_str())
-        .collect();
-    for (virtual_path, cursor_stream, session_id) in
-        rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, "")?
-    {
-        if output
-            .files
-            .iter()
-            .any(|file| file.relative_path == virtual_path)
-        {
-            continue;
-        }
-        let Some((physical_path, native_session_id)) = virtual_path.split_once('#') else {
-            continue;
-        };
-        let native_session_id = native_session_id.to_owned();
-        if present.contains(physical_path) {
-            continue;
-        }
-        let Some(stream) = layout.stream(&cursor_stream) else {
-            continue;
-        };
-        let Some(driver) = adapter.stream_driver(&cursor_stream) else {
-            continue;
-        };
-        if !matches!(
-            driver,
-            StreamDriver::DocumentSnapshot | StreamDriver::SqliteSnapshot
-        ) {
-            continue;
-        }
-        output.files.push(SessionFile {
-            ledger_only: false,
-            relative_path: virtual_path,
-            stream_id: cursor_stream,
-            file_format: stream.file_format,
-            discipline: stream.discipline,
-            driver,
-            session_id,
-            native_session_id,
-            size: 0,
-            modified_ms: 0,
-            agent_version: None,
-            source_missing: true,
-        });
-    }
+    // A snapshot source that disappears whole keeps every member's last
+    // projected generation, like a deleted JSONL transcript keeps its rows;
+    // its virtual cursors simply see no further activity (product decision,
+    // 2026-09-24: an agent pruning its own store must not erase history).
 
     // Session ownership is a metadata decision. Resolve child inheritance and
     // local repository identity exactly once before any transcript is streamed;
@@ -911,7 +860,6 @@ fn admit_document(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     root: &Path,
-    store: &Store,
     stream: &rosetta_adapter_support::StreamSpec,
     driver: StreamDriver,
     relative_path: &str,
@@ -983,37 +931,9 @@ fn admit_document(
         );
     }
 
-    // Removed members are retained for one empty generation so their old
-    // projection contribution is swept just like removed SQLite members.
-    let prefix = format!("{relative_path}#");
-    for (virtual_path, cursor_stream, session_id) in
-        rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, &prefix)?
-    {
-        if output
-            .files
-            .iter()
-            .any(|file| file.relative_path == virtual_path)
-        {
-            continue;
-        }
-        let Some(native_session_id) = virtual_path.strip_prefix(&prefix).map(str::to_owned) else {
-            continue;
-        };
-        output.files.push(SessionFile {
-            ledger_only: false,
-            relative_path: virtual_path,
-            stream_id: cursor_stream,
-            file_format: stream.file_format,
-            discipline: stream.discipline,
-            driver,
-            session_id,
-            native_session_id,
-            size,
-            modified_ms,
-            agent_version: None,
-            source_missing: false,
-        });
-    }
+    // A member the document no longer lists keeps its last projected
+    // generation, like a removed SQLite member and a deleted JSONL transcript
+    // (product decision, 2026-09-24).
     Ok(())
 }
 
@@ -1026,7 +946,6 @@ fn admit_database(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     root: &Path,
-    store: &Store,
     stream: &rosetta_adapter_support::StreamSpec,
     driver: StreamDriver,
     db_relative: &str,
@@ -1085,38 +1004,11 @@ fn admit_database(
         );
     }
 
-    // The database is an authoritative snapshot. Cursors for members no
-    // longer returned by sessions_sql remain as virtual tombstones for this
-    // pass; their empty record query activates a sweep of old contribution.
-    let prefix = format!("{db_relative}#");
-    for (relative_path, cursor_stream, session_id) in
-        rosetta_store::queries::cursor_sources_with_prefix(store.conn(), &runtime.id, &prefix)?
-    {
-        if output
-            .files
-            .iter()
-            .any(|file| file.relative_path == relative_path)
-        {
-            continue;
-        }
-        let Some(native_session_id) = relative_path.strip_prefix(&prefix).map(str::to_owned) else {
-            continue;
-        };
-        output.files.push(SessionFile {
-            relative_path,
-            stream_id: cursor_stream,
-            ledger_only: false,
-            file_format: stream.file_format,
-            discipline: stream.discipline,
-            driver,
-            session_id,
-            native_session_id,
-            size,
-            modified_ms,
-            agent_version: None,
-            source_missing: false,
-        });
-    }
+    // A member no longer returned by sessions_sql keeps its last projected
+    // generation, exactly as a deleted JSONL transcript keeps its rows: an
+    // agent pruning its own store (Hermes 0.21.4 retains 90 days by default)
+    // must not erase Rosetta's history (product decision, 2026-09-24). The
+    // cursor simply sees no further activity.
     Ok(())
 }
 

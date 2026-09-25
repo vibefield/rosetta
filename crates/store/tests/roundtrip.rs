@@ -348,6 +348,7 @@ fn private_cold_reconciliation_folds_cross_source_relations_once_in_ram() {
             ops: vec![
                 terminal,
                 IngestOp::Usage {
+                    identity: None,
                     session_id: "s1".into(),
                     response: "cold-call".into(),
                     ts: 3_700_000,
@@ -911,6 +912,7 @@ fn private_cold_usage_preserves_pending_then_current_order_across_flushes() {
     let usage_cursor = install_cursor(&mut store, "usage.jsonl");
     let opener_cursor = install_cursor(&mut store, "late-opener.jsonl");
     let usage = |input| IngestOp::Usage {
+        identity: None,
         session_id: "s1".into(),
         response: "late-call".into(),
         ts: 3_700_000 + input,
@@ -1808,6 +1810,7 @@ fn pending_target_in_one_session_does_not_poison_another() {
     store
         .apply(&Batch {
             ops: vec![IngestOp::Usage {
+                identity: None,
                 session_id: "s1".into(),
                 response: "missing-response".into(),
                 ts: 0,
@@ -1866,6 +1869,7 @@ fn usage_replacement_never_double_counts_and_preserves_unknownness() {
     let stats = store
         .apply(&Batch {
             ops: vec![IngestOp::Usage {
+                identity: None,
                 session_id: "s1".into(),
                 response: "m-agent".into(),
                 ts: 3_601_000,
@@ -2200,6 +2204,7 @@ fn session_usage_replaces_exactly_and_does_not_invent_messages() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
     let mut sample = SessionUsageRow {
+        identity: None,
         session_id: "s1".into(),
         key: "native-model-task".into(),
         ts: 3_600_000,
@@ -2280,6 +2285,7 @@ fn live_usage_waits_in_ram_until_its_response_arrives() {
     let stats = store
         .apply(&Batch {
             ops: vec![IngestOp::Usage {
+                identity: None,
                 session_id: "s1".into(),
                 response: "late-response".into(),
                 ts: 3_700_000,
@@ -2312,6 +2318,7 @@ fn live_usage_waits_in_ram_until_its_response_arrives() {
 
 fn late_usage(response: &str, input: i64) -> IngestOp {
     IngestOp::Usage {
+        identity: None,
         session_id: "s1".into(),
         response: response.into(),
         ts: 3_700_000,
@@ -2609,7 +2616,7 @@ fn live_staging_deduplicates_exact_retries_and_rejects_conflicts_in_ram() {
 }
 
 #[test]
-fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
+fn message_replacement_moves_counts_between_bucket_keys_and_carries_unstated_usage() {
     let mut store = Store::open_in_memory().unwrap();
     store.apply(&base_batch()).unwrap();
 
@@ -2628,6 +2635,9 @@ fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
         })
         .unwrap();
 
+    // A replacement that says nothing about usage moves the row, and the
+    // usage it already has, to the new bucket key (ARCHITECTURE §4.1.3: a
+    // row op that carries no usage makes no usage statement).
     row.ts = Some(2 * 3_600_000);
     row.model = Some("claude-sonnet-5".into());
     row.kind = MessageKind::Agent;
@@ -2652,17 +2662,43 @@ fn message_replacement_moves_counts_between_bucket_keys_and_clears_unknowns() {
         )
         .unwrap();
     assert_eq!(old_count, 0, "the old bucket must be emptied");
-    let (input, messages, tools): (Option<i64>, i64, i64) = store
-        .conn()
-        .query_row(
-            "SELECT in_tokens, message_count, tool_call_count FROM usage_bucket
-             WHERE session_id = 's1' AND hour_ts = 7200000 AND model = 'claude-sonnet-5'",
-            [],
-            |record| Ok((record.get(0)?, record.get(1)?, record.get(2)?)),
-        )
+    fn sonnet_bucket(store: &Store) -> (Option<i64>, i64, i64) {
+        store
+            .conn()
+            .query_row(
+                "SELECT in_tokens, message_count, tool_call_count FROM usage_bucket
+                 WHERE session_id = 's1' AND hour_ts = 7200000 AND model = 'claude-sonnet-5'",
+                [],
+                |record| Ok((record.get(0)?, record.get(1)?, record.get(2)?)),
+            )
+            .unwrap()
+    }
+    assert_eq!(
+        sonnet_bucket(&store),
+        (Some(40), 1, 0),
+        "unstated usage travels with the replaced row"
+    );
+
+    // Only a usage statement returns it to unknown: an all-None `Usage` op.
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::Usage {
+                identity: None,
+                session_id: "s1".into(),
+                response: "m-move".into(),
+                ts: 2 * 3_600_000,
+                model: None,
+                tokens: TokenSnapshot::default(),
+            }],
+            checkpoints: vec![],
+            source: None,
+        })
         .unwrap();
-    assert_eq!(input, None, "a cleared full replacement returns to unknown");
-    assert_eq!((messages, tools), (1, 0));
+    assert_eq!(
+        sonnet_bucket(&store),
+        (None, 1, 0),
+        "an all-None usage statement returns the row to unknown"
+    );
 }
 
 #[test]
@@ -3010,6 +3046,7 @@ fn activation_sweeps_every_artifact_kind_from_ram_only_staging() {
             terminal_at: Some(3_600_500),
         }),
         IngestOp::SessionUsage(SessionUsageRow {
+            identity: None,
             session_id: "s1".into(),
             key: "g1-usage".into(),
             ts: 3_600_000,

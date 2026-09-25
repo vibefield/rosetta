@@ -53,6 +53,10 @@ pub(crate) struct TimelineRecord {
     pub(crate) part_time_created: i64,
     part_data: String,
     first_event_seq: Option<i64>,
+    /// The owning session's creation time. Absent only in records ledgered
+    /// before it was selected (normalizer 8 and earlier).
+    #[serde(default)]
+    pub(crate) session_time_created: Option<i64>,
     #[serde(flatten)]
     unknown: Unknown,
 }
@@ -67,22 +71,34 @@ pub fn ingest(
         Ok(envelope) => envelope,
         Err(_) => return hard(ctx, stream_id, "<snapshot>", "invalid_json", None),
     };
-    if envelope.query != spec::TIMELINE_QUERY {
-        return LineOutcome {
-            ops: vec![drift(
-                ctx,
-                stream_id,
-                &format!("snapshot/{}", envelope.query),
-                "unknown_query",
-                &[],
-                None,
-            )],
-            status: LineStatus::UnknownType,
-        };
-    }
-
     let mut outer_paths = Vec::new();
     note_unknown(&envelope.unknown, "snapshot", &mut outer_paths);
+    match envelope.query.as_str() {
+        spec::TIMELINE_QUERY => {}
+        spec::TIMELINE_V2_QUERY | spec::USAGE_V2_QUERY => {
+            return crate::normalize_v2::ingest(
+                ctx,
+                stream_id,
+                &envelope.query,
+                envelope.row,
+                outer_paths,
+            );
+        }
+        _ => {
+            return LineOutcome {
+                ops: vec![drift(
+                    ctx,
+                    stream_id,
+                    &format!("snapshot/{}", envelope.query),
+                    "unknown_query",
+                    &[],
+                    None,
+                )],
+                status: LineStatus::UnknownType,
+            };
+        }
+    }
+
     let record = match serde_json::from_value::<TimelineRecord>(envelope.row) {
         Ok(record) => record,
         Err(_) => {
@@ -161,6 +177,25 @@ pub fn ingest(
             record_kind(&message, &part),
             "unknown_fields",
             &paths,
+            Some(record.part_time_created),
+        ));
+    }
+    // Rows imported from older stores lack fields the pinned writer always
+    // stores; they still project, and the shape is reported once per shape.
+    let legacy: Vec<String> = match &*message {
+        MessageData::User(message) => message.legacy_missing_fields(),
+        MessageData::Assistant(message) => message.legacy_missing_fields(),
+    }
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    if !legacy.is_empty() {
+        ops.push(drift(
+            ctx,
+            stream_id,
+            record_kind(&message, &part),
+            "legacy_message_shape",
+            &legacy,
             Some(record.part_time_created),
         ));
     }
@@ -420,10 +455,9 @@ fn timeline_row(
 ) -> MessageRow {
     let (parent_uuid, model) = match message {
         MessageData::User(_) => (None, None),
-        MessageData::Assistant(message) => (
-            Some(message.parent_id.clone()),
-            Some(message.model_id.clone()),
-        ),
+        MessageData::Assistant(message) => {
+            (message.parent_id.clone(), Some(message.model_id.clone()))
+        }
     };
     MessageRow {
         timeline_id: ids::timeline_id(&ctx.session_id, &record.part_id),
@@ -528,7 +562,7 @@ pub(crate) fn drift(
     })
 }
 
-fn hard(
+pub(crate) fn hard(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,
@@ -614,6 +648,74 @@ mod tests {
             row.timeline_id,
             rosetta_core::ids::timeline_id("session", "message:msg-1")
         );
+    }
+
+    #[test]
+    fn legacy_message_shapes_project_and_are_reported() {
+        // A pre-1.0.100 user row (no agent/model) and a pre-1.0.154 assistant
+        // row (no agent, no parentID) as the JSON importer keeps them.
+        let user = json!({"role": "user", "time": {"created": 100}});
+        let assistant = json!({
+            "role": "assistant",
+            "cost": 0,
+            "mode": "build",
+            "modelID": "mock-model",
+            "path": {"cwd": "/workspace", "root": "/workspace"},
+            "providerID": "mock",
+            "system": ["prompt"],
+            "time": {"created": 100, "completed": 130},
+            "tokens": {"input": 10, "output": 4, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+        });
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        let mut state = OpenCodeState::default();
+        let outcome = ingest(
+            &mut ctx,
+            &mut state,
+            spec::DATABASE,
+            &line(user, json!({"type": "text", "text": "hello"})),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        let codes: Vec<_> = outcome
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                IngestOp::Drift(fact) => Some(fact.error_code.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(codes, ["legacy_message_shape"]);
+        assert!(
+            outcome
+                .ops
+                .iter()
+                .any(|op| matches!(op, IngestOp::Message(_)))
+        );
+
+        let outcome = ingest(
+            &mut ctx,
+            &mut state,
+            spec::DATABASE,
+            &line(assistant, json!({"type": "text", "text": "reply"})),
+        );
+        assert_eq!(outcome.status, LineStatus::Parsed);
+        let row = outcome
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                IngestOp::Message(row) => Some(row),
+                _ => None,
+            })
+            .expect("agent row");
+        assert!(row.parent_native_id.is_none());
+        let codes: Vec<_> = outcome
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                IngestOp::Drift(fact) => Some(fact.error_code.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(codes, ["legacy_message_shape"]);
     }
 
     #[test]

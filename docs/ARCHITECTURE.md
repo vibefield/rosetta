@@ -474,9 +474,12 @@ capture contract explicit.
   `DocumentSnapshot` reads one stable, bounded rewrite-in-place JSON, YAML, Markdown, or
   text document. Adapters may lower the pipeline document limit for a small native format
   (Copilot caps `workspace.yaml` at 64 KiB). Both drivers may enumerate multiple virtual
-  sessions from one physical source. Membership is authoritative:
-  rewrites tombstone removed members, and deletion of the whole physical source runs an
-  empty generation for every retained virtual cursor before removing stale projection rows.
+  sessions from one physical source. A member that is rewritten in place swaps generations
+  like any replaced source. A member that disappears — the agent pruned it (Hermes 0.21.4
+  retains 90 days by default), or the whole store is gone — keeps its last projected
+  generation, exactly as a deleted JSONL transcript keeps its rows: an agent's retention
+  policy never erases Rosetta's history (product decision, 2026-09-24). Its virtual cursor
+  simply sees no further activity.
 - **Title reconciliation**: bounded metadata emits a ranked `SessionTitle` fact instead
   of relying on file-walk order. Explicit native labels outrank generated labels, which
   outrank prompt/checkpoint-derived fallbacks; same-rank replacements preserve native
@@ -842,31 +845,39 @@ text member rather than presenting the saved preview as the full message.
 
 ### 4.1.3 Usage accounting and list-price USD (2026-09-22)
 
-**Status (2026-09-22): implemented on branch `usd-cost`, not yet merged.** James decided
-the four product questions that day: exclusive buckets, the five new usage fields, a
-list-price headline, and genai-prices plus an overlay. What landed: the canonical fields, the
-nine adapters' exclusive mappings and counting fixes, `crates/pricing`, projection schema 23,
-protocol v22, and the app. On 2026-09-23 James set the basis: the figure is an estimate at
-each model's official per-token list price, as the provider publishes it and Artificial Analysis
-and OpenRouter show it, not a reconstruction of any bill. Multi-call totals are estimated as
-equal requests, and dated prices stay. Still open:
+**Status (2026-09-24): in `main` at schema 24 / protocol v23.** James decided the four
+product questions on 2026-09-22: exclusive buckets, the five new usage fields, a list-price
+headline, and genai-prices plus an overlay. On 2026-09-23 he set the basis: the figure is an
+estimate at each model's official per-token list price, as the provider publishes it and
+Artificial Analysis and OpenRouter show it, not a reconstruction of any bill; multi-call
+totals are estimated as equal requests, and dated prices stay. A nine-auditor review of every
+agent on 2026-09-23 found the arithmetic exact (every record re-prices to the rollup, live
+equals cold, every priced record matches genai-prices' own calculator) and the gaps in
+coverage and counting; the fixes landed on 2026-09-24 with three more decisions: output an
+agent never recorded is stored as unreported and counted (`unrecorded_output`), never guessed;
+a session that vanishes from an agent's store keeps its last usage; a free or discounted
+serving of a listed model prices at that model's list price. Still open:
 
-- native fixture captures of the mock's `[usage]` scenario;
-- the cross-file usage reconciliation for Claude copies, Grok subagent folds, Codex guardians
-  (RESEARCH_PLAN §5.13);
-- Copilot's per-call usage table.
+- native fixture captures of the mock's `[usage]` scenario, and re-pins of the writers that
+  moved during the audit (Kimi Code 2.0.2, Hermes 0.21.4, Pi 0.87.1, Copilot 1.0.88,
+  OpenCode 2.x, Codex 0.155);
+- Grok parent turns that fold finished children's spend (RESEARCH_PLAN §5.13).
 
 The frozen before/after pair is under **Performance budget** below. Per-agent bucket rules
-and their evidence, including a rebuild of the real 2026-09-11 ledger, are in
+and their evidence, including rebuilds of the real ledger, are in
 [RESEARCH_PLAN.md §5.13](groundtruth/RESEARCH_PLAN.md#513-usage-accounting-audit-2026-09-22).
 The concrete DDL is in [`canonical-model.html`](canonical-model.html). This section owns the
-usage contract. The affected adapters' normalizer versions, projection schema 23, the price
-catalog, protocol v22 and the generated TypeScript types change together.
+usage contract. The affected adapters' normalizer versions, projection schema 24, the price
+catalog, protocol v23 and the generated TypeScript types change together.
 
 **What a usage record is.** One usage record describes one model request as the agent
 recorded it. It rides on the response's timeline row, on a replacement `Usage` op for that
 row, or on a `session_usage` sample when no response row can own it. Examples of the last
 case: an invisible response, a per-session total, an extra attempt inside one response.
+A timeline row that carries no usage makes no usage statement: re-emitting it (a replayed
+record, or a Claude Code row whose usage travels as a `Usage` op behind it) keeps the usage
+columns it already has, and usage returns to unknown only through an all-`None` `Usage` op
+or the replacement generation that drops the row.
 Requests an agent never writes to disk, such as Claude Code's background title calls, are
 outside coverage. The product says "recorded requests", never "your bill".
 
@@ -921,9 +932,16 @@ its request count, when the agent reports one: Grok's `modelCalls`, Copilot's in
    there is no per-component reset (the pre-2026-09-22 Codex fold re-added a component's
    whole running total after any dip).
 2. *Replayed history is not usage.* A row that a child, forked or resumed file copies from
-   another session keeps its timeline role and drops its usage. This covers Codex subagent
-   rollouts before `subagent_history_start_ordinal` and Claude Code responses copied into
-   subagent transcripts.
+   another session keeps its timeline role and drops its usage. Within one file the adapter
+   decides (Codex subagent rollouts before `subagent_history_start_ordinal`, Pi and Kimi
+   Code forks, OpenCode fork copies). Across files the adapter stamps every usage op of a
+   response with the response's native identity (Claude Code: `message.id:requestId`) and
+   the store keeps one owner per identity — the earliest-started session, then the lower
+   session id — dropping later copies on arrival and retracting an earlier-applied copy's
+   usage when its origin lands (`apply::UsageOwners`). The index is process-local like the
+   RAM reconciliation buffer: a rebuild replays the raw ledger through it, and a daemon that
+   opens a complete projection starts empty, so a copy whose origin was projected in an
+   earlier run is caught at the next rebuild. Copies never persist anything (iron rule 5).
 3. *Extra attempts are separate records.* A fallback, compaction or advisor call inside one
    response (Claude `usage.iterations`) becomes its own `session_usage` sample with its own
    model.
@@ -931,7 +949,9 @@ its request count, when the agent reports one: Grok's `modelCalls`, Copilot's in
    only its last step's counts.
 5. *Internal sessions still cost money.* Usage from sessions hidden from the timeline, such as
    Codex guardian reviews, attributes to the parent session as `session_usage` when the parent
-   is source-proven. Otherwise it is reported as out of coverage.
+   is source-proven. Otherwise it is reported as out of coverage. The store admits only such
+   samples and drift from a session-less source; they carry the hidden source's own cursor as
+   provenance, so a rewrite of the review retracts them like any other generation.
 
 **Cost is computed in the rollup, not the adapter.** Adapters extract facts only. Because
 `normalize()` never sees a price, a price update never invalidates a checkpoint or forces a
@@ -974,27 +994,62 @@ every price change is a reviewable diff.
 - *Long-context tiers* reprice the whole request when its prompt size exceeds the tier start.
   The comparison is strictly greater-than, genai-prices' convention, which encodes xAI's
   inclusive 200K boundary as 199,999.
-- *Overlay:* cited additions only. It holds service-tier rules, missing models, aliases such
-  as `k3` → `kimi-k3`, and residency premiums. A cache rate is never derived from the input
-  rate unless the provider documents the multiplier; Anthropic's 1-hour writes at 2× input
-  are cited. Grok Build's `grok-4.6-build` and `grok-4.5-build` are aliases of grok-4.6 and
-  grok-4.5: xAI's per-request charge equals those list prices to the tick until a Grok Build
-  discount began in mid-August 2026. A model with no published list price, such as OpenCode's
-  free `big-pickle`, stays unpriced, and any billed amount is still shown.
+- *Overlay:* cited additions only, in five entry kinds. `[[alias]]` adds an exact spelling
+  of a catalog model (`k3` → `kimi-k3`; the dotted `claude-fable-5.1` and `claude-opus-5.5`
+  that Copilot, OpenRouter and Hermes record; Kimi Code's plan ids); an alias may re-point an
+  upstream spelling only by naming what it displaces. `[[model]]` adds a model genai-prices
+  lacks (grok-4.7, and Grok 4.7 Fast as its own price table), with dated periods where the
+  price changed. `[[patch]]` corrects or completes an upstream model's rates in every period
+  (Moonshot's K3 cache writes), because a same-id `[[model]]` would be shadowed and is
+  rejected. `[[tier]]` and `[[route]]` carry multipliers, optionally dated (`from`/`until`),
+  and a tier entry may name both spellings a provider accepts. A cache rate is never derived
+  from the input rate unless the provider documents the multiplier. Free or discounted
+  servings of a listed model alias the listed model — Grok Build's `grok-4.x-build` (xAI's
+  charge equals list to the tick until a mid-August 2026 discount), OpenCode Zen's `*-free`
+  ids — because the figure is what the usage would cost at list. A model with no published
+  list price, such as Zen's stealth `big-pickle` or `codex-auto-review`, stays unpriced, and
+  any billed amount is still shown.
 - *Multipliers scale tokens only:* service-tier and residency rules multiply the token cost,
-  as their sources cite. Per-call search fees and per-request fees stay flat.
+  as their sources cite. Per-call search fees and per-request fees stay flat. Anthropic fast
+  mode is 2× on Opus 5.5 (from 2026-09-22), Opus 5 and Opus 4.8 (from 2026-05-28), and
+  standard on Opus 4.6 from 2026-05-29 (its earlier research-preview premium is uncited, so
+  those records stay unpriced); `inference_geo: "us"` is 1.1× on every Claude 4.6+ model as
+  the route `anthropic/us` (from 2026-02-05). OpenAI Fast mode (Priority until 2026-07-30,
+  both spellings accepted) is per model: 2× on gpt-6-astra/sol/luna, gpt-5.6-sol/terra/luna,
+  gpt-5.4, gpt-5.4-mini, gpt-5.2 and gpt-5.3-codex, 2.5× on gpt-5.5; Flex and Batch are 0.5×.
+  Gemini's Priority tier is 1.8× and Batch/Flex 0.5× provider-wide. A model-specific rule
+  beats a provider-wide one; a dated rule needs the record's timestamp, so an undated record
+  that only dated rules could price is ambiguous.
 - *Counted aggregates:* an aggregate with a request count is estimated as that many equal
   requests. Each carries the average prompt, which selects the long-context tier, and a
   per-request fee applies once per request. On James's Grok history this estimate is about
   $2.3K, against $1.4K at base rates and $2.9K if the summed prompt picked the tier.
 - *Unpriced, never zero:* the causes are an unknown model, no price period at the timestamp,
   an unsupported tier or residency, a non-zero bucket without a rate, and an uncounted
-  aggregate whose prompt tokens exceed a tier start. A record without a time is ambiguous on a model whose
-  price changed. Usage ops write that "no time" as `ts = 0`, which the store never prices as
-  1970-01-01.
-- *Version:* `rosetta_pricing::CATALOG_VERSION` combines the upstream commit, the overlay's
-  hash and the generator version. `pricing_version()` adds the calculator's revision, which is
-  bumped with any change to what a record costs under an unchanged catalog.
+  aggregate whose prompt tokens exceed a tier start. A record without a time is ambiguous on a
+  model whose price changed, or when only a dated tier or route rule could apply. Usage ops
+  write that "no time" as `ts = 0`, which the store never prices as 1970-01-01. The resolver
+  also reads Amazon Bedrock's inference-profile grammar (`us.anthropic.claude-opus-4-6-v1:0`
+  is `claude-opus-4-6`) and treats a leading `@` (Cloudflare's `@cf/…`) as a prefix, not a
+  version suffix.
+- *Unrecorded output:* a streamed response that never got its final usage record has a known
+  prompt and an unknown output (Claude Code writes a 1–99-token placeholder on every block
+  record and the real figure only on the last; 15.7% of James's responses, 30% in September
+  2026, never get it). The adapter stores such an output as not reported, never the
+  placeholder and never a guess (decision, 2026-09-24); the record prices for its prompt, and
+  `usage_bucket.unrecorded_output` counts these records so every aggregate holding one reads
+  as partial, a lower bound. The transcript head marks the reply the same way.
+- *Version:* `rosetta_pricing::CATALOG_VERSION` combines the upstream commit, the data's
+  SHA-256, the overlay's hash, the generator version and a digest of the rendered tables, so a
+  generator change that alters any table re-prices projections whether or not the constant was
+  bumped. `pricing_version()` adds the calculator's revision, bumped with any change to what a
+  record costs under an unchanged catalog (3: dated tier and route rules, Bedrock and `@`
+  spellings).
+- *Coverage report:* `/api/pricing` lists every model in the open projection with unpriced
+  usage — id, tokens, first and last hour, and whether the id is unknown to the catalog — so
+  a model launched yesterday shows up the day it is first used, before anyone notices a low
+  figure. Re-vendor genai-prices weekly and on any unknown id; the vendored copy went stale
+  by one day when Opus 5.5 launched (3.49B tokens, $1,061, unpriced for a day).
 
 **Re-pricing never replays the ledger.** `projection_state.pricing_version` records the
 pricing version the rollup costs were computed with. A writer opening a complete projection
@@ -1005,9 +1060,20 @@ usage rows on the 2026-09-11 corpus (diagnostic). A cold fold stamps the version
 **The headline is list-price equivalent.** The app leads with one basis across every agent:
 what the recorded usage would cost at API list prices. Most usage runs on subscriptions, so
 there is no bill to compare against. Provider-billed amounts appear as a secondary figure where
-present. Partial or unavailable coverage is always visible, and unpriced usage never reads as $0.
+present. Partial or unavailable coverage is always visible — the `+` marker on any figure that
+is a lower bound, `n/p` on a reply with usage but no priced part, the treemap's note for
+projects it cannot size — and unpriced usage never reads as $0.
 
-**Protocol v21, then v22.** `TokenSnapshot` gains the new fields, and v22 adds `requests`.
+**Aggregates attribute a session tree to its root.** The heatmap, per-model days, hour
+profile and lifetime contribution all scope the same way: every member of a tree whose root
+belongs to the project, provided any member of the tree has been indexed. A subagent that
+resolved another cwd still counts for the project its parent ran in, and a root whose own
+transcript is gone (Claude Code's 30-day cleanup left 538 such roots) still carries its
+indexed subagents' $277. The two paths can no longer disagree.
+
+**Protocol v21, then v22, then v23.** `TokenSnapshot` gains the new fields, v22 adds
+`requests`, and v23 adds `unrecorded_output` beside every spend figure and the coverage report
+on `/api/pricing`.
 Heatmap days, model days, hour totals
 and contribution rows gain `cost_micro_usd`, `billed_micro_usd` and `unpriced_tokens` beside
 `tokens`, so contribution rows can be ranked by spend. Timeline responses carry each
@@ -1036,6 +1102,18 @@ The frozen cold-ingest pair is campaign `usd-cost-abba3-2026-09-22`:
 The pair also caught a cost. Claude checkpoints were keeping each response's full usage snapshot,
 which grew them by 50%. A live append rewrites the file's whole checkpoint, so that cost
 recurs at runtime. They now keep a 64-bit fingerprint instead, and end 4% smaller than before.
+
+The audit fixes (schema 24, 2026-09-24) were paired the same way, campaign
+`audit-fix-abba3-2026-09-24`: `main` b85866d against this tree, the same corpus, command and
+`nice`, ABBA three times, load average 33 to 455. Logical counts are identical on both sides
+(315,168 messages, 2,464 buckets, 472 samples, the same token total: the corpus has no cross-file
+copies and no placeholder responses). Medians: CPU time 38.0 s to 39.8 s (+4.8%); wall 60.2 s to
+60.6 s, within noise; the bucket fold 1.37 s on both; canonical apply 15.5 s to 15.8 s; peak RSS
+1.27 GB to 1.48 GB, the process-local usage-owner index plus the Claude adapter's per-response
+state; the projection 672 MB to 688 MB, usage now on rows plus the `session_root` index;
+checkpoints 44.0 MB to 48.8 MB. On the real 2026-09-23 ledger the checkpoint growth is 2.4%:
+Claude Code +1.8%, Codex 1.47 MB to 2.33 MB for its per-file thread, parent and last-record
+state, Grok unchanged.
 
 **Prior art.** genai-prices (dated prices, the exactly-one-bucket rule), LiteLLM's Rust
 `litellm-cost` (a compiled plan with explicit prompt-convention and threshold policies, and
@@ -1357,14 +1435,14 @@ committed canonical-op goldens and restart tests currently establish this matrix
 
 | adapter | driven source | tool-result merge | usage representation in fixtures | restart proof |
 |---|---|---:|---|---|
-| Antigravity | 1 JSONL + metadata SQLite snapshot | yes | none observed | split/resume + ranked-title ledger/snapshot replay |
-| Claude Code | 2 JSONL streams | yes | inline on messages | split at every fixture line |
+| Antigravity | 1 JSONL + metadata SQLite snapshot + per-conversation SQLite snapshot | yes | `session_usage` samples from the conversation database | split/resume + ranked-title ledger/snapshot replay |
+| Claude Code | 2 JSONL streams | yes | separate identity-stamped `Usage` merge behind each response row | split at every fixture line |
 | Codex | 1 JSONL + metadata SQLite snapshot | yes | separate `Usage` merge | split/resume + native-title snapshot replay |
-| Copilot | 1 JSONL + metadata document snapshot | yes | inline + separate `Usage` merge | split/resume + metadata rename replay |
+| Copilot | 1 JSONL + metadata document snapshot + session-store SQLite snapshot | yes | `session_usage` samples (per-model shutdown intervals) | split/resume + metadata rename replay |
 | Grok | 1 JSONL + metadata document snapshot | yes | separate `Usage` merge | checkpoint/one-shot + document replay |
-| Hermes | 1 SQLite snapshot | yes | none observed | stateless snapshot replay equality |
+| Hermes | 2 SQLite snapshots (state + profile state) | yes | `session_usage` samples (per-model session rows) | stateless snapshot replay equality |
 | Kimi Code | 1 JSONL + metadata document snapshot | yes | inline on messages | split/resume + document replay |
-| OpenCode | 1 SQLite snapshot | yes | inline on messages | split at every snapshot record |
+| OpenCode | 1 SQLite snapshot | yes | separate `Usage` merge (one per step-finish part) | split at every snapshot record |
 | Pi | 1 JSONL | yes | inline on messages | split/resume state test |
 
 “None observed” is fixture evidence, not a claim that a future release cannot report

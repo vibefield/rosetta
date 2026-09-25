@@ -1,0 +1,65 @@
+[
+  {
+    "op": "session_usage",
+    "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
+    "key": "c89acddca28c35565b9c9c81c5e6cd2317e7565b911745939c11890232895818",
+    "ts": 1787634644612,
+    "model": null,
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
+    "key": "0a51830b34beb707c0aa6c2b14601eb6f0f62fd2f5d59c9cd601b99cbd43303a",
+    "ts": 1787634644627,
+    "model": null,
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "489eabc57c6f722f050ce2adaf1250dcf1ba160a90a1df3fe42cff94e10b760c",
+    "key": "ca8187840bb1df78c8a78f2e329fb39a90eb0e039cb94fd149a02fbcc1aa408f",
+    "ts": 1787634644629,
+    "model": null,
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  }
+]

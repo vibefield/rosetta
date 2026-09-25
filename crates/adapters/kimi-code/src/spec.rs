@@ -103,6 +103,8 @@ mod tests {
             "metadata",
             "context.append_loop_event",
             "context.apply_compaction",
+            // Declared from the 2.0.2 bundle (sources/2.0.2.writer.json).
+            "forked",
         ] {
             assert!(records.contains(name), "{name} missing from canonical");
         }

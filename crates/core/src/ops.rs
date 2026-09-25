@@ -55,6 +55,13 @@ pub enum IngestOp {
         ts: Ms,
         model: Option<String>,
         tokens: TokenSnapshot,
+        /// Stable native identity of the model response this usage belongs
+        /// to, shared by every copy of the response across files (Claude
+        /// Code: `<message.id>:<requestId>`). The store keeps the usage of
+        /// the earliest-started session's copy and drops the others'
+        /// (ARCHITECTURE §4.1.3, counting rule 2). Never persisted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<String>,
     },
     /// Usage that the native agent reports only at session/task granularity.
     /// It is an additive canonical sample, not a synthetic response message.
@@ -355,6 +362,7 @@ fn nonempty(value: Option<String>) -> Option<String> {
 fn usage_only(row: &MessageRow) -> Option<IngestOp> {
     let usage = row.usage.clone().filter(|usage| !usage.is_empty())?;
     Some(IngestOp::SessionUsage(SessionUsageRow {
+        identity: None,
         session_id: row.session_id.clone(),
         key: format!("timeline:{}", row.timeline_id),
         ts: row.ts.unwrap_or(0),

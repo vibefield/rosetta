@@ -8,6 +8,7 @@ export interface SpendFields {
   readonly cost_micro_usd: number | null;
   readonly billed_micro_usd: number | null;
   readonly unpriced_tokens: number;
+  readonly unrecorded_output: number;
 }
 
 export interface Spend {
@@ -17,15 +18,25 @@ export interface Spend {
   readonly billedMicroUsd: number | null;
   /** Tokens the price catalog could not price. */
   readonly unpricedTokens: number;
+  /** Usage records whose prompt was recorded but whose output never was
+   * (a streamed reply that never got its final usage record): the priced
+   * figure is a lower bound. */
+  readonly unrecordedOutput: number;
 }
 
-export const NO_SPEND: Spend = { costMicroUsd: null, billedMicroUsd: null, unpricedTokens: 0 };
+export const NO_SPEND: Spend = {
+  costMicroUsd: null,
+  billedMicroUsd: null,
+  unpricedTokens: 0,
+  unrecordedOutput: 0,
+};
 
 export function spendOf(fields: SpendFields): Spend {
   return {
     costMicroUsd: fields.cost_micro_usd,
     billedMicroUsd: fields.billed_micro_usd,
     unpricedTokens: fields.unpriced_tokens,
+    unrecordedOutput: fields.unrecorded_output,
   };
 }
 
@@ -40,6 +51,7 @@ export function addSpend(left: Spend, right: Spend): Spend {
     costMicroUsd: addNullable(left.costMicroUsd, right.costMicroUsd),
     billedMicroUsd: addNullable(left.billedMicroUsd, right.billedMicroUsd),
     unpricedTokens: left.unpricedTokens + right.unpricedTokens,
+    unrecordedOutput: left.unrecordedOutput + right.unrecordedOutput,
   };
 }
 
@@ -49,13 +61,14 @@ export function sumSpend(rows: Iterable<SpendFields>): Spend {
   return total;
 }
 
-/** `complete`: every token priced. `partial`: some unpriced, so the figure
- * is a lower bound. `unavailable`: tokens, none priced. `none`: no usage. */
+/** `complete`: every token priced and every output recorded. `partial`: some
+ * usage unpriced or some output unrecorded, so the figure is a lower bound.
+ * `unavailable`: tokens, none priced. `none`: no usage. */
 export type Coverage = "complete" | "partial" | "unavailable" | "none";
 
 export function coverage(spend: Spend): Coverage {
   if (spend.costMicroUsd === null) return spend.unpricedTokens > 0 ? "unavailable" : "none";
-  return spend.unpricedTokens > 0 ? "partial" : "complete";
+  return spend.unpricedTokens > 0 || spend.unrecordedOutput > 0 ? "partial" : "complete";
 }
 
 /** The two-part figure (`$53.5` + `K`), in fmtTokens' shape. */
@@ -112,8 +125,13 @@ export function spendDescription(spend: Spend, tokenText: (tokens: number) => st
       `${tokenText(spend.unpricedTokens)} tokens ${spend.costMicroUsd === null ? "" : "more "}with no list price`,
     );
   }
+  if (spend.unrecordedOutput > 0) {
+    parts.push(
+      `${spend.unrecordedOutput.toLocaleString()} ${spend.unrecordedOutput === 1 ? "reply" : "replies"} with unrecorded output`,
+    );
+  }
   if (spend.billedMicroUsd !== null) {
     parts.push(`${usdExact(spend.billedMicroUsd)} billed by the provider`);
   }
-  return parts.length === 0 ? "No recorded usage" : parts.join(" · ");
+  return parts.length === 0 ? "No usage read from this agent's records" : parts.join(" · ");
 }

@@ -35,10 +35,12 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        // 16: one usage record per request (counter rule, replay gates, no
-        // usage aimed at dropped rows), exclusive buckets, tier, route and web
-        // searches (§4.1.3).
-        16
+        // 17: per-response `token_usage_record` (remote compactions), the
+        // first settings snapshot's tier back-applied to the first turn, a
+        // start ordinal at end of file no longer drops a child's own usage,
+        // guardian usage attributed to the parent, missed-emission deltas as
+        // aggregates, missing tier key = unset (2026-09-23 audit).
+        17
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

@@ -5,7 +5,7 @@ use std::any::Any;
 use rosetta_adapter_support::{
     AgentAdapter, FileStat, GroundTruthDoc, LineOutcome, NormalizeCtx, SkimResult, StreamDriver,
 };
-use rosetta_core::rows::{SessionRole, TitleKind};
+use rosetta_core::rows::{Ms, SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, KimiCodeState};
@@ -32,9 +32,10 @@ impl AgentAdapter for KimiCodeAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        // 12: compaction (`usageScope: "session"`) usage counts; pending turn
-        // usage accumulates (§4.1.3).
-        12
+        // 13: a step's first visible row owns its request and the remainder
+        // flushes at step.end; fork copies drop usage; negative inputOther
+        // clamps; compaction samples name the request model (§4.1.3).
+        13
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -123,8 +124,13 @@ impl AgentAdapter for KimiCodeAdapter {
         let Ok(state) = crate::raw::parse_session_state(text) else {
             return Vec::new();
         };
+        // A fork's `forkedFrom` plus `createdAt` is the instant the wire gate
+        // needs before it reads the copied prefix (`SessionState::fork_instant`,
+        // `KimiCodeState::observe_fork_instant`). `SkimResult` carries no such
+        // fact yet; once the pipeline adds `forked_at`, every session of this
+        // document sets `forked_at: state.fork_instant().and_then(epoch_ms)`.
         let root = state.id;
-        let cwd = (!state.cwd.is_empty()).then_some(state.cwd);
+        let cwd = state.cwd.filter(|cwd| !cwd.is_empty());
         let started_at = epoch_ms(state.created_at);
         let title = state.title.filter(|title| !title.is_empty());
         let mut sessions = vec![SkimResult {
@@ -188,6 +194,7 @@ impl AgentAdapter for KimiCodeAdapter {
             return LineOutcome::parsed(Vec::new());
         }
         let mut state = take_state(ctx);
+        state.observe_fork_instant(fork_instant(ctx));
         let outcome = normalize::ingest_line(ctx, &mut state, stream_id, line);
         ctx.state = Some(state);
         outcome
@@ -199,6 +206,15 @@ fn take_state(ctx: &mut NormalizeCtx) -> Box<KimiCodeState> {
         Some(state) => state.downcast::<KimiCodeState>().unwrap_or_default(),
         None => Box::default(),
     }
+}
+
+/// The session's fork instant as settled by the meta phase from `state.json`
+/// (see `document_sessions`). `NormalizeCtx` does not carry it yet: the
+/// pipeline change that adds `forked_at` replaces this body with
+/// `ctx.forked_at`. Until then the gate is exercised through the checkpoint
+/// and the tests, and a fork's copied prefix still counts.
+fn fork_instant(_ctx: &NormalizeCtx) -> Option<Ms> {
+    None
 }
 
 struct WireIdentity {

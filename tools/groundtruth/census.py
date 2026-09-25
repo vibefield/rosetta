@@ -56,6 +56,8 @@ def _shape_sample(value: Any) -> Any:
 # schema inference itself is privacy-bounded, but parsing fewer sensitive files
 # is a stronger guarantee than relying on scrubbing after the fact.
 CENSUS_STREAMS = {
+    # The per-call usage table of the runtime's store (RESEARCH_PLAN §5.13).
+    "copilot": {"session-store"},
     "claude-code": {
         "transcript",
         "subagent-transcript",
@@ -115,6 +117,8 @@ def _default_root(agent: str) -> Path:
         return Path.home() / ".gemini" / "antigravity-cli"
     if agent == "kimi-code":
         return Path(os.environ.get("KIMI_CODE_HOME", Path.home() / ".kimi-code"))
+    if agent == "copilot":
+        return Path(os.environ.get("COPILOT_HOME", Path.home() / ".copilot"))
     raise GroundTruthError(f"no default data root for {agent}")
 
 

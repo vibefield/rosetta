@@ -301,10 +301,11 @@ pub(super) fn rebuild_bucket(
                     cost_pusd: row.get(7)?,
                     billed_pusd: row.get(8)?,
                     unpriced_tokens: row.get(9)?,
-                    messages: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
-                    tools: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                    unrecorded_output: row.get(10)?,
+                    messages: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                    tools: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
                 },
-                row.get::<_, i64>(12)?,
+                row.get::<_, i64>(13)?,
             ))
         })?;
     let (values, contributors) = aggregate;
@@ -319,8 +320,8 @@ pub(super) fn rebuild_bucket(
         "INSERT INTO usage_bucket
            (session_id, hour_ts, model, in_tokens, out_tokens, cache_r_tokens,
             cache_w_tokens, think_tokens, cache_w1h_tokens, web_searches, cost_pusd,
-            billed_pusd, unpriced_tokens, message_count, tool_call_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            billed_pusd, unpriced_tokens, unrecorded_output, message_count, tool_call_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(session_id, hour_ts, model) DO UPDATE SET
            in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
            cache_r_tokens = excluded.cache_r_tokens,
@@ -331,6 +332,7 @@ pub(super) fn rebuild_bucket(
            cost_pusd = excluded.cost_pusd,
            billed_pusd = excluded.billed_pusd,
            unpriced_tokens = excluded.unpriced_tokens,
+           unrecorded_output = excluded.unrecorded_output,
            message_count = excluded.message_count,
            tool_call_count = excluded.tool_call_count",
     )?
@@ -348,6 +350,7 @@ pub(super) fn rebuild_bucket(
         values.cost_pusd,
         values.billed_pusd,
         values.unpriced_tokens,
+        values.unrecorded_output,
         values.messages,
         values.tools,
     ])?;
@@ -367,6 +370,7 @@ struct BucketValues {
     cost_pusd: Option<i64>,
     billed_pusd: Option<i64>,
     unpriced_tokens: i64,
+    unrecorded_output: i64,
     messages: i64,
     tools: i64,
 }
@@ -565,11 +569,20 @@ fn apply_message_inner(
                        tool_status_basis = ?26, tool_detail = ?27,
                        tool_error_kind = ?28, tool_error_summary = ?29, tool_diagnostic = ?30,
                        tool_started_at = ?31, tool_completed_at = ?32, tool_duration_ms = ?33,
-                       parent_tool_native_id = ?34, in_tokens = ?35, out_tokens = ?36,
-                       cache_r_tokens = ?37, cache_w_tokens = ?38, think_tokens = ?39,
+                       parent_tool_native_id = ?34,
+                       in_tokens = CASE WHEN ?52 THEN in_tokens ELSE ?35 END,
+                       out_tokens = CASE WHEN ?52 THEN out_tokens ELSE ?36 END,
+                       cache_r_tokens = CASE WHEN ?52 THEN cache_r_tokens ELSE ?37 END,
+                       cache_w_tokens = CASE WHEN ?52 THEN cache_w_tokens ELSE ?38 END,
+                       think_tokens = CASE WHEN ?52 THEN think_tokens ELSE ?39 END,
                        agent_version = ?40, src_cursor = ?41, src_offset = ?42,
-                       cache_w1h_tokens = ?45, web_searches = ?46, service_tier = ?47,
-                       route = ?48, billed_pusd = ?49, usage_scope = ?50, requests = ?51,
+                       cache_w1h_tokens = CASE WHEN ?52 THEN cache_w1h_tokens ELSE ?45 END,
+                       web_searches = CASE WHEN ?52 THEN web_searches ELSE ?46 END,
+                       service_tier = CASE WHEN ?52 THEN service_tier ELSE ?47 END,
+                       route = CASE WHEN ?52 THEN route ELSE ?48 END,
+                       billed_pusd = CASE WHEN ?52 THEN billed_pusd ELSE ?49 END,
+                       usage_scope = CASE WHEN ?52 THEN usage_scope ELSE ?50 END,
+                       requests = CASE WHEN ?52 THEN requests ELSE ?51 END,
                        activity_first_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
                          (SELECT MIN(value) FROM (SELECT activity_first_at AS value UNION ALL SELECT ?43)) END,
                        activity_last_at = CASE WHEN ?10 = 'notice' THEN NULL ELSE
@@ -628,6 +641,10 @@ fn apply_message_inner(
                     new_usage.billed_pico_usd,
                     message_codec::message_scope_column(new_usage.scope),
                     new_usage.requests,
+                    // A re-emitted row that carries no usage (a replayed record;
+                    // a row whose usage travels as a separate `Usage` op) keeps
+                    // the usage it already has, never wipes it.
+                    new_usage.is_empty(),
                 ])?;
                 stats.messages_updated += 1;
             }

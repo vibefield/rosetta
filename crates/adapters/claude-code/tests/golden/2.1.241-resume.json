@@ -39,6 +39,27 @@
         "timeline_id": "645649a929d3141abd48466ce461dc9e48f7e91a114d32eefa11ccb2ee50592c",
         "usage": {
           "billed_pico_usd": null,
+          "cache_read": null,
+          "cache_write": null,
+          "cache_write_1h": null,
+          "input": null,
+          "output": null,
+          "requests": null,
+          "route": null,
+          "scope": "request",
+          "service_tier": null,
+          "thinking": null,
+          "web_searches": null
+        }
+      },
+      {
+        "identity": "msg_mock_0003",
+        "model": "claude-opus-5",
+        "op": "usage",
+        "response": "645649a929d3141abd48466ce461dc9e48f7e91a114d32eefa11ccb2ee50592c",
+        "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0",
+        "tokens": {
+          "billed_pico_usd": null,
           "cache_read": 0,
           "cache_write": 0,
           "cache_write_1h": 0,
@@ -50,7 +71,8 @@
           "service_tier": "standard",
           "thinking": 0,
           "web_searches": 0
-        }
+        },
+        "ts": 1787625319522
       },
       {
         "at": 1787625319878,
@@ -135,6 +157,27 @@
         "timeline_id": "0effde8b1b9287958ac00e75049a383680d601ac3d6ad6f7f2281d401fe370e5",
         "usage": {
           "billed_pico_usd": null,
+          "cache_read": null,
+          "cache_write": null,
+          "cache_write_1h": null,
+          "input": null,
+          "output": null,
+          "requests": null,
+          "route": null,
+          "scope": "request",
+          "service_tier": null,
+          "thinking": null,
+          "web_searches": null
+        }
+      },
+      {
+        "identity": "msg_mock_0004",
+        "model": "claude-opus-5",
+        "op": "usage",
+        "response": "0effde8b1b9287958ac00e75049a383680d601ac3d6ad6f7f2281d401fe370e5",
+        "session_id": "fa3b8c54e51b7bbecf8e882aa2d1b47542028a0f39b68052c30254f74086e9a0",
+        "tokens": {
+          "billed_pico_usd": null,
           "cache_read": 0,
           "cache_write": 0,
           "cache_write_1h": 0,
@@ -146,7 +189,8 @@
           "service_tier": "standard",
           "thinking": 0,
           "web_searches": 0
-        }
+        },
+        "ts": 1787625319897
       }
     ],
     "transcript": "projects/-private-tmp-rosetta-farm-resume-project/469a2e13-c3ed-4909-89af-056a5ab04a4e.jsonl"

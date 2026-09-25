@@ -315,7 +315,7 @@
       "service_tier": null,
       "route": null,
       "billed_pico_usd": null,
-      "scope": "aggregate",
+      "scope": "request",
       "requests": null
     },
     "provenance": {

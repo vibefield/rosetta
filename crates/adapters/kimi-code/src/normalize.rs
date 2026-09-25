@@ -3,7 +3,8 @@
 //! Kimi has duplicate persistence rails inside one wire file: `turn.prompt`
 //! precedes the richer `context.append_message`, and `usage.record` repeats the
 //! usage later carried by `step.end`. This projection takes the message rail
-//! and the dedicated usage rail exactly once.
+//! and the dedicated usage rail exactly once; the usage rules live in
+//! [`crate::usage`].
 
 use std::collections::BTreeSet;
 
@@ -12,24 +13,28 @@ use rosetta_adapter_support::tool::{
 };
 use rosetta_adapter_support::{Drift, LineOutcome, LineStatus, NormalizeCtx};
 use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TaskRow, TaskStatus, TokenSnapshot,
+    DriftFact, MessageKind, MessageRow, Ms, TaskRow, TaskStatus, TokenSnapshot,
 };
-use rosetta_core::timeline::{AttachmentKind, AttachmentRef, ToolAction};
-use rosetta_core::{IngestOp, fold, ids};
+use rosetta_core::timeline::ToolAction;
+use rosetta_core::{IngestOp, ids};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::content::{
+    ContentPartError, content_attachments, content_part_failure, content_text, result_text,
+    validate_content_part,
+};
 use crate::raw::wire::{
-    ConfigUpdateLine, ContentBlock, ContextAppendLoopEventLine, ContextAppendMessageLine,
-    ContextApplyCompactionLine, KnownRecord, ProfileBindLine, RecordedUsage, ToolResultBody,
-    ToolsUpdateStoreLine, UsageRecordLine,
+    ConfigUpdateLine, ContextAppendLoopEventLine, ContextAppendMessageLine,
+    ContextApplyCompactionLine, KnownRecord, ProfileBindLine, ToolsUpdateStoreLine,
 };
 use crate::raw::{ParsedLine, parse_wire_line};
 use crate::spec;
 use crate::time::epoch_ms;
+use crate::usage;
 
 const UNKNOWN_TYPE: &str = "unknown_type";
-const UNKNOWN_SUBTYPE: &str = "unknown_subtype";
+pub(crate) const UNKNOWN_SUBTYPE: &str = "unknown_subtype";
 const UNKNOWN_FIELDS: &str = "unknown_fields";
 const PARSE_FAILED: &str = "parse_failed";
 const INVALID_JSON: &str = "invalid_json";
@@ -38,13 +43,6 @@ const NO_TYPE: &str = "<none>";
 const INVALID_JSON_KIND: &str = "<invalid-json>";
 const BINARY_KIND: &str = "<binary>";
 
-#[derive(Debug, PartialEq, Eq)]
-enum ContentPartError {
-    Undeclared(String),
-    UnsupportedDeclared(String),
-    Malformed(&'static str),
-}
-
 /// Per-wire state. Each agent wire gets its own `NormalizeCtx`, so model,
 /// pending usage, transient tool cwd, and ordinals never cross agent sessions.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -52,13 +50,43 @@ enum ContentPartError {
 pub struct KimiCodeState {
     /// Execution context for resolving tool paths only. Canonical cwd is meta.
     tool_cwd: Option<String>,
-    model: Option<String>,
-    effort: Option<String>,
-    pending_usage: Option<TokenSnapshot>,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) pending_usage: Option<TokenSnapshot>,
+    /// The open loop step (`step.begin` uuid). Its first visible row owns the
+    /// pending request; closing it flushes whatever is left as a step sample.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) step: Option<String>,
     /// Result records carry no tool name. Remember only reviewed Agent calls
     /// so unrelated successful output cannot masquerade as a child link.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     delegate_calls: BTreeSet<String>,
+    /// The fork instant proven by bounded session metadata (`state.json`
+    /// `forkedFrom` plus `createdAt`, see `SessionState::fork_instant`). A
+    /// fork's wire starts with the source's records, `usage.record` lines
+    /// included, and the in-stream `forked` marker only follows them; so the
+    /// gate needs the instant before the copied prefix is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forked_at: Option<Ms>,
+}
+
+impl KimiCodeState {
+    /// Seed the fork instant from the session's bounded metadata. The first
+    /// proven value sticks; the checkpoint then carries it across resumes.
+    pub fn observe_fork_instant(&mut self, forked_at: Option<Ms>) {
+        if self.forked_at.is_none() {
+            self.forked_at = forked_at;
+        }
+    }
+
+    /// A record older than the fork instant is the source session's copy:
+    /// its row stays, its usage was already counted there (§4.1.3 rule 2).
+    pub(crate) fn inherited_copy(&self, at: Option<Ms>) -> bool {
+        match (self.forked_at, at) {
+            (Some(forked_at), Some(at)) => at < forked_at,
+            _ => false,
+        }
+    }
 }
 
 pub fn ingest_line(
@@ -76,7 +104,7 @@ pub fn ingest_line(
 
     let parsed = match parse_wire_line(text) {
         Ok(parsed) => parsed,
-        Err(_) => return parse_failure(ctx, stream_id, text),
+        Err(_) => return parse_failure(ctx, state, stream_id, text),
     };
     let record = match parsed {
         ParsedLine::Known(record) => record,
@@ -129,10 +157,14 @@ fn project(
         KnownRecord::ContextAppendLoopEvent(line) => loop_event(ctx, state, stream_id, line, ops),
         KnownRecord::LlmRequest(line) => {
             state.model = Some(line.model.clone());
-            state.effort = Some(line.thinking_effort.clone());
+            // 2.0.2 may omit the effort; the bound setting then still applies.
+            if let Some(effort) = &line.thinking_effort {
+                state.effort = Some(effort.clone());
+            }
             LineStatus::Parsed
         }
-        KnownRecord::UsageRecord(line) => usage_record(ctx, state, stream_id, line, ops),
+        KnownRecord::UsageRecord(line) => usage::usage_record(ctx, state, stream_id, line, ops),
+        KnownRecord::TurnEnded(line) => usage::turn_ended(ctx, state, line, ops),
         KnownRecord::ConfigUpdate(line) => config_update(ctx, state, stream_id, line, ops),
         KnownRecord::ContextApplyCompaction(line) => context_compaction(ctx, stream_id, line, ops),
         KnownRecord::ToolsUpdateStore(line) => tools_update_store(ctx, stream_id, line, ops),
@@ -140,7 +172,9 @@ fn project(
         // appended context message; step usage is handled inside the loop-event
         // router and duplicates the preceding usage.record. Prompt acceptance,
         // approval interaction, and compaction lifecycle records carry no
-        // additional canonical content beyond the typed records above.
+        // additional canonical content beyond the typed records above. The
+        // `forked` marker only confirms in-stream what the bounded metadata
+        // already proved: everything before it is the source's copy.
         KnownRecord::Metadata(_)
         | KnownRecord::RuntimeSetBinding(_)
         | KnownRecord::PermissionSetMode(_)
@@ -148,14 +182,14 @@ fn project(
         | KnownRecord::PluginSessionStart(_)
         | KnownRecord::LlmToolsSnapshot(_)
         | KnownRecord::TokenCountingMeasured(_)
-        | KnownRecord::TurnEnded(_)
         | KnownRecord::TokenCountingTurnRecorded(_)
         | KnownRecord::FullCompactionBegin(_)
         | KnownRecord::FullCompactionComplete(_)
         | KnownRecord::InteractionRequest(_)
         | KnownRecord::InteractionResolved(_)
         | KnownRecord::PermissionRecordApprovalResult(_)
-        | KnownRecord::PromptAccepted(_) => LineStatus::Parsed,
+        | KnownRecord::PromptAccepted(_)
+        | KnownRecord::Forked(_) => LineStatus::Parsed,
     }
 }
 
@@ -190,6 +224,33 @@ fn profile_bind(
     state.effort = Some(line.thinking_effort.clone());
     state.tool_cwd = Some(cwd.to_owned());
     LineStatus::Parsed
+}
+
+/// A known record that failed to parse. An `llm.request` that did not parse
+/// leaves the model unknown rather than stale: the step's `usage.record`
+/// then names it from the recorded alias.
+fn parse_failure(
+    ctx: &NormalizeCtx,
+    state: &mut KimiCodeState,
+    stream_id: &str,
+    text: &str,
+) -> LineOutcome {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return hard(ctx, stream_id, INVALID_JSON_KIND, INVALID_JSON, &[], None);
+    };
+    let kind = value["type"].as_str().unwrap_or(NO_TYPE);
+    if kind == "llm.request" {
+        state.model = None;
+        state.effort = None;
+    }
+    hard(
+        ctx,
+        stream_id,
+        kind,
+        PARSE_FAILED,
+        &top_level_keys(&value),
+        value_time(&value),
+    )
 }
 
 fn config_update(
@@ -447,6 +508,8 @@ fn loop_event(
     ops: &mut Vec<IngestOp>,
 ) -> LineStatus {
     match line.event.event_type.as_str() {
+        "step.begin" => usage::step_begin(ctx, state, line, ops),
+        "step.end" => usage::step_end(ctx, state, line, ops),
         "content.part" => content_part(ctx, state, stream_id, line, ops),
         "tool.call" => tool_call(ctx, state, stream_id, line, ops),
         "tool.result" => tool_result(ctx, state, stream_id, line, ops),
@@ -533,7 +596,7 @@ fn content_part(
             .into_iter()
             .map(|asset| IngestOp::ProjectionAsset { asset }),
     );
-    stamp_response(&mut row, state);
+    usage::stamp_response(&mut row, state);
     IngestOp::push_message(ops, row);
     LineStatus::Parsed
 }
@@ -628,7 +691,7 @@ fn tool_call(
         row.branch_tool_id = Some(tool_id.to_owned());
         state.delegate_calls.insert(tool_id.to_owned());
     }
-    stamp_response(&mut row, state);
+    usage::stamp_response(&mut row, state);
     IngestOp::push_message(ops, row);
     LineStatus::Parsed
 }
@@ -723,108 +786,6 @@ fn delegate_agent_id(text: &str) -> Option<&str> {
     })
 }
 
-fn content_part_failure(
-    ctx: &NormalizeCtx,
-    stream_id: &str,
-    record_kind: &str,
-    error: ContentPartError,
-    at: Option<Ms>,
-    ops: &mut Vec<IngestOp>,
-) -> LineStatus {
-    match error {
-        ContentPartError::Undeclared(kind) => {
-            ops.push(drift(
-                ctx,
-                stream_id,
-                &format!("{record_kind}/{kind}"),
-                UNKNOWN_SUBTYPE,
-                &[],
-                at,
-            ));
-            LineStatus::UnknownType
-        }
-        ContentPartError::UnsupportedDeclared(kind) => hard_into(
-            ctx,
-            stream_id,
-            &format!("{record_kind}/{kind}"),
-            "unsupported_declared_content_part",
-            at,
-            ops,
-        ),
-        ContentPartError::Malformed(code) => hard_into(ctx, stream_id, record_kind, code, at, ops),
-    }
-}
-
-fn usage_record(
-    ctx: &NormalizeCtx,
-    state: &mut KimiCodeState,
-    stream_id: &str,
-    line: &UsageRecordLine,
-    ops: &mut Vec<IngestOp>,
-) -> LineStatus {
-    let known = matches!(line.usage_scope.as_str(), "turn" | "session");
-    if known && usage_snapshot(&line.usage).is_none() {
-        return hard_into(
-            ctx,
-            stream_id,
-            "usage.record",
-            "usage_out_of_range",
-            epoch_ms(line.time),
-            ops,
-        );
-    }
-    match line.usage_scope.as_str() {
-        // One finished loop request; the next response row owns it. Two
-        // requests before one row accumulate into an aggregate rather than
-        // the second overwriting the first.
-        "turn" => {
-            let tokens = usage_snapshot(&line.usage).expect("checked above");
-            state.pending_usage = Some(match state.pending_usage.take() {
-                Some(pending) => fold::bucket_apply(&pending, &tokens),
-                None => tokens,
-            });
-            LineStatus::Parsed
-        }
-        // Every request that is not a loop step (compaction today) is also
-        // one billable request, never a running total (RESEARCH_PLAN §5.13).
-        // No response row owns it, so it is a replacement-keyed sample.
-        "session" => {
-            let tokens = usage_snapshot(&line.usage).expect("checked above");
-            let native_key = format!(
-                "usage.record:{}:{}:{}",
-                line.agent_id.as_deref().unwrap_or(""),
-                line.time,
-                line.model
-            );
-            ops.push(IngestOp::SessionUsage(SessionUsageRow {
-                session_id: ctx.session_id.clone(),
-                key: ids::usage_id(&ctx.session_id, &native_key),
-                ts: epoch_ms(line.time).unwrap_or(0),
-                model: Some(line.model.clone()),
-                tokens,
-            }));
-            LineStatus::Parsed
-        }
-        other => {
-            ops.push(drift(
-                ctx,
-                stream_id,
-                &format!("usage.record/{other}"),
-                UNKNOWN_SUBTYPE,
-                &[],
-                epoch_ms(line.time),
-            ));
-            LineStatus::UnknownType
-        }
-    }
-}
-
-fn stamp_response(row: &mut MessageRow, state: &mut KimiCodeState) {
-    row.model.clone_from(&state.model);
-    row.effort.clone_from(&state.effort);
-    row.usage = state.pending_usage.take();
-}
-
 fn row(
     ctx: &mut NormalizeCtx,
     discriminator: &str,
@@ -857,7 +818,7 @@ fn row(
     }
 }
 
-fn source_discriminator(ctx: &NormalizeCtx, kind: &str) -> String {
+pub(crate) fn source_discriminator(ctx: &NormalizeCtx, kind: &str) -> String {
     if let Some(offset) = ctx.src_offset {
         format!("wire@{offset}:{kind}")
     } else if let Some(cursor) = ctx.src_cursor {
@@ -865,115 +826,6 @@ fn source_discriminator(ctx: &NormalizeCtx, kind: &str) -> String {
     } else {
         format!("ordinal@{}:{kind}", ctx.next_ordinal)
     }
-}
-
-fn validate_content_part(block: &ContentBlock) -> Result<(), ContentPartError> {
-    if !spec::declared_content_part_types().contains(&block.block_type) {
-        return Err(ContentPartError::Undeclared(block.block_type.clone()));
-    }
-    match block.block_type.as_str() {
-        "text" if block.text.is_none() => Err(ContentPartError::Malformed("missing_text")),
-        "think" if block.think.is_none() => Err(ContentPartError::Malformed("missing_think")),
-        "image_url" if block.image_url.is_none() => {
-            Err(ContentPartError::Malformed("missing_image_url"))
-        }
-        "audio_url" if block.audio_url.is_none() => {
-            Err(ContentPartError::Malformed("missing_audio_url"))
-        }
-        "video_url" if block.video_url.is_none() => {
-            Err(ContentPartError::Malformed("missing_video_url"))
-        }
-        "text" | "think" | "image_url" | "audio_url" | "video_url" => Ok(()),
-        other => Err(ContentPartError::UnsupportedDeclared(other.to_owned())),
-    }
-}
-
-fn content_text(blocks: &[ContentBlock]) -> Result<Option<String>, ContentPartError> {
-    let mut text = Vec::with_capacity(blocks.len());
-    for block in blocks {
-        validate_content_part(block)?;
-        if block.block_type == "text" {
-            text.push(block.text.as_deref().expect("validated text part"));
-        }
-    }
-    let joined = text.join("\n");
-    Ok((!joined.is_empty()).then_some(joined))
-}
-
-/// Only authored content reaches this helper. URL references never trigger IO;
-/// a data URL materializes only the bytes actually recorded in the ledger.
-fn content_attachments(
-    blocks: &[ContentBlock],
-) -> (Vec<AttachmentRef>, Vec<rosetta_core::ProjectionAsset>) {
-    use rosetta_adapter_support::media;
-    let mut attachments = Vec::new();
-    let mut assets = Vec::new();
-    for (index, block) in blocks.iter().enumerate() {
-        let (kind, source) = match block.block_type.as_str() {
-            "image_url" => (AttachmentKind::Image, block.image_url.as_ref()),
-            "audio_url" => (AttachmentKind::Audio, block.audio_url.as_ref()),
-            "video_url" => (AttachmentKind::Video, block.video_url.as_ref()),
-            _ => continue,
-        };
-        let id = format!("media-{index}");
-        let (mut attachment, asset) = match source {
-            Some(source) => media::from_url(&id, kind, &source.url, None),
-            None => media::unavailable(
-                &id,
-                kind,
-                rosetta_core::timeline::AttachmentUnavailableReason::InvalidData,
-            ),
-        };
-        attachment.name = source
-            .and_then(|source| source.id.as_deref())
-            .and_then(media::bounded_name);
-        attachments.push(attachment);
-        assets.extend(asset);
-    }
-    (attachments, assets)
-}
-
-/// Kimi's usage is exclusive by construction (`inputOther` excludes cache
-/// reads and creation; RESEARCH_PLAN §5.13). Its OpenAI-compatible providers
-/// fold any cache writes into `inputOther` and never split reasoning out of
-/// `output`, so neither can be recovered here.
-fn usage_snapshot(usage: &RecordedUsage) -> Option<TokenSnapshot> {
-    Some(TokenSnapshot {
-        input: Some(i64::try_from(usage.input_other).ok()?),
-        output: Some(i64::try_from(usage.output).ok()?),
-        cache_read: Some(i64::try_from(usage.input_cache_read).ok()?),
-        cache_write: Some(i64::try_from(usage.input_cache_creation).ok()?),
-        // Kimi's native usage shape declares no thinking-token component.
-        thinking: None,
-        ..TokenSnapshot::default()
-    })
-}
-
-fn result_text(result: &ToolResultBody) -> Result<Option<String>, ContentPartError> {
-    match &result.output {
-        Value::String(text) => Ok(Some(text.clone())),
-        Value::Array(blocks) => {
-            let blocks = serde_json::from_value::<Vec<ContentBlock>>(Value::Array(blocks.clone()))
-                .map_err(|_| ContentPartError::Malformed("invalid_result_blocks"))?;
-            content_text(&blocks)
-        }
-        _ => Err(ContentPartError::Malformed("unsupported_result_output")),
-    }
-}
-
-fn parse_failure(ctx: &NormalizeCtx, stream_id: &str, text: &str) -> LineOutcome {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return hard(ctx, stream_id, INVALID_JSON_KIND, INVALID_JSON, &[], None);
-    };
-    let kind = value["type"].as_str().unwrap_or(NO_TYPE);
-    hard(
-        ctx,
-        stream_id,
-        kind,
-        PARSE_FAILED,
-        &top_level_keys(&value),
-        value_time(&value),
-    )
 }
 
 fn hard(
@@ -992,7 +844,7 @@ fn hard(
     }
 }
 
-fn hard_into(
+pub(crate) fn hard_into(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,
@@ -1006,7 +858,7 @@ fn hard_into(
     }
 }
 
-fn drift(
+pub(crate) fn drift(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,
@@ -1052,6 +904,7 @@ fn record_kind(record: &KnownRecord) -> &'static str {
         KnownRecord::PermissionRecordApprovalResult(_) => "permission.record_approval_result",
         KnownRecord::PromptAccepted(_) => "prompt.accepted",
         KnownRecord::ToolsUpdateStore(_) => "tools.update_store",
+        KnownRecord::Forked(_) => "forked",
     }
 }
 
@@ -1080,6 +933,7 @@ fn record_time(record: &KnownRecord) -> Option<Ms> {
         KnownRecord::PermissionRecordApprovalResult(line) => line.time,
         KnownRecord::PromptAccepted(line) => line.time,
         KnownRecord::ToolsUpdateStore(line) => line.time,
+        KnownRecord::Forked(line) => line.time,
     };
     epoch_ms(time)
 }
@@ -1096,51 +950,4 @@ fn top_level_keys(value: &Value) -> Vec<String> {
         .as_object()
         .map(|object| object.keys().cloned().collect())
         .unwrap_or_else(|| vec!["<non-object>".to_owned()])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{result_text, usage_snapshot};
-    use crate::raw::wire::{RecordedUsage, ToolResultBody};
-    use rosetta_adapter_support::Unknown;
-    use serde_json::json;
-
-    #[test]
-    fn reported_zero_usage_stays_reported() {
-        let usage = RecordedUsage {
-            input_other: 0,
-            output: 0,
-            input_cache_read: 0,
-            input_cache_creation: 0,
-            unknown: Unknown::new(),
-        };
-        let tokens = usage_snapshot(&usage).expect("representable usage");
-        assert_eq!(tokens.input, Some(0));
-        assert_eq!(tokens.output, Some(0));
-        assert_eq!(tokens.cache_read, Some(0));
-        assert_eq!(tokens.cache_write, Some(0));
-        assert_eq!(tokens.thinking, None);
-    }
-
-    #[test]
-    fn result_output_preserves_string_and_text_blocks() {
-        let body = ToolResultBody {
-            output: json!("plain"),
-            is_error: None,
-            note: None,
-            unknown: Unknown::new(),
-        };
-        assert_eq!(result_text(&body), Ok(Some("plain".to_owned())));
-
-        let body = ToolResultBody {
-            output: json!([
-                {"type": "text", "text": "first"},
-                {"type": "text", "text": "second"}
-            ]),
-            is_error: Some(false),
-            note: None,
-            unknown: Unknown::new(),
-        };
-        assert_eq!(result_text(&body), Ok(Some("first\nsecond".to_owned())));
-    }
 }

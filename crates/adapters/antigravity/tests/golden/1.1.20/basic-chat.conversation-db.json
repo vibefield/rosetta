@@ -1,0 +1,44 @@
+[
+  {
+    "op": "session_usage",
+    "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
+    "key": "2a7d6659fe6342a32669d8b5b89e85585c03d9cff61482cfeb57306090457444",
+    "ts": 1787634643900,
+    "model": null,
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "c8a6548018e07de2d74e70ccf87c600b438f77549668d04fbe2bb340f96a4ddd",
+    "key": "1d3142f1e6a43a1d7bb09f3a87084adebf9d57312ca405182760e0159d657a7a",
+    "ts": 1787634643907,
+    "model": null,
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  }
+]

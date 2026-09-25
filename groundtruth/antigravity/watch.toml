@@ -5,6 +5,7 @@
 status = "captured"
 known_gaps = [
   "IDE persistence is a separate Tier D surface; implicit protobuf and several maintenance streams remain observed/research only.",
+  "The conversation store's protobuf grammar (steps.metadata, gen_metadata.data) is declared from the installed agy 1.2.9 descriptor set, not from a 1.2.9 fixture farm; the mock reports no served-model string, cache reads, or thinking tokens, so response_model#19 and a non-zero cache/thinking split await a native usage-scenario capture.",
 ]
 
 [agent]

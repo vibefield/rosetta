@@ -18,6 +18,17 @@
 //! hermetic 0.38.0 always writes it; organic protocol-1.5 sessions usually
 //! omit it. `subagents` is omitted on explore sub-agent profile.bind.
 //!
+//! Kimi Code 2.0.2 (installed bundle `~/.kimi-code/bin/kimi`, byte offsets
+//! `kimi@N`, declared in `sources/2.0.2.writer.json`) still stamps protocol
+//! 1.5 (`createWireMetadataRecord` kimi@96251710) and adds: the `forked`
+//! marker `{type, agentId, time}` appended at the fork boundary of every
+//! copied agent wire (`GoalForked` kimi@101437805, `forkedRecord`
+//! kimi@97815218); optional `modelAlias`, `thinkingEffort`, `thinkingKeep`
+//! and `maxTokens` on `llm.request` (`llmRequestSchema` kimi@103479471);
+//! an optional `usageScope` (`usageRecordSchema` kimi@101742617); and an
+//! unclamped `inputOther = prompt_tokens − cached` (`parseOpenAIUsage`
+//! kimi@98617262) that can go negative.
+//!
 //! Parsing policy (CLAUDE.md): permissive on fields — flatten-unknown maps
 //! everywhere, non-empty = drift. Strict on envelope structure. Tool-result
 //! payloads stay `serde_json::Value`.
@@ -67,6 +78,7 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "permission.record_approval_result"
                 | "prompt.accepted"
                 | "tools.update_store"
+                | "forked"
         )
     );
     if known {
@@ -126,6 +138,8 @@ pub enum KnownRecord {
     PromptAccepted(PromptAcceptedLine),
     #[serde(rename = "tools.update_store")]
     ToolsUpdateStore(ToolsUpdateStoreLine),
+    #[serde(rename = "forked")]
+    Forked(ForkedLine),
 }
 
 impl Drift for KnownRecord {
@@ -166,6 +180,7 @@ impl Drift for KnownRecord {
                     note_unknown(&item.unknown, &format!("{prefix}.value[{index}]"), out);
                 }
             }
+            KnownRecord::Forked(l) => note_unknown(&l.unknown, prefix, out),
         }
     }
 }
@@ -475,6 +490,12 @@ pub struct LlmToolsSnapshotLine {
     pub unknown: Unknown,
 }
 
+/// One model request. `model` is the API model id; `modelAlias` the
+/// configured alias that `usage.record.model` repeats. The four optional
+/// fields below are required in the 0.38.0 corpus and optional in the 2.0.2
+/// writer schema (`llmRequestSchema` kimi@103479471), whose further optional
+/// fields (`temperature`, `topP`, `betaApi`, `systemPrompt`, `attempt`,
+/// `projection`) stay in `unknown` until a capture shows them.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmRequestLine {
@@ -483,10 +504,14 @@ pub struct LlmRequestLine {
     pub kind: String,
     pub provider: String,
     pub model: String,
-    pub model_alias: String,
-    pub thinking_effort: String,
-    pub thinking_keep: String,
-    pub max_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_keep: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
     pub tool_select: bool,
     pub system_prompt_hash: String,
     pub tools_hash: String,
@@ -500,6 +525,11 @@ pub struct LlmRequestLine {
     pub unknown: Unknown,
 }
 
+/// One finished model request, recorded by `LlmRequesterService` after the
+/// stream's finish event (kimi@103495669) with `model = request.modelAlias`.
+/// `usageScope` is `turn` for loop steps and `session` for every other
+/// request (`UsageAgentModel.record` kimi@101743598); the 2.0.2 schema
+/// declares it optional (`usageRecordSchema` kimi@101742617).
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordLine {
@@ -507,7 +537,8 @@ pub struct UsageRecordLine {
     pub agent_id: Option<String>,
     pub model: String,
     pub usage: RecordedUsage,
-    pub usage_scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_scope: Option<String>,
     pub time: u64,
     #[serde(flatten)]
     pub unknown: Unknown,
@@ -521,10 +552,14 @@ impl Drift for UsageRecordLine {
 }
 
 /// Usage as Kimi records it on the wire (not the raw OpenAI usage block).
+/// `inputOther` is `prompt_tokens − cached_tokens` without a clamp
+/// (`parseOpenAIUsage` kimi@98617262), so a provider that reports more cached
+/// than prompt tokens writes a negative value; the normalizer clamps it to
+/// zero and reports drift instead of failing the record.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedUsage {
-    pub input_other: u64,
+    pub input_other: i64,
     pub output: u64,
     pub input_cache_read: u64,
     pub input_cache_creation: u64,
@@ -688,6 +723,24 @@ pub struct ToolsUpdateStoreLine {
 pub struct TodoItem {
     pub status: String,
     pub title: String,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+/// The fork boundary marker. Kimi Code 2.0.2 `fork()` (kimi@97829976)
+/// byte-copies every session file except `state.json`, `logs` and
+/// `upcoming-goals.json` (`copySessionFiles` kimi@97839892), or rewrites the
+/// retained turn prefix of each wire when a turn index is given
+/// (`copyAgentWire` kimi@97836890), then appends this record to every copied
+/// agent wire (`forkedRecord` kimi@97815218, `appendForkedMarker`). Every
+/// record before it is the source session's copy, `usage.record` included.
+/// Writer zod schema: `{agentId: string}` (`GoalForked` kimi@101437805).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkedLine {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    pub time: u64,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

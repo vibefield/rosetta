@@ -1,0 +1,460 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "kimi-code",
+  "agent_version": "2.0.2",
+  "evidence": "writer",
+  "generator": "writer-bundle @moonshot-ai/kimi-code@2.0.2 installed at ~/.kimi-code/bin/kimi (auto-update 2026-09-22; cited as byte offsets kimi@N into that bundle, read with `grep -abo`/`strings`): packages/agent-core-v2/src/agent/goal events GoalForked kimi@101437805; packages/agent-core-v2/src/workspace/sessionLifecycle/sessionLifecycleService.ts forkedRecord kimi@97815218, fork kimi@97829976, copyAgentWire/appendForkedMarker kimi@97836890, copySessionFiles kimi@97839892, state.json write kimi@97834752; packages/agent-core-v2/src/agent/llmRequester llmRequestSchema kimi@103479471; packages/agent-core-v2/src/agent/usage/usageOps.ts usageRecordSchema kimi@101742617; packages/agent-core-v2/src/human/llm tokenUsageSchema kimi@101893268; packages/agent-core-v2/src/wire/record.ts createWireMetadataRecord kimi@96251710; packages/klient/src/contract/session/metadata.ts sessionMetaSchema kimi@103928171",
+  "data_root": "~/.kimi-code",
+  "writer_version": "@moonshot-ai/kimi-code@2.0.2",
+  "streams": [
+    {
+      "id": "wire",
+      "glob": "sessions/*/*/agents/*/wire.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Kimi Code 2.0.2 still stamps protocol_version 1.5 (createWireMetadataRecord kimi@96251710). /fork and POST /sessions/{id}/children (fork kimi@97829976) copy the source session: a whole-session fork byte-copies every session file except state.json, logs and upcoming-goals.json (copySessionFiles kimi@97839892), so each agents/*/wire.jsonl comes along with all of its usage.record lines; a turn-sliced fork rewrites each retained wire with the records of turns 0..=turnIndex (usage.record lines included) and cuts subagent wires at the slice's cutoff time (copyAgentWire kimi@97836890). Both then append {type: forked, agentId, time} to every copied agent wire (forkedRecord kimi@97815218; GoalForked kimi@101437805, durable, schema {agentId: string}); the copied metadata keeps the source's created_at. Every record before the marker is the source's copy. llm.request makes modelAlias, thinkingEffort, thinkingKeep and maxTokens optional and adds optional temperature, topP, betaApi, systemPrompt, attempt and projection (llmRequestSchema kimi@103479471). usage.record.model is request.modelAlias and usageScope is optional in the schema (usageRecordSchema kimi@101742617) though always written as turn|session; its usage is the kosong TokenUsage (tokenUsageSchema kimi@101893268) whose inputOther = prompt_tokens - cached_tokens is not clamped (parseOpenAIUsage kimi@98617262) and whose optional raw block is unseen on disk.",
+      "discriminator": "type",
+      "record_types": {
+        "forked": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "forked": 0
+                  }
+                },
+                "required": true
+              },
+              "agentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "llm.request": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "llm.request": 0
+                  }
+                },
+                "required": true
+              },
+              "agentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "kind": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "compaction": 0,
+                    "loop": 0
+                  }
+                },
+                "required": true
+              },
+              "provider": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "modelAlias": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "thinkingEffort": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "thinkingKeep": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "temperature": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "topP": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "maxTokens": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "betaApi": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false
+              },
+              "toolSelect": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "systemPromptHash": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "systemPrompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "toolsHash": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "messageCount": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "turnStep": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "attempt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "projection": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "media-degraded": 0,
+                    "media-stripped": 0,
+                    "strict": 0,
+                    "strict-media-degraded": 0,
+                    "strict-media-stripped": 0
+                  }
+                },
+                "required": false
+              },
+              "droppedCount": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        },
+        "usage.record": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "usage.record": 0
+                  }
+                },
+                "required": true
+              },
+              "agentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "model": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "usage": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "inputOther": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true
+                    },
+                    "output": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true
+                    },
+                    "inputCacheRead": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true
+                    },
+                    "inputCacheCreation": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": true
+                    },
+                    "raw": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": true
+              },
+              "usageScope": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session": 0,
+                    "turn": 0
+                  }
+                },
+                "required": false
+              },
+              "time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "session-state",
+      "glob": "sessions/*/*/state.json",
+      "file_format": "json",
+      "discipline": "rewrite_in_place",
+      "evidence": "writer",
+      "notes": "sessionMetaSchema at 2.0.2 (kimi@103928171): id, createdAt, updatedAt and archived required; version, title, titleKind (replaceable|generated|custom), lastPrompt, archivedAt, cwd, forkedFrom, agents, custom and lastTurnReason (completed|cancelled|failed) optional; encodeSessionMeta adds isCustomTitle = (titleKind == custom). A fork's document (fork kimi@97834752) carries forkedFrom = the source session id, createdAt = the fork instant stamped after every copied wire was marked, updatedAt = the source's, title = opts.title or 'Fork: <source title>', and omits custom and lastTurnReason when the source had none. Agent entries (agentMetaSchema) may add forkedFrom and swarmItem; type gains independent.",
+      "record_types": {
+        "": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "id": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "version": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "title": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "titleKind": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "custom": 0,
+                    "generated": 0,
+                    "replaceable": 0
+                  }
+                },
+                "required": false
+              },
+              "lastPrompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "createdAt": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "updatedAt": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              },
+              "archived": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              },
+              "archivedAt": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "cwd": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "forkedFrom": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "agents": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "main": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "homedir": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
+                          },
+                          "type": {
+                            "shape": {
+                              "kind": "string",
+                              "values": {
+                                "independent": 0,
+                                "main": 0,
+                                "sub": 0
+                              }
+                            },
+                            "required": false
+                          },
+                          "parentAgentId": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
+                          },
+                          "forkedFrom": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
+                          },
+                          "labels": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {}
+                            },
+                            "required": false
+                          },
+                          "swarmItem": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
+                          }
+                        }
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "custom": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {}
+                },
+                "required": false
+              },
+              "lastTurnReason": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "cancelled": 0,
+                    "completed": 0,
+                    "failed": 0
+                  }
+                },
+                "required": false
+              },
+              "isCustomTitle": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

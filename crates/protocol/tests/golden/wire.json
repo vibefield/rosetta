@@ -92,7 +92,8 @@
         "project_id": "p1",
         "session_id": "s1",
         "tokens": 5,
-        "unpriced_tokens": 0
+        "unpriced_tokens": 0,
+        "unrecorded_output": 0
       }
     ]
   },
@@ -130,7 +131,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 22,
+      "protocol_version": 23,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -625,7 +626,8 @@
         "cost_micro_usd": 4210,
         "day": "2026-08-26",
         "tokens": 123,
-        "unpriced_tokens": 23
+        "unpriced_tokens": 23,
+        "unrecorded_output": 0
       }
     ]
   },
@@ -970,6 +972,15 @@
         "sha256": "71d66c12",
         "url": "https://github.com/pydantic/genai-prices"
       }
+    ],
+    "unpriced": [
+      {
+        "first_hour_ms": 1790096400000,
+        "last_hour_ms": 1790190000000,
+        "model": "claude-opus-5-5",
+        "reason": "unknown_model",
+        "tokens": 3488371239
+      }
     ]
   },
   "projects": {
@@ -984,7 +995,7 @@
       }
     ]
   },
-  "protocol_version": 22,
+  "protocol_version": 23,
   "runtimes": {
     "runtimes": [
       {
@@ -1192,7 +1203,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 22,
+    "protocol_version": 23,
     "schema_version": 16,
     "search": {
       "progress": null,
@@ -1462,7 +1473,8 @@
         "cost_micro_usd": null,
         "hour": 15,
         "tokens": 123,
-        "unpriced_tokens": 0
+        "unpriced_tokens": 0,
+        "unrecorded_output": 0
       }
     ],
     "models": [
@@ -1472,7 +1484,8 @@
         "day": "2026-08-26",
         "model": "claude-opus-5",
         "tokens": 100,
-        "unpriced_tokens": 0
+        "unpriced_tokens": 0,
+        "unrecorded_output": 0
       },
       {
         "billed_micro_usd": null,
@@ -1480,7 +1493,8 @@
         "day": "2026-08-26",
         "model": "unknown",
         "tokens": 23,
-        "unpriced_tokens": 23
+        "unpriced_tokens": 23,
+        "unrecorded_output": 0
       }
     ]
   }

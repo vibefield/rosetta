@@ -4,14 +4,17 @@ use std::any::Any;
 
 use rosetta_adapter_support::GroundTruthDoc;
 use rosetta_adapter_support::adapter::{
-    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, SnapshotPlan, StreamDriver,
+    AgentAdapter, FileStat, LineOutcome, NormalizeCtx, SkimResult, SnapshotPlan, SnapshotQuery,
+    StreamDriver,
 };
 use rosetta_core::rows::{SessionRole, TitleKind};
 use serde_json::Value;
 
 use crate::normalize::{self, AntigravityState};
+use crate::raw::conversation::{GEN_METADATA_QUERY, STEPS_QUERY};
 use crate::spec;
 use crate::time::rfc3339_ms;
+use crate::usage;
 
 pub struct AntigravityAdapter;
 
@@ -27,22 +30,30 @@ impl AgentAdapter for AntigravityAdapter {
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
         match stream_id {
             spec::TRANSCRIPT => Some(StreamDriver::JsonLines),
-            spec::CONVERSATION_SUMMARIES => Some(StreamDriver::SqliteSnapshot),
+            spec::CONVERSATION_SUMMARIES | spec::CONVERSATION_DB => {
+                Some(StreamDriver::SqliteSnapshot)
+            }
             _ => None,
         }
     }
 
     fn normalizer_version(&self) -> u32 {
-        7
+        // 8: the conversation store's per-step usage becomes session usage
+        // samples (§4.1.3); the checkpoint gains the generation index.
+        8
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
-        (stream_id == spec::CONVERSATION_SUMMARIES).then(|| SnapshotPlan {
-            sessions_sql: SUMMARIES_SQL.to_owned(),
-            // This database is metadata-only. The transcript remains the one
-            // authoritative timeline source.
-            record_queries: Vec::new(),
-        })
+        match stream_id {
+            spec::CONVERSATION_SUMMARIES => Some(SnapshotPlan {
+                sessions_sql: SUMMARIES_SQL.to_owned(),
+                // This database is metadata-only. The transcript remains the one
+                // authoritative timeline source.
+                record_queries: Vec::new(),
+            }),
+            spec::CONVERSATION_DB => Some(conversation_plan()),
+            _ => None,
+        }
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {
@@ -129,14 +140,58 @@ impl AgentAdapter for AntigravityAdapter {
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
         // Admission is repeated here defensively. Even a caller bypassing
         // `stream_driver` cannot normalize a byte-identical inventory sibling.
-        if stream_id != spec::TRANSCRIPT {
-            return LineOutcome::parsed(Vec::new());
-        }
-
         let mut state = take_state(ctx);
-        let outcome = normalize::ingest(ctx, &mut state, stream_id, line);
+        let outcome = match stream_id {
+            spec::TRANSCRIPT => normalize::ingest(ctx, &mut state, stream_id, line),
+            spec::CONVERSATION_DB => usage::ingest(ctx, &mut state, stream_id, line),
+            _ => LineOutcome::parsed(Vec::new()),
+        };
         ctx.state = Some(state);
         outcome
+    }
+}
+
+/// The conversation store is one database per cascade, and `cascade_id` is
+/// the brain UUID the transcript path carries, so the store enriches that
+/// session instead of minting one. Generations are read before steps so the
+/// normalizer can attribute every step's usage to the generation that owns
+/// it. The payload columns are never selected: the transcript owns the
+/// timeline, and this stream owns usage only. A store that ever listed
+/// several cascades would attribute its steps to the lowest id alone rather
+/// than count the same requests once per cascade.
+fn conversation_plan() -> SnapshotPlan {
+    SnapshotPlan {
+        sessions_sql: r#"
+            SELECT DISTINCT cascade_id AS native_session_id
+            FROM trajectory_meta
+            WHERE cascade_id IS NOT NULL AND cascade_id <> ''
+            ORDER BY cascade_id
+        "#
+        .to_owned(),
+        record_queries: vec![
+            SnapshotQuery {
+                name: GEN_METADATA_QUERY.to_owned(),
+                sql: r#"
+                    SELECT idx, data
+                    FROM gen_metadata
+                    WHERE ?1 = (SELECT MIN(cascade_id) FROM trajectory_meta
+                                WHERE cascade_id IS NOT NULL AND cascade_id <> '')
+                    ORDER BY idx
+                "#
+                .to_owned(),
+            },
+            SnapshotQuery {
+                name: STEPS_QUERY.to_owned(),
+                sql: r#"
+                    SELECT idx, step_type, status, metadata
+                    FROM steps
+                    WHERE ?1 = (SELECT MIN(cascade_id) FROM trajectory_meta
+                                WHERE cascade_id IS NOT NULL AND cascade_id <> '')
+                    ORDER BY idx
+                "#
+                .to_owned(),
+            },
+        ],
     }
 }
 
@@ -293,6 +348,10 @@ mod tests {
             adapter.stream_driver(spec::CONVERSATION_SUMMARIES),
             Some(StreamDriver::SqliteSnapshot)
         );
+        assert_eq!(
+            adapter.stream_driver(spec::CONVERSATION_DB),
+            Some(StreamDriver::SqliteSnapshot)
+        );
         for inventory in [
             spec::TRANSCRIPT_FULL,
             spec::TRANSCRIPT_CHUNKS,
@@ -360,6 +419,117 @@ mod tests {
         assert_eq!(rows["child"].1.as_deref(), Some("root"));
         assert_eq!(rows["child"].2, "root");
         assert_eq!(rows["child"].3, "subagent");
+    }
+
+    /// The 1.1.20 store schema (sources/1.1.20.sqlite-schema.sql), reduced to
+    /// the three tables the plan touches.
+    fn conversation_store() -> rusqlite::Connection {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE trajectory_meta (trajectory_id TEXT PRIMARY KEY, cascade_id TEXT,
+                    trajectory_type INTEGER, source INTEGER);
+                 CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0,
+                    status INTEGER NOT NULL DEFAULT 0, has_subtrajectory NUMERIC NOT NULL DEFAULT 0,
+                    metadata BLOB, error_details BLOB, permissions BLOB, task_details BLOB,
+                    render_info BLOB, step_payload BLOB, step_format INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB,
+                    size INTEGER NOT NULL DEFAULT 0);
+                 INSERT INTO trajectory_meta VALUES ('traj-1', 'cascade-a', 4, 17);
+                 INSERT INTO trajectory_meta VALUES ('traj-2', 'cascade-a', 4, 17);
+                 INSERT INTO trajectory_meta VALUES ('traj-3', '', 4, 17);
+                 INSERT INTO steps (idx, step_type, status, metadata, step_payload)
+                    VALUES (0, 14, 3, x'0800', x'DEADBEEF');
+                 INSERT INTO steps (idx, step_type, status, metadata, step_payload)
+                    VALUES (1, 15, 3, x'0801', x'DEADBEEF');
+                 INSERT INTO gen_metadata VALUES (0, x'1001', 2);",
+            )
+            .unwrap();
+        connection
+    }
+
+    fn column_names(connection: &rusqlite::Connection, sql: &str) -> Vec<String> {
+        connection
+            .prepare(sql)
+            .unwrap()
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect()
+    }
+
+    fn count(connection: &rusqlite::Connection, sql: &str, bind: &str) -> usize {
+        let mut statement = connection.prepare(sql).unwrap();
+        statement
+            .query_map(rusqlite::params![bind], |_| Ok(()))
+            .unwrap()
+            .count()
+    }
+
+    #[test]
+    fn conversation_plan_names_one_cascade_and_reads_only_usage_columns() {
+        let connection = conversation_store();
+        let plan = AntigravityAdapter
+            .snapshot_plan(spec::CONVERSATION_DB)
+            .expect("conversation plan");
+
+        let mut statement = connection.prepare(&plan.sessions_sql).unwrap();
+        let sessions: Vec<String> = statement
+            .query_map([], |row| row.get::<_, String>("native_session_id"))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            sessions,
+            ["cascade-a"],
+            "one session per cascade, blanks dropped"
+        );
+
+        let names: Vec<&str> = plan
+            .record_queries
+            .iter()
+            .map(|query| query.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["gen_metadata", "steps"],
+            "generations precede steps"
+        );
+        assert_eq!(
+            column_names(&connection, &plan.record_queries[0].sql),
+            ["idx", "data"]
+        );
+        assert_eq!(
+            column_names(&connection, &plan.record_queries[1].sql),
+            ["idx", "step_type", "status", "metadata"],
+            "payload columns are never selected"
+        );
+        for query in &plan.record_queries {
+            assert!(
+                count(&connection, &query.sql, "cascade-a") > 0,
+                "{} rows belong to the cascade",
+                query.name
+            );
+        }
+
+        // A store that ever listed two cascades attributes its rows once.
+        connection
+            .execute(
+                "INSERT INTO trajectory_meta VALUES ('traj-4', 'cascade-b', 4, 17)",
+                [],
+            )
+            .unwrap();
+        let mut statement = connection.prepare(&plan.sessions_sql).unwrap();
+        let sessions: Vec<String> = statement
+            .query_map([], |row| row.get::<_, String>("native_session_id"))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(sessions, ["cascade-a", "cascade-b"]);
+        for query in &plan.record_queries {
+            assert!(count(&connection, &query.sql, "cascade-a") > 0);
+            assert_eq!(count(&connection, &query.sql, "cascade-b"), 0);
+        }
     }
 
     #[test]

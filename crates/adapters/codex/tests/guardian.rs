@@ -49,6 +49,8 @@ fn native_guardian_sources_are_ledger_only_in_both_metadata_surfaces() {
     }
 }
 
+/// Transcript records of a review never leave the ledger. Its usage records
+/// do, as samples on the proven parent: `usage_rules.rs`.
 #[test]
 fn guardian_normalization_and_resumed_tails_emit_nothing() {
     let mut ctx = NormalizeCtx::new("runtime", "guardian");

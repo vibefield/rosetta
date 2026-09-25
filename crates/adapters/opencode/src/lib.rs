@@ -5,6 +5,7 @@
 
 pub mod adapter;
 pub mod normalize;
+pub mod plan;
 pub mod raw;
 pub mod spec;
 pub mod tool;
@@ -12,4 +13,6 @@ pub mod tool;
 pub use adapter::OpenCodeAdapter;
 
 mod images;
+mod normalize_v2;
 mod usage;
+mod usage_v2;

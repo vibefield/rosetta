@@ -15,11 +15,19 @@
       "writer_version": "@moonshot-ai/kimi-code@0.38.0"
     },
     {
+      "generator": "writer-bundle @moonshot-ai/kimi-code@2.0.2 installed at ~/.kimi-code/bin/kimi (auto-update 2026-09-22; cited as byte offsets kimi@N into that bundle, read with `grep -abo`/`strings`): packages/agent-core-v2/src/agent/goal events GoalForked kimi@101437805; packages/agent-core-v2/src/workspace/sessionLifecycle/sessionLifecycleService.ts forkedRecord kimi@97815218, fork kimi@97829976, copyAgentWire/appendForkedMarker kimi@97836890, copySessionFiles kimi@97839892, state.json write kimi@97834752; packages/agent-core-v2/src/agent/llmRequester llmRequestSchema kimi@103479471; packages/agent-core-v2/src/agent/usage/usageOps.ts usageRecordSchema kimi@101742617; packages/agent-core-v2/src/human/llm tokenUsageSchema kimi@101893268; packages/agent-core-v2/src/wire/record.ts createWireMetadataRecord kimi@96251710; packages/klient/src/contract/session/metadata.ts sessionMetaSchema kimi@103928171",
+      "agent_version": "2.0.2",
+      "evidence": "writer",
+      "path": "sources/2.0.2.writer.json",
+      "sha256": "101470572e762f51428cb6289560c5c8ad9b33deeecf32815292a4af185ca020",
+      "writer_version": "@moonshot-ai/kimi-code@2.0.2"
+    },
+    {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "0.38.0",
       "evidence": "fixture",
       "path": "sources/0.38.0.fixtures.json",
-      "sha256": "045b19e062c4fb44de69711fca10a46e9dcfedcda4afa976c31f4b739651472d"
+      "sha256": "7d881e5070d51a9cea21d2cbeb408aaf22d9265ce4b4895e03c0cbd643d9ca28"
     },
     {
       "generator": "tools.groundtruth census 2",
@@ -733,6 +741,36 @@
           },
           "evidence": "observed"
         },
+        "forked": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "forked": 0
+                  }
+                },
+                "required": true
+              },
+              "agentId": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "time": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        },
         "full_compaction.begin": {
           "observed": 1,
           "shape": {
@@ -1017,15 +1055,25 @@
                 "shape": {
                   "kind": "string"
                 },
-                "required": false,
-                "observed": 10
+                "required": false
+              },
+              "attempt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
+              },
+              "betaApi": {
+                "shape": {
+                  "kind": "boolean"
+                },
+                "required": false
               },
               "droppedCount": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": false,
-                "observed": 1
+                "required": false
               },
               "kind": {
                 "shape": {
@@ -1035,99 +1083,110 @@
                     "loop": 258
                   }
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "maxTokens": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 259
+                "required": false
               },
               "messageCount": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "model": {
                 "shape": {
-                  "kind": "string",
-                  "values": {
-                    "k3": 249,
-                    "mock-model": 10
-                  }
+                  "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "modelAlias": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": false
               },
-              "provider": {
+              "projection": {
                 "shape": {
                   "kind": "string",
                   "values": {
-                    "openai": 259
+                    "media-degraded": 0,
+                    "media-stripped": 0,
+                    "strict": 0,
+                    "strict-media-degraded": 0,
+                    "strict-media-stripped": 0
                   }
                 },
-                "required": true,
-                "observed": 259
+                "required": false
+              },
+              "provider": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "systemPrompt": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
               },
               "systemPromptHash": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
+              },
+              "temperature": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
               },
               "thinkingEffort": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": false
               },
               "thinkingKeep": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": false
               },
               "time": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "toolSelect": {
                 "shape": {
                   "kind": "boolean"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "toolsHash": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
+              },
+              "topP": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
               },
               "turnStep": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": false,
-                "observed": 258
+                "required": false
               },
               "type": {
                 "shape": {
@@ -1136,12 +1195,11 @@
                     "llm.request": 259
                   }
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               }
             }
           },
-          "evidence": "fixture"
+          "evidence": "writer"
         },
         "llm.tools_snapshot": {
           "observed": 11,
@@ -2895,22 +2953,19 @@
                 "shape": {
                   "kind": "string"
                 },
-                "required": false,
-                "observed": 10
+                "required": false
               },
               "model": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "time": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "type": {
                 "shape": {
@@ -2919,8 +2974,7 @@
                     "usage.record": 259
                   }
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "usage": {
                 "shape": {
@@ -2930,34 +2984,36 @@
                       "shape": {
                         "kind": "number"
                       },
-                      "required": true,
-                      "observed": 259
+                      "required": true
                     },
                     "inputCacheRead": {
                       "shape": {
                         "kind": "number"
                       },
-                      "required": true,
-                      "observed": 259
+                      "required": true
                     },
                     "inputOther": {
                       "shape": {
                         "kind": "number"
                       },
-                      "required": true,
-                      "observed": 259
+                      "required": true
                     },
                     "output": {
                       "shape": {
                         "kind": "number"
                       },
-                      "required": true,
-                      "observed": 259
+                      "required": true
+                    },
+                    "raw": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {}
+                      },
+                      "required": false
                     }
                   }
                 },
-                "required": true,
-                "observed": 259
+                "required": true
               },
               "usageScope": {
                 "shape": {
@@ -2967,12 +3023,11 @@
                     "turn": 258
                   }
                 },
-                "required": true,
-                "observed": 259
+                "required": false
               }
             }
           },
-          "evidence": "fixture"
+          "evidence": "writer"
         }
       },
       "facets": [
@@ -4158,8 +4213,8 @@
       "glob": "sessions/*/*/state.json",
       "file_format": "json",
       "discipline": "rewrite_in_place",
-      "evidence": "fixture",
-      "notes": "Session metadata. Fixture fields: id, version, cwd, createdAt/updatedAt, archived, agents.<id>.{homedir,type}, custom, lastTurnReason (completed|failed), isCustomTitle. Sub-agent entries add parentAgentId and labels. Organic also writes title, lastPrompt, titleKind. Docs list forkedFrom (unseen in fixtures and organic census).",
+      "evidence": "writer",
+      "notes": "sessionMetaSchema at 2.0.2 (kimi@103928171): id, createdAt, updatedAt and archived required; version, title, titleKind (replaceable|generated|custom), lastPrompt, archivedAt, cwd, forkedFrom, agents, custom and lastTurnReason (completed|cancelled|failed) optional; encodeSessionMeta adds isCustomTitle = (titleKind == custom). A fork's document (fork kimi@97834752) carries forkedFrom = the source session id, createdAt = the fork instant stamped after every copied wire was marked, updatedAt = the source's, title = opts.title or 'Fork: <source title>', and omits custom and lastTurnReason when the source had none. Agent entries (agentMetaSchema) may add forkedFrom and swarmItem; type gains independent.",
       "record_types": {
         "": {
           "observed": 9,
@@ -4223,128 +4278,154 @@
                       "shape": {
                         "kind": "object",
                         "fields": {
+                          "forkedFrom": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
+                          },
                           "homedir": {
                             "shape": {
                               "kind": "string"
                             },
-                            "required": true,
-                            "observed": 9
+                            "required": false
+                          },
+                          "labels": {
+                            "shape": {
+                              "kind": "object",
+                              "fields": {}
+                            },
+                            "required": false
+                          },
+                          "parentAgentId": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
+                          },
+                          "swarmItem": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": false
                           },
                           "type": {
                             "shape": {
                               "kind": "string",
                               "values": {
-                                "main": 9
+                                "independent": 0,
+                                "main": 9,
+                                "sub": 0
                               }
                             },
-                            "required": true,
-                            "observed": 9
+                            "required": false
                           }
                         }
                       },
-                      "required": true,
-                      "observed": 9
+                      "required": false
                     }
                   }
                 },
-                "required": true,
-                "observed": 9
+                "required": false
               },
               "archived": {
                 "shape": {
                   "kind": "boolean"
                 },
-                "required": true,
-                "observed": 9
+                "required": true
+              },
+              "archivedAt": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
               },
               "createdAt": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 9
+                "required": true
               },
               "custom": {
                 "shape": {
                   "kind": "object",
                   "fields": {}
                 },
-                "required": true,
-                "observed": 9
+                "required": false
               },
               "cwd": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 9
+                "required": false
+              },
+              "forkedFrom": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": false
               },
               "id": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
-                "observed": 9
+                "required": true
               },
               "isCustomTitle": {
                 "shape": {
                   "kind": "boolean"
                 },
-                "required": true,
-                "observed": 9
+                "required": true
               },
               "lastPrompt": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": false,
-                "observed": 4
+                "required": false
               },
               "lastTurnReason": {
                 "shape": {
                   "kind": "string",
                   "values": {
+                    "cancelled": 0,
                     "completed": 8,
                     "failed": 1
                   }
                 },
-                "required": true,
-                "observed": 9
+                "required": false
               },
               "title": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": false,
-                "observed": 4
+                "required": false
               },
               "titleKind": {
                 "shape": {
                   "kind": "string",
                   "values": {
+                    "custom": 0,
+                    "generated": 0,
                     "replaceable": 3
                   }
                 },
-                "required": false,
-                "observed": 3
+                "required": false
               },
               "updatedAt": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 9
+                "required": true
               },
               "version": {
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 9
+                "required": false
               }
             }
           },
-          "evidence": "fixture"
+          "evidence": "writer"
         }
       }
     },

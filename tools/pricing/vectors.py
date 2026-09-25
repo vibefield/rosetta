@@ -21,9 +21,27 @@ from decimal import Decimal
 
 import genai_prices  # type: ignore[import-not-found]
 
-from .generate import FIRST_PARTY, ROOT, TOKEN_FIELDS, _load_upstream, _periods, is_plain_id
+from .generate import (
+    EXCLUDED_UPSTREAM,
+    FIRST_PARTY,
+    OVERLAY,
+    ROOT,
+    TOKEN_FIELDS,
+    _load_upstream,
+    _periods,
+    is_plain_id,
+)
 
 OUT = ROOT / "crates" / "pricing" / "tests" / "genai_prices_vectors.json"
+
+
+def _patched_models() -> set[tuple[str, str]]:
+    """Models whose upstream rates the overlay corrects: genai-prices' own
+    figure is not the reference for them (the overlay tests are)."""
+    import tomllib
+
+    overlay = tomllib.loads(OVERLAY.read_text())
+    return {(entry["provider"], entry["model"]) for entry in overlay.get("patch", [])}
 
 # (input, cache_read, cache_write, cache_write_1h, output, thinking, web_searches)
 SHAPES = {
@@ -43,6 +61,8 @@ STAMPS = [
     "2026-08-21T00:00:01",
     "2026-09-22T02:00:00",
     "2026-09-22T12:00:00",
+    "2026-12-31T23:59:59",
+    "2027-01-01T00:00:01",
 ]
 
 
@@ -55,11 +75,12 @@ def main() -> int:
     providers = {provider["id"]: provider for provider in upstream}
     vectors = []
     mismatched_models = set()
+    skipped = _patched_models() | EXCLUDED_UPSTREAM
     for provider_id, prefixes in FIRST_PARTY:
         for raw in providers[provider_id]["models"]:
             if prefixes is not None and not raw["id"].startswith(prefixes):
                 continue
-            if not is_plain_id(raw["id"]):
+            if not is_plain_id(raw["id"]) or (provider_id, raw["id"]) in skipped:
                 continue
             periods = _periods(raw["prices"], raw["id"])
             if not any(any(name in p.prices for name in TOKEN_FIELDS) for p in periods):

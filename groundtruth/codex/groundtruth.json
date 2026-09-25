@@ -23,6 +23,14 @@
       "writer_version": "rust-v0.150.1"
     },
     {
+      "generator": "writer-source openai/codex@e7bbc79f (main, 2026-09-22, after rust-v0.155.1) codex-rs/protocol/src/protocol.rs TokenUsageRecord/TokenUsage/ThreadSettingsAppliedEvent/ThreadSettingsSnapshot; codex-rs/core/src/session/mod.rs record_observed_response_completed; codex-rs/core/src/compact_remote_v2.rs collect_compaction_output",
+      "agent_version": "0.155.1",
+      "evidence": "writer",
+      "path": "sources/0.155.1.writer.json",
+      "sha256": "9a5f252f989eeaef0b0ede7ef29e2e15994ee1b56079deac5454176d031437ca",
+      "writer_version": "main@e7bbc79f"
+    },
+    {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "0.149.1",
       "evidence": "fixture",
@@ -1466,6 +1474,206 @@
           },
           "evidence": "fixture"
         },
+        "token_usage_record": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "token_usage_record": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "turn_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "session_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "root_turn_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "response_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cached_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cache_write_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "reasoning_output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      },
+                      "required": true
+                    },
+                    "turn_token_usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cached_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cache_write_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "reasoning_output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      },
+                      "required": true
+                    },
+                    "thread_token_usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cached_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cache_write_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "reasoning_output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      },
+                      "required": true
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        },
         "turn_context": {
           "observed": 4,
           "shape": {
@@ -2770,6 +2978,12 @@
               "shape": {
                 "kind": "object",
                 "fields": {
+                  "thread_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
                   "thread_settings": {
                     "shape": {
                       "kind": "object",
@@ -2782,27 +2996,33 @@
                                 "shape": {
                                   "kind": "string"
                                 },
-                                "required": true,
+                                "required": false,
                                 "observed": 1
                               }
                             }
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": false
                         },
                         "approval_policy": {
                           "shape": {
-                            "kind": "string"
+                            "kind": "any_of",
+                            "variants": [
+                              {
+                                "kind": "string"
+                              },
+                              {
+                                "kind": "object",
+                                "fields": {}
+                              }
+                            ]
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": true
                         },
                         "approvals_reviewer": {
                           "shape": {
                             "kind": "string"
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": true
                         },
                         "collaboration_mode": {
                           "shape": {
@@ -2853,32 +3073,26 @@
                               }
                             }
                           },
-                          "required": true,
+                          "required": false,
                           "observed": 1
                         },
                         "cwd": {
                           "shape": {
                             "kind": "string"
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": true
                         },
                         "model": {
                           "shape": {
-                            "kind": "string",
-                            "values": {
-                              "mock-model": 1
-                            }
+                            "kind": "string"
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": true
                         },
                         "model_provider_id": {
                           "shape": {
                             "kind": "string"
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": true
                         },
                         "permission_profile": {
                           "shape": {
@@ -2957,14 +3171,14 @@
                                     }
                                   }
                                 },
-                                "required": true,
+                                "required": false,
                                 "observed": 1
                               },
                               "network": {
                                 "shape": {
                                   "kind": "string"
                                 },
-                                "required": true,
+                                "required": false,
                                 "observed": 1
                               },
                               "type": {
@@ -2974,25 +3188,38 @@
                                     "managed": 1
                                   }
                                 },
-                                "required": true,
+                                "required": false,
                                 "observed": 1
                               }
                             }
                           },
-                          "required": true,
-                          "observed": 1
+                          "required": true
                         },
                         "personality": {
                           "shape": {
                             "kind": "string"
                           },
-                          "required": true,
+                          "required": false,
                           "observed": 1
+                        },
+                        "runtime_workspace_roots": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "string"
+                            }
+                          },
+                          "required": false
+                        },
+                        "service_tier": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false
                         }
                       }
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": true
                   },
                   "type": {
                     "shape": {
@@ -3001,12 +3228,11 @@
                         "thread_settings_applied": 1
                       }
                     },
-                    "required": true,
-                    "observed": 1
+                    "required": true
                   }
                 }
               },
-              "evidence": "fixture"
+              "evidence": "writer"
             },
             "token_count": {
               "observed": 5,

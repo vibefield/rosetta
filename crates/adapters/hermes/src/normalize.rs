@@ -10,18 +10,17 @@ use rosetta_adapter_support::tool::{
     projection_record_kind, projection_shape_paths, terminal_update, unknown_interaction,
 };
 use rosetta_adapter_support::{Drift, Unknown, note_unknown};
-use rosetta_core::rows::{
-    DriftFact, MessageKind, MessageRow, Ms, SessionUsageRow, TokenSnapshot, UsageScope,
-};
+use rosetta_core::rows::{DriftFact, MessageKind, MessageRow, Ms};
 use rosetta_core::{IngestOp, ids};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::raw::state::{
-    KnownRecord, MessageRow as NativeMessage, ParsedRow, SystemPromptRow, ToolCallRow,
+    KnownRecord, MessageRow as NativeMessage, ParsedRow, SessionRow, SystemPromptRow, ToolCallRow,
     ToolResultRow, parse_row,
 };
-use crate::spec;
+use crate::state::HermesState;
+use crate::{spec, usage};
 
 const INVALID_JSON: &str = "<invalid-json>";
 const UNTYPED: &str = "<untyped>";
@@ -30,8 +29,9 @@ const UNKNOWN_QUERY: &str = "unknown_query";
 const UNKNOWN_TABLE: &str = "unknown_table";
 const UNKNOWN_SUBTYPE: &str = "unknown_subtype";
 const PARSE_FAILED: &str = "parse_failed";
-/// Reasoning larger than the output that should contain it.
-const USAGE_SUBSET_EXCEEDS_TOTAL: &str = "usage_subset_exceeds_total";
+/// `sessions.model_config` key the Codex app-server runtime writes
+/// (0.21.4 `agent/codex_runtime.py:467`).
+const CODEX_THREAD_ID: &str = "codex_thread_id";
 
 #[derive(Deserialize)]
 struct SnapshotRecord {
@@ -154,8 +154,12 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
 
     let status = match &*native {
         // The same native session row was already projected by sessions_sql
-        // during bounded metadata admission.
-        KnownRecord::Session(_) => LineStatus::Parsed,
+        // during bounded metadata admission; only its runtime binding is
+        // kept for the usage rows that follow it.
+        KnownRecord::Session(row) => {
+            note_session(ctx, row);
+            LineStatus::Parsed
+        }
         KnownRecord::Message(row) => project_message(ctx, stream_id, row, &mut ops),
         KnownRecord::SystemPrompt(row) => {
             project_system_prompt(ctx, row, &mut ops);
@@ -173,7 +177,7 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
             LineStatus::UnknownType
         }
         KnownRecord::SessionModelUsage(row) => {
-            project_session_usage(ctx, stream_id, row, &mut ops);
+            usage::project_session_usage(ctx, stream_id, row, &mut ops);
             LineStatus::Parsed
         }
         KnownRecord::SchemaVersion(_) | KnownRecord::StateMeta(_) => LineStatus::Parsed,
@@ -181,85 +185,26 @@ pub fn ingest_line(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> Line
     LineOutcome { ops, status }
 }
 
-fn project_session_usage(
-    ctx: &NormalizeCtx,
-    stream_id: &str,
-    row: &crate::raw::state::SessionModelUsageRow,
-    ops: &mut Vec<IngestOp>,
-) {
-    // The native composite key is the table's replacement identity. Hashing
-    // it keeps provider URLs (which can contain credentials) out of the
-    // projection while preserving exact replacement semantics.
-    let native_key = serde_json::to_string(&(
-        &row.model,
-        &row.billing_provider,
-        &row.billing_base_url,
-        &row.billing_mode,
-        &row.task,
-    ))
-    .expect("usage key serializes");
-    let ts = row
-        .last_seen
-        .or(row.first_seen)
-        .and_then(seconds_ms)
-        .unwrap_or(0);
-    let (tokens, exclusive_reasoning) = usage_snapshot(row);
-    if exclusive_reasoning {
-        ops.push(drift(
-            ctx,
-            stream_id,
-            "session_model_usage",
-            USAGE_SUBSET_EXCEEDS_TOTAL,
-            &["reasoning_tokens".to_owned()],
-            Some(ts),
-        ));
-    }
-    ops.push(IngestOp::SessionUsage(SessionUsageRow {
-        session_id: ctx.session_id.clone(),
-        key: ids::usage_id(&ctx.session_id, &native_key),
-        ts,
-        model: Some(row.model.clone()),
-        tokens,
-    }));
+/// The session row's facts a later record of the same snapshot needs.
+fn note_session(ctx: &mut NormalizeCtx, row: &SessionRow) {
+    let codex_runtime = row
+        .model_config
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|config| {
+            config
+                .get(CODEX_THREAD_ID)
+                .and_then(Value::as_str)
+                .map(|thread| !thread.is_empty())
+        })
+        .unwrap_or(false);
+    HermesState::of(ctx).codex_runtime = codex_runtime;
 }
 
-/// Map one `session_model_usage` running total into the exclusive buckets
-/// (RESEARCH_PLAN §5.13). Hermes' `input_tokens` is already uncached and its
-/// `output_tokens` includes `reasoning_tokens` (OpenAI-style providers; the
-/// Anthropic shape reports reasoning 0). Reasoning larger than output means
-/// the provider reported it exclusively: both are kept and the record is
-/// flagged. Only a provider-reported `actual` cost is billing; estimates and
-/// subscription-included rows are not.
-fn usage_snapshot(row: &crate::raw::state::SessionModelUsageRow) -> (TokenSnapshot, bool) {
-    let exclusive_reasoning = row.reasoning_tokens > row.output_tokens;
-    let output = if exclusive_reasoning {
-        row.output_tokens
-    } else {
-        row.output_tokens - row.reasoning_tokens
-    };
-    let billed_pico_usd = (row.cost_status.as_deref() == Some("actual")
-        && row.actual_cost_usd.is_finite()
-        && row.actual_cost_usd > 0.0)
-        .then(|| (row.actual_cost_usd * 1e12).round() as i64);
-    let tokens = TokenSnapshot {
-        input: Some(row.input_tokens),
-        output: Some(output),
-        cache_read: Some(row.cache_read_tokens),
-        cache_write: Some(row.cache_write_tokens),
-        thinking: Some(row.reasoning_tokens),
-        route: rosetta_core::rows::canonical_route(&row.billing_provider),
-        billed_pico_usd,
-        // One row per session × model × billing route × task accumulates every
-        // call; only a single-call row is one request.
-        scope: if row.api_call_count == 1 {
-            UsageScope::Request
-        } else {
-            UsageScope::Aggregate
-        },
-        requests: (row.api_call_count > 1).then_some(row.api_call_count),
-        ..TokenSnapshot::default()
-    };
-    (tokens, exclusive_reasoning)
+/// A tool name the adapter can place: declared by the L1 `tool-calls` facet
+/// or mapped by the closed projector registry. Anything else is soft drift.
+fn known_tool(name: &str) -> bool {
+    spec::declared_tool_names().contains(name) || crate::tool::is_registered(name)
 }
 
 fn schema_inventory(
@@ -410,9 +355,7 @@ fn project_assistant(
                 at,
             ));
         }
-        if call.call_type != "function"
-            || !spec::declared_tool_names().contains(&call.function.name)
-        {
+        if call.call_type != "function" || !known_tool(&call.function.name) {
             ops.push(drift(
                 ctx,
                 stream_id,
@@ -535,7 +478,7 @@ fn project_tool_result(
     if native
         .tool_name
         .as_deref()
-        .is_some_and(|name| !spec::declared_tool_names().contains(name))
+        .is_some_and(|name| !known_tool(name))
     {
         let name = native.tool_name.as_deref().unwrap_or(UNTYPED);
         ops.push(drift(
@@ -656,7 +599,7 @@ fn decode_arguments(arguments: &str) -> Value {
     serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_owned()))
 }
 
-fn seconds_ms(seconds: f64) -> Option<Ms> {
+pub(crate) fn seconds_ms(seconds: f64) -> Option<Ms> {
     let millis = seconds * 1_000.0;
     (millis.is_finite() && millis >= i64::MIN as f64 && millis <= i64::MAX as f64)
         .then(|| millis.trunc() as i64)
@@ -676,7 +619,7 @@ fn keys(value: &Value) -> Vec<String> {
         .unwrap_or_else(|| vec!["<non-object>".to_owned()])
 }
 
-fn drift(
+pub(crate) fn drift(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,

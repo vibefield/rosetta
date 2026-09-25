@@ -3,5 +3,6 @@
 //! `fixtures/<version>/`); do not add fields without fixture evidence.
 
 pub mod events;
+pub mod store;
 
 pub use events::{ParsedLine, parse_line};

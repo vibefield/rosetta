@@ -350,6 +350,8 @@ fn two_requests_before_one_response_accumulate_into_an_aggregate() {
     assert_eq!(row.usage.cache_read, Some(200));
     assert_eq!(row.usage.output, Some(10));
     assert_eq!(row.usage.scope, rosetta_core::UsageScope::Aggregate);
+    // Pricing estimates the aggregate as that many equal requests.
+    assert_eq!(row.usage.requests, Some(2));
 }
 
 #[test]

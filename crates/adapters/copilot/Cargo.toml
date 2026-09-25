@@ -10,4 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+rosetta-capture = { path = "../../capture" }
+rusqlite.workspace = true
+tempfile.workspace = true
 walkdir.workspace = true

@@ -36,7 +36,8 @@ use crate::spec;
 use crate::time::rfc3339_ms;
 use crate::tool::TransportCall;
 use crate::usage::{
-    RawUsage, ReplayGate, begin_response, codex_service_tier, push_response, token_count,
+    RawUsage, ReplayGate, UntieredRequest, begin_response, billable_search, push_response,
+    thread_settings_applied, token_count, token_usage_record, usage_only,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,10 +71,24 @@ enum CellRoute {
 /// `response_total` are the machinery for the cumulative token counters.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CodexState {
-    /// Internal approval review is retained only in the raw ledger. This bit
-    /// survives live-tail checkpoints so resumed suffixes stay unprojected.
+    /// Internal approval review is retained only in the raw ledger: no rows,
+    /// assets or drift. Its usage still reaches `parent_session` when the
+    /// header proves one. This bit survives live-tail checkpoints so resumed
+    /// suffixes stay unprojected.
     #[serde(default)]
-    ledger_only: bool,
+    pub(crate) ledger_only: bool,
+    /// The session that ran a guardian review, as a canonical session id, when
+    /// its header names the parent thread (§4.1.3 rule 5).
+    #[serde(default)]
+    pub(crate) parent_session: Option<String>,
+    /// The file's native thread id from its first header: the owner that a
+    /// per-response usage record must name to be this file's own.
+    #[serde(default)]
+    pub(crate) thread_id: Option<String>,
+    /// A copied prefix can repeat the parent's header; only the first header
+    /// configures the file.
+    #[serde(default)]
+    header_seen: bool,
     /// Current execution cwd used only to resolve relative tool arguments.
     /// The canonical session cwd is selected independently during meta ingest.
     tool_cwd: Option<String>,
@@ -97,6 +112,16 @@ pub struct CodexState {
     /// The configured tier from the latest `thread_settings_applied`.
     #[serde(default)]
     pub(crate) service_tier: Option<ServiceTier>,
+    /// Whether a settings snapshot has been seen; until then requests are
+    /// held in `untiered` for the tier the first snapshot will name.
+    #[serde(default)]
+    pub(crate) tier_settled: bool,
+    #[serde(default)]
+    pub(crate) untiered: Vec<UntieredRequest>,
+    /// The usage of the latest own `token_usage_record`, which the next
+    /// `token_count` repeats.
+    #[serde(default)]
+    pub(crate) last_record_usage: Option<RawUsage>,
     /// `session_meta.model_provider` when it is not Codex's default `openai`.
     #[serde(default)]
     pub(crate) route: Option<String>,
@@ -123,15 +148,18 @@ pub fn ingest_line(
     stream_id: &str,
     line: &[u8],
 ) -> LineOutcome {
-    if state.ledger_only {
-        return LineOutcome::parsed(Vec::new());
-    }
     let Ok(text) = std::str::from_utf8(line) else {
+        if state.ledger_only {
+            return LineOutcome::parsed(Vec::new());
+        }
         return hard(ctx, stream_id, "<binary>", "invalid_utf8", &[], None);
     };
     // Rollout files are append-only; a torn write shows up as a blank line.
     if text.trim().is_empty() {
         return LineOutcome::parsed(Vec::new());
+    }
+    if state.ledger_only {
+        return usage_only(ctx, state, stream_id, text);
     }
 
     let parsed = match parse_line(text) {
@@ -151,14 +179,18 @@ pub fn ingest_line(
         }
     };
 
+    let ts = rfc3339_ms(&record.timestamp);
     if let RolloutPayload::SessionMeta(meta) = &record.payload
+        && !state.header_seen
         && crate::session_policy::ledger_only(&meta.source, meta.thread_source.as_deref())
     {
         state.ledger_only = true;
+        // The header still configures the file: its usage facts need the
+        // model provider, the replay gate and, above all, the parent.
+        session_meta(ctx, state, meta, ts);
         return LineOutcome::parsed(Vec::new());
     }
 
-    let ts = rfc3339_ms(&record.timestamp);
     let mut ops = Vec::new();
     // Permissive parsing means novel fields land in the flatten maps instead of
     // failing the line — that is the whole point, but it must still be visible.
@@ -212,6 +244,10 @@ fn project(
         RolloutPayload::EventMsg(event) => {
             event_msg(ctx, state, stream_id, event, record.ordinal, ts, ops)
         }
+        RolloutPayload::TokenUsageRecord(item) => {
+            token_usage_record(ctx, state, item, record.ordinal, ts, ops);
+            LineStatus::Parsed
+        }
         RolloutPayload::Compacted(item) => {
             let Some(discriminator) = record_discriminator(record, ctx) else {
                 return hard_into(
@@ -264,24 +300,40 @@ fn project(
 
 /// Session identity, topology, and canonical cwd are admitted from this same
 /// opening record by `CodexAdapter::skim`. Streaming retains only provenance
-/// and execution context needed to normalize later tools.
+/// and execution context needed to normalize later tools. Only the file's
+/// first header counts: a paginated child's inherited prefix repeats the
+/// parent's header at ordinal 1, and that copy must not reconfigure the
+/// child (CODEX-8).
 fn session_meta(
     ctx: &mut NormalizeCtx,
     state: &mut CodexState,
     meta: &SessionMeta,
     ts: Option<Ms>,
 ) {
+    if state.header_seen {
+        return;
+    }
+    state.header_seen = true;
     ctx.agent_version = Some(meta.cli_version.clone());
+    state.thread_id = Some(meta.id.clone());
     state.tool_cwd = Some(meta.cwd.clone());
     state.route = (meta.model_provider != "openai")
         .then(|| rosetta_core::rows::canonical_route(&meta.model_provider))
         .flatten();
     state.replay_gate = ReplayGate::for_session(meta, ts);
+    // A guardian review's usage belongs to the thread that ran it. The
+    // header's `parent_thread_id` is the only proof; without it the review
+    // stays entirely in the raw ledger.
+    state.parent_session = state
+        .ledger_only
+        .then_some(meta.parent_thread_id.as_deref())
+        .flatten()
+        .map(|parent| ids::session_id(&ctx.runtime_id, parent));
 }
 
 /// Per-turn execution context used to stamp rows and resolve relative tool
 /// paths. It does not revise the session metadata selected during admission.
-fn turn_context(state: &mut CodexState, turn: &TurnContext) {
+pub(crate) fn turn_context(state: &mut CodexState, turn: &TurnContext) {
     let settings = turn
         .collaboration_mode
         .as_ref()
@@ -618,16 +670,7 @@ fn response_item(
             LineStatus::Parsed
         }
         "local_shell_call" | "web_search_call" | "image_generation_call" => {
-            // Only a search action is a billable call; opening or finding in
-            // a page is not counted (RESEARCH_PLAN §5.13).
-            if item.item_type == "web_search_call"
-                && item
-                    .action
-                    .as_ref()
-                    .and_then(|action| action.get("type"))
-                    .and_then(Value::as_str)
-                    == Some("search")
-            {
+            if billable_search(item) {
                 state.request_searches += 1;
             }
             let name = item.item_type.as_str();
@@ -1163,13 +1206,7 @@ fn event_msg(
             LineStatus::Parsed
         }
         "thread_settings_applied" => {
-            if let Some(tier) = event
-                .thread_settings
-                .as_ref()
-                .and_then(|settings| settings.get("service_tier"))
-            {
-                state.service_tier = codex_service_tier(tier.as_str());
-            }
+            thread_settings_applied(ctx, state, stream_id, event, ts, ops);
             LineStatus::Parsed
         }
         "item_completed" => item_completed(ctx, stream_id, event, ts, ops),
@@ -1460,7 +1497,7 @@ fn undeclared(
     LineStatus::UnknownType
 }
 
-fn drift(
+pub(crate) fn drift(
     ctx: &NormalizeCtx,
     stream_id: &str,
     record_kind: &str,
@@ -1542,6 +1579,7 @@ fn record_kind(payload: &RolloutPayload) -> String {
         }
         RolloutPayload::SecurityRiskScore(_) => "security_risk_score".to_owned(),
         RolloutPayload::RealtimeItem(_) => "realtime_item".to_owned(),
+        RolloutPayload::TokenUsageRecord(_) => "token_usage_record".to_owned(),
         RolloutPayload::EventMsg(event) => format!("event_msg/{}", event.event_type),
         RolloutPayload::ResponseItem(item) => format!("response_item/{}", item.item_type),
     }

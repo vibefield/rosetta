@@ -9,10 +9,11 @@ use rosetta_adapter_support::adapter::{
 use rosetta_core::rows::{SessionRole, TitleKind};
 use serde_json::Value;
 
-use crate::normalize::{self, PiState};
+use crate::normalize;
 use crate::raw::session::KnownRecord;
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
+use crate::state::PiState;
 use crate::time::rfc3339_ms;
 
 pub struct PiAdapter;
@@ -31,9 +32,10 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn normalizer_version(&self) -> u32 {
-        // 8: exclusive usage buckets, 1-hour writes, route, tool-result
-        // usage, and fork copies without usage (§4.1.3).
-        8
+        // 9: `usage` entries (cache warming) as samples, compaction request
+        // counts, summaries on the latest model, never-reported usage as
+        // unreported, provider-segment routes (2026-09-23 audit PI-1/2/6/8/9/10).
+        9
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

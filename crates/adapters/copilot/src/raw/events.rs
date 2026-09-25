@@ -438,10 +438,13 @@ pub struct SessionShutdown {
     pub token_details: Option<Value>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub tool_definitions_tokens: Option<u64>,
+    /// Writer schema `number`; kept as written (a float is not a hard error).
     #[serde(default, skip_serializing_if = "skip_none")]
-    pub total_nano_aiu: Option<u64>,
+    pub total_nano_aiu: Option<Value>,
+    /// Writer schema `number`; the SDK notes the count may be fractional
+    /// because of model multipliers.
     #[serde(default, skip_serializing_if = "skip_none")]
-    pub total_premium_requests: Option<u64>,
+    pub total_premium_requests: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -647,9 +650,10 @@ pub struct SessionTaskComplete {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUsageCheckpoint {
-    pub total_nano_aiu: u64,
+    /// Writer schema `number`; kept as written.
+    pub total_nano_aiu: Value,
     #[serde(default, skip_serializing_if = "skip_none")]
-    pub total_premium_requests: Option<u64>,
+    pub total_premium_requests: Option<Value>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub model_cache_state: Option<Vec<Value>>,
     #[serde(flatten)]

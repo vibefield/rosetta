@@ -13,7 +13,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{
-    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, SessionUsageRow, TaskRow,
+    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, SessionUsageRow, TaskRow, TokenSnapshot,
 };
 use rosetta_core::{TimelineBody, ToolAction, WorkflowJournalObservation, WorkflowRun};
 
@@ -79,6 +79,9 @@ pub struct ApplyStats {
     pub tool_results_unmatched: u64,
     pub usage_applied: u64,
     pub usage_unmatched: u64,
+    /// Usage of responses copied from another session, dropped or retracted
+    /// because an earlier-started session owns them.
+    pub usage_copies_dropped: u64,
     pub drift_recorded: u64,
     /// Distinct session/hour/model keys rebuilt after the batch. This remains
     /// bounded by changed buckets, not changed messages.
@@ -138,6 +141,7 @@ impl ApplyStats {
         self.tool_results_unmatched += batch.tool_results_unmatched;
         self.usage_applied += batch.usage_applied;
         self.usage_unmatched += batch.usage_unmatched;
+        self.usage_copies_dropped += batch.usage_copies_dropped;
         self.drift_recorded += batch.drift_recorded;
         self.bucket_rebuilds += batch.bucket_rebuilds;
         self.source_sweeps += batch.source_sweeps;
@@ -211,6 +215,7 @@ mod bulk_reconcile;
 mod metadata;
 mod ram_reconcile;
 mod rows;
+mod usage_owners;
 
 pub(crate) use bulk_reconcile::{
     BulkReconciliationBuffer, BulkReconciliationDelta, BulkReconciliationPlan,
@@ -222,13 +227,16 @@ use rows::{
     BucketKey, apply_message, apply_tool_updates, apply_usage, finalize_source_tools, mark_bucket,
     rebuild_bucket, touch_session,
 };
+pub(crate) use usage_owners::UsageOwners;
+use usage_owners::{Claim, OwnerTarget};
 
 pub(crate) fn apply_bulk_reconciliation(
     tx: &Transaction,
     plan: &mut BulkReconciliationPlan,
     preserve_message_ordinals: bool,
+    owners: &mut UsageOwners,
 ) -> Result<ApplyStats, StoreError> {
-    bulk_reconcile::apply_plan(tx, plan, preserve_message_ordinals)
+    bulk_reconcile::apply_plan(tx, plan, preserve_message_ordinals, owners)
 }
 
 fn apply_session_usage(
@@ -239,6 +247,18 @@ fn apply_session_usage(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
 ) -> Result<(), StoreError> {
+    // A sample may name another session than its source (a Codex guardian
+    // review attributes its usage to the parent thread). The parent row
+    // exists whenever its rollout was captured; otherwise the sample is out
+    // of coverage, never a foreign-key failure of the whole batch.
+    let known: Option<i64> = tx
+        .prepare_cached("SELECT 1 FROM session WHERE id = ?1")?
+        .query_row(params![row.session_id], |record| record.get(0))
+        .optional()?;
+    if known.is_none() {
+        stats.usage_unmatched += 1;
+        return Ok(());
+    }
     let previous = tx
         .prepare_cached(
             "SELECT ts, model FROM session_usage
@@ -633,6 +653,7 @@ fn project_source_ops(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    owners: &mut UsageOwners,
     defer_bulk_reconciliation: bool,
     mut projection: DirectProjection<'_>,
 ) -> Result<(), StoreError> {
@@ -716,6 +737,7 @@ fn project_source_ops(
                 stats,
                 maintenance,
                 dirty_buckets,
+                owners,
                 projection.effects.as_deref_mut(),
             )?;
         }
@@ -729,6 +751,7 @@ fn project_source_ops(
             stats,
             maintenance,
             dirty_buckets,
+            owners,
             projection.effects.as_deref_mut(),
         )?;
     }
@@ -767,7 +790,9 @@ fn remove_cursor_projection(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
 ) -> Result<(), StoreError> {
-    let session_id: String = tx
+    // A ledger-only cursor has no session of its own; its samples name
+    // other sessions and its sweep owns no title.
+    let session_id: Option<String> = tx
         .prepare_cached("SELECT session_id FROM ingest_cursor WHERE id = ?1")?
         .query_row(params![cursor_id], |row| row.get(0))?;
     if maintenance.buckets {
@@ -840,12 +865,14 @@ fn remove_cursor_projection(
     }
     tx.prepare_cached("DELETE FROM message WHERE src_cursor = ?1")?
         .execute(params![cursor_id])?;
-    tx.prepare_cached(
-        "UPDATE session
-         SET title = NULL, title_rank = 0, title_at = NULL, title_src_cursor = NULL
-         WHERE id = ?1 AND title_src_cursor = ?2",
-    )?
-    .execute(params![session_id, cursor_id])?;
+    if let Some(session_id) = session_id {
+        tx.prepare_cached(
+            "UPDATE session
+             SET title = NULL, title_rank = 0, title_at = NULL, title_src_cursor = NULL
+             WHERE id = ?1 AND title_src_cursor = ?2",
+        )?
+        .execute(params![session_id, cursor_id])?;
+    }
     Ok(())
 }
 
@@ -1035,6 +1062,7 @@ fn activate_cursor(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    owners: &mut UsageOwners,
     defer_bulk_reconciliation: bool,
     effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
@@ -1085,6 +1113,7 @@ fn activate_cursor(
                 stats,
                 maintenance,
                 dirty_buckets,
+                owners,
                 None,
             )?,
         }
@@ -1097,6 +1126,7 @@ fn activate_cursor(
             stats,
             maintenance,
             dirty_buckets,
+            owners,
             None,
         )?;
     }
@@ -1109,6 +1139,7 @@ fn activate_cursor(
             stats,
             maintenance,
             dirty_buckets,
+            owners,
             None,
         )?;
     }
@@ -1262,6 +1293,7 @@ fn apply_op(
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
+    owners: &mut UsageOwners,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     if let Some(fx) = effects.as_deref_mut() {
@@ -1290,7 +1322,24 @@ fn apply_op(
             ts,
             model,
             tokens,
+            identity,
         } => {
+            if let Some(identity) = identity
+                && !claim_usage(
+                    tx,
+                    owners,
+                    identity,
+                    session_id,
+                    OwnerTarget::Row(response.clone()),
+                    !tokens.is_empty(),
+                    stats,
+                    maintenance,
+                    dirty_buckets,
+                    effects.as_deref_mut(),
+                )?
+            {
+                return Ok(());
+            }
             let _ = apply_usage(
                 tx,
                 session_id,
@@ -1305,6 +1354,22 @@ fn apply_op(
             )?;
         }
         IngestOp::SessionUsage(row) => {
+            if let Some(identity) = &row.identity
+                && !claim_usage(
+                    tx,
+                    owners,
+                    identity,
+                    &row.session_id,
+                    OwnerTarget::Sample(row.key.clone()),
+                    !row.tokens.is_empty(),
+                    stats,
+                    maintenance,
+                    dirty_buckets,
+                    effects,
+                )?
+            {
+                return Ok(());
+            }
             apply_session_usage(tx, row, src_cursor, stats, maintenance, dirty_buckets)?
         }
         IngestOp::FileEdit(row) => profile_other(stats, || apply_file_edit(tx, row, src_cursor))?,
@@ -1325,6 +1390,97 @@ fn apply_op(
     Ok(())
 }
 
+/// Settle who owns a usage record that carries a response identity
+/// (ARCHITECTURE §4.1.3, counting rule 2). Returns whether the record should
+/// be applied; a copy of usage another session owns is dropped, and a record
+/// from an earlier-started session displaces the current owner, whose usage
+/// is retracted here.
+#[allow(clippy::too_many_arguments)]
+fn claim_usage(
+    tx: &Transaction,
+    owners: &mut UsageOwners,
+    identity: &str,
+    session_id: &str,
+    target: OwnerTarget,
+    carries_usage: bool,
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    effects: Option<&mut Effects>,
+) -> Result<bool, StoreError> {
+    match owners.claim(tx, identity, session_id, target, carries_usage)? {
+        Claim::Own => Ok(true),
+        Claim::DropCopy => {
+            stats.usage_copies_dropped += 1;
+            Ok(false)
+        }
+        Claim::Displace {
+            session_id: displaced,
+            target,
+        } => {
+            stats.usage_copies_dropped += 1;
+            match target {
+                OwnerTarget::Row(timeline_id) => {
+                    apply_usage(
+                        tx,
+                        &displaced,
+                        &timeline_id,
+                        0,
+                        None,
+                        &TokenSnapshot::default(),
+                        stats,
+                        maintenance,
+                        dirty_buckets,
+                        effects,
+                    )?;
+                }
+                OwnerTarget::Sample(key) => {
+                    retract_sample(tx, &displaced, &key, maintenance, dirty_buckets)?;
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// Blank a session sample's usage in place: the row keeps its key, time and
+/// model, contributes nothing to any rollup, and its hour bucket is redone.
+fn retract_sample(
+    tx: &Transaction,
+    session_id: &str,
+    key: &str,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+) -> Result<(), StoreError> {
+    let previous = tx
+        .prepare_cached(
+            "SELECT ts, model FROM session_usage WHERE session_id = ?1 AND sample_key = ?2",
+        )?
+        .query_row(params![session_id, key], |row| {
+            Ok((row.get::<_, Ms>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .optional()?;
+    let Some((ts, model)) = previous else {
+        return Ok(());
+    };
+    tx.prepare_cached(
+        "UPDATE session_usage
+         SET in_tokens = NULL, out_tokens = NULL, cache_r_tokens = NULL,
+             cache_w_tokens = NULL, think_tokens = NULL, cache_w1h_tokens = NULL,
+             web_searches = NULL, billed_pusd = NULL, requests = NULL
+         WHERE session_id = ?1 AND sample_key = ?2",
+    )?
+    .execute(params![session_id, key])?;
+    mark_bucket(
+        dirty_buckets,
+        maintenance,
+        session_id,
+        Some(ts),
+        model.as_deref(),
+    );
+    Ok(())
+}
+
 /// What this apply is observed at, per granularity. Row-level effects are
 /// worth their mutation log only for sessions a reader is watching — the
 /// armed [`Effects::scope`] enforces exactly that, so the cold paths below
@@ -1337,6 +1493,7 @@ pub(crate) struct Observation<'a> {
     pub meta: Option<&'a mut MetaEffects>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_batch(
     tx: &Transaction,
     batch: &Batch,
@@ -1344,6 +1501,7 @@ pub(crate) fn apply_batch(
     bulk_load: bool,
     progressive_public: bool,
     precomputed_bulk_ordinals: bool,
+    owners: &mut UsageOwners,
     observed: Observation<'_>,
 ) -> Result<ApplyStats, StoreError> {
     let Observation {
@@ -1385,6 +1543,7 @@ pub(crate) fn apply_batch(
                     &mut stats,
                     maintenance,
                     &mut dirty_buckets,
+                    owners,
                     effects.as_deref_mut(),
                 )?;
             }
@@ -1397,6 +1556,7 @@ pub(crate) fn apply_batch(
                     &mut stats,
                     maintenance,
                     &mut dirty_buckets,
+                    owners,
                     effects.as_deref_mut(),
                 )?;
             }
@@ -1462,21 +1622,27 @@ pub(crate) fn apply_batch(
             }
 
             // An internal source has a durable capture cursor but no canonical
-            // session. Advance only that cursor; reject accidental payloads
-            // before they can create rows, rollups, or search repair work.
+            // session. Advance that cursor and admit only what §4.1.3 rule 5
+            // lets a hidden session contribute: usage samples for a proven
+            // session and diagnostic drift. Every other payload is rejected
+            // before it can create rows, titles, or search repair work.
             if cursor_session.is_none() {
-                if !batch.ops.is_empty() {
-                    return Err(StoreError::SourceState {
-                        cursor_id: source.cursor_id,
-                        message: "ledger-only source cannot project operations".to_string(),
-                    });
-                }
-                if source.mode == SourceMode::Activate {
-                    set_active_generation(tx, source, active_generation)?;
-                }
+                project_ledger_only_source(
+                    tx,
+                    source,
+                    &batch.ops,
+                    &mut stats,
+                    maintenance,
+                    &mut dirty_buckets,
+                    owners,
+                    bulk_load && active_generation == 0 && source.mode != SourceMode::Append,
+                    starts_new_generation,
+                    active_generation,
+                )?;
                 for checkpoint in &batch.checkpoints {
                     apply_checkpoint(tx, checkpoint)?;
                 }
+                fold_dirty_buckets(tx, dirty_buckets, &mut stats)?;
                 return Ok(stats);
             }
 
@@ -1540,6 +1706,7 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
+                            owners,
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: false,
@@ -1624,6 +1791,7 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
+                            owners,
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: true,
@@ -1664,6 +1832,7 @@ pub(crate) fn apply_batch(
                             &mut stats,
                             maintenance,
                             &mut dirty_buckets,
+                            owners,
                             defer_bulk_reconciliation,
                             effects,
                         )?;
@@ -1681,11 +1850,85 @@ pub(crate) fn apply_batch(
     for checkpoint in &batch.checkpoints {
         apply_checkpoint(tx, checkpoint)?;
     }
+    fold_dirty_buckets(tx, dirty_buckets, &mut stats)?;
+    Ok(stats)
+}
+
+/// Recompute every hourly bucket a batch touched.
+fn fold_dirty_buckets(
+    tx: &Transaction,
+    dirty_buckets: BTreeSet<BucketKey>,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
     let started = Instant::now();
     for key in dirty_buckets {
         rebuild_bucket(tx, &key.session_id, key.hour_ts, &key.model)?;
         stats.bucket_rebuilds += 1;
     }
     stats.canonical_apply_nanos += elapsed_nanos(started);
-    Ok(stats)
+    Ok(())
+}
+
+/// Project what a session-less source may contribute (ARCHITECTURE §4.1.3,
+/// counting rule 5): `session_usage` samples that name a proven session — a
+/// Codex guardian review's requests attributed to the thread that ran it —
+/// and drift. The samples carry this cursor as provenance, so a replacement
+/// generation sweeps them exactly as it sweeps a canonical session's rows.
+/// A live Stage parks its ops in RAM upstream and delivers them whole at
+/// activation, like any other source; a private cold generation projects its
+/// chunks directly and sweeps only when a retry starts the generation over.
+#[allow(clippy::too_many_arguments)]
+fn project_ledger_only_source(
+    tx: &Transaction,
+    source: &SourceWrite,
+    ops: &[IngestOp],
+    stats: &mut ApplyStats,
+    maintenance: Maintenance,
+    dirty_buckets: &mut BTreeSet<BucketKey>,
+    owners: &mut UsageOwners,
+    direct_cold_generation: bool,
+    starts_new_generation: bool,
+    active_generation: u64,
+) -> Result<(), StoreError> {
+    if ops
+        .iter()
+        .any(|op| !matches!(op, IngestOp::SessionUsage(_) | IngestOp::Drift(_)))
+    {
+        return Err(StoreError::SourceState {
+            cursor_id: source.cursor_id,
+            message: "ledger-only source cannot project operations".to_string(),
+        });
+    }
+    let started = Instant::now();
+    let sweep = match source.mode {
+        SourceMode::Stage | SourceMode::Append => direct_cold_generation && starts_new_generation,
+        SourceMode::Activate => !direct_cold_generation || starts_new_generation,
+        SourceMode::Abandon => direct_cold_generation,
+    };
+    if sweep && cursor_has_projection(tx, source.cursor_id)? {
+        remove_cursor_projection(tx, source.cursor_id, maintenance, dirty_buckets)?;
+        stats.source_sweeps += 1;
+    }
+    match source.mode {
+        SourceMode::Abandon => abandon_cursor(tx, ops, stats)?,
+        SourceMode::Stage | SourceMode::Append | SourceMode::Activate => {
+            for op in ops {
+                apply_op(
+                    tx,
+                    op,
+                    Some(source.cursor_id),
+                    stats,
+                    maintenance,
+                    dirty_buckets,
+                    owners,
+                    None,
+                )?;
+            }
+            if source.mode == SourceMode::Activate {
+                set_active_generation(tx, source, active_generation)?;
+            }
+        }
+    }
+    stats.canonical_apply_nanos += elapsed_nanos(started);
+    Ok(())
 }

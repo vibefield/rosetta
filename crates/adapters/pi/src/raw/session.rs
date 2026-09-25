@@ -13,6 +13,12 @@
 //! writes them. Compaction.retainedTail is documented but NOT in the 0.84.3
 //! writer interface — do not add it.
 //!
+//! `usage` entries postdate the 0.84.3 pin: Pi ≥ 0.86 records every prompt-cache
+//! warming request as one (`session-manager.ts:80-89` at pi-mono a8ed497, the
+//! union at `:183-194`; `cache-warmer.ts:331-349`; on by default,
+//! `settings-manager.ts:157`). They are typed from that source until the L1
+//! re-pin with a warm fixture lands (native capture pending).
+//!
 //! Parsing policy: flatten-unknown maps everywhere; unknown top-level
 //! discriminants are soft drift; a known type that fails to parse is hard.
 //! Tool-call arguments stay Value.
@@ -40,6 +46,7 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "model_change"
                 | "thinking_level_change"
                 | "session_info"
+                | "usage"
                 | "compaction"
                 | "branch_summary"
                 | "custom"
@@ -68,6 +75,8 @@ pub enum KnownRecord {
     ThinkingLevelChange(ThinkingLevelChangeEntry),
     #[serde(rename = "session_info")]
     SessionInfo(SessionInfoEntry),
+    #[serde(rename = "usage")]
+    Usage(UsageEntry),
     #[serde(rename = "compaction")]
     Compaction(CompactionEntry),
     #[serde(rename = "branch_summary")]
@@ -88,6 +97,7 @@ impl Drift for KnownRecord {
             KnownRecord::ModelChange(entry) => note_unknown(&entry.unknown, prefix, out),
             KnownRecord::ThinkingLevelChange(entry) => note_unknown(&entry.unknown, prefix, out),
             KnownRecord::SessionInfo(entry) => note_unknown(&entry.unknown, prefix, out),
+            KnownRecord::Usage(entry) => entry.drift(prefix, out),
             KnownRecord::Compaction(entry) => note_unknown(&entry.unknown, prefix, out),
             KnownRecord::BranchSummary(entry) => note_unknown(&entry.unknown, prefix, out),
             KnownRecord::Custom(entry) => note_unknown(&entry.unknown, prefix, out),
@@ -250,12 +260,7 @@ pub struct AssistantMessage {
 impl Drift for AssistantMessage {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         note_unknown(&self.unknown, prefix, out);
-        note_unknown(&self.usage.unknown, &format!("{prefix}.usage"), out);
-        note_unknown(
-            &self.usage.cost.unknown,
-            &format!("{prefix}.usage.cost"),
-            out,
-        );
+        self.usage.drift(&format!("{prefix}.usage"), out);
         for (index, block) in self.content.iter().enumerate() {
             block.drift(&format!("{prefix}.content[{index}]"), out);
         }
@@ -412,21 +417,40 @@ pub enum KnownContentBlock {
     },
 }
 
+/// `packages/ai/src/types.ts:396-417`. Every count is optional here even
+/// though the writer declares them required: `AgentMessage` is untagged, so a
+/// single missing or `null` field would otherwise demote the whole assistant
+/// turn to `Other` and drop its row and usage. A missing count is unreported.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_1h: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<u64>,
-    pub total_tokens: u64,
-    pub cost: Cost,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
     #[serde(flatten)]
     pub unknown: Unknown,
+}
+
+impl Drift for Usage {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        if let Some(cost) = &self.cost {
+            note_unknown(&cost.unknown, &format!("{prefix}.cost"), out);
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -436,11 +460,17 @@ pub struct Cost {
     /// hermetic mock fixtures happen to report integer zeroes. Keeping these
     /// as integers makes the surrounding untagged `AgentMessage` silently
     /// fall back to `Other(Value)`, dropping the entire assistant turn.
-    pub input: serde_json::Number,
-    pub output: serde_json::Number,
-    pub cache_read: serde_json::Number,
-    pub cache_write: serde_json::Number,
-    pub total: serde_json::Number,
+    /// Pi computes them from its own price table, so they are never read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<serde_json::Number>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -478,6 +508,34 @@ pub struct SessionInfoEntry {
     pub name: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
+}
+
+/// Model-attributed usage outside the conversation: Pi ≥ 0.86 appends one per
+/// prompt-cache warming request (`kind: "cache_warm"`), with the model that
+/// served it (`responseModel ?? model`). Hidden from the tree, counted in the
+/// session's totals; unknown kinds are still usage (docs/session-format.md
+/// "UsageEntry"). Not in the 0.84.3 pin.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub timestamp: String,
+    pub kind: String,
+    pub provider: String,
+    pub model: String,
+    pub usage: Usage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
+impl Drift for UsageEntry {
+    fn drift(&self, prefix: &str, out: &mut Vec<String>) {
+        note_unknown(&self.unknown, prefix, out);
+        self.usage.drift(&format!("{prefix}.usage"), out);
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

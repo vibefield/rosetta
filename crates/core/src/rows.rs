@@ -516,6 +516,13 @@ pub struct SessionUsageRow {
     pub ts: Ms,
     pub model: Option<String>,
     pub tokens: TokenSnapshot,
+    /// Stable native identity of the model response this usage belongs to,
+    /// shared by every copy of the response across files (Claude Code:
+    /// `<message.id>:<requestId>`). The store keeps the usage of the
+    /// earliest-started session's copy and drops the others' (ARCHITECTURE
+    /// §4.1.3, counting rule 2). Never persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

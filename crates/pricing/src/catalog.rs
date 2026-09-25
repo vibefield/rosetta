@@ -74,7 +74,9 @@ pub struct TierStep {
 
 /// A cited service-tier price rule: the tier's cost is the standard cost times
 /// `numerator / denominator`. `model = None` applies to every model of the
-/// provider that has no model-specific rule.
+/// provider that has no model-specific rule. A dated rule holds from
+/// `from_day` (inclusive) until `until_day` (exclusive), UTC days since
+/// 1970-01-01; `None` is open-ended.
 #[derive(Debug)]
 pub struct TierRule {
     pub provider: &'static str,
@@ -82,11 +84,14 @@ pub struct TierRule {
     pub tier: ServiceTier,
     pub numerator: i64,
     pub denominator: i64,
+    pub from_day: Option<i32>,
+    pub until_day: Option<i32>,
     pub source: &'static str,
 }
 
 /// A cited residency/regional premium for a qualified route such as
-/// `anthropic/us`, applied as a multiplier from `from_day` onward.
+/// `anthropic/us`, applied as a multiplier; dated like a [`TierRule`].
+/// `models` empty means every model of the provider.
 #[derive(Debug)]
 pub struct RouteRule {
     pub route: &'static str,
@@ -94,7 +99,34 @@ pub struct RouteRule {
     pub models: &'static [&'static str],
     pub numerator: i64,
     pub denominator: i64,
+    pub from_day: Option<i32>,
+    pub until_day: Option<i32>,
     pub source: &'static str,
+}
+
+impl TierRule {
+    pub fn active(&self, at_day: i64) -> bool {
+        window_holds(self.from_day, self.until_day, at_day)
+    }
+
+    pub fn dated(&self) -> bool {
+        self.from_day.is_some() || self.until_day.is_some()
+    }
+}
+
+impl RouteRule {
+    pub fn active(&self, at_day: i64) -> bool {
+        window_holds(self.from_day, self.until_day, at_day)
+    }
+
+    pub fn dated(&self) -> bool {
+        self.from_day.is_some() || self.until_day.is_some()
+    }
+}
+
+fn window_holds(from_day: Option<i32>, until_day: Option<i32>, at_day: i64) -> bool {
+    from_day.is_none_or(|from| at_day >= i64::from(from))
+        && until_day.is_none_or(|until| at_day < i64::from(until))
 }
 
 /// Where the catalog's data came from, for `/api/pricing` and audits.

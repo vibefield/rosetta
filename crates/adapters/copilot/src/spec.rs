@@ -15,6 +15,9 @@ const CANONICAL: &str = include_str!("../../../../groundtruth/copilot/groundtrut
 pub const EVENTS: &str = "events";
 /// Per-session title/workspace metadata document.
 pub const SESSION_WORKSPACE: &str = "session-workspace";
+/// The global SQLite store whose `assistant_usage_events` table is the
+/// per-call usage record (RESEARCH_PLAN §5.13).
+pub const SESSION_STORE: &str = "session-store";
 
 pub fn doc() -> &'static GroundTruthDoc {
     static DOC: OnceLock<GroundTruthDoc> = OnceLock::new();
@@ -133,7 +136,10 @@ struct StreamRecordTypes {
 
 #[cfg(test)]
 mod tests {
-    use super::{EVENTS, SESSION_WORKSPACE, declared_event_types, doc, unexpected_declared_fields};
+    use super::{
+        EVENTS, SESSION_STORE, SESSION_WORKSPACE, declared_event_types, doc,
+        unexpected_declared_fields,
+    };
     use serde_json::json;
 
     #[test]
@@ -146,6 +152,39 @@ mod tests {
             .stream(SESSION_WORKSPACE)
             .expect("session workspace stream");
         assert_eq!(workspace.glob, "session-state/*/workspace.yaml");
+        let store = doc().stream(SESSION_STORE).expect("session store stream");
+        assert_eq!(store.glob, "session-store.db*");
+        assert_eq!(store.evidence, rosetta_adapter_support::Evidence::Observed);
+    }
+
+    #[test]
+    fn the_usage_table_is_declared_by_the_canonical() {
+        let document: serde_json::Value =
+            serde_json::from_str(super::CANONICAL).expect("embedded groundtruth.json is valid");
+        let store = document["streams"]
+            .as_array()
+            .and_then(|streams| streams.iter().find(|stream| stream["id"] == SESSION_STORE))
+            .expect("session store stream");
+        let table =
+            &store["record_types"]["session-store.db:assistant_usage_events"]["shape"]["fields"];
+        for column in [
+            "id",
+            "session_id",
+            "model",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "total_nano_aiu",
+            "token_details_json",
+            "created_at",
+        ] {
+            assert!(
+                table.get(column).is_some(),
+                "{column} missing from the canonical"
+            );
+        }
     }
 
     #[test]

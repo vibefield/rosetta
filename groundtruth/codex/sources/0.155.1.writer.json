@@ -1,0 +1,329 @@
+{
+  "format": "rosetta-groundtruth/1",
+  "agent": "codex",
+  "agent_version": "0.155.1",
+  "evidence": "writer",
+  "generator": "writer-source openai/codex@e7bbc79f (main, 2026-09-22, after rust-v0.155.1) codex-rs/protocol/src/protocol.rs TokenUsageRecord/TokenUsage/ThreadSettingsAppliedEvent/ThreadSettingsSnapshot; codex-rs/core/src/session/mod.rs record_observed_response_completed; codex-rs/core/src/compact_remote_v2.rs collect_compaction_output",
+  "data_root": "~/.codex",
+  "writer_version": "main@e7bbc79f",
+  "streams": [
+    {
+      "id": "rollout",
+      "glob": "sessions/*/*/*/rollout-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Pinned primary source: https://github.com/openai/codex/blob/e7bbc79f482acf285e50a09a9f898aeb2ce3881c/codex-rs/protocol/src/protocol.rs (TokenUsageRecord at lines 2249-2260, TokenUsage at 2227-2247, ThreadSettingsAppliedEvent/ThreadSettingsSnapshot at 2186-2205). A token_usage_record is persisted for every completed response (core/src/session/mod.rs:4645-4675) immediately before that response's token_count event (core/src/session/turn.rs:2850-2863; core/src/compact.rs:830-837), and alone for a remote compaction, which emits no token_count (core/src/compact_remote_v2.rs:462-477). Its thread_id names the owning thread; forks and paginated children never copy these records (core/src/agent/control/spawn.rs:1120). Observed locally from writer 0.153.0. thread_settings_applied omits service_tier when no tier is configured (skip_serializing_if) and carries the owner's thread_id from 0.150; copied snapshots keep their original owner's id. Native fixture capture pending.",
+      "discriminator": "type",
+      "record_types": {
+        "token_usage_record": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "timestamp": {
+                "shape": {
+                  "kind": "string"
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "token_usage_record": 0
+                  }
+                },
+                "required": true
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "turn_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "session_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "root_turn_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "response_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cached_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cache_write_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "reasoning_output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      },
+                      "required": true
+                    },
+                    "turn_token_usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cached_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cache_write_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "reasoning_output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      },
+                      "required": true
+                    },
+                    "thread_token_usage": {
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cached_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "cache_write_input_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "reasoning_output_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "total_tokens": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      },
+                      "required": true
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          }
+        }
+      },
+      "facets": [
+        {
+          "id": "event-msg",
+          "path": "event_msg.payload (by payload.type)",
+          "discriminator": "type",
+          "record_types": {
+            "thread_settings_applied": {
+              "observed": 0,
+              "shape": {
+                "kind": "object",
+                "fields": {
+                  "type": {
+                    "shape": {
+                      "kind": "string",
+                      "values": {
+                        "thread_settings_applied": 0
+                      }
+                    },
+                    "required": true
+                  },
+                  "thread_id": {
+                    "shape": {
+                      "kind": "string"
+                    },
+                    "required": false
+                  },
+                  "thread_settings": {
+                    "shape": {
+                      "kind": "object",
+                      "fields": {
+                        "model": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "model_provider_id": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "service_tier": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": false
+                        },
+                        "approval_policy": {
+                          "shape": {
+                            "kind": "any_of",
+                            "variants": [
+                              {
+                                "kind": "string"
+                              },
+                              {
+                                "kind": "object",
+                                "fields": {}
+                              }
+                            ]
+                          },
+                          "required": true
+                        },
+                        "approvals_reviewer": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "permission_profile": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {}
+                          },
+                          "required": true
+                        },
+                        "active_permission_profile": {
+                          "shape": {
+                            "kind": "object",
+                            "fields": {}
+                          },
+                          "required": false
+                        },
+                        "cwd": {
+                          "shape": {
+                            "kind": "string"
+                          },
+                          "required": true
+                        },
+                        "runtime_workspace_roots": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "string"
+                            }
+                          },
+                          "required": false
+                        }
+                      }
+                    },
+                    "required": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
