@@ -124,9 +124,16 @@ impl GroundTruthDoc {
 
     /// The first stream whose glob claims `relative_path`.
     pub fn matching_stream(&self, relative_path: &str) -> Option<&StreamSpec> {
+        self.matching_stream_index(relative_path)
+            .map(|index| &self.streams[index])
+    }
+
+    /// [`GroundTruthDoc::matching_stream`] as a position in `streams`, for
+    /// walks that carry the verdict with each file instead of matching again.
+    pub fn matching_stream_index(&self, relative_path: &str) -> Option<usize> {
         self.streams
             .iter()
-            .find(|stream| stream.pattern.matches(relative_path))
+            .position(|stream| stream.pattern.matches(relative_path))
     }
 
     /// Whether any stream `accept` admits could claim a file somewhere below

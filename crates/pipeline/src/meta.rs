@@ -99,11 +99,11 @@ pub fn meta_ingest_into(
 ) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
     let layout = adapter.layout();
     let walk = instrument.time(Metric::WalkNanos, || {
-        rosetta_capture::walk_pruned(
+        rosetta_capture::walk_classified(
             root,
             opts.max_files,
             |dir| layout.may_claim_below(dir, |_| true),
-            |path| layout.matching_stream(path).is_some(),
+            |path| layout.matching_stream_index(path),
         )
     })?;
 
@@ -122,7 +122,8 @@ pub fn meta_ingest_into(
 
 /// Metadata admission over the exact roster already returned by discovery.
 /// The roster is immutable evidence from the same finite command; individual
-/// reads still handle files vanishing or changing after that census.
+/// reads still handle files vanishing or changing after that census. Each
+/// file's stream comes from the class its discovery walk carried.
 #[allow(clippy::too_many_arguments)]
 pub fn meta_ingest_inventory_into(
     adapter: &dyn AgentAdapter,
@@ -142,7 +143,7 @@ pub fn meta_ingest_inventory_into(
     report.walk_truncated = walk_truncated;
 
     for file in inventory {
-        let Some(stream) = layout.matching_stream(&file.relative_path) else {
+        let Some(stream) = crate::discover::inventory_stream(layout, file) else {
             continue;
         };
         report.files_matched += 1;

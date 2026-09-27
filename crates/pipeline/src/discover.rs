@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use rosetta_adapter_support::AgentAdapter;
+use rosetta_adapter_support::{AgentAdapter, GroundTruthDoc, StreamSpec};
 use rosetta_core::ids;
 use rosetta_core::rows::RuntimeRow;
 
@@ -92,11 +92,11 @@ pub fn discover_root(
         .map_or(0, |elapsed| elapsed.as_millis() as i64);
     let layout = adapter.layout();
     let report = instrument.time(Metric::WalkNanos, || {
-        rosetta_capture::walk_pruned(
+        rosetta_capture::walk_classified(
             root,
             opts.max_files,
             |dir| layout.may_claim_below(dir, |_| true),
-            |path| layout.matching_stream(path).is_some(),
+            |path| layout.matching_stream_index(path),
         )
     })?;
     instrument.add(Metric::FilesWalked, report.files.len() as u64);
@@ -112,8 +112,7 @@ pub fn discover_root(
         file_count += 1;
         total_bytes += file.size;
         newest_modified_ms = newest_modified_ms.max(file.modified_ms);
-        let driven = layout
-            .matching_stream(&file.relative_path)
+        let driven = inventory_stream(layout, file)
             .is_some_and(|stream| adapter.stream_driver(&stream.id).is_some());
         if driven {
             streamable_count += 1;
@@ -145,4 +144,25 @@ pub fn discover_root(
         walk_truncated: report.truncated,
         inventory: report.files,
     })
+}
+
+/// The stream that claimed an inventory file: the index its classifying
+/// walk carried, or a fresh match for an inventory walked without one.
+pub(crate) fn inventory_stream<'a>(
+    layout: &'a GroundTruthDoc,
+    file: &rosetta_capture::ScannedFile,
+) -> Option<&'a StreamSpec> {
+    let stream = match file.class {
+        Some(index) => layout.streams.get(index),
+        None => layout.matching_stream(&file.relative_path),
+    };
+    debug_assert_eq!(
+        stream.map(|stream| &stream.id),
+        layout
+            .matching_stream(&file.relative_path)
+            .map(|stream| &stream.id),
+        "{} carries a stream from another layout",
+        file.relative_path
+    );
+    stream
 }

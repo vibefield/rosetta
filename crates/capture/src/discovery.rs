@@ -15,6 +15,10 @@ pub struct ScannedFile {
     pub relative_path: String,
     pub size: u64,
     pub modified_ms: i64,
+    /// The caller's verdict on this path from [`walk_classified`] (a layout
+    /// walk records which stream claimed it); `None` from walks that only
+    /// filter.
+    pub class: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -51,8 +55,30 @@ pub fn walk_filtered(
 pub fn walk_pruned(
     root: &Path,
     max_files: usize,
-    mut descend: impl FnMut(&str) -> bool,
+    descend: impl FnMut(&str) -> bool,
     mut include: impl FnMut(&str) -> bool,
+) -> Result<WalkReport, CaptureError> {
+    walk_with(root, max_files, descend, |path| {
+        include(path).then_some(None)
+    })
+}
+
+/// [`walk_pruned`] where the include answers with a class to keep on each
+/// accepted file (`None` rejects), so later phases need not ask again.
+pub fn walk_classified(
+    root: &Path,
+    max_files: usize,
+    descend: impl FnMut(&str) -> bool,
+    mut classify: impl FnMut(&str) -> Option<usize>,
+) -> Result<WalkReport, CaptureError> {
+    walk_with(root, max_files, descend, |path| classify(path).map(Some))
+}
+
+fn walk_with(
+    root: &Path,
+    max_files: usize,
+    mut descend: impl FnMut(&str) -> bool,
+    mut accept: impl FnMut(&str) -> Option<Option<usize>>,
 ) -> Result<WalkReport, CaptureError> {
     let mut report = WalkReport::default();
     if !root.is_dir() {
@@ -99,9 +125,9 @@ pub fn walk_pruned(
         let Some(relative_path) = portable_relative(relative) else {
             continue;
         };
-        if !include(&relative_path) {
+        let Some(class) = accept(&relative_path) else {
             continue;
-        }
+        };
         if report.files.len() == max_files {
             report.truncated = true;
             break;
@@ -123,6 +149,7 @@ pub fn walk_pruned(
             relative_path,
             size: metadata.len(),
             modified_ms: modified_ms(&metadata),
+            class,
         });
     }
     report
@@ -386,6 +413,39 @@ mod tests {
         assert_eq!(paths, ["keep/a.jsonl", "keep/nested/b.jsonl", "top.jsonl"]);
         asked.sort();
         assert_eq!(asked, ["keep", "keep/nested", "skip", "skipped"]);
+    }
+
+    #[test]
+    fn classified_walk_keeps_each_files_class_through_the_sort() {
+        let root = TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("b")).unwrap();
+        for file in ["c.jsonl", "b/a.json", "a.txt"] {
+            std::fs::write(root.path().join(file), b"x\n").unwrap();
+        }
+        let report = walk_classified(
+            root.path(),
+            100,
+            |_| true,
+            |path| match path.rsplit_once('.').map(|(_, extension)| extension) {
+                Some("jsonl") => Some(7),
+                Some("json") => Some(3),
+                _ => None,
+            },
+        )
+        .unwrap();
+        let classes: Vec<(&str, Option<usize>)> = report
+            .files
+            .iter()
+            .map(|file| (file.relative_path.as_str(), file.class))
+            .collect();
+        assert_eq!(classes, [("b/a.json", Some(3)), ("c.jsonl", Some(7))]);
+        assert!(
+            walk(root.path(), 100)
+                .unwrap()
+                .files
+                .iter()
+                .all(|file| file.class.is_none())
+        );
     }
 
     #[cfg(unix)]
