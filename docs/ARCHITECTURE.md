@@ -1763,9 +1763,13 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   project, ts, kind and error indexes and the database-wide `ANALYZE` were pure build cost.
   Generations built before 2026-09-27 keep those indexes and statistics and remain valid under
   search schema 4; with statistics, only five-or-more-filter combinations mixing API-only runtime,
-  session or time filters with a very rare value ever planned through them. Search extraction,
-  member verification, FTS integrity checks, SQLite quick checks, syncs, and atomic generation
-  publication remain part of the measured work. SQLite documents this
+  session or time filters with a very rare value ever planned through them. Publication is gated
+  by one `PRAGMA quick_check` on the read-write build connection: in the bundled SQLite (3.44 and
+  later) it also runs FTS5's integrity method, the same checksum verification as the
+  `'integrity-check'` command, which the build used to issue as well, re-tokenizing every
+  document twice; a unit test pins that `quick_check` reports FTS5 index damage. Search
+  extraction, member verification, the page walk, the FTS5 verification, syncs, and atomic
+  generation publication remain part of the measured work. SQLite documents this
   [connection-local, demand-allocated cache setting](https://www.sqlite.org/pragma.html#pragma_cache_size).
   Frozen campaign `rosetta-cold-ingest-20260906` compared the retained `7e6b873` working-tree
   binary with this change on an Apple M1 Max / 64 GiB, macOS 26.5.2 arm64, Rust 1.97.1 release,

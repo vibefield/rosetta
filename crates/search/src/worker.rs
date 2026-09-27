@@ -28,10 +28,10 @@ const WORKER_POLL: Duration = Duration::from_millis(200);
 const STOP_CHECK_ROWS: u64 = 1_024;
 /// Pager cache of the private build connection, in KiB. It holds a whole
 /// generation (about 200 MB for 160k documents) with room to grow, so the
-/// insert transaction never spills pages to the file and the index, FTS5
-/// check, commit and `quick_check` that follow never read them back.
-/// Demand-allocated and freed when the connection closes; query and repair
-/// connections keep SQLite's default.
+/// insert transaction never spills pages to the file and the index, check
+/// and commit that follow never read them back. Demand-allocated and freed
+/// when the connection closes; query and repair connections keep SQLite's
+/// default.
 const BUILD_CACHE_KIB: i64 = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,13 +208,26 @@ fn finish_private_generation(
     tx.execute_batch(SEARCH_INDEXES)
         .map_err(|error| backend(format!("building search metadata indexes: {error}")))?;
     progress.stage(crate::SearchBuildStage::Validating);
-    tx.execute(
-        "INSERT INTO message_fts(message_fts, rank) VALUES('integrity-check', 1)",
-        [],
-    )
-    .map_err(|error| backend(format!("checking private search index: {error}")))?;
     tx.commit()
         .map_err(|error| backend(format!("committing private search build: {error}")))?;
+    validate_private_generation(conn)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = DELETE;
+         PRAGMA synchronous = FULL;",
+    )
+    .map_err(|error| backend(format!("finalizing private search journal: {error}")))?;
+    Ok(documents)
+}
+
+/// The gate on publication. In the bundled SQLite (3.44 and later) a
+/// `quick_check` also runs every virtual table's integrity method, which for
+/// FTS5 is the same checksum verification as its `'integrity-check'` command:
+/// every stored document re-tokenized and compared with the inverted index,
+/// row counts and column totals checked. One pass therefore covers both the
+/// page walk and the FTS5 index; issuing the command as well repeated the
+/// whole re-tokenization. The build connection is read-write, so CHECK
+/// constraints are evaluated too.
+fn validate_private_generation(conn: &Connection) -> Result<(), SearchError> {
     let quick: String = conn
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(|error| backend(format!("validating private search build: {error}")))?;
@@ -223,12 +236,7 @@ fn finish_private_generation(
             "private search quick_check returned {quick}"
         )));
     }
-    conn.execute_batch(
-        "PRAGMA journal_mode = DELETE;
-         PRAGMA synchronous = FULL;",
-    )
-    .map_err(|error| backend(format!("finalizing private search journal: {error}")))?;
-    Ok(documents)
+    Ok(())
 }
 
 fn generation_name(epoch: &str, revision: u64) -> String {
@@ -530,5 +538,72 @@ impl Drop for Fts5SearchWorker {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A committed generation with a few documents, as the build leaves it.
+    fn generation(dir: &tempfile::TempDir) -> Connection {
+        let conn = Connection::open(dir.path().join("generation.sqlite")).unwrap();
+        conn.execute_batch(SEARCH_DDL).unwrap();
+        conn.execute_batch("BEGIN").unwrap();
+        for id in 1..=200_i64 {
+            conn.execute(
+                "INSERT INTO search_document
+                   (id, timeline_id, session_id, runtime_id, agent, project_id, ts, kind, is_error)
+                 VALUES (?1, ?2, 's1', 'rt1', 'codex', NULL, ?1, 'agent', NULL)",
+                params![id, format!("t{id}")],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO message_fts(rowid, prose, target, intent, change, tool)
+                 VALUES (?1, ?2, '', '', '', '')",
+                params![id, format!("alpha document number {id} beta")],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO search_state (singleton, search_schema, projection_epoch, revision)
+             VALUES (1, ?1, 'epoch', 0)",
+            params![SEARCH_SCHEMA_VERSION],
+        )
+        .unwrap();
+        conn.execute_batch(SEARCH_INDEXES).unwrap();
+        conn.execute_batch("COMMIT").unwrap();
+        conn
+    }
+
+    #[test]
+    fn quick_check_runs_the_fts5_index_verification() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = generation(&dir);
+        validate_private_generation(&conn).unwrap();
+
+        // Text removed behind FTS5's back: every page is still well formed,
+        // so only the inverted-index verification can notice.
+        conn.execute("DELETE FROM message_fts_content WHERE id <= 5", [])
+            .unwrap();
+        let error = validate_private_generation(&conn).unwrap_err();
+        assert!(
+            error.to_string().contains("malformed inverted index"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn quick_check_evaluates_check_constraints() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = generation(&dir);
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE search_state SET revision = -1;
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+        let error = validate_private_generation(&conn).unwrap_err();
+        assert!(error.to_string().contains("CHECK constraint"), "{error}");
     }
 }
