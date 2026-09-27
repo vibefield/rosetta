@@ -1668,6 +1668,17 @@ This makes the optimization boundary explicit:
   universal `Message::ToolUse` / `ToolUpdate` / response-usage / file-edit vocabulary. The later
   schema-11 storage-boundary change removes the reduced-fact writes too; its performance claim
   requires a new frozen before/after pair rather than reusing this earlier measurement.
+- Enforcing CHECK constraints while private cold rows are written, so that the final
+  `quick_check` could skip CHECK evaluation, is store-wide and rejected. SQLite re-checks a
+  CHECK on every write that touches its columns, so the gate would hold, and on the
+  2026-08-26 frozen snapshot the final `quick_check` fell from 4.4–4.8 to 1.0–1.9 CPU-s. But
+  cold rows are written through single-row prepared INSERTs, and every execution of the
+  message INSERT rebuilds nine ephemeral b-trees for the CHECKs' `IN (...)` lists of three or
+  more constants (53 keys): about 7.0 CPU-s for 357k tool rows and 1.1 CPU-s for 153k other
+  rows. Claude's tool-row writes sit in its admission on the critical path; at load ~190 they
+  went from 7.6 s to 36.0 s while validation fell from 16.9 s to 5.9 s. The candidate is the
+  last commit of `cold/t1-final` (2026-09-27), not merged. It needs batched cold inserts or
+  CHECKs without long `IN` lists first.
 
 The applicability is general; unpaired saving estimates are not. Always-on split counters
 attribute replay cost by adapter and canonical statement family. The former target-aware SQLite
